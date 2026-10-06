@@ -83,6 +83,22 @@ export const RUNTIME_AGENT_CATALOG: RuntimeAgentCatalogEntry[] = [
 		},
 	},
 	{
+		id: "copilot",
+		label: "GitHub Copilot",
+		binary: "copilot",
+		baseArgs: [],
+		// The adapter adds --allow-all-tools/--allow-all-paths in autonomous mode (never in plan mode).
+		autonomousArgs: [],
+		installUrl: "https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference",
+		capabilities: {
+			modelOverride: "flag",
+			effortOverride: "flag",
+			// "github" = the Copilot subscription; other ids name BYOK profiles in copilot-providers.json.
+			providerOverride: "config",
+			docsUrl: "https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference",
+		},
+	},
+	{
 		id: "opencode",
 		label: "OpenCode",
 		binary: "opencode",
@@ -146,6 +162,7 @@ export const RUNTIME_LAUNCH_SUPPORTED_AGENT_IDS: readonly RuntimeAgentId[] = [
 	"cline",
 	"claude",
 	"codex",
+	"copilot",
 	"droid",
 	"kiro",
 	"cline-cli",

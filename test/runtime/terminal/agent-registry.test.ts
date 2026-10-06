@@ -48,7 +48,7 @@ describe("agent-registry", () => {
 		const detected = detectInstalledCommands();
 
 		expect(detected).toEqual(["claude"]);
-		expect(commandDiscoveryMocks.isBinaryAvailableOnPath).toHaveBeenCalledTimes(9);
+		expect(commandDiscoveryMocks.isBinaryAvailableOnPath).toHaveBeenCalledTimes(10);
 	});
 
 	it("treats shell-only agents as unavailable", () => {
@@ -84,6 +84,7 @@ describe("buildRuntimeConfigResponse", () => {
 			"codex",
 			"cline",
 			"cline-cli",
+			"copilot",
 			"droid",
 			"kiro",
 		]);
@@ -91,6 +92,7 @@ describe("buildRuntimeConfigResponse", () => {
 		expect(response.agents.find((agent) => agent.id === "codex")?.defaultArgs).toEqual([]);
 		expect(response.agents.find((agent) => agent.id === "cline")?.defaultArgs).toEqual([]);
 		expect(response.agents.find((agent) => agent.id === "cline-cli")?.defaultArgs).toEqual([]);
+		expect(response.agents.find((agent) => agent.id === "copilot")?.defaultArgs).toEqual([]);
 		expect(response.agents.find((agent) => agent.id === "droid")?.defaultArgs).toEqual([]);
 		expect(response.agents.find((agent) => agent.id === "kiro")?.defaultArgs).toEqual(["chat"]);
 		expect(response.agents.find((agent) => agent.id === "cline")?.installed).toBe(true);
@@ -120,6 +122,7 @@ describe("buildRuntimeConfigResponse", () => {
 			"codex",
 			"cline",
 			"cline-cli",
+			"copilot",
 			"droid",
 			"kiro",
 		]);
@@ -127,12 +130,14 @@ describe("buildRuntimeConfigResponse", () => {
 		expect(response.agents.find((agent) => agent.id === "codex")?.defaultArgs).toEqual([]);
 		expect(response.agents.find((agent) => agent.id === "cline")?.defaultArgs).toEqual([]);
 		expect(response.agents.find((agent) => agent.id === "cline-cli")?.defaultArgs).toEqual([]);
+		expect(response.agents.find((agent) => agent.id === "copilot")?.defaultArgs).toEqual([]);
 		expect(response.agents.find((agent) => agent.id === "droid")?.defaultArgs).toEqual([]);
 		expect(response.agents.find((agent) => agent.id === "kiro")?.defaultArgs).toEqual(["chat"]);
 		expect(response.agents.find((agent) => agent.id === "cline")?.installed).toBe(true);
 		expect(response.agents.find((agent) => agent.id === "claude")?.command).toBe("claude");
 		expect(response.agents.find((agent) => agent.id === "codex")?.command).toBe("codex");
 		expect(response.agents.find((agent) => agent.id === "cline-cli")?.command).toBe("cline");
+		expect(response.agents.find((agent) => agent.id === "copilot")?.command).toBe("copilot");
 		expect(response.agents.find((agent) => agent.id === "droid")?.command).toBe("droid");
 		expect(response.agents.find((agent) => agent.id === "kiro")?.command).toBe("kiro-cli chat");
 	});
