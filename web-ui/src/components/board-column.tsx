@@ -1,6 +1,7 @@
 import { Droppable } from "@hello-pangea/dnd";
 import { Play, Plus, Trash2 } from "lucide-react";
 import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
+import { useState } from "react";
 
 import { BoardCard } from "@/components/board-card";
 import { Button } from "@/components/ui/button";
@@ -8,6 +9,10 @@ import { ColumnIndicator } from "@/components/ui/column-indicator";
 import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import { isCardDropDisabled, type ProgrammaticCardMoveInFlight } from "@/state/drag-rules";
 import type { BoardCard as BoardCardModel, BoardColumnId, BoardColumn as BoardColumnModel } from "@/types";
+
+// The Done column can grow to hundreds of cards. Render the newest ones and reveal the rest on demand,
+// so a long history does not slow down every board render (it made the board unusable on phones).
+export const DONE_COLUMN_PAGE_SIZE = 30;
 
 export function BoardColumn({
 	column,
@@ -73,6 +78,10 @@ export function BoardColumn({
 	const canCreate = column.id === "backlog" && onCreateTask;
 	const canStartAllTasks = column.id === "backlog" && onStartAllTasks;
 	const canClearTrash = column.id === "trash" && onClearTrash;
+	const [doneVisibleCount, setDoneVisibleCount] = useState(DONE_COLUMN_PAGE_SIZE);
+	const visibleCards = column.id === "trash" ? column.cards.slice(0, doneVisibleCount) : column.cards;
+	const hiddenCardCount = column.cards.length - visibleCards.length;
+	const handleCardClick = column.id === "backlog" ? onEditTask : onCardClick;
 	const cardDropType = "CARD";
 	const isDropDisabled = isCardDropDisabled(column.id, activeDragSourceColumnId ?? null, {
 		activeDragTaskId,
@@ -151,7 +160,7 @@ export function BoardColumn({
 							{(() => {
 								const items: ReactNode[] = [];
 								let draggableIndex = 0;
-								for (const card of column.cards) {
+								for (const card of visibleCards) {
 									if (column.id === "backlog" && editingTaskId === card.id) {
 										items.push(
 											<div
@@ -189,13 +198,7 @@ export function BoardColumn({
 											workspacePath={workspacePath}
 											defaultClineModelId={defaultClineModelId}
 											onSaveTitle={onSaveTitle}
-											onClick={() => {
-												if (column.id === "backlog") {
-													onEditTask?.(card);
-													return;
-												}
-												onCardClick?.(card);
-											}}
+											onClick={handleCardClick}
 										/>,
 									);
 									draggableIndex += 1;
@@ -203,6 +206,17 @@ export function BoardColumn({
 								return items;
 							})()}
 							{cardProvided.placeholder}
+							{hiddenCardCount > 0 ? (
+								<Button
+									variant="ghost"
+									size="sm"
+									fill
+									onClick={() => setDoneVisibleCount((count) => count + DONE_COLUMN_PAGE_SIZE)}
+									style={{ flexShrink: 0 }}
+								>
+									{`Show ${Math.min(hiddenCardCount, DONE_COLUMN_PAGE_SIZE)} more (${hiddenCardCount} hidden)`}
+								</Button>
+							) : null}
 						</div>
 					)}
 				</Droppable>
