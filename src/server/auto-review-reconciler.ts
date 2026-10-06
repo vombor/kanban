@@ -10,7 +10,6 @@
 // the board first, then probes only the worktrees of those candidates. A
 // workspace with no auto-review candidates costs zero git work.
 
-import type { ClineTaskSessionService } from "../cline-sdk/cline-task-session-service";
 import type {
 	RuntimeAgentId,
 	RuntimeBoardCard,
@@ -76,8 +75,6 @@ export interface CreateAutoReviewReconcilerDependencies {
 	getPromptTemplates: (workspaceId: string, workspacePath: string) => Promise<TaskGitPromptTemplates | null>;
 	/** Workspace-level default agent; cards may override it via `agentId`. */
 	getSelectedAgentId?: (workspaceId: string, workspacePath: string) => Promise<RuntimeAgentId | null>;
-	/** Native Cline session service for a workspace, when one exists. */
-	getClineTaskSessionService?: (workspaceId: string) => ClineTaskSessionService | null;
 	/** Probes one task worktree; injected in tests to count calls. */
 	probeTaskWorkspace?: (input: {
 		workspacePath: string;
@@ -112,7 +109,6 @@ interface ReconcilerWorkspaceRuntime {
 	pendingEvaluation: boolean;
 	gitActionInFlightTaskIds: Set<string>;
 	submitTimers: Set<NodeJS.Timeout>;
-	clineUnavailableLoggedTaskIds: Set<string>;
 }
 
 function createWorkspaceRuntime(): ReconcilerWorkspaceRuntime {
@@ -121,7 +117,6 @@ function createWorkspaceRuntime(): ReconcilerWorkspaceRuntime {
 		pendingEvaluation: false,
 		gitActionInFlightTaskIds: new Set<string>(),
 		submitTimers: new Set<NodeJS.Timeout>(),
-		clineUnavailableLoggedTaskIds: new Set<string>(),
 	};
 }
 
@@ -350,31 +345,6 @@ export function createAutoReviewReconciler(deps: CreateAutoReviewReconcilerDepen
 		return true;
 	};
 
-	const triggerClineGitAction = async (
-		workspaceId: string,
-		card: RuntimeBoardCard,
-		prompt: string,
-	): Promise<boolean> => {
-		const service = deps.getClineTaskSessionService?.(workspaceId) ?? null;
-		if (!service) {
-			return false;
-		}
-		try {
-			// Mirrors the chat-send route: retry once after rebinding a persisted
-			// session whose SDK handle was lost (for example across a restart).
-			let summary = await service.sendTaskSessionInput(card.id, prompt, "act");
-			if (!summary) {
-				const rebound = await service.rebindPersistedTaskSession(card.id);
-				if (rebound) {
-					summary = await service.sendTaskSessionInput(card.id, prompt, "act");
-				}
-			}
-			return summary !== null;
-		} catch {
-			return false;
-		}
-	};
-
 	const triggerGitAction = async (input: {
 		workspace: AutoReviewWorkspace;
 		card: RuntimeBoardCard;
@@ -384,9 +354,6 @@ export function createAutoReviewReconciler(deps: CreateAutoReviewReconcilerDepen
 	}): Promise<boolean> => {
 		const action = resolveAutoReviewMode(input.card);
 		const prompt = buildGitActionPrompt(action, input.card.baseRef, input.templates);
-		if (input.effectiveAgent === "cline") {
-			return await triggerClineGitAction(input.workspace.workspaceId, input.card, prompt);
-		}
 		if (!input.workspace.terminalManager) {
 			return false;
 		}
@@ -491,19 +458,7 @@ export function createAutoReviewReconciler(deps: CreateAutoReviewReconcilerDepen
 
 				// Never arm a card whose delivery channel is missing: it could only
 				// "complete" via the staleness timeout, which silently strands it.
-				if (effectiveAgent === "cline") {
-					const service = deps.getClineTaskSessionService?.(workspace.workspaceId) ?? null;
-					const sessionSummary = service?.getSummary(card.id) ?? null;
-					if (!service || !sessionSummary) {
-						if (!runtime.clineUnavailableLoggedTaskIds.has(card.id)) {
-							runtime.clineUnavailableLoggedTaskIds.add(card.id);
-							deps.warn?.(
-								`Auto-review is waiting for a native Cline session for task "${card.id}"; the card stays unarmed until one exists.`,
-							);
-						}
-						continue;
-					}
-				} else if (!workspace.terminalManager || !workspace.terminalManager.getSummary(card.id)) {
+				if (!workspace.terminalManager || !workspace.terminalManager.getSummary(card.id)) {
 					// No terminal session to deliver the prompt to.
 					continue;
 				}
@@ -650,7 +605,6 @@ export function createAutoReviewReconciler(deps: CreateAutoReviewReconcilerDepen
 				}
 				runtime.submitTimers.clear();
 				runtime.gitActionInFlightTaskIds.clear();
-				runtime.clineUnavailableLoggedTaskIds.clear();
 			}
 			workspaceRuntimes.clear();
 		},

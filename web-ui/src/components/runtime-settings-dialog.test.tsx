@@ -75,10 +75,6 @@ vi.mock("@radix-ui/react-select", () => ({
 }));
 
 const resetLayoutCustomizationsMock = vi.hoisted(() => vi.fn());
-const clineSetupSectionOnSavedRef = vi.hoisted(() => ({
-	onSaved: null as null | (() => void),
-}));
-
 vi.mock("@runtime-agent-catalog", () => ({
 	getRuntimeAgentCatalogEntry: vi.fn((agentId: string) => ({
 		id: agentId,
@@ -87,47 +83,12 @@ vi.mock("@runtime-agent-catalog", () => ({
 	})),
 	getRuntimeLaunchSupportedAgentCatalog: vi.fn(() => [
 		{ id: "cline", label: "Cline", binary: "cline" },
-		{ id: "cline-cli", label: "Cline CLI", binary: "cline" },
 		{ id: "claude", label: "Claude Code", binary: "claude" },
 	]),
 }));
 
 vi.mock("@runtime-shortcuts", () => ({
 	areRuntimeProjectShortcutsEqual: vi.fn(() => true),
-}));
-
-vi.mock("@/components/shared/cline-setup-section", () => ({
-	ClineSetupSection: ({ onSaved }: { onSaved?: () => void }) => {
-		clineSetupSectionOnSavedRef.onSaved = onSaved ?? null;
-		return null;
-	},
-}));
-
-vi.mock("@/hooks/use-runtime-settings-cline-controller", () => ({
-	useRuntimeSettingsClineController: () => ({
-		currentProviderSettings: {
-			providerId: "anthropic",
-			modelId: "claude-3-7-sonnet",
-			baseUrl: null,
-			reasoningEffort: null,
-			apiKeyConfigured: true,
-			oauthProvider: null,
-			oauthAccessTokenConfigured: false,
-			oauthRefreshTokenConfigured: false,
-			oauthAccountId: null,
-			oauthExpiresAt: null,
-		},
-		hasUnsavedChanges: false,
-		providerId: "anthropic",
-		saveProviderSettings: vi.fn(async () => ({ ok: true })),
-	}),
-}));
-
-vi.mock("@/hooks/use-runtime-settings-cline-mcp-controller", () => ({
-	useRuntimeSettingsClineMcpController: () => ({
-		hasUnsavedChanges: false,
-		saveMcpSettings: vi.fn(async () => ({ ok: true })),
-	}),
 }));
 
 vi.mock("@/resize/layout-customizations", () => ({
@@ -167,7 +128,7 @@ function findButtonByAriaLabel(container: ParentNode, ariaLabel: string): HTMLBu
 	) ?? null) as HTMLButtonElement | null;
 }
 
-const savedClineOauthConfig = {
+const savedConfig = {
 	selectedAgentId: "cline",
 	selectedShortcutLabel: null,
 	agentAutonomousModeEnabled: true,
@@ -196,26 +157,7 @@ const savedClineOauthConfig = {
 			command: "claude",
 			installed: true,
 		},
-		{
-			id: "cline-cli",
-			label: "Cline CLI",
-			binary: "cline",
-			command: "cline",
-			installed: true,
-		},
 	],
-	clineProviderSettings: {
-		providerId: null,
-		modelId: "cline-sonnet",
-		baseUrl: null,
-		reasoningEffort: null,
-		apiKeyConfigured: false,
-		oauthProvider: "cline",
-		oauthAccessTokenConfigured: true,
-		oauthRefreshTokenConfigured: true,
-		oauthAccountId: "acc-1",
-		oauthExpiresAt: 1_800_000_000_000,
-	},
 } as unknown as RuntimeConfigResponse;
 
 describe("RuntimeSettingsDialog", () => {
@@ -225,7 +167,6 @@ describe("RuntimeSettingsDialog", () => {
 
 	beforeEach(() => {
 		resetLayoutCustomizationsMock.mockReset();
-		clineSetupSectionOnSavedRef.onSaved = null;
 		window.localStorage.clear();
 		document.documentElement.removeAttribute("data-theme");
 		previousActEnvironment = (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
@@ -252,22 +193,23 @@ describe("RuntimeSettingsDialog", () => {
 		}
 	});
 
-	it("lists Cline CLI as a launch-supported agent", async () => {
+	it("lists Cline once as a launch-supported agent", async () => {
 		await act(async () => {
 			root.render(
 				<RuntimeSettingsDialog
 					open={true}
 					workspaceId={"workspace-1"}
-					initialConfig={savedClineOauthConfig}
+					initialConfig={savedConfig}
 					onOpenChange={() => {}}
 				/>,
 			);
 		});
 
-		const clineCliRow = Array.from(document.body.querySelectorAll('[role="button"]')).find((element) =>
-			element.textContent?.includes("Cline CLI"),
+		const agentRows = Array.from(document.body.querySelectorAll('[role="button"]')).filter((element) =>
+			element.textContent?.includes("Cline"),
 		);
-		expect(clineCliRow).toBeTruthy();
+		expect(agentRows).toHaveLength(1);
+		expect(document.body.textContent).not.toContain("Cline CLI");
 	});
 
 	it("does not render support actions inside settings", async () => {
@@ -276,7 +218,7 @@ describe("RuntimeSettingsDialog", () => {
 				<RuntimeSettingsDialog
 					open={true}
 					workspaceId={"workspace-1"}
-					initialConfig={savedClineOauthConfig}
+					initialConfig={savedConfig}
 					onOpenChange={() => {}}
 				/>,
 			);
@@ -292,7 +234,7 @@ describe("RuntimeSettingsDialog", () => {
 				<RuntimeSettingsDialog
 					open={true}
 					workspaceId={"workspace-1"}
-					initialConfig={savedClineOauthConfig}
+					initialConfig={savedConfig}
 					onOpenChange={() => {}}
 				/>,
 			);
@@ -315,7 +257,7 @@ describe("RuntimeSettingsDialog", () => {
 				<RuntimeSettingsDialog
 					open={true}
 					workspaceId={"workspace-1"}
-					initialConfig={savedClineOauthConfig}
+					initialConfig={savedConfig}
 					onOpenChange={handleOpenChange}
 				/>,
 			);
@@ -362,7 +304,7 @@ describe("RuntimeSettingsDialog", () => {
 				<RuntimeSettingsDialog
 					open={true}
 					workspaceId={"workspace-1"}
-					initialConfig={savedClineOauthConfig}
+					initialConfig={savedConfig}
 					onOpenChange={handleOpenChange}
 				/>,
 			);
@@ -390,28 +332,5 @@ describe("RuntimeSettingsDialog", () => {
 		expect(handleOpenChange).toHaveBeenCalledWith(false);
 		expect(window.localStorage.getItem("kanban.theme")).toBe("graphite");
 		expect(document.documentElement.getAttribute("data-theme")).toBe("graphite");
-	});
-
-	it("forwards cline setup saves to the dialog onSaved callback", async () => {
-		const handleSaved = vi.fn();
-		await act(async () => {
-			root.render(
-				<RuntimeSettingsDialog
-					open={true}
-					workspaceId={"workspace-1"}
-					initialConfig={savedClineOauthConfig}
-					onOpenChange={() => {}}
-					onSaved={handleSaved}
-				/>,
-			);
-		});
-
-		expect(clineSetupSectionOnSavedRef.onSaved).toBeTypeOf("function");
-
-		await act(async () => {
-			clineSetupSectionOnSavedRef.onSaved?.();
-		});
-
-		expect(handleSaved).toHaveBeenCalledTimes(1);
 	});
 });

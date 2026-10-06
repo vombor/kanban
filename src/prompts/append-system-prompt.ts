@@ -28,7 +28,6 @@ const APPEND_PROMPT_AGENT_IDS: readonly RuntimeAgentId[] = [
 	"claude",
 	"codex",
 	"cline",
-	"cline-cli",
 	"droid",
 	"kiro",
 	"gemini",
@@ -44,7 +43,9 @@ function resolveHomeAgentId(taskId: string): RuntimeAgentId | null {
 		return null;
 	}
 	const parts = taskId.split(":");
-	const maybeAgentId = parts.at(-1) ?? null;
+	const lastPart = parts.at(-1) ?? null;
+	// Home sessions started as "cline-cli" before the embedded agent was removed.
+	const maybeAgentId = lastPart === "cline-cli" ? "cline" : lastPart;
 	if (!maybeAgentId || !isRuntimeAgentId(maybeAgentId)) {
 		return null;
 	}
@@ -54,9 +55,7 @@ function resolveHomeAgentId(taskId: string): RuntimeAgentId | null {
 function renderLinearSetupGuidanceForAgent(agentId: RuntimeAgentId | null): string {
 	switch (agentId) {
 		case "cline":
-			return "- If Linear MCP is not available in the current agent (Cline), direct the user to open settings and go to the MCP section where they can add the Linear integration.";
-		case "cline-cli":
-			return "- If Linear MCP is not available in the current agent (Cline CLI), suggest running: `cline mcp install linear --transport http https://mcp.linear.app/mcp`";
+			return "- If Linear MCP is not available in the current agent (Cline), suggest running: `cline mcp install linear --transport http https://mcp.linear.app/mcp`";
 		case "claude":
 			return "- If Linear MCP is not available in the current agent (Claude Code), suggest running: `claude mcp add --transport http --scope user linear https://mcp.linear.app/mcp`";
 		case "codex":

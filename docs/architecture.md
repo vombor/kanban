@@ -1,5 +1,7 @@
 # Architecture Overview
 
+> **Fork note (vombor/kanban, 0.1.70-fork.2):** the embedded Cline agent (the `src/cline-sdk/` integration layer over the `@clinebot/*` SDK, its native chat UI, provider/OAuth/MCP settings and account features) was removed. Cline is the standalone `cline` CLI and runs like every other agent: a PTY task terminal with per-card `--provider/--model/--thinking` and Kanban-managed hook scripts. The old id `cline-cli` is an accepted alias of `cline`. Sections below that describe the "native Cline" stack are historical.
+
 Kanban is a local Node runtime plus a React app for running many coding-agent tasks in parallel.
 
 There are three big ideas to hold in your head:

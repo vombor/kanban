@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClineTaskSessionService } from "../../../src/cline-sdk/cline-task-session-service";
 import type {
 	RuntimeAgentId,
 	RuntimeBoardCard,
@@ -108,30 +107,10 @@ function createFakeTerminalManager() {
 	};
 }
 
-function createFakeClineService() {
-	const sendTaskSessionInput = vi.fn(async (taskId: string, _text: string, _mode?: string) => {
-		await Promise.resolve();
-		return { taskId } as unknown as RuntimeTaskSessionSummary;
-	});
-	const rebindPersistedTaskSession = vi.fn(async () => null);
-	const getSummary = vi.fn((taskId: string) => ({ taskId }) as unknown as RuntimeTaskSessionSummary);
-	return {
-		sendTaskSessionInput,
-		rebindPersistedTaskSession,
-		getSummary,
-		service: {
-			sendTaskSessionInput,
-			rebindPersistedTaskSession,
-			getSummary,
-		} as unknown as ClineTaskSessionService,
-	};
-}
-
 interface HarnessOptions {
 	board: RuntimeBoardData;
 	sessions?: Record<string, RuntimeTaskSessionSummary>;
 	selectedAgentId?: RuntimeAgentId;
-	clineService?: ClineTaskSessionService;
 	promptTemplates?: TaskGitPromptTemplates;
 	now?: () => number;
 }
@@ -170,7 +149,6 @@ function createHarness(options: HarnessOptions) {
 				openPrPromptTemplateDefault: null,
 			},
 		getSelectedAgentId: async () => options.selectedAgentId ?? null,
-		getClineTaskSessionService: () => options.clineService ?? null,
 		probeTaskWorkspace,
 		onBoardMutated,
 		...(options.now ? { now: options.now } : {}),
@@ -321,6 +299,17 @@ describe("auto-review reconciler", () => {
 		expect(harness.store.stored.revision).toBe(1);
 	});
 
+	it("delivers git actions for Cline cards through the task terminal", async () => {
+		const card = createCard({ id: "task-1", autoReviewEnabled: true });
+		const harness = createHarness({ board: createBoard({ review: [card] }), selectedAgentId: "cline" });
+		harness.setProbe("task-1", { exists: true, headCommit: "commit-1", changedFiles: 3 });
+
+		await harness.evaluate();
+
+		expect(harness.terminal.writeInput).toHaveBeenCalledTimes(1);
+		expect(findCardInBoard(harness.store.stored.board, "task-1")?.card.pendingGitAction).not.toBeNull();
+	});
+
 	it("starts exactly one git action when two evaluations race", async () => {
 		const card = createCard({ id: "task-1", autoReviewEnabled: true });
 		const harness = createHarness({ board: createBoard({ review: [card] }) });
@@ -337,55 +326,6 @@ describe("auto-review reconciler", () => {
 		const armed = findCardInBoard(harness.store.stored.board, "task-1");
 		expect(armed?.card.pendingGitAction).not.toBeNull();
 		expect(armed?.card.pendingGitAction?.attempt).toBe(0);
-	});
-
-	it("delivers git actions through the native Cline session service", async () => {
-		const cline = createFakeClineService();
-		const card = createCard({ id: "task-1", autoReviewEnabled: true });
-		const harness = createHarness({
-			board: createBoard({ review: [card] }),
-			selectedAgentId: "cline",
-			clineService: cline.service,
-		});
-		harness.setProbe("task-1", { exists: true, headCommit: "commit-1", changedFiles: 3 });
-
-		await harness.evaluate();
-
-		const armed = findCardInBoard(harness.store.stored.board, "task-1");
-		expect(armed?.card.pendingGitAction).not.toBeNull();
-		expect(cline.sendTaskSessionInput).toHaveBeenCalledTimes(1);
-		expect(cline.sendTaskSessionInput).toHaveBeenCalledWith("task-1", "Commit the working changes onto main.", "act");
-		// The terminal path must not be used for native Cline sessions.
-		expect(harness.terminal.writeInput).not.toHaveBeenCalled();
-
-		// Completion still works once HEAD moves.
-		harness.setProbe("task-1", { exists: true, headCommit: "commit-2", changedFiles: 0 });
-		await harness.evaluate();
-
-		const completed = findCardInBoard(harness.store.stored.board, "task-1");
-		expect(completed?.columnId).toBe("trash");
-		expect(completed?.card.pendingGitAction ?? null).toBeNull();
-	});
-
-	it("never arms a native Cline card while no Cline session exists", async () => {
-		const card = createCard({ id: "task-1", autoReviewEnabled: true });
-		const harness = createHarness({
-			board: createBoard({ review: [card] }),
-			selectedAgentId: "cline",
-			// No Cline service exists for the workspace yet.
-		});
-		harness.setProbe("task-1", { exists: true, headCommit: "commit-1", changedFiles: 3 });
-
-		await harness.evaluate();
-
-		expect(findCardInBoard(harness.store.stored.board, "task-1")?.card.pendingGitAction ?? null).toBeNull();
-		expect(harness.warn).toHaveBeenCalledTimes(1);
-		expect(harness.store.stored.revision).toBe(1);
-
-		// The skip is logged once per task, not once per cycle.
-		await harness.evaluate();
-		expect(harness.warn).toHaveBeenCalledTimes(1);
-		expect(findCardInBoard(harness.store.stored.board, "task-1")?.card.pendingGitAction ?? null).toBeNull();
 	});
 
 	it("clears a pending git action once it goes stale", async () => {

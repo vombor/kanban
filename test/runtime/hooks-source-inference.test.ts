@@ -52,17 +52,17 @@ describe("inferHookSourceFromPayload", () => {
 		).toBe("codex");
 	});
 
-	it("infers cline-cli from the CLI hook payload version field", () => {
+	it("infers cline from the CLI hook payload version field", () => {
 		expect(
 			inferHookSourceFromPayload({
 				clineVersion: "3.0.60",
 				hookName: "agent_end",
 				taskId: "task-1",
 			}),
-		).toBe("cline-cli");
+		).toBe("cline");
 	});
 
-	it("keeps transcript-path sources ahead of the cline-cli version fallback", () => {
+	it("keeps transcript-path sources ahead of the cline version fallback", () => {
 		expect(
 			inferHookSourceFromPayload({
 				transcript_path: "/Users/dev/.claude/projects/task/transcript.jsonl",

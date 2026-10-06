@@ -273,7 +273,7 @@ describe.sequential("runtime-config auto agent selection", () => {
 		}
 	});
 
-	it("keeps a configured cline-cli agent when launch support is enabled", async () => {
+	it("normalizes a configured cline-cli agent to cline", async () => {
 		const { path: tempHome, cleanup: cleanupHome } = createTempDir("kanban-home-runtime-config-cline-cli-");
 		const { path: tempProject, cleanup: cleanupProject } = createTempDir("kanban-project-runtime-config-cline-cli-");
 		const { path: tempBin, cleanup: cleanupBin } = createTempDir("kanban-bin-runtime-config-cline-cli-");
@@ -297,7 +297,7 @@ describe.sequential("runtime-config auto agent selection", () => {
 
 			await withTemporaryEnv({ home: tempHome, pathPrefix: tempBin }, async () => {
 				const state = await loadRuntimeConfig(tempProject);
-				expect(state.selectedAgentId).toBe("cline-cli");
+				expect(state.selectedAgentId).toBe("cline");
 			});
 		} finally {
 			cleanupBin();
@@ -306,7 +306,7 @@ describe.sequential("runtime-config auto agent selection", () => {
 		}
 	});
 
-	it("does not auto-select the Cline CLI over the embedded Cline default", async () => {
+	it("selects cline by default when the cline CLI is installed", async () => {
 		const { path: tempHome, cleanup: cleanupHome } = createTempDir("kanban-home-runtime-config-cline-cli-auto-");
 		const { path: tempProject, cleanup: cleanupProject } = createTempDir(
 			"kanban-project-runtime-config-cline-cli-auto-",

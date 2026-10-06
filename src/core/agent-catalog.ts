@@ -1,12 +1,12 @@
 import type { RuntimeAgentId } from "./api-contract";
 
 // How an agent accepts launch-time model/effort overrides. Mechanisms only — never value lists.
-export type RuntimeAgentOverrideMechanism = "flag" | "config" | "sdk" | "none";
+export type RuntimeAgentOverrideMechanism = "flag" | "config" | "none";
 
 export interface RuntimeAgentCapabilities {
 	modelOverride: RuntimeAgentOverrideMechanism;
 	effortOverride: RuntimeAgentOverrideMechanism;
-	/** Whether the agent consumes `providerId` at launch (Cline SDK, OpenCode `provider/model`). */
+	/** Whether the agent consumes `providerId` at launch (Cline `--provider`, OpenCode `provider/model`). */
 	providerOverride: RuntimeAgentOverrideMechanism;
 	docsUrl: string;
 }
@@ -18,8 +18,6 @@ export interface RuntimeAgentCatalogEntry {
 	baseArgs: string[];
 	autonomousArgs: string[];
 	installUrl: string;
-	/** Built-in runtime (e.g. the embedded Cline SDK) that needs no external binary detection. */
-	embedded?: boolean;
 	capabilities: RuntimeAgentCapabilities;
 }
 
@@ -55,22 +53,6 @@ export const RUNTIME_AGENT_CATALOG: RuntimeAgentCatalogEntry[] = [
 	{
 		id: "cline",
 		label: "Cline",
-		binary: "cline",
-		baseArgs: [],
-		autonomousArgs: ["--auto-approve-all"],
-		installUrl: "https://github.com/cline/cline",
-		// Embedded SDK runtime: always available, no external binary to detect.
-		embedded: true,
-		capabilities: {
-			modelOverride: "sdk",
-			effortOverride: "sdk",
-			providerOverride: "sdk",
-			docsUrl: "https://github.com/cline/cline",
-		},
-	},
-	{
-		id: "cline-cli",
-		label: "Cline CLI",
 		binary: "cline",
 		baseArgs: [],
 		autonomousArgs: ["--auto-approve", "true"],
@@ -165,7 +147,6 @@ export const RUNTIME_LAUNCH_SUPPORTED_AGENT_IDS: readonly RuntimeAgentId[] = [
 	"copilot",
 	"droid",
 	"kiro",
-	"cline-cli",
 	// "opencode",
 	// "gemini",
 ];

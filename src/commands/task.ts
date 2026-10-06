@@ -9,7 +9,7 @@ import type {
 	RuntimeTaskAgentSettings,
 	RuntimeWorkspaceStateResponse,
 } from "../core/api-contract";
-import { runtimeAgentIdSchema } from "../core/api-contract";
+import { runtimeAgentIdEnumSchema, runtimeAgentIdSchema } from "../core/api-contract";
 import { buildKanbanRuntimeUrl, getKanbanRuntimeOrigin, getRuntimeFetch } from "../core/runtime-endpoint";
 import { cloneRuntimeTaskAgentSettings } from "../core/task-agent-settings";
 import {
@@ -82,7 +82,7 @@ function parseAutoReviewMode(value: string | undefined): "commit" | "pr" | undef
 	throw new Error(`Invalid auto review mode "${value}". Expected: commit, pr.`);
 }
 
-const VALID_AGENT_IDS = runtimeAgentIdSchema.options;
+const VALID_AGENT_IDS = runtimeAgentIdEnumSchema.options;
 
 function parseAgentId(value: string | undefined): RuntimeAgentId | null | undefined {
 	if (value === undefined) {
@@ -1177,10 +1177,7 @@ export function registerTaskCommand(program: Command): void {
 		.option("--start-in-plan-mode [value]", "Set plan mode (true|false). Flag-only implies true.")
 		.option("--auto-review-enabled [value]", "Enable auto-review behavior (true|false). Flag-only implies true.")
 		.option("--auto-review-mode <mode>", "Auto-review mode: commit | pr.", parseAutoReviewMode)
-		.option(
-			"--agent-id <id>",
-			"Agent override: cline | cline-cli | claude | codex | droid | gemini | opencode | kiro | default.",
-		)
+		.option("--agent-id <id>", "Agent override: cline | claude | codex | droid | gemini | opencode | kiro | default.")
 		.option("--provider <id>", "Provider override for the task's agent. Valid values depend on the agent.")
 		.option("--model <id>", "Model override for the task's agent. Valid values depend on the agent.")
 		.option("--effort <level>", "Reasoning effort override for the task's agent. Valid values depend on the agent.")
@@ -1257,7 +1254,7 @@ export function registerTaskCommand(program: Command): void {
 		.option("--auto-review-mode <mode>", "Auto-review mode: commit | pr.", parseAutoReviewMode)
 		.option(
 			"--agent-id <id>",
-			'Agent override: cline | cline-cli | claude | codex | droid | gemini | opencode | kiro. Use "default" to clear.',
+			'Agent override: cline | claude | codex | droid | gemini | opencode | kiro. Use "default" to clear.',
 		)
 		.option(
 			"--provider <id>",

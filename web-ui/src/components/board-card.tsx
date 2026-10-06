@@ -1,16 +1,11 @@
 import { Draggable } from "@hello-pangea/dnd";
 import { getRuntimeAgentCatalogEntry } from "@runtime-agent-catalog";
-import { formatClineToolCallLabel } from "@runtime-cline-tool-call-display";
 import { buildTaskWorktreeDisplayPath } from "@runtime-task-worktree-path";
+import { formatToolCallLabel } from "@runtime-tool-call-display";
 import { AlertCircle, AlertTriangle, Bot, GitBranch, Pencil, Play, RotateCcw, Trash2 } from "lucide-react";
 import type { KeyboardEvent, MouseEvent } from "react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import {
-	formatClineReasoningEffortLabel,
-	formatClineSelectedModelButtonText,
-	resolveClineModelDisplayName,
-} from "@/components/detail-panels/cline-model-picker-options";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
 import { Spinner } from "@/components/ui/spinner";
@@ -121,7 +116,7 @@ function resolveToolCallLabel(
 		if (!toolInputSummary && !parsedSummary) {
 			return null;
 		}
-		return formatClineToolCallLabel(toolName, toolInputSummary ?? parsedSummary);
+		return formatToolCallLabel(toolName, toolInputSummary ?? parsedSummary);
 	}
 	if (!activityText) {
 		return null;
@@ -130,7 +125,7 @@ function resolveToolCallLabel(
 	if (!parsed) {
 		return null;
 	}
-	return formatClineToolCallLabel(parsed.toolName, parsed.toolInputSummary);
+	return formatToolCallLabel(parsed.toolName, parsed.toolInputSummary);
 }
 
 function isCardCreditLimitError(summary: RuntimeTaskSessionSummary | undefined): boolean {
@@ -235,7 +230,6 @@ export const BoardCard = memo(function BoardCard({
 	isDependencyTarget = false,
 	isDependencyLinking = false,
 	workspacePath,
-	defaultClineModelId = null,
 }: {
 	card: BoardCardModel;
 	index: number;
@@ -259,7 +253,6 @@ export const BoardCard = memo(function BoardCard({
 	isDependencyTarget?: boolean;
 	isDependencyLinking?: boolean;
 	workspacePath?: string | null;
-	defaultClineModelId?: string | null;
 }): React.ReactElement {
 	const [isHovered, setIsHovered] = useState(false);
 	const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -455,30 +448,18 @@ export const BoardCard = memo(function BoardCard({
 		if (card.agentSettings === undefined) {
 			return null;
 		}
-		const explicitReasoningLabel = card.agentSettings.reasoningEffort
-			? formatClineReasoningEffortLabel(card.agentSettings.reasoningEffort)
-			: !card.agentSettings.providerId && !card.agentSettings.modelId
-				? "Default"
-				: null;
-		if (card.agentSettings.providerId && !card.agentSettings.modelId) {
-			const providerLabel = `Provider: ${card.agentSettings.providerId}`;
-			return explicitReasoningLabel ? `${providerLabel} (${explicitReasoningLabel})` : providerLabel;
+		// Agent settings are opaque per-agent strings (e.g. Cline --provider/--model/--thinking), shown verbatim.
+		const { providerId, modelId, reasoningEffort } = card.agentSettings;
+		const effortLabel = reasoningEffort ? reasoningEffort : !providerId && !modelId ? "Default" : null;
+		if (providerId && !modelId) {
+			const providerLabel = `Provider: ${providerId}`;
+			return effortLabel ? `${providerLabel} (${effortLabel})` : providerLabel;
 		}
-		const effectiveModelId = card.agentSettings.modelId ?? defaultClineModelId;
-		if (!effectiveModelId) {
-			return explicitReasoningLabel ? `Default model (${explicitReasoningLabel})` : null;
+		if (!modelId) {
+			return effortLabel ? `Default model (${effortLabel})` : null;
 		}
-		const modelName = resolveClineModelDisplayName(effectiveModelId);
-		if (explicitReasoningLabel) {
-			return `${modelName} (${explicitReasoningLabel})`;
-		}
-		const inheritedReasoningEffort = "";
-		return formatClineSelectedModelButtonText({
-			modelName,
-			reasoningEffort: inheritedReasoningEffort,
-			showReasoningEffort: Boolean(inheritedReasoningEffort),
-		});
-	}, [card.agentSettings, defaultClineModelId]);
+		return effortLabel ? `${modelId} (${effortLabel})` : modelId;
+	}, [card.agentSettings]);
 	const taskAgentSettingsLabel = useMemo(() => {
 		const parts = [agentOverrideLabel, modelOverrideLabel].filter((value): value is string => Boolean(value));
 		return parts.length > 0 ? parts.join(" · ") : null;

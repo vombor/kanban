@@ -48,7 +48,7 @@ describe("agent-registry", () => {
 		const detected = detectInstalledCommands();
 
 		expect(detected).toEqual(["claude"]);
-		expect(commandDiscoveryMocks.isBinaryAvailableOnPath).toHaveBeenCalledTimes(10);
+		expect(commandDiscoveryMocks.isBinaryAvailableOnPath).toHaveBeenCalledTimes(9);
 	});
 
 	it("treats shell-only agents as unavailable", () => {
@@ -66,24 +66,13 @@ describe("buildRuntimeConfigResponse", () => {
 			agentAutonomousModeEnabled: true,
 		});
 
-		const response = buildRuntimeConfigResponse(config, {
-			providerId: null,
-			modelId: null,
-			baseUrl: null,
-			apiKeyConfigured: false,
-			oauthProvider: null,
-			oauthAccessTokenConfigured: false,
-			oauthRefreshTokenConfigured: false,
-			oauthAccountId: null,
-			oauthExpiresAt: null,
-		});
+		const response = buildRuntimeConfigResponse(config);
 
 		expect(response.agentAutonomousModeEnabled).toBe(true);
 		expect(response.agents.map((agent) => agent.id)).toEqual([
 			"claude",
 			"codex",
 			"cline",
-			"cline-cli",
 			"copilot",
 			"droid",
 			"kiro",
@@ -91,11 +80,9 @@ describe("buildRuntimeConfigResponse", () => {
 		expect(response.agents.find((agent) => agent.id === "claude")?.defaultArgs).toEqual([]);
 		expect(response.agents.find((agent) => agent.id === "codex")?.defaultArgs).toEqual([]);
 		expect(response.agents.find((agent) => agent.id === "cline")?.defaultArgs).toEqual([]);
-		expect(response.agents.find((agent) => agent.id === "cline-cli")?.defaultArgs).toEqual([]);
 		expect(response.agents.find((agent) => agent.id === "copilot")?.defaultArgs).toEqual([]);
 		expect(response.agents.find((agent) => agent.id === "droid")?.defaultArgs).toEqual([]);
 		expect(response.agents.find((agent) => agent.id === "kiro")?.defaultArgs).toEqual(["chat"]);
-		expect(response.agents.find((agent) => agent.id === "cline")?.installed).toBe(true);
 	});
 
 	it("omits autonomous flags from curated agent commands when disabled", () => {
@@ -104,24 +91,13 @@ describe("buildRuntimeConfigResponse", () => {
 		});
 		commandDiscoveryMocks.isBinaryAvailableOnPath.mockImplementation((binary: string) => binary === "claude");
 
-		const response = buildRuntimeConfigResponse(config, {
-			providerId: null,
-			modelId: null,
-			baseUrl: null,
-			apiKeyConfigured: false,
-			oauthProvider: null,
-			oauthAccessTokenConfigured: false,
-			oauthRefreshTokenConfigured: false,
-			oauthAccountId: null,
-			oauthExpiresAt: null,
-		});
+		const response = buildRuntimeConfigResponse(config);
 
 		expect(response.agentAutonomousModeEnabled).toBe(false);
 		expect(response.agents.map((agent) => agent.id)).toEqual([
 			"claude",
 			"codex",
 			"cline",
-			"cline-cli",
 			"copilot",
 			"droid",
 			"kiro",
@@ -129,14 +105,11 @@ describe("buildRuntimeConfigResponse", () => {
 		expect(response.agents.find((agent) => agent.id === "claude")?.defaultArgs).toEqual([]);
 		expect(response.agents.find((agent) => agent.id === "codex")?.defaultArgs).toEqual([]);
 		expect(response.agents.find((agent) => agent.id === "cline")?.defaultArgs).toEqual([]);
-		expect(response.agents.find((agent) => agent.id === "cline-cli")?.defaultArgs).toEqual([]);
 		expect(response.agents.find((agent) => agent.id === "copilot")?.defaultArgs).toEqual([]);
 		expect(response.agents.find((agent) => agent.id === "droid")?.defaultArgs).toEqual([]);
 		expect(response.agents.find((agent) => agent.id === "kiro")?.defaultArgs).toEqual(["chat"]);
-		expect(response.agents.find((agent) => agent.id === "cline")?.installed).toBe(true);
 		expect(response.agents.find((agent) => agent.id === "claude")?.command).toBe("claude");
 		expect(response.agents.find((agent) => agent.id === "codex")?.command).toBe("codex");
-		expect(response.agents.find((agent) => agent.id === "cline-cli")?.command).toBe("cline");
 		expect(response.agents.find((agent) => agent.id === "copilot")?.command).toBe("copilot");
 		expect(response.agents.find((agent) => agent.id === "droid")?.command).toBe("droid");
 		expect(response.agents.find((agent) => agent.id === "kiro")?.command).toBe("kiro-cli chat");
@@ -144,33 +117,13 @@ describe("buildRuntimeConfigResponse", () => {
 
 	it("sets debug mode from runtime environment variables", () => {
 		process.env.KANBAN_DEBUG_MODE = "true";
-		const response = buildRuntimeConfigResponse(createRuntimeConfigState(), {
-			providerId: null,
-			modelId: null,
-			baseUrl: null,
-			apiKeyConfigured: false,
-			oauthProvider: null,
-			oauthAccessTokenConfigured: false,
-			oauthRefreshTokenConfigured: false,
-			oauthAccountId: null,
-			oauthExpiresAt: null,
-		});
+		const response = buildRuntimeConfigResponse(createRuntimeConfigState());
 		expect(response.debugModeEnabled).toBe(true);
 	});
 
 	it("supports debug_mode fallback env name", () => {
 		process.env.debug_mode = "1";
-		const response = buildRuntimeConfigResponse(createRuntimeConfigState(), {
-			providerId: null,
-			modelId: null,
-			baseUrl: null,
-			apiKeyConfigured: false,
-			oauthProvider: null,
-			oauthAccessTokenConfigured: false,
-			oauthRefreshTokenConfigured: false,
-			oauthAccountId: null,
-			oauthExpiresAt: null,
-		});
+		const response = buildRuntimeConfigResponse(createRuntimeConfigState());
 		expect(response.debugModeEnabled).toBe(true);
 	});
 });
@@ -195,20 +148,11 @@ describe("buildAgentCapabilityReport", () => {
 		}
 	});
 
-	it("marks the embedded Cline runtime as installed regardless of binary detection", () => {
+	it("reports Cline as a launch-supported CLI agent with flag overrides, gated on binary detection", () => {
 		commandDiscoveryMocks.isBinaryAvailableOnPath.mockReturnValue(false);
 
 		const report = buildAgentCapabilityReport(createRuntimeConfigState());
-
-		expect(report.find((entry) => entry.id === "cline")?.installed).toBe(true);
-		expect(report.find((entry) => entry.id === "cline")?.launchSupported).toBe(true);
-	});
-
-	it("reports the Cline CLI agent as launch-supported with flag overrides, gated on binary detection", () => {
-		commandDiscoveryMocks.isBinaryAvailableOnPath.mockReturnValue(false);
-
-		const report = buildAgentCapabilityReport(createRuntimeConfigState());
-		const clineCli = report.find((entry) => entry.id === "cline-cli");
+		const clineCli = report.find((entry) => entry.id === "cline");
 
 		expect(clineCli?.launchSupported).toBe(true);
 		expect(clineCli?.installed).toBe(false);
@@ -220,6 +164,6 @@ describe("buildAgentCapabilityReport", () => {
 
 		commandDiscoveryMocks.isBinaryAvailableOnPath.mockImplementation((binary: string) => binary === "cline");
 		const detectedReport = buildAgentCapabilityReport(createRuntimeConfigState());
-		expect(detectedReport.find((entry) => entry.id === "cline-cli")?.installed).toBe(true);
+		expect(detectedReport.find((entry) => entry.id === "cline")?.installed).toBe(true);
 	});
 });

@@ -5,12 +5,7 @@ import {
 	isRuntimeAgentLaunchSupported,
 	RUNTIME_AGENT_CATALOG,
 } from "../core/agent-catalog";
-import type {
-	RuntimeAgentDefinition,
-	RuntimeAgentId,
-	RuntimeClineProviderSettings,
-	RuntimeConfigResponse,
-} from "../core/api-contract";
+import type { RuntimeAgentDefinition, RuntimeAgentId, RuntimeConfigResponse } from "../core/api-contract";
 import { isBinaryAvailableOnPath } from "./command-discovery";
 
 export interface ResolvedAgentCommand {
@@ -29,10 +24,9 @@ function getDefaultArgs(agentId: RuntimeAgentId): string[] {
 	return [...entry.baseArgs];
 }
 
-// Embedded agents (the Cline SDK) are always installed; everything else needs
-// its binary on PATH.
+// An agent is installed when its binary is on PATH.
 function isAgentInstalled(entry: RuntimeAgentCatalogEntry, detectedSet: ReadonlySet<string>): boolean {
-	return entry.embedded === true || detectedSet.has(entry.binary);
+	return detectedSet.has(entry.binary);
 }
 
 function quoteForDisplay(part: string): string {
@@ -131,10 +125,7 @@ export function resolveAgentCommand(runtimeConfig: RuntimeConfigState): Resolved
 	return null;
 }
 
-export function buildRuntimeConfigResponse(
-	runtimeConfig: RuntimeConfigState,
-	clineProviderSettings: RuntimeClineProviderSettings,
-): RuntimeConfigResponse {
+export function buildRuntimeConfigResponse(runtimeConfig: RuntimeConfigState): RuntimeConfigResponse {
 	const detectedCommands = detectInstalledCommands();
 	const agents = getCuratedDefinitions(runtimeConfig, detectedCommands);
 	const resolved = resolveAgentCommand(runtimeConfig);
@@ -152,7 +143,6 @@ export function buildRuntimeConfigResponse(
 		detectedCommands,
 		agents,
 		shortcuts: runtimeConfig.shortcuts,
-		clineProviderSettings,
 		commitPromptTemplate: runtimeConfig.commitPromptTemplate,
 		openPrPromptTemplate: runtimeConfig.openPrPromptTemplate,
 		commitPromptTemplateDefault: runtimeConfig.commitPromptTemplateDefault,

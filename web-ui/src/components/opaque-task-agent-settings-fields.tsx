@@ -6,26 +6,43 @@ export function OpaqueTaskAgentSettingsFields({
 	agentSettings,
 	agentLabel,
 	docsUrl,
+	showProviderInput = false,
 	showModelInput,
 	showEffortInput,
+	onProviderChange,
 	onModelChange,
 	onEffortChange,
 }: {
 	agentSettings: RuntimeTaskAgentSettings | undefined;
 	agentLabel: string;
 	docsUrl: string | undefined;
+	showProviderInput?: boolean;
 	showModelInput: boolean;
 	showEffortInput: boolean;
+	onProviderChange?: (value: string) => void;
 	onModelChange: (value: string) => void;
 	onEffortChange: (value: string) => void;
 }): ReactElement | null {
-	if (!showModelInput && !showEffortInput) {
+	if (!showProviderInput && !showModelInput && !showEffortInput) {
 		return null;
 	}
 
 	return (
 		<div className="flex flex-col gap-2">
 			<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+				{showProviderInput ? (
+					<div className="min-w-0">
+						<span className="text-[11px] text-text-secondary block mb-1">Provider</span>
+						<input
+							type="text"
+							value={agentSettings?.providerId ?? ""}
+							onChange={(e) => onProviderChange?.(e.currentTarget.value)}
+							placeholder="Provider ID"
+							aria-label="Provider override"
+							className="w-full rounded-md border border-border bg-surface-2 px-2 py-1.5 text-[12px] text-text-primary placeholder:text-text-tertiary focus:border-border-focus focus:outline-none"
+						/>
+					</div>
+				) : null}
 				{showModelInput ? (
 					<div className="min-w-0">
 						<span className="text-[11px] text-text-secondary block mb-1">Model</span>
@@ -60,7 +77,7 @@ export function OpaqueTaskAgentSettingsFields({
 					rel="noreferrer"
 					className="w-fit text-[11px] text-accent hover:text-accent-hover"
 				>
-					{agentLabel} CLI reference
+					{agentLabel} command-line reference
 				</a>
 			) : null}
 		</div>

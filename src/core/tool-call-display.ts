@@ -1,4 +1,4 @@
-export interface ClineToolCallDisplay {
+export interface ToolCallDisplay {
 	toolName: string;
 	inputSummary: string | null;
 }
@@ -160,7 +160,7 @@ const KANBAN_SUBCOMMAND_LABELS: Record<string, string> = {
  * binary path (e.g. `'/opt/homebrew/.../node' '/opt/.../cli.js' task create ...`)
  * or a simple `kanban task create ...`.
  */
-function resolveKanbanCommandDisplay(command: string): ClineToolCallDisplay | null {
+function resolveKanbanCommandDisplay(command: string): ToolCallDisplay | null {
 	if (!/kanban/i.test(command)) {
 		return null;
 	}
@@ -308,7 +308,7 @@ function summarizeParsedToolInput(toolName: string, input: unknown): string | nu
  * Resolves a kanban-friendly display from run_commands input when the command
  * is a kanban task CLI invocation. Returns null for non-kanban commands.
  */
-function resolveKanbanRunCommandDisplay(input: unknown): ClineToolCallDisplay | null {
+function resolveKanbanRunCommandDisplay(input: unknown): ToolCallDisplay | null {
 	if (!isRecord(input)) {
 		return null;
 	}
@@ -325,7 +325,7 @@ function resolveKanbanRunCommandDisplay(input: unknown): ClineToolCallDisplay | 
 	return null;
 }
 
-export function getClineToolCallDisplay(toolName: string | null | undefined, input: unknown): ClineToolCallDisplay {
+export function getToolCallDisplay(toolName: string | null | undefined, input: unknown): ToolCallDisplay {
 	const normalizedToolName = normalizeDisplayToolName(toolName);
 	const parsedInput = parseToolInput(input);
 
@@ -342,7 +342,7 @@ export function getClineToolCallDisplay(toolName: string | null | undefined, inp
 	};
 }
 
-export function formatClineToolCallLabel(
+export function formatToolCallLabel(
 	toolName: string | null | undefined,
 	inputSummary: string | null | undefined,
 ): string {

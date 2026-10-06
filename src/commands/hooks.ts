@@ -284,11 +284,10 @@ export function inferHookSourceFromPayload(payload: Record<string, unknown> | nu
 	if (payload && readStringField(payload, "type") === "agent-turn-complete") {
 		return "codex";
 	}
-	// Cline CLI hook payloads always carry the CLI version plus a snake_case
-	// hookName (agent_end, tool_call, ...); the embedded Cline runtime never
-	// flows through hook ingest, so this uniquely identifies the CLI.
+	// Cline hook payloads always carry the CLI version plus a snake_case
+	// hookName (agent_end, tool_call, ...).
 	if (payload && readStringField(payload, "clineVersion")) {
-		return "cline-cli";
+		return "cline";
 	}
 	return null;
 }

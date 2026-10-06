@@ -116,7 +116,9 @@ function getRuntimeHomePath(): string {
 	return join(homedir(), RUNTIME_HOME_PARENT_DIR, RUNTIME_HOME_DIR);
 }
 
-function normalizeAgentId(agentId: RuntimeAgentId | string | null | undefined): RuntimeAgentId {
+function normalizeAgentId(rawAgentId: RuntimeAgentId | string | null | undefined): RuntimeAgentId {
+	// "cline-cli" is the old id of the Cline CLI agent; it is now just "cline".
+	const agentId = rawAgentId === "cline-cli" ? "cline" : rawAgentId;
 	if (
 		(agentId === "claude" ||
 			agentId === "codex" ||
@@ -125,8 +127,7 @@ function normalizeAgentId(agentId: RuntimeAgentId | string | null | undefined): 
 			agentId === "droid" ||
 			agentId === "kiro" ||
 			agentId === "copilot" ||
-			agentId === "cline" ||
-			agentId === "cline-cli") &&
+			agentId === "cline") &&
 		isRuntimeAgentLaunchSupported(agentId)
 	) {
 		return agentId;

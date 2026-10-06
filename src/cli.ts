@@ -6,8 +6,6 @@ import { resolve } from "node:path";
 import { Command, Option } from "commander";
 import ora, { type Ora } from "ora";
 import packageJson from "../package.json" with { type: "json" };
-import type { ClineTaskSessionService } from "./cline-sdk/cline-task-session-service";
-import { disposeCliTelemetryService } from "./cline-sdk/cline-telemetry-service.js";
 import { registerAgentsCommand } from "./commands/agents";
 import { registerHooksCommand } from "./commands/hooks";
 import { registerTaskCommand } from "./commands/task";
@@ -385,7 +383,7 @@ async function startServer(): Promise<{
 
 		A regression in 25ba59f showed that eagerly importing the runtime stack here
 		could leave the source CLI process alive after the command had already printed
-		its JSON result. The issue first appeared after the native Cline SDK runtime
+		its JSON result. The issue first appeared after the (since removed) embedded Cline SDK runtime
 		was added to the server import graph. We have not yet isolated the deepest
 		handle creator inside that graph, so we keep command-style subcommands on the
 		lightweight path and only load the server stack when we actually start Kanban.
@@ -415,7 +413,6 @@ async function startServer(): Promise<{
 	]);
 	let runtimeStateHub: RuntimeStateHub | undefined;
 	let autoReviewReconciler: AutoReviewReconciler | undefined;
-	const clineTaskSessionServiceByWorkspaceId = new Map<string, ClineTaskSessionService>();
 	const workspaceRegistry = await createWorkspaceRegistry({
 		cwd: process.cwd(),
 		loadGlobalRuntimeConfig,
@@ -445,7 +442,6 @@ async function startServer(): Promise<{
 		});
 		runtimeHub.disposeWorkspace(workspaceId);
 		autoReviewReconciler?.untrackWorkspace(workspaceId);
-		clineTaskSessionServiceByWorkspaceId.delete(workspaceId);
 		return disposed;
 	};
 
@@ -456,9 +452,6 @@ async function startServer(): Promise<{
 			console.warn(`[kanban] ${message}`);
 		},
 		ensureTerminalManagerForWorkspace: workspaceRegistry.ensureTerminalManagerForWorkspace,
-		onClineTaskSessionServiceReady: (workspaceId, service) => {
-			clineTaskSessionServiceByWorkspaceId.set(workspaceId, service);
-		},
 		resolveInteractiveShellCommand,
 		runCommand: runScopedCommand,
 		resolveProjectInputPath,
@@ -536,7 +529,6 @@ async function startServer(): Promise<{
 			const config = await workspaceRegistry.loadScopedRuntimeConfig({ workspaceId, workspacePath });
 			return config.selectedAgentId;
 		},
-		getClineTaskSessionService: (workspaceId) => clineTaskSessionServiceByWorkspaceId.get(workspaceId) ?? null,
 		onBoardMutated: (workspaceId, workspacePath) =>
 			void runtimeHub.broadcastRuntimeWorkspaceStateUpdated(workspaceId, workspacePath),
 		warn: (message) => {
@@ -673,7 +665,6 @@ async function runMainCommand(options: CliOptions, shouldAutoOpenBrowser: boolea
 		await runtime.shutdown({
 			skipSessionCleanup: options.skipShutdownCleanup,
 		});
-		await disposeCliTelemetryService().catch(() => {});
 	};
 
 	installGracefulShutdownHandlers({
@@ -796,14 +787,14 @@ async function run(): Promise<void> {
 	const program = createProgram(argv);
 	await program.parseAsync(argv, { from: "user" });
 	if (!shouldAutoOpenBrowserTabForInvocation(argv)) {
-		await Promise.allSettled([disposeCliTelemetryService(), flushNodeTelemetry()]);
+		await Promise.allSettled([flushNodeTelemetry()]);
 		process.exit(process.exitCode ?? 0);
 	}
 }
 
 void run().catch(async (error) => {
 	captureNodeException(error, { area: "startup" });
-	await Promise.allSettled([disposeCliTelemetryService(), flushNodeTelemetry()]);
+	await Promise.allSettled([flushNodeTelemetry()]);
 	const message = error instanceof Error ? error.message : String(error);
 	console.error(`Failed to start Kanban: ${message}`);
 	process.exit(1);

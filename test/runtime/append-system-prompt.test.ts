@@ -169,7 +169,7 @@ describe("resolveHomeAgentAppendSystemPrompt", () => {
 		expect(prompt).not.toContain("--scope user");
 	});
 
-	it("returns active-agent guidance for cline-cli home sidebar sessions", () => {
+	it("returns Cline guidance for home sidebar sessions started under the old cline-cli id", () => {
 		const prompt = resolveHomeAgentAppendSystemPrompt("__home_agent__:workspace-1:cline-cli", {
 			currentVersion: "0.1.10",
 			cwd: "/Users/example/repo",
@@ -178,7 +178,7 @@ describe("resolveHomeAgentAppendSystemPrompt", () => {
 			argv: ["node", "/Users/example/repo/dist/cli.js"],
 			resolveRealPath: (path) => path,
 		});
-		expect(prompt).toContain("Current home agent: `cline-cli`");
+		expect(prompt).toContain("Current home agent: `cline`");
 		expect(prompt).toContain("cline mcp install linear --transport http https://mcp.linear.app/mcp");
 	});
 });

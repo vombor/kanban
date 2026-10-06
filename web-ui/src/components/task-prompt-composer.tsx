@@ -1,13 +1,12 @@
 import { ImagePlus, Paperclip } from "lucide-react";
 import type { ChangeEvent, ClipboardEvent, DragEvent, KeyboardEvent, ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-
-import {
-	applyClineComposerCompletion,
-	buildMentionInsertText,
-	detectActiveClineComposerToken,
-} from "@/components/detail-panels/cline-chat-composer-completion";
 import { type InlineCompletionItem, InlineCompletionPicker } from "@/components/inline-completion-picker";
+import {
+	applyComposerCompletion,
+	buildMentionInsertText,
+	detectActiveComposerToken,
+} from "@/components/prompt-composer-completion";
 import {
 	ACCEPTED_TASK_IMAGE_INPUT_ACCEPT,
 	collectImageFilesFromDataTransfer,
@@ -83,7 +82,7 @@ export function TaskPromptComposer({
 	}, [autoResizeTextarea, value]);
 
 	const activeToken = useMemo(() => {
-		const token = detectActiveClineComposerToken(value, cursorIndex);
+		const token = detectActiveComposerToken(value, cursorIndex);
 		if (token && token.kind !== "mention") {
 			return null;
 		}
@@ -171,7 +170,7 @@ export function TaskPromptComposer({
 				return;
 			}
 			const insertText = mentionInsertTextMap.get(item.id) ?? `@${item.id}`;
-			const next = applyClineComposerCompletion(value, activeToken, insertText);
+			const next = applyComposerCompletion(value, activeToken, insertText);
 			onValueChange(next.value);
 			window.requestAnimationFrame(() => {
 				if (!textareaRef.current) {

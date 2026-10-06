@@ -456,76 +456,6 @@ describe("prepareAgentLaunch hook strategies", () => {
 		expect(launch.deferredStartupInput?.endsWith("\r")).toBe(true);
 	});
 
-	it("writes Cline hook scripts and injects --hooks-dir", async () => {
-		setupTempHome();
-		const launch = await prepareAgentLaunch({
-			taskId: "task-1",
-			agentId: "cline",
-			binary: "cline",
-			args: [],
-			cwd: "/tmp",
-			prompt: "",
-			workspaceId: "workspace-1",
-		});
-
-		const hooksDir = join(homedir(), ".cline", "kanban", "hooks", "cline");
-		const notificationHookPath =
-			process.platform === "win32" ? join(hooksDir, "Notification.ps1") : join(hooksDir, "Notification");
-		const taskCompleteHookPath =
-			process.platform === "win32" ? join(hooksDir, "TaskComplete.ps1") : join(hooksDir, "TaskComplete");
-		const userPromptSubmitHookPath =
-			process.platform === "win32" ? join(hooksDir, "UserPromptSubmit.ps1") : join(hooksDir, "UserPromptSubmit");
-		const preToolUseHookPath =
-			process.platform === "win32" ? join(hooksDir, "PreToolUse.ps1") : join(hooksDir, "PreToolUse");
-		const postToolUseHookPath =
-			process.platform === "win32" ? join(hooksDir, "PostToolUse.ps1") : join(hooksDir, "PostToolUse");
-
-		expect(launch.env.KANBAN_HOOK_TASK_ID).toBe("task-1");
-		expect(launch.env.KANBAN_HOOK_WORKSPACE_ID).toBe("workspace-1");
-
-		const hooksDirArgIndex = launch.args.indexOf("--hooks-dir");
-		expect(hooksDirArgIndex).toBeGreaterThanOrEqual(0);
-		expect(launch.args[hooksDirArgIndex + 1]).toBe(hooksDir);
-
-		expect(existsSync(notificationHookPath)).toBe(true);
-		expect(existsSync(taskCompleteHookPath)).toBe(true);
-		expect(existsSync(userPromptSubmitHookPath)).toBe(true);
-		expect(existsSync(preToolUseHookPath)).toBe(true);
-		expect(existsSync(postToolUseHookPath)).toBe(true);
-
-		const notificationScript = readFileSync(notificationHookPath, "utf8");
-		expect(notificationScript).toContain("hooks");
-		expect(notificationScript).toContain("to_review");
-		expect(notificationScript).toContain("user_attention");
-		expect(notificationScript).toContain("completion_result");
-		expect(notificationScript).toContain('{"cancel":false}');
-
-		const taskCompleteScript = readFileSync(taskCompleteHookPath, "utf8");
-		expect(taskCompleteScript).toContain("hooks");
-		expect(taskCompleteScript).toContain("to_review");
-		expect(taskCompleteScript).toContain('{"cancel":false}');
-
-		const userPromptSubmitScript = readFileSync(userPromptSubmitHookPath, "utf8");
-		expect(userPromptSubmitScript).toContain("hooks");
-		expect(userPromptSubmitScript).toContain("to_in_progress");
-		expect(userPromptSubmitScript).toContain('{"cancel":false}');
-
-		const preToolUseScript = readFileSync(preToolUseHookPath, "utf8");
-		expect(preToolUseScript).toContain("hooks");
-		expect(preToolUseScript).toContain("activity");
-		expect(preToolUseScript).toContain("to_in_progress");
-		expect(preToolUseScript).toContain("to_review");
-		expect(preToolUseScript).toContain("ask_followup_question");
-		expect(preToolUseScript).toContain("plan_mode_respond");
-
-		const postToolUseScript = readFileSync(postToolUseHookPath, "utf8");
-		expect(postToolUseScript).toContain("hooks");
-		expect(postToolUseScript).toContain("activity");
-		expect(postToolUseScript).toContain("to_in_progress");
-		expect(postToolUseScript).toContain("ask_followup_question");
-		expect(postToolUseScript).toContain("plan_mode_respond");
-	});
-
 	it("adds resume flags for each agent", async () => {
 		setupTempHome();
 
@@ -604,7 +534,8 @@ describe("prepareAgentLaunch hook strategies", () => {
 			prompt: "",
 			resumeFromTrash: true,
 		});
-		expect(clineLaunch.args).toContain("--continue");
+		// Cline has no --continue; a trash-restore relaunches with the original prompt.
+		expect(clineLaunch.args).not.toContain("--continue");
 	});
 
 	it("places Codex hook config before the resume subcommand", async () => {
@@ -697,7 +628,7 @@ describe("prepareAgentLaunch hook strategies", () => {
 			cwd: "/tmp",
 			prompt: "",
 		});
-		expect(clineLaunch.args).toContain("--auto-approve-all");
+		expect(clineLaunch.args).toEqual(expect.arrayContaining(["--auto-approve", "true"]));
 	});
 
 	it("does not add a Claude permission mode when args already set one", async () => {
@@ -793,12 +724,13 @@ describe("prepareAgentLaunch hook strategies", () => {
 			taskId: "task-cline-no-auto",
 			agentId: "cline",
 			binary: "cline",
-			args: ["--auto-approve-all"],
+			args: ["--auto-approve", "true"],
 			autonomousModeEnabled: false,
 			cwd: "/tmp",
 			prompt: "",
 		});
-		expect(clineLaunch.args).toContain("--auto-approve-all");
+		expect(clineLaunch.args).toEqual(expect.arrayContaining(["--auto-approve", "true"]));
+		expect(clineLaunch.args).not.toContain("false");
 
 		const kiroLaunch = await prepareAgentLaunch({
 			taskId: "task-kiro-no-auto",
@@ -1003,11 +935,11 @@ describe("per-task agentSettings overrides", () => {
 		expect(launch.args).not.toContain("--model");
 	});
 
-	it("cline-cli: passes provider/model/effort verbatim as --provider/--model/--thinking", async () => {
+	it("cline: passes provider/model/effort verbatim as --provider/--model/--thinking", async () => {
 		setupTempHome();
 		const launch = await prepareAgentLaunch({
 			taskId: "task-1",
-			agentId: "cline-cli",
+			agentId: "cline",
 			binary: "cline",
 			args: [],
 			cwd: "/tmp",
@@ -1030,11 +962,11 @@ describe("per-task agentSettings overrides", () => {
 		expect(launch.args[effortIndex + 1]).toBe(SENTINEL.reasoningEffort);
 	});
 
-	it("cline-cli: keeps user-pinned flags and does not duplicate overrides", async () => {
+	it("cline: keeps user-pinned flags and does not duplicate overrides", async () => {
 		setupTempHome();
 		const launch = await prepareAgentLaunch({
 			taskId: "task-1",
-			agentId: "cline-cli",
+			agentId: "cline",
 			binary: "cline",
 			args: ["-m", "user-pinned-model", "--thinking", "high"],
 			cwd: "/tmp",
@@ -1075,7 +1007,7 @@ describe("per-task agentSettings overrides", () => {
 	});
 });
 
-describe("cline-cli adapter", () => {
+describe("cline adapter", () => {
 	function setupTaskCwd(): string {
 		const home = setupTempHome();
 		const taskCwd = join(home, "worktree");
@@ -1088,11 +1020,11 @@ describe("cline-cli adapter", () => {
 		return join(taskCwd, ".cline", "hooks", fileName);
 	}
 
-	it("writes Cline CLI hook scripts into the worktree .cline/hooks directory", async () => {
+	it("writes Cline hook scripts into the worktree .cline/hooks directory", async () => {
 		const taskCwd = setupTaskCwd();
 		const launch = await prepareAgentLaunch({
 			taskId: "task-1",
-			agentId: "cline-cli",
+			agentId: "cline",
 			binary: "cline",
 			args: [],
 			cwd: taskCwd,
@@ -1145,7 +1077,7 @@ describe("cline-cli adapter", () => {
 		expect(postToolUseScript).toContain("ask_followup_question");
 	});
 
-	it("never overwrites user-owned Cline CLI hook files and surfaces a session warning", async () => {
+	it("never overwrites user-owned Cline hook files and surfaces a session warning", async () => {
 		const taskCwd = setupTaskCwd();
 		const userHookPath = clineCliHookPath(taskCwd, "TaskComplete");
 		mkdirSync(join(taskCwd, ".cline", "hooks"), { recursive: true });
@@ -1153,7 +1085,7 @@ describe("cline-cli adapter", () => {
 
 		const launch = await prepareAgentLaunch({
 			taskId: "task-1",
-			agentId: "cline-cli",
+			agentId: "cline",
 			binary: "cline",
 			args: [],
 			cwd: taskCwd,
@@ -1168,7 +1100,7 @@ describe("cline-cli adapter", () => {
 		expect(existsSync(clineCliHookPath(taskCwd, "UserPromptSubmit"))).toBe(true);
 	});
 
-	it("refreshes stale Kanban-managed Cline CLI hook files", async () => {
+	it("refreshes stale Kanban-managed Cline hook files", async () => {
 		const taskCwd = setupTaskCwd();
 		const hookPath = clineCliHookPath(taskCwd, "TaskComplete");
 		mkdirSync(join(taskCwd, ".cline", "hooks"), { recursive: true });
@@ -1176,7 +1108,7 @@ describe("cline-cli adapter", () => {
 
 		await prepareAgentLaunch({
 			taskId: "task-1",
-			agentId: "cline-cli",
+			agentId: "cline",
 			binary: "cline",
 			args: [],
 			cwd: taskCwd,
@@ -1193,7 +1125,7 @@ describe("cline-cli adapter", () => {
 		setupTempHome();
 		const launch = await prepareAgentLaunch({
 			taskId: "task-1",
-			agentId: "cline-cli",
+			agentId: "cline",
 			binary: "cline",
 			args: [],
 			cwd: "/tmp",
@@ -1208,7 +1140,7 @@ describe("cline-cli adapter", () => {
 		setupTempHome();
 		const launch = await prepareAgentLaunch({
 			taskId: "task-1",
-			agentId: "cline-cli",
+			agentId: "cline",
 			binary: "cline",
 			args: ["--json"],
 			cwd: "/tmp",
@@ -1223,7 +1155,7 @@ describe("cline-cli adapter", () => {
 		setupTempHome();
 		const launch = await prepareAgentLaunch({
 			taskId: "task-1",
-			agentId: "cline-cli",
+			agentId: "cline",
 			binary: "cline",
 			args: [],
 			autonomousModeEnabled: true,
@@ -1242,7 +1174,7 @@ describe("cline-cli adapter", () => {
 		setupTempHome();
 		const launch = await prepareAgentLaunch({
 			taskId: "task-1",
-			agentId: "cline-cli",
+			agentId: "cline",
 			binary: "cline",
 			args: [],
 			autonomousModeEnabled: false,
@@ -1259,7 +1191,7 @@ describe("cline-cli adapter", () => {
 		setupTempHome();
 		const launch = await prepareAgentLaunch({
 			taskId: "task-1",
-			agentId: "cline-cli",
+			agentId: "cline",
 			binary: "cline",
 			args: ["--auto-approve", "false"],
 			autonomousModeEnabled: true,
@@ -1275,7 +1207,7 @@ describe("cline-cli adapter", () => {
 		setupTempHome();
 		const launch = await prepareAgentLaunch({
 			taskId: "task-1",
-			agentId: "cline-cli",
+			agentId: "cline",
 			binary: "cline",
 			args: ["--auto-approve", "true"],
 			autonomousModeEnabled: true,
@@ -1293,7 +1225,7 @@ describe("cline-cli adapter", () => {
 		setupTempHome();
 		const launch = await prepareAgentLaunch({
 			taskId: "task-1",
-			agentId: "cline-cli",
+			agentId: "cline",
 			binary: "cline",
 			args: ["--worktree", "--zen", "--kanban", "--update"],
 			cwd: "/tmp",
@@ -1310,7 +1242,7 @@ describe("cline-cli adapter", () => {
 		setupTempHome();
 		const launch = await prepareAgentLaunch({
 			taskId: "task-1",
-			agentId: "cline-cli",
+			agentId: "cline",
 			binary: "cline",
 			args: [],
 			cwd: "/tmp",
@@ -1330,7 +1262,7 @@ describe("cline-cli adapter", () => {
 		setKanbanProcessContext();
 		const launch = await prepareAgentLaunch({
 			taskId: "__home_agent__:workspace-1:cline-cli",
-			agentId: "cline-cli",
+			agentId: "cline",
 			binary: "cline",
 			args: [],
 			cwd: taskCwd,
@@ -1351,7 +1283,15 @@ describe("prepareAgentLaunch copilot", () => {
 	function copilotInput(overrides: Record<string, unknown> = {}) {
 		const cwd = join(tempHome as string, "worktree");
 		mkdirSync(cwd, { recursive: true });
-		return { taskId: "task-copilot", agentId: "copilot" as const, binary: "copilot", args: [], cwd, prompt: "Build it", ...overrides };
+		return {
+			taskId: "task-copilot",
+			agentId: "copilot" as const,
+			binary: "copilot",
+			args: [],
+			cwd,
+			prompt: "Build it",
+			...overrides,
+		};
 	}
 
 	it("starts interactive with the prompt and maps the card's model and effort", async () => {
@@ -1382,7 +1322,9 @@ describe("prepareAgentLaunch copilot", () => {
 
 	it("uses the Copilot subscription for provider 'github' and keeps BYOK env empty", async () => {
 		setupTempHome();
-		const launch = await prepareAgentLaunch(copilotInput({ agentSettings: { providerId: "github", modelId: "gpt-6.1-sol" } }));
+		const launch = await prepareAgentLaunch(
+			copilotInput({ agentSettings: { providerId: "github", modelId: "gpt-6.1-sol" } }),
+		);
 		expect(Object.keys(launch.env).filter((key) => key.startsWith("COPILOT_PROVIDER_"))).toEqual([]);
 		expect(launch.sessionWarning).toBeUndefined();
 	});
@@ -1392,11 +1334,17 @@ describe("prepareAgentLaunch copilot", () => {
 		mkdirSync(join(home, ".cline", "kanban"), { recursive: true });
 		writeFileSync(
 			join(home, ".cline", "kanban", "copilot-providers.json"),
-			JSON.stringify({ providers: { local: { baseUrl: "http://127.0.0.1:13305/v1", type: "openai", apiKeyEnv: "TEST_COPILOT_KEY" } } }),
+			JSON.stringify({
+				providers: {
+					local: { baseUrl: "http://127.0.0.1:13305/v1", type: "openai", apiKeyEnv: "TEST_COPILOT_KEY" },
+				},
+			}),
 		);
 		process.env.TEST_COPILOT_KEY = "test-value";
 		try {
-			const launch = await prepareAgentLaunch(copilotInput({ agentSettings: { providerId: "local", modelId: "some-model" } }));
+			const launch = await prepareAgentLaunch(
+				copilotInput({ agentSettings: { providerId: "local", modelId: "some-model" } }),
+			);
 			expect(launch.env.COPILOT_PROVIDER_BASE_URL).toBe("http://127.0.0.1:13305/v1");
 			expect(launch.env.COPILOT_PROVIDER_TYPE).toBe("openai");
 			expect(launch.env.COPILOT_PROVIDER_API_KEY).toBe("test-value");

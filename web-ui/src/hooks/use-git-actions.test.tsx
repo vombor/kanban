@@ -100,17 +100,6 @@ function createRuntimeConfig(selectedAgentId: RuntimeConfigResponse["selectedAge
 			},
 		],
 		shortcuts: [],
-		clineProviderSettings: {
-			providerId: "anthropic",
-			modelId: "claude-sonnet-4",
-			baseUrl: null,
-			apiKeyConfigured: true,
-			oauthProvider: null,
-			oauthAccessTokenConfigured: false,
-			oauthRefreshTokenConfigured: false,
-			oauthAccountId: null,
-			oauthExpiresAt: null,
-		},
 		commitPromptTemplate: "commit",
 		openPrPromptTemplate: "pr",
 		commitPromptTemplateDefault: "commit",
@@ -135,13 +124,11 @@ function HookHarness({
 	board = createBoard(),
 	runtimeProjectConfig = createRuntimeConfig("cline"),
 	sendTaskSessionInput,
-	sendTaskChatMessage,
 }: {
 	onSnapshot: (snapshot: HookSnapshot) => void;
 	board?: BoardData;
 	runtimeProjectConfig?: RuntimeConfigResponse;
 	sendTaskSessionInput: Parameters<typeof useGitActions>[0]["sendTaskSessionInput"];
-	sendTaskChatMessage: Parameters<typeof useGitActions>[0]["sendTaskChatMessage"];
 }): null {
 	const gitActions = useGitActions({
 		currentProjectId: "project-1",
@@ -149,7 +136,6 @@ function HookHarness({
 		selectedCard: null,
 		runtimeProjectConfig,
 		sendTaskSessionInput,
-		sendTaskChatMessage,
 		fetchTaskWorkspaceInfo: async () => createWorkspaceInfo(),
 		isGitHistoryOpen: false,
 		refreshWorkspaceState: async () => {},
@@ -175,10 +161,8 @@ describe("useGitActions", () => {
 		cardAgentId?: RuntimeAgentId;
 	}): Promise<{
 		sendTaskSessionInput: ReturnType<typeof vi.fn>;
-		sendTaskChatMessage: ReturnType<typeof vi.fn>;
 	}> {
 		const sendTaskSessionInput = vi.fn(async () => ({ ok: true }));
-		const sendTaskChatMessage = vi.fn(async () => ({ ok: true }));
 		let latestSnapshot: HookSnapshot | null = null;
 
 		await act(async () => {
@@ -187,7 +171,6 @@ describe("useGitActions", () => {
 					board={createBoard(args.cardAgentId)}
 					runtimeProjectConfig={createRuntimeConfig(args.projectAgentId)}
 					sendTaskSessionInput={sendTaskSessionInput}
-					sendTaskChatMessage={sendTaskChatMessage}
 					onSnapshot={(snapshot) => {
 						latestSnapshot = snapshot;
 					}}
@@ -207,7 +190,7 @@ describe("useGitActions", () => {
 			await Promise.resolve();
 		});
 
-		return { sendTaskSessionInput, sendTaskChatMessage };
+		return { sendTaskSessionInput };
 	}
 
 	beforeEach(() => {
@@ -239,58 +222,25 @@ describe("useGitActions", () => {
 		}
 	});
 
-	it("sends commit prompts through the native cline chat API", async () => {
-		const sendTaskSessionInput = vi.fn(async () => ({ ok: true }));
-		const sendTaskChatMessage = vi.fn(async () => ({ ok: true }));
-		let latestSnapshot: HookSnapshot | null = null;
-
-		await act(async () => {
-			root.render(
-				<HookHarness
-					sendTaskSessionInput={sendTaskSessionInput}
-					sendTaskChatMessage={sendTaskChatMessage}
-					onSnapshot={(snapshot) => {
-						latestSnapshot = snapshot;
-					}}
-				/>,
-			);
-			await Promise.resolve();
-		});
-
-		if (latestSnapshot === null) {
-			throw new Error("Expected a hook snapshot.");
-		}
-
-		await act(async () => {
-			latestSnapshot?.handleAgentCommitTask("task-1");
-			await Promise.resolve();
-			await Promise.resolve();
-			await Promise.resolve();
-		});
-
-		expect(sendTaskChatMessage).toHaveBeenCalledWith("task-1", expect.any(String), { mode: "act" });
-		expect(sendTaskSessionInput).not.toHaveBeenCalled();
-		expect(showAppToastMock).not.toHaveBeenCalled();
-	});
-
-	it("routes a cline card override to chat when the project default is a terminal agent", async () => {
-		const { sendTaskSessionInput, sendTaskChatMessage } = await commitFromReviewCard({
+	it("routes Cline cards through the task terminal like every other agent", async () => {
+		const { sendTaskSessionInput } = await commitFromReviewCard({
 			projectAgentId: "codex",
 			cardAgentId: "cline",
 		});
 
-		expect(sendTaskChatMessage).toHaveBeenCalledWith("task-1", expect.any(String), { mode: "act" });
-		expect(sendTaskSessionInput).not.toHaveBeenCalled();
+		expect(sendTaskSessionInput).toHaveBeenCalledWith("task-1", expect.any(String), {
+			appendNewline: false,
+			mode: "paste",
+		});
 		expect(showAppToastMock).not.toHaveBeenCalled();
 	});
 
 	it("routes a terminal card override to the session when the project default is cline", async () => {
-		const { sendTaskSessionInput, sendTaskChatMessage } = await commitFromReviewCard({
+		const { sendTaskSessionInput } = await commitFromReviewCard({
 			projectAgentId: "cline",
 			cardAgentId: "codex",
 		});
 
-		expect(sendTaskChatMessage).not.toHaveBeenCalled();
 		expect(sendTaskSessionInput).toHaveBeenCalledWith("task-1", expect.any(String), {
 			appendNewline: false,
 			mode: "paste",
@@ -306,22 +256,11 @@ describe("useGitActions", () => {
 		expect(showAppToastMock).not.toHaveBeenCalled();
 	});
 
-	it("routes a card with no agent override through cline chat when the project default is cline", async () => {
-		const { sendTaskSessionInput, sendTaskChatMessage } = await commitFromReviewCard({
-			projectAgentId: "cline",
-		});
-
-		expect(sendTaskChatMessage).toHaveBeenCalledWith("task-1", expect.any(String), { mode: "act" });
-		expect(sendTaskSessionInput).not.toHaveBeenCalled();
-		expect(showAppToastMock).not.toHaveBeenCalled();
-	});
-
 	it("routes a card with no agent override through the session when the project default is a terminal agent", async () => {
-		const { sendTaskSessionInput, sendTaskChatMessage } = await commitFromReviewCard({
+		const { sendTaskSessionInput } = await commitFromReviewCard({
 			projectAgentId: "codex",
 		});
 
-		expect(sendTaskChatMessage).not.toHaveBeenCalled();
 		expect(sendTaskSessionInput).toHaveBeenCalledWith("task-1", expect.any(String), {
 			appendNewline: false,
 			mode: "paste",

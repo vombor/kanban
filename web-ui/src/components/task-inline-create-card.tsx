@@ -9,7 +9,7 @@ import { TaskAgentModelPicker, useTaskAgentModelPicker } from "@/components/task
 import { TaskPromptComposer } from "@/components/task-prompt-composer";
 import { Button } from "@/components/ui/button";
 import { NativeSelect } from "@/components/ui/native-select";
-import type { RuntimeAgentId, RuntimeClineReasoningEffort, RuntimeTaskAgentSettings } from "@/runtime/types";
+import type { RuntimeAgentId, RuntimeTaskAgentSettings } from "@/runtime/types";
 import type { TaskAutoReviewMode, TaskImage } from "@/types";
 import { pasteShortcutLabel } from "@/utils/platform";
 import { useDocumentEvent, useMeasure } from "@/utils/react-use";
@@ -72,9 +72,6 @@ export function TaskInlineCreateCard({
 	agentSettings,
 	onAgentSettingsChange,
 	defaultAgentId,
-	defaultProviderId,
-	defaultModelId,
-	defaultReasoningEffort,
 }: {
 	title?: string;
 	onTitleChange?: (value: string) => void;
@@ -105,12 +102,6 @@ export function TaskInlineCreateCard({
 	onAgentSettingsChange?: (value: RuntimeTaskAgentSettings | undefined) => void;
 	/** Default agent ID from runtimeConfig.selectedAgentId, used to show "Default (AgentName)" in picker */
 	defaultAgentId?: RuntimeAgentId | null;
-	/** Default Cline provider ID from runtimeConfig.clineProviderSettings.providerId */
-	defaultProviderId?: string | null;
-	/** Default Cline model ID from runtimeConfig.clineProviderSettings.modelId */
-	defaultModelId?: string | null;
-	/** Default Cline reasoning effort from runtimeConfig.clineProviderSettings.reasoningEffort */
-	defaultReasoningEffort?: RuntimeClineReasoningEffort | null;
 }): ReactElement {
 	const promptId = `${idPrefix}-prompt-input`;
 	const planModeId = `${idPrefix}-plan-mode-toggle`;
@@ -121,7 +112,6 @@ export function TaskInlineCreateCard({
 	const [measureRef, cardRect] = useMeasure<HTMLDivElement>();
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const [isBranchPopoverOpen, setIsBranchPopoverOpen] = useState(false);
-	const [isModelPickerPopoverOpen, setIsModelPickerPopoverOpen] = useState(false);
 	const setCardRef = useCallback(
 		(node: HTMLDivElement | null) => {
 			containerRef.current = node;
@@ -137,23 +127,8 @@ export function TaskInlineCreateCard({
 	const cancelLabel = hideCancelShortcut ? "Cancel" : "Cancel (esc)";
 	const cardMarginBottom = mode === "create" ? 6 : 0;
 
-	const {
-		agentOptions,
-		clineProviderOptions,
-		clineModelOptions,
-		effectiveDefaultModelId,
-		providerModels,
-		isLoadingProviders,
-		isLoadingModels,
-		providerDefaultModels,
-	} = useTaskAgentModelPicker({
-		active: true,
-		workspaceId,
-		agentId,
-		agentSettings,
+	const { agentOptions } = useTaskAgentModelPicker({
 		defaultAgentId,
-		defaultProviderId,
-		defaultModelId,
 	});
 
 	useHotkeys(
@@ -180,7 +155,7 @@ export function TaskInlineCreateCard({
 	useDocumentEvent(
 		"pointerdown",
 		(event) => {
-			if (!enabled || mode !== "edit" || isBranchPopoverOpen || isModelPickerPopoverOpen) {
+			if (!enabled || mode !== "edit" || isBranchPopoverOpen) {
 				return;
 			}
 			const container = containerRef.current;
@@ -315,17 +290,7 @@ export function TaskInlineCreateCard({
 						agentSettings={agentSettings}
 						onAgentSettingsChange={onAgentSettingsChange}
 						agentOptions={agentOptions}
-						clineProviderOptions={clineProviderOptions}
-						clineModelOptions={clineModelOptions}
-						effectiveDefaultModelId={effectiveDefaultModelId}
-						providerModels={providerModels}
-						isLoadingProviders={isLoadingProviders}
-						isLoadingModels={isLoadingModels}
 						defaultAgentId={defaultAgentId}
-						defaultProviderId={defaultProviderId}
-						defaultReasoningEffort={defaultReasoningEffort}
-						providerDefaultModels={providerDefaultModels}
-						onPopoverOpenChange={setIsModelPickerPopoverOpen}
 					/>
 				) : null}
 			</div>
