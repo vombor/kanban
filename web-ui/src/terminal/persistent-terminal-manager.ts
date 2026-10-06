@@ -21,6 +21,7 @@ import {
 	hasInterruptAcknowledgement,
 	hasLikelyShellPrompt,
 } from "@/terminal/terminal-prompt-heuristics";
+import { attachTerminalTouchScroll } from "@/terminal/terminal-touch-scroll";
 import { isMacPlatform } from "@/utils/platform";
 
 const SHIFT_ENTER_SEQUENCE = "\n";
@@ -165,6 +166,7 @@ class PersistentTerminal {
 	private terminalWriteQueue: Promise<void> = Promise.resolve();
 	private lastRestore: AppliedRestore | null = null;
 	private disposed = false;
+	private detachTouchScroll: (() => void) | null = null;
 
 	constructor(
 		private readonly taskId: string,
@@ -197,6 +199,25 @@ class PersistentTerminal {
 		this.terminal.loadAddon(this.unicode11Addon);
 		this.terminal.unicode.activeVersion = "11";
 		this.terminal.open(this.hostElement);
+		this.detachTouchScroll = attachTerminalTouchScroll(this.hostElement, {
+			getLineHeight: () => {
+				const rows = this.terminal.rows;
+				const height = this.terminal.element?.querySelector(".xterm-screen")?.clientHeight ?? 0;
+				return rows > 0 && height > 0 ? height / rows : 16;
+			},
+			scrollLines: (lines) => {
+				if (this.terminal.buffer.active.type === "normal") {
+					this.terminal.scrollLines(lines);
+					return;
+				}
+				// The alternate screen has no scrollback; a full-screen app (or its mouse mode) decides
+				// what scrolling means, so hand it the same wheel event a mouse would send.
+				const screen = this.terminal.element?.querySelector(".xterm-screen");
+				screen?.dispatchEvent(
+					new WheelEvent("wheel", { deltaY: lines * 16, deltaMode: 0, bubbles: true, cancelable: true }),
+				);
+			},
+		});
 		this.terminal.onData((data) => {
 			this.sendIoData(data);
 		});
@@ -702,6 +723,8 @@ class PersistentTerminal {
 		this.controlSocket = null;
 		this.subscribers.clear();
 		this.lastRestore = null;
+		this.detachTouchScroll?.();
+		this.detachTouchScroll = null;
 		this.terminal.dispose();
 		this.hostElement.remove();
 	}
