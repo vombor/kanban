@@ -78,6 +78,7 @@ export const runtimeAgentIdSchema = z.enum([
 	"opencode",
 	"droid",
 	"kiro",
+	"copilot",
 	"cline",
 	"cline-cli",
 ]);

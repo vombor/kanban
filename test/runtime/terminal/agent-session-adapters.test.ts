@@ -1346,3 +1346,78 @@ describe("cline-cli adapter", () => {
 		expect(rules).toContain("'/usr/local/bin/node' '/Users/example/repo/dist/cli.js' task create");
 	});
 });
+
+describe("prepareAgentLaunch copilot", () => {
+	function copilotInput(overrides: Record<string, unknown> = {}) {
+		const cwd = join(tempHome as string, "worktree");
+		mkdirSync(cwd, { recursive: true });
+		return { taskId: "task-copilot", agentId: "copilot" as const, binary: "copilot", args: [], cwd, prompt: "Build it", ...overrides };
+	}
+
+	it("starts interactive with the prompt and maps the card's model and effort", async () => {
+		setupTempHome();
+		const launch = await prepareAgentLaunch(
+			copilotInput({ agentSettings: { modelId: "claude-sonnet-5", reasoningEffort: "high" } }),
+		);
+		expect(launch.args).toContain("--interactive");
+		expect(launch.args[launch.args.indexOf("--interactive") + 1]).toBe("Build it");
+		expect(launch.args[launch.args.indexOf("--model") + 1]).toBe("claude-sonnet-5");
+		expect(launch.args[launch.args.indexOf("--reasoning-effort") + 1]).toBe("high");
+		expect(launch.args).not.toContain("--allow-all-tools");
+	});
+
+	it("allows tools and paths only in autonomous mode, never in plan mode", async () => {
+		setupTempHome();
+		const autonomous = await prepareAgentLaunch(copilotInput({ autonomousModeEnabled: true }));
+		expect(autonomous.args).toEqual(expect.arrayContaining(["--allow-all-tools", "--allow-all-paths"]));
+		expect(autonomous.args).not.toContain("--autopilot");
+
+		const plan = await prepareAgentLaunch(
+			copilotInput({ autonomousModeEnabled: true, startInPlanMode: true, args: ["--allow-all"] }),
+		);
+		expect(plan.args).toContain("--plan");
+		expect(plan.args).not.toContain("--allow-all");
+		expect(plan.args).not.toContain("--allow-all-tools");
+	});
+
+	it("uses the Copilot subscription for provider 'github' and keeps BYOK env empty", async () => {
+		setupTempHome();
+		const launch = await prepareAgentLaunch(copilotInput({ agentSettings: { providerId: "github", modelId: "gpt-6.1-sol" } }));
+		expect(Object.keys(launch.env).filter((key) => key.startsWith("COPILOT_PROVIDER_"))).toEqual([]);
+		expect(launch.sessionWarning).toBeUndefined();
+	});
+
+	it("maps a named BYOK profile to COPILOT_PROVIDER_* env without storing secrets", async () => {
+		const home = setupTempHome();
+		mkdirSync(join(home, ".cline", "kanban"), { recursive: true });
+		writeFileSync(
+			join(home, ".cline", "kanban", "copilot-providers.json"),
+			JSON.stringify({ providers: { local: { baseUrl: "http://127.0.0.1:13305/v1", type: "openai", apiKeyEnv: "TEST_COPILOT_KEY" } } }),
+		);
+		process.env.TEST_COPILOT_KEY = "test-value";
+		try {
+			const launch = await prepareAgentLaunch(copilotInput({ agentSettings: { providerId: "local", modelId: "some-model" } }));
+			expect(launch.env.COPILOT_PROVIDER_BASE_URL).toBe("http://127.0.0.1:13305/v1");
+			expect(launch.env.COPILOT_PROVIDER_TYPE).toBe("openai");
+			expect(launch.env.COPILOT_PROVIDER_API_KEY).toBe("test-value");
+		} finally {
+			delete process.env.TEST_COPILOT_KEY;
+		}
+	});
+
+	it("warns and falls back to the subscription for an unknown provider profile", async () => {
+		setupTempHome();
+		const launch = await prepareAgentLaunch(copilotInput({ agentSettings: { providerId: "nope" } }));
+		expect(launch.env.COPILOT_PROVIDER_BASE_URL).toBeUndefined();
+		expect(launch.sessionWarning).toContain('"nope"');
+	});
+
+	it("pre-trusts the worktree under both trusted-folder keys", async () => {
+		const home = setupTempHome();
+		const input = copilotInput();
+		await prepareAgentLaunch(input);
+		const config = JSON.parse(readFileSync(join(home, ".copilot", "config.json"), "utf8"));
+		expect(config.trustedFolders).toContain(input.cwd);
+		expect(config.trusted_folders).toContain(input.cwd);
+	});
+});
