@@ -7,10 +7,23 @@ import type {
 	RuntimeTaskAgentSettings,
 	RuntimeTaskAutoReviewMode,
 	RuntimeTaskImage,
+	RuntimeTaskPendingGitAction,
 } from "./api-contract";
 import { cloneRuntimeTaskAgentSettings } from "./task-agent-settings";
 import { createUniqueTaskId } from "./task-id";
 import { resolveTaskTitle } from "./task-title";
+
+/**
+ * How long a persisted pending git action stays armed before it is treated as
+ * stale. The agent commit/PR choreography takes minutes, so give it generous
+ * headroom. Shared by every actor that reads the arming state: the runtime
+ * auto-review reconciler and the browser.
+ */
+export const PENDING_GIT_ACTION_STALE_AFTER_MS = 15 * 60_000;
+
+export function isPendingGitActionStale(pending: RuntimeTaskPendingGitAction, now: number = Date.now()): boolean {
+	return now - pending.requestedAt > PENDING_GIT_ACTION_STALE_AFTER_MS;
+}
 
 export interface RuntimeCreateTaskInput {
 	taskId?: string;
