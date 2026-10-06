@@ -1,11 +1,11 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildTaskAgentSettingsForUpdate } from "../../../src/commands/task";
-import { prepareAgentLaunch } from "../../../src/terminal/agent-session-adapters";
+import { parseCopilotConfig, prepareAgentLaunch } from "../../../src/terminal/agent-session-adapters";
 
 const originalHome = process.env.HOME;
 const originalAppData = process.env.APPDATA;
@@ -1367,5 +1367,67 @@ describe("prepareAgentLaunch copilot", () => {
 		const config = JSON.parse(readFileSync(join(home, ".copilot", "config.json"), "utf8"));
 		expect(config.trustedFolders).toContain(input.cwd);
 		expect(config.trusted_folders).toContain(input.cwd);
+	});
+
+	it("keeps the login and the comment header of Copilot's JSONC config when pre-trusting", async () => {
+		const home = setupTempHome();
+		const configPath = join(home, ".copilot", "config.json");
+		mkdirSync(join(home, ".copilot"), { recursive: true });
+		const header = "// User settings belong in settings.json.\n// This file is managed automatically.\n";
+		const login = {
+			authTokens: { "https://ghe.example.com:octo": "gho_secret" },
+			loggedInUsers: [{ host: "https://ghe.example.com", login: "octo" }],
+			lastLoggedInUser: { host: "https://ghe.example.com", login: "octo" },
+			trustedFolders: ["/already/trusted"],
+		};
+		writeFileSync(configPath, `${header}${JSON.stringify(login, null, 2)}\n`, "utf8");
+		const input = copilotInput();
+		await prepareAgentLaunch(input);
+		const written = readFileSync(configPath, "utf8");
+		expect(written.startsWith(header)).toBe(true);
+		const config = parseCopilotConfig(written)?.config;
+		expect(config?.authTokens).toEqual(login.authTokens);
+		expect(config?.loggedInUsers).toEqual(login.loggedInUsers);
+		expect(config?.lastLoggedInUser).toEqual(login.lastLoggedInUser);
+		expect(config?.trustedFolders).toEqual(["/already/trusted", input.cwd]);
+		expect(config?.trusted_folders).toEqual([input.cwd]);
+	});
+
+	it("writes the config through a temp file + rename and leaves no temp file behind", async () => {
+		const home = setupTempHome();
+		const copilotHome = join(home, ".copilot");
+		mkdirSync(copilotHome, { recursive: true });
+		writeFileSync(join(copilotHome, "config.json"), '// header\n{ "theme": "dark" }\n', "utf8");
+		const launch = await prepareAgentLaunch(copilotInput());
+		expect(readdirSync(copilotHome)).toEqual(["config.json"]);
+		expect(launch.sessionWarning).toBeUndefined();
+		const written = readFileSync(join(copilotHome, "config.json"), "utf8");
+		expect(written.startsWith("// header\n")).toBe(true);
+		expect(parseCopilotConfig(written)?.config.theme).toBe("dark");
+	});
+
+	it("leaves a config it can't parse untouched", async () => {
+		const home = setupTempHome();
+		const configPath = join(home, ".copilot", "config.json");
+		mkdirSync(join(home, ".copilot"), { recursive: true });
+		const garbled = '// managed\n{ "authTokens": { "x": "gho_secret" }, oops }\n';
+		writeFileSync(configPath, garbled, "utf8");
+		const launch = await prepareAgentLaunch(copilotInput());
+		expect(readFileSync(configPath, "utf8")).toBe(garbled);
+		expect(launch.sessionWarning).toContain("left untouched");
+	});
+});
+
+describe("parseCopilotConfig", () => {
+	it("parses JSONC with a // header and keeps // inside strings", () => {
+		const parsed = parseCopilotConfig('// a\n// b\n{\n  "url": "https://x//y" // trailing\n}\n');
+		expect(parsed?.header).toBe("// a\n// b\n");
+		expect(parsed?.config).toEqual({ url: "https://x//y" });
+	});
+
+	it("treats an empty file as an empty config and rejects non-objects", () => {
+		expect(parseCopilotConfig("")).toEqual({ header: "", config: {} });
+		expect(parseCopilotConfig("// only\n[1]\n")).toBeNull();
+		expect(parseCopilotConfig("{ broken")).toBeNull();
 	});
 });

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { access, mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -1613,17 +1613,49 @@ async function addToWorktreeGitExclude(worktreePath: string, pattern: string): P
 	}
 }
 
-async function addCopilotTrustedFolder(folderPath: string): Promise<void> {
+// Copilot writes ~/.copilot/config.json as JSONC (a `// ...` header) and keeps the login in it (authTokens,
+// loggedInUsers, lastLoggedInUser). Returns null unless the content is a JSON(C) object, so callers never
+// write back a file they couldn't fully read.
+export function parseCopilotConfig(content: string): { header: string; config: Record<string, unknown> } | null {
+	const header = /^(?:[ \t]*(?:\/\/[^\n]*)?\r?\n)*/u.exec(content)?.[0] ?? "";
+	if (content.trim() === "") {
+		return { header: "", config: {} };
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(stripJsonComments(content));
+	} catch {
+		return null;
+	}
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+		return null;
+	}
+	return { header, config: parsed as Record<string, unknown> };
+}
+
+function joinWarnings(...warnings: Array<string | null | undefined>): string | undefined {
+	return warnings.filter(Boolean).join(" ") || undefined;
+}
+
+// Returns a warning for the session output when the worktree could not be pre-trusted.
+async function addCopilotTrustedFolder(folderPath: string): Promise<string | null> {
 	try {
 		const copilotHome = process.env.COPILOT_HOME ?? join(homedir(), ".copilot");
 		const configPath = join(copilotHome, "config.json");
-		let config: Record<string, unknown> = {};
+		let content = "";
 		try {
-			const content = await readFile(configPath, "utf8");
-			config = JSON.parse(content) as Record<string, unknown>;
-		} catch {
-			// config doesn't exist yet, start fresh
+			content = await readFile(configPath, "utf8");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+				throw error;
+			}
 		}
+		const parsed = parseCopilotConfig(content);
+		if (!parsed) {
+			// Copilot asks for folder trust itself; rewriting would drop every key we couldn't read (the login).
+			return `Did not pre-trust the worktree for Copilot: ${configPath} is not a JSON(C) object, so it was left untouched.`;
+		}
+		const { header, config } = parsed;
 		const normalizedPath = folderPath.replace(/\/+$/u, "");
 		let changed = false;
 		// Copilot CLI 1.x documents the key as `trustedFolders`; earlier builds read `trusted_folders`.
@@ -1637,10 +1669,15 @@ async function addCopilotTrustedFolder(folderPath: string): Promise<void> {
 		}
 		if (changed) {
 			await mkdir(copilotHome, { recursive: true });
-			await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+			// Temp file + rename, so Copilot never reads a half-written config.
+			const tempPath = `${configPath}.kanban-${process.pid}.tmp`;
+			await writeFile(tempPath, `${header}${JSON.stringify(config, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+			await rename(tempPath, configPath);
 		}
-	} catch {
+		return null;
+	} catch (error) {
 		// best-effort
+		return `Could not pre-trust the worktree for Copilot: ${error instanceof Error ? error.message : String(error)}`;
 	}
 }
 
@@ -1896,11 +1933,15 @@ const copilotAdapter: AgentSessionAdapter = {
 					notification: [buildCopilotHookEntry("activity", { source: "copilot" })],
 				},
 			};
-			await Promise.all([ensureTextFile(hooksFilePath, JSON.stringify(hooksConfig, null, 2)), trustPromise]);
+			const [, trustWarning] = await Promise.all([
+				ensureTextFile(hooksFilePath, JSON.stringify(hooksConfig, null, 2)),
+				trustPromise,
+			]);
+			sessionWarning = joinWarnings(sessionWarning, trustWarning);
 			await addToWorktreeGitExclude(input.cwd, ".github/hooks/kanban.json");
 			Object.assign(env, createHookRuntimeEnv({ taskId: hooks.taskId, workspaceId: hooks.workspaceId }));
 		} else {
-			await trustPromise;
+			sessionWarning = joinWarnings(sessionWarning, await trustPromise);
 		}
 
 		// Skip the prompt when resuming: --interactive with --resume makes Copilot treat it as a new
