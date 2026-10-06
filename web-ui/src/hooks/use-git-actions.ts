@@ -214,10 +214,6 @@ export function useGitActions({
 		return next;
 	}, [taskGitActionLoadingByTaskId]);
 
-	const shouldUseClineChatForTaskGitActions = isNativeClineAgentSelected(
-		runtimeProjectConfig?.selectedAgentId ?? null,
-	);
-
 	const runTaskGitAction = useCallback(
 		async (taskId: string, action: TaskGitAction, source: TaskGitActionSource) => {
 			const taskLoadingState = taskGitActionLoadingByTaskId[taskId];
@@ -292,7 +288,9 @@ export function useGitActions({
 							}
 						: null,
 				});
-				if (shouldUseClineChatForTaskGitActions) {
+				const effectiveAgentId = selection.card.agentId ?? runtimeProjectConfig?.selectedAgentId ?? null;
+				const useClineChat = isNativeClineAgentSelected(effectiveAgentId);
+				if (useClineChat) {
 					const sent = await sendTaskChatMessage(taskId, prompt, { mode: "act" });
 					if (!sent.ok) {
 						showAppToast({
@@ -340,7 +338,6 @@ export function useGitActions({
 			sendTaskChatMessage,
 			sendTaskSessionInput,
 			setTaskGitActionLoading,
-			shouldUseClineChatForTaskGitActions,
 			taskGitActionLoadingByTaskId,
 		],
 	);
