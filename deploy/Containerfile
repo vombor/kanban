@@ -1,0 +1,31 @@
+# Dev container with the vombor/kanban fork. Built by .github/workflows/image.yml and published to GHCR.
+# Same toolset as the hand-built image, plus the standalone cline CLI (the fork's cline-cli agent, #643).
+# Kanban is installed from the fork's npm pack tarball (deploy/kanban.tgz, made in CI) instead of
+# `npx kanban`, which fetched upstream at every start.
+# AGENT_CLIS is resolved in CI to exact versions (pkg@x.y.z ...), so a new npm release of any of them
+# changes the build arg, busts this layer and the next scheduled build picks it up.
+FROM node:26-slim
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    git \
+    curl \
+    nano \
+    ca-certificates \
+    unzip \
+    bubblewrap \
+    openssh-client && \
+    rm -rf /var/lib/apt/lists/*
+
+ARG AGENT_CLIS="npm @anthropic-ai/claude-code @github/copilot @openai/codex cline"
+RUN npm install -g --no-fund $AGENT_CLIS
+
+COPY kanban.tgz /tmp/kanban.tgz
+RUN npm install -g --no-fund /tmp/kanban.tgz && rm /tmp/kanban.tgz
+
+WORKDIR /projects
+
+EXPOSE 3485
+EXPOSE 3600
+
+CMD ["kanban", "--port", "3485", "--no-open", "--no-passcode"]
