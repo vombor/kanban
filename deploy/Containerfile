@@ -23,6 +23,15 @@ RUN npm install -g --no-fund $AGENT_CLIS
 COPY kanban.tgz /tmp/kanban.tgz
 RUN npm install -g --no-fund /tmp/kanban.tgz && rm /tmp/kanban.tgz
 
+# No self-updates inside the container: the image build is the only update path (daily scheduled build).
+#  KANBAN_NO_AUTO_UPDATE: Kanban would npm-install upstream kanban@latest over this fork (0.1.70-fork.N sorts
+#   below 0.1.70 in semver, so it would "update" right back to upstream).
+#  CLINE_NO_AUTO_UPDATE: cline 3.x background updates restart its hub daemon under live sessions.
+#  DISABLE_AUTOUPDATER: Claude Code.
+ENV KANBAN_NO_AUTO_UPDATE=1 \
+    CLINE_NO_AUTO_UPDATE=1 \
+    DISABLE_AUTOUPDATER=1
+
 WORKDIR /projects
 
 EXPOSE 3485
