@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 
 import type {
 	RuntimeGitSyncSummary,
@@ -387,18 +387,27 @@ export function useHomeGitStateVersionValue(): number {
 	);
 }
 
+// A stable subscribe function per task id: an inline one makes useSyncExternalStore unsubscribe and
+// resubscribe on every render of every card.
+function useTaskIdSubscribe(normalizedTaskId: string): (listener: () => void) => () => void {
+	return useCallback(
+		(listener: () => void) => {
+			if (!normalizedTaskId) {
+				return () => {};
+			}
+			return subscribeToTaskId(normalizedTaskId, listener);
+		},
+		[normalizedTaskId],
+	);
+}
+
 export function useTaskWorkspaceInfoValue(
 	taskId: string | null | undefined,
 	baseRef?: string | null,
 ): RuntimeTaskWorkspaceInfoResponse | null {
 	const normalizedTaskId = taskId?.trim() ?? "";
 	return useSyncExternalStore(
-		(listener) => {
-			if (!normalizedTaskId) {
-				return () => {};
-			}
-			return subscribeToTaskId(normalizedTaskId, listener);
-		},
+		useTaskIdSubscribe(normalizedTaskId),
 		() => getTaskWorkspaceInfo(normalizedTaskId, baseRef),
 		() => null,
 	);
@@ -407,12 +416,7 @@ export function useTaskWorkspaceInfoValue(
 export function useTaskWorkspaceSnapshotValue(taskId: string | null | undefined): ReviewTaskWorkspaceSnapshot | null {
 	const normalizedTaskId = taskId?.trim() ?? "";
 	return useSyncExternalStore(
-		(listener) => {
-			if (!normalizedTaskId) {
-				return () => {};
-			}
-			return subscribeToTaskId(normalizedTaskId, listener);
-		},
+		useTaskIdSubscribe(normalizedTaskId),
 		() => getTaskWorkspaceSnapshot(normalizedTaskId),
 		() => null,
 	);
@@ -421,12 +425,7 @@ export function useTaskWorkspaceSnapshotValue(taskId: string | null | undefined)
 export function useTaskWorkspaceStateVersionValue(taskId: string | null | undefined): number {
 	const normalizedTaskId = taskId?.trim() ?? "";
 	return useSyncExternalStore(
-		(listener) => {
-			if (!normalizedTaskId) {
-				return () => {};
-			}
-			return subscribeToTaskId(normalizedTaskId, listener);
-		},
+		useTaskIdSubscribe(normalizedTaskId),
 		() => workspaceMetadataState.taskWorkspaceStateVersionByTaskId[normalizedTaskId] ?? 0,
 		() => 0,
 	);

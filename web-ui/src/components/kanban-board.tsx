@@ -92,8 +92,14 @@ export function KanbanBoard({
 	const [activeDragSourceColumnId, setActiveDragSourceColumnId] = useState<BoardColumnId | null>(null);
 	const [programmaticCardMoveInFlight, setProgrammaticCardMoveInFlight] =
 		useState<ProgrammaticCardMoveInFlight | null>(null);
+	// Must be stable: the linking callbacks handed to every card depend on it, and an inline arrow made
+	// every card re-render on each session update.
+	const canLinkTasks = useCallback(
+		(fromTaskId: string, toTaskId: string) => canCreateTaskDependency(data, fromTaskId, toTaskId),
+		[data],
+	);
 	const dependencyLinking = useDependencyLinking({
-		canLinkTasks: (fromTaskId, toTaskId) => canCreateTaskDependency(data, fromTaskId, toTaskId),
+		canLinkTasks,
 		onCreateDependency,
 	});
 
@@ -368,6 +374,16 @@ export function KanbanBoard({
 		programmaticCardMoveInFlight?.toColumnId ??
 		(activeDragTaskId !== null && activeDragSourceColumnId === "backlog" ? "in_progress" : null);
 
+	// Stable across renders (the latest onCardSelect is read from a ref), so memoized cards don't
+	// re-render just because the board did.
+	const onCardSelectRef = useRef(onCardSelect);
+	onCardSelectRef.current = onCardSelect;
+	const handleCardClick = useCallback((card: BoardCard) => {
+		if (!dragOccurredRef.current) {
+			onCardSelectRef.current(card.id);
+		}
+	}, []);
+
 	return (
 		<DragDropContext
 			onBeforeCapture={handleBeforeCapture}
@@ -411,11 +427,7 @@ export function KanbanBoard({
 						isDependencyLinking={dependencyLinking.draft !== null}
 						workspacePath={workspacePath}
 						defaultClineModelId={defaultClineModelId}
-						onCardClick={(card) => {
-							if (!dragOccurredRef.current) {
-								onCardSelect(card.id);
-							}
-						}}
+						onCardClick={handleCardClick}
 					/>
 				))}
 				<DependencyOverlay

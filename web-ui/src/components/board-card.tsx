@@ -4,7 +4,7 @@ import { formatClineToolCallLabel } from "@runtime-cline-tool-call-display";
 import { buildTaskWorktreeDisplayPath } from "@runtime-task-worktree-path";
 import { AlertCircle, AlertTriangle, Bot, GitBranch, Pencil, Play, RotateCcw, Trash2 } from "lucide-react";
 import type { KeyboardEvent, MouseEvent } from "react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
 	formatClineReasoningEffortLabel,
@@ -50,6 +50,8 @@ const DESCRIPTION_EXPAND_LABEL = "See more";
 const DESCRIPTION_COLLAPSE_LABEL = "Less";
 const DESCRIPTION_COLLAPSE_SUFFIX = `… ${DESCRIPTION_EXPAND_LABEL}`;
 const DESCRIPTION_EXPANDED_SUFFIX = `… ${DESCRIPTION_COLLAPSE_LABEL}`;
+// Done cards use a CSS line clamp instead of measuring; past this length the clamp almost always cuts text.
+const TRASH_DESCRIPTION_TOGGLE_MIN_CHARS = 160;
 
 function reconstructTaskWorktreeDisplayPath(taskId: string, workspacePath: string | null | undefined): string | null {
 	if (!workspacePath) {
@@ -210,7 +212,7 @@ function getCardSessionActivity(summary: RuntimeTaskSessionSummary | undefined):
 	return null;
 }
 
-export function BoardCard({
+export const BoardCard = memo(function BoardCard({
 	card,
 	index,
 	columnId,
@@ -240,7 +242,7 @@ export function BoardCard({
 	columnId: BoardColumnId;
 	sessionSummary?: RuntimeTaskSessionSummary;
 	selected?: boolean;
-	onClick?: () => void;
+	onClick?: (card: BoardCardModel) => void;
 	onStart?: (taskId: string) => void;
 	onMoveToTrash?: (taskId: string) => void;
 	onRestoreFromTrash?: (taskId: string) => void;
@@ -269,8 +271,10 @@ export function BoardCard({
 	const [descriptionWidthFallback, setDescriptionWidthFallback] = useState(0);
 	const [descriptionFont, setDescriptionFont] = useState(DEFAULT_TEXT_MEASURE_FONT);
 	const [isDescriptionExpanded, setIsDescriptionExpanded] = useState(false);
-	const reviewWorkspaceSnapshot = useTaskWorkspaceSnapshotValue(card.id);
 	const isTrashCard = columnId === "trash";
+	// Done cards are static: they do not subscribe to workspace metadata or measure their description
+	// (a CSS line clamp is used instead), so a long Done column costs little to render and update.
+	const reviewWorkspaceSnapshot = useTaskWorkspaceSnapshotValue(isTrashCard ? null : card.id);
 	const isCardInteractive = !isTrashCard;
 	const descriptionWidth = descriptionRect.width > 0 ? descriptionRect.width : descriptionWidthFallback;
 	const rawSessionActivity = useMemo(() => getCardSessionActivity(sessionSummary), [sessionSummary]);
@@ -294,18 +298,23 @@ export function BoardCard({
 	);
 
 	useLayoutEffect(() => {
-		if (descriptionRect.width > 0 || !displayDescription) {
+		if (isTrashCard || descriptionRect.width > 0 || !displayDescription) {
 			return;
 		}
 		const nextWidth = descriptionRef.current?.parentElement?.getBoundingClientRect().width ?? 0;
-		if (nextWidth > 0 && nextWidth !== descriptionWidthFallback) {
+		// Fractional layout widths can oscillate between renders before useMeasure reports a width.
+		if (nextWidth > 0 && Math.abs(nextWidth - descriptionWidthFallback) >= 1) {
 			setDescriptionWidthFallback(nextWidth);
 		}
-	}, [descriptionRect.width, descriptionWidthFallback, displayDescription]);
+	}, [descriptionRect.width, descriptionWidthFallback, displayDescription, isTrashCard]);
 
 	useLayoutEffect(() => {
-		setDescriptionFont(readElementFontShorthand(descriptionRef.current, DEFAULT_TEXT_MEASURE_FONT));
-	}, [descriptionWidth, displayDescription]);
+		if (isTrashCard) {
+			return;
+		}
+		const nextFont = readElementFontShorthand(descriptionRef.current, DEFAULT_TEXT_MEASURE_FONT);
+		setDescriptionFont((current) => (current === nextFont ? current : nextFont));
+	}, [descriptionWidth, displayDescription, isTrashCard]);
 
 	useEffect(() => {
 		setIsDescriptionExpanded(false);
@@ -373,28 +382,36 @@ export function BoardCard({
 				expanded: { text: "", isTruncated: false },
 			};
 		}
-		if (descriptionWidth <= 0) {
+		if (isTrashCard || descriptionWidth <= 0) {
 			return {
 				collapsed: { text: displayDescription, isTruncated: false },
 				expanded: { text: displayDescription, isTruncated: false },
 			};
 		}
+		// Whole pixels keep sub-pixel width jitter from re-running the clamp, and make cache hits likely.
+		const maxWidthPx = Math.floor(descriptionWidth);
 		const measure = (value: string) => measureTextWidth(value, descriptionFont);
+		const collapsed = clampTextWithInlineSuffix(displayDescription, {
+			maxWidthPx,
+			maxLines: DESCRIPTION_COLLAPSE_LINES,
+			suffix: DESCRIPTION_COLLAPSE_SUFFIX,
+			measureText: measure,
+			cacheKey: descriptionFont,
+		});
 		return {
-			collapsed: clampTextWithInlineSuffix(displayDescription, {
-				maxWidthPx: descriptionWidth,
-				maxLines: DESCRIPTION_COLLAPSE_LINES,
-				suffix: DESCRIPTION_COLLAPSE_SUFFIX,
-				measureText: measure,
-			}),
-			expanded: clampTextWithInlineSuffix(displayDescription, {
-				maxWidthPx: descriptionWidth,
-				maxLines: DESCRIPTION_EXPANDED_MAX_LINES,
-				suffix: DESCRIPTION_EXPANDED_SUFFIX,
-				measureText: measure,
-			}),
+			collapsed,
+			// The expanded variant is only needed once the user expands the card.
+			expanded: isDescriptionExpanded
+				? clampTextWithInlineSuffix(displayDescription, {
+						maxWidthPx,
+						maxLines: DESCRIPTION_EXPANDED_MAX_LINES,
+						suffix: DESCRIPTION_EXPANDED_SUFFIX,
+						measureText: measure,
+						cacheKey: descriptionFont,
+					})
+				: collapsed,
 		};
-	}, [descriptionFont, descriptionWidth, displayDescription]);
+	}, [descriptionFont, descriptionWidth, displayDescription, isDescriptionExpanded, isTrashCard]);
 
 	const isCreditLimit = isCardCreditLimitError(sessionSummary);
 	const renderStatusMarker = () => {
@@ -519,7 +536,7 @@ export function BoardCard({
 								return;
 							}
 							if (!snapshot.isDragging && onClick) {
-								onClick();
+								onClick(card);
 							}
 						}}
 						style={{
@@ -653,13 +670,14 @@ export function BoardCard({
 								) : null}
 							</div>
 							{displayDescription ? (
-								<div ref={descriptionContainerRef}>
+								<div ref={isTrashCard ? undefined : descriptionContainerRef}>
 									<p
 										ref={descriptionRef}
 										className={cn(
 											"text-sm leading-[1.4]",
 											isTrashCard ? "text-text-tertiary" : "text-text-secondary",
 											!isDescriptionMeasured && !isDescriptionExpanded && "line-clamp-3",
+											isTrashCard && isDescriptionExpanded && "line-clamp-10",
 										)}
 										style={{
 											margin: "2px 0 0",
@@ -708,6 +726,23 @@ export function BoardCard({
 											</>
 										) : null}
 									</p>
+									{isTrashCard && displayDescription.length > TRASH_DESCRIPTION_TOGGLE_MIN_CHARS ? (
+										<button
+											type="button"
+											className="inline cursor-pointer rounded-sm text-sm text-text-tertiary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+											aria-expanded={isDescriptionExpanded}
+											aria-label={
+												isDescriptionExpanded ? "Collapse task description" : "Expand task description"
+											}
+											onMouseDown={stopEvent}
+											onClick={(event) => {
+												stopEvent(event);
+												setIsDescriptionExpanded(!isDescriptionExpanded);
+											}}
+										>
+											{isDescriptionExpanded ? DESCRIPTION_COLLAPSE_LABEL : DESCRIPTION_EXPAND_LABEL}
+										</button>
+									) : null}
 								</div>
 							) : null}
 							{taskAgentSettingsLabel ? (
@@ -854,4 +889,4 @@ export function BoardCard({
 			}}
 		</Draggable>
 	);
-}
+});
