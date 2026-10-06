@@ -1177,7 +1177,10 @@ export function registerTaskCommand(program: Command): void {
 		.option("--start-in-plan-mode [value]", "Set plan mode (true|false). Flag-only implies true.")
 		.option("--auto-review-enabled [value]", "Enable auto-review behavior (true|false). Flag-only implies true.")
 		.option("--auto-review-mode <mode>", "Auto-review mode: commit | pr.", parseAutoReviewMode)
-		.option("--agent-id <id>", "Agent override: cline | claude | codex | droid | gemini | opencode | kiro | default.")
+		.option(
+			"--agent-id <id>",
+			"Agent override: cline | claude | codex | copilot | droid | gemini | opencode | kiro | default.",
+		)
 		.option("--provider <id>", "Provider override for the task's agent. Valid values depend on the agent.")
 		.option("--model <id>", "Model override for the task's agent. Valid values depend on the agent.")
 		.option("--effort <level>", "Reasoning effort override for the task's agent. Valid values depend on the agent.")
@@ -1254,7 +1257,7 @@ export function registerTaskCommand(program: Command): void {
 		.option("--auto-review-mode <mode>", "Auto-review mode: commit | pr.", parseAutoReviewMode)
 		.option(
 			"--agent-id <id>",
-			'Agent override: cline | claude | codex | droid | gemini | opencode | kiro. Use "default" to clear.',
+			'Agent override: cline | claude | codex | copilot | droid | gemini | opencode | kiro. Use "default" to clear.',
 		)
 		.option(
 			"--provider <id>",
