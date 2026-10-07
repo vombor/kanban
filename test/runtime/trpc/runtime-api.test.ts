@@ -141,7 +141,6 @@ describe("createRuntimeApi startTaskSession", () => {
 			setActiveRuntimeConfig: vi.fn(),
 			getScopedTerminalManager: vi.fn(async () => terminalManager as never),
 			resolveInteractiveShellCommand: vi.fn(),
-			runCommand: vi.fn(),
 		});
 
 		const response = await api.startTaskSession(
@@ -186,7 +185,6 @@ describe("createRuntimeApi startTaskSession", () => {
 			setActiveRuntimeConfig: vi.fn(),
 			getScopedTerminalManager: vi.fn(async () => terminalManager as never),
 			resolveInteractiveShellCommand: vi.fn(),
-			runCommand: vi.fn(),
 		});
 
 		const response = await api.startTaskSession(
@@ -228,7 +226,6 @@ describe("createRuntimeApi startTaskSession", () => {
 			setActiveRuntimeConfig: vi.fn(),
 			getScopedTerminalManager: vi.fn(async () => terminalManager as never),
 			resolveInteractiveShellCommand: vi.fn(),
-			runCommand: vi.fn(),
 		});
 
 		const response = await api.startTaskSession(
@@ -274,7 +271,6 @@ describe("createRuntimeApi startTaskSession", () => {
 			setActiveRuntimeConfig: vi.fn(),
 			getScopedTerminalManager: vi.fn(async () => terminalManager as never),
 			resolveInteractiveShellCommand: vi.fn(),
-			runCommand: vi.fn(),
 		});
 
 		const response = await api.startTaskSession(
@@ -314,7 +310,6 @@ describe("createRuntimeApi startTaskSession", () => {
 			setActiveRuntimeConfig: vi.fn(),
 			getScopedTerminalManager: vi.fn(async () => terminalManager as never),
 			resolveInteractiveShellCommand: vi.fn(),
-			runCommand: vi.fn(),
 		});
 
 		const response = await api.startTaskSession(
@@ -355,7 +350,6 @@ describe("createRuntimeApi resetAllState", () => {
 			setActiveRuntimeConfig: vi.fn(),
 			getScopedTerminalManager: vi.fn(async () => ({}) as never),
 			resolveInteractiveShellCommand: vi.fn(),
-			runCommand: vi.fn(),
 			prepareForStateReset,
 		});
 
@@ -397,7 +391,6 @@ describe("createRuntimeApi resetAllState", () => {
 			setActiveRuntimeConfig: vi.fn(),
 			getScopedTerminalManager: vi.fn(async () => ({}) as never),
 			resolveInteractiveShellCommand: vi.fn(),
-			runCommand: vi.fn(),
 			prepareForStateReset: vi.fn(async () => {
 				throw new Error("teardown failed");
 			}),
@@ -434,7 +427,6 @@ describe("createRuntimeApi update handlers", () => {
 			setActiveRuntimeConfig: vi.fn(),
 			getScopedTerminalManager: vi.fn(async () => ({}) as never),
 			resolveInteractiveShellCommand: vi.fn(),
-			runCommand: vi.fn(),
 			getUpdateStatus,
 		});
 
@@ -461,7 +453,6 @@ describe("createRuntimeApi update handlers", () => {
 			setActiveRuntimeConfig: vi.fn(),
 			getScopedTerminalManager: vi.fn(async () => ({}) as never),
 			resolveInteractiveShellCommand: vi.fn(),
-			runCommand: vi.fn(),
 			runUpdateNow,
 		});
 
@@ -485,7 +476,6 @@ describe("createRuntimeApi deliverTaskInput", () => {
 			setActiveRuntimeConfig: vi.fn(),
 			getScopedTerminalManager: vi.fn(async () => terminalManager as never),
 			resolveInteractiveShellCommand: vi.fn(),
-			runCommand: vi.fn(),
 		});
 	}
 

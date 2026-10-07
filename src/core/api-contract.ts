@@ -619,20 +619,6 @@ export const runtimeProjectShortcutSchema = z.object({
 });
 export type RuntimeProjectShortcut = z.infer<typeof runtimeProjectShortcutSchema>;
 
-export const runtimeCommandRunRequestSchema = z.object({
-	command: z.string(),
-});
-export type RuntimeCommandRunRequest = z.infer<typeof runtimeCommandRunRequestSchema>;
-
-export const runtimeCommandRunResponseSchema = z.object({
-	exitCode: z.number(),
-	stdout: z.string(),
-	stderr: z.string(),
-	combinedOutput: z.string(),
-	durationMs: z.number(),
-});
-export type RuntimeCommandRunResponse = z.infer<typeof runtimeCommandRunResponseSchema>;
-
 export const runtimeOpenFileRequestSchema = z.object({
 	filePath: z.string(),
 });

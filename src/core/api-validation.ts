@@ -1,7 +1,6 @@
 import { z } from "zod";
 
 import {
-	type RuntimeCommandRunRequest,
 	type RuntimeConfigSaveRequest,
 	type RuntimeDirectoryListRequest,
 	type RuntimeGitCheckoutRequest,
@@ -21,7 +20,6 @@ import {
 	type RuntimeWorkspaceStateSaveRequest,
 	type RuntimeWorktreeDeleteRequest,
 	type RuntimeWorktreeEnsureRequest,
-	runtimeCommandRunRequestSchema,
 	runtimeConfigSaveRequestSchema,
 	runtimeDirectoryListRequestSchema,
 	runtimeGitCheckoutRequestSchema,
@@ -193,17 +191,6 @@ export function parseProjectRemoveRequest(value: unknown): RuntimeProjectRemoveR
 
 export function parseRuntimeConfigSaveRequest(value: unknown): RuntimeConfigSaveRequest {
 	return parseWithSchema(runtimeConfigSaveRequestSchema, value);
-}
-
-export function parseCommandRunRequest(value: unknown): RuntimeCommandRunRequest {
-	const parsed = parseWithSchema(runtimeCommandRunRequestSchema, value);
-	const command = parsed.command.trim();
-	if (!command) {
-		throw new Error("Command cannot be empty.");
-	}
-	return {
-		command,
-	};
 }
 
 export function parseTaskSessionStartRequest(value: unknown): RuntimeTaskSessionStartRequest {

@@ -8,12 +8,10 @@ import { TRPCError } from "@trpc/server";
 import type { RuntimeConfigState } from "../config/runtime-config";
 import { updateGlobalRuntimeConfig, updateRuntimeConfig } from "../config/runtime-config";
 import type {
-	RuntimeCommandRunResponse,
 	RuntimeRunUpdateResponse,
 	RuntimeUpdateStatusResponse,
 } from "../core/api-contract";
 import {
-	parseCommandRunRequest,
 	parseRuntimeConfigSaveRequest,
 	parseShellSessionStartRequest,
 	parseTaskInputDeliveryRequest,
@@ -38,7 +36,6 @@ export interface CreateRuntimeApiDependencies {
 	setActiveRuntimeConfig: (config: RuntimeConfigState) => void;
 	getScopedTerminalManager: (scope: RuntimeTrpcWorkspaceScope) => Promise<TerminalSessionManager>;
 	resolveInteractiveShellCommand: () => { binary: string; args: string[] };
-	runCommand: (command: string, cwd: string) => Promise<RuntimeCommandRunResponse>;
 	prepareForStateReset?: () => Promise<void>;
 	getUpdateStatus: () => RuntimeUpdateStatusResponse;
 	runUpdateNow: () => Promise<RuntimeRunUpdateResponse>;
@@ -293,18 +290,6 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 					shellBinary: null,
 					error: message,
 				};
-			}
-		},
-		runCommand: async (workspaceScope, input) => {
-			try {
-				const body = parseCommandRunRequest(input);
-				return await deps.runCommand(body.command, workspaceScope.workspacePath);
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error);
-				throw new TRPCError({
-					code: "INTERNAL_SERVER_ERROR",
-					message,
-				});
 			}
 		},
 		resetAllState: async (_workspaceScope) => {

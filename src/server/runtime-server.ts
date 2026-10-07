@@ -5,7 +5,6 @@ import { join } from "node:path";
 
 import { createHTTPHandler } from "@trpc/server/adapters/standalone";
 import type {
-	RuntimeCommandRunResponse,
 	RuntimeRunUpdateResponse,
 	RuntimeUpdateStatusResponse,
 	RuntimeWorkspaceStateResponse,
@@ -56,7 +55,6 @@ export interface CreateRuntimeServerDependencies {
 	warn: (message: string) => void;
 	ensureTerminalManagerForWorkspace: (workspaceId: string, repoPath: string) => Promise<TerminalSessionManager>;
 	resolveInteractiveShellCommand: () => { binary: string; args: string[] };
-	runCommand: (command: string, cwd: string) => Promise<RuntimeCommandRunResponse>;
 	resolveProjectInputPath: (inputPath: string, basePath: string) => string;
 	assertPathIsDirectory: (targetPath: string) => Promise<void>;
 	hasGitRepository: (path: string) => boolean;
@@ -163,7 +161,6 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		setActiveRuntimeConfig: deps.workspaceRegistry.setActiveRuntimeConfig,
 		getScopedTerminalManager,
 		resolveInteractiveShellCommand: deps.resolveInteractiveShellCommand,
-		runCommand: deps.runCommand,
 		prepareForStateReset,
 		getUpdateStatus: deps.getUpdateStatus,
 		runUpdateNow: deps.runUpdateNow,

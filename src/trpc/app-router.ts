@@ -6,8 +6,6 @@ import { initTRPC, TRPCError } from "@trpc/server";
 import { z } from "zod";
 
 import type {
-	RuntimeCommandRunRequest,
-	RuntimeCommandRunResponse,
 	RuntimeConfigResponse,
 	RuntimeConfigSaveRequest,
 	RuntimeDebugResetAllStateResponse,
@@ -63,8 +61,6 @@ import type {
 	RuntimeWorktreeEnsureResponse,
 } from "../core/api-contract";
 import {
-	runtimeCommandRunRequestSchema,
-	runtimeCommandRunResponseSchema,
 	runtimeConfigResponseSchema,
 	runtimeConfigSaveRequestSchema,
 	runtimeDebugResetAllStateResponseSchema,
@@ -154,10 +150,6 @@ export interface RuntimeTrpcContext {
 			scope: RuntimeTrpcWorkspaceScope,
 			input: RuntimeShellSessionStartRequest,
 		) => Promise<RuntimeShellSessionStartResponse>;
-		runCommand: (
-			scope: RuntimeTrpcWorkspaceScope,
-			input: RuntimeCommandRunRequest,
-		) => Promise<RuntimeCommandRunResponse>;
 		resetAllState: (scope: RuntimeTrpcWorkspaceScope | null) => Promise<RuntimeDebugResetAllStateResponse>;
 		openFile: (input: RuntimeOpenFileRequest) => Promise<RuntimeOpenFileResponse>;
 		getUpdateStatus: (scope: RuntimeTrpcWorkspaceScope | null) => Promise<RuntimeUpdateStatusResponse>;
@@ -337,12 +329,6 @@ export const runtimeAppRouter = t.router({
 			.output(runtimeShellSessionStartResponseSchema)
 			.mutation(async ({ ctx, input }) => {
 				return await ctx.runtimeApi.startShellSession(ctx.workspaceScope, input);
-			}),
-		runCommand: workspaceProcedure
-			.input(runtimeCommandRunRequestSchema)
-			.output(runtimeCommandRunResponseSchema)
-			.mutation(async ({ ctx, input }) => {
-				return await ctx.runtimeApi.runCommand(ctx.workspaceScope, input);
 			}),
 		resetAllState: t.procedure.output(runtimeDebugResetAllStateResponseSchema).mutation(async ({ ctx }) => {
 			return await ctx.runtimeApi.resetAllState(ctx.workspaceScope);

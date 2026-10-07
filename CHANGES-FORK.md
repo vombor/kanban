@@ -15,3 +15,11 @@ of this repository is the complete record of changes.
 - `web-ui/src/components/open-workspace-button.tsx`, `web-ui/src/hooks/use-open-workspace.ts`,
   `web-ui/src/utils/open-targets.ts`, `web-ui/src/assets/open-targets/*`: removed along with the "Open" button.
 - `web-ui/src/storage/local-storage-store.ts`: removed the "Open" button's preferred-target storage key.
+- `src/trpc/app-router.ts`, `src/trpc/runtime-api.ts`, `src/server/runtime-server.ts`, `src/cli.ts`: removed the
+  `runtime.runCommand` route, which ran an arbitrary shell command in a workspace. Its only caller was the
+  removed "Open" button; project shortcuts run in the task terminal instead.
+- `src/core/api-contract.ts`, `src/core/api-validation.ts`: removed the `runCommand` request/response schemas and
+  validator.
+- `src/server/process-termination.ts`, `test/runtime/process-termination.test.ts`: removed (only used by
+  `runCommand`).
+- `test/runtime/trpc/runtime-api.test.ts`: dropped the `runCommand` dependency stubs.
