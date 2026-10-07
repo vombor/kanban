@@ -15,8 +15,9 @@
 // - A worker that exits on its own is restarted after a growing delay. `pipeline.workerEntry` points the child at
 //   another build's CLI (the dev pod's "fix it live" loop): the host runs `<workerEntry> pipeline worker`.
 // - A worker `request` for a QA gate card action (create or start a QA card, src/pipeline/actions.ts) runs through
-//   `runAction`, only for a workspace that runs the pipeline as of the last sweep; anything else is refused. Every
-//   other `request` is a watchdog action (`handleWatchdogRequest`).
+//   `runAction`, only for a workspace on landing mode `qa` (pipeline not paused) as of the last sweep; anything else
+//   is refused, also while the watchdog has every workspace. Every other `request` is a watchdog action
+//   (`handleWatchdogRequest`), for any workspace the worker has.
 import { type ChildProcess, fork } from "node:child_process";
 
 import { getWorkspacePipelineSettings, type ParsedPipelineConfig, readPipelineConfig } from "../config/pipeline-config";
@@ -159,11 +160,13 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 	let closed = false;
 	/** Workspaces sent to the worker as of the last sweep (pipeline workspaces, or all while the watchdog runs): id → path. */
 	let pipelineWorkspaces = new Map<string, string>();
+	/** The subset of `pipelineWorkspaces` on landing mode `qa`: the only ones the QA gate's card actions may touch. */
+	let cardActionWorkspaces = new Map<string, string>();
 	const coalesceTimers = new Map<string, NodeJS.Timeout>();
 	const lastSessionStates = new Map<string, RuntimeTaskSessionState>();
 
 	const runAction = async (request: PipelineActionRequest): Promise<PipelineActionResult> => {
-		if (pipelineWorkspaces.get(request.workspaceId) !== request.workspacePath) {
+		if (cardActionWorkspaces.get(request.workspaceId) !== request.workspacePath) {
 			return { ok: false, error: `workspace ${request.workspaceId} does not run the pipeline` };
 		}
 		if (!deps.runAction) {
@@ -324,6 +327,7 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 		const parsed = await readConfig();
 		const config = parsed.config;
 		const next = new Map<string, string>();
+		const nextCardActions = new Map<string, string>();
 		const watchdogOn = config.watchdog.mode !== "off";
 		for (const workspace of deps.listWorkspaces()) {
 			const pipeline =
@@ -331,9 +335,13 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 			if (workspace.workspacePath && (pipeline || watchdogOn)) {
 				next.set(workspace.workspaceId, workspace.workspacePath);
 			}
+			if (workspace.workspacePath && pipeline) {
+				nextCardActions.set(workspace.workspaceId, workspace.workspacePath);
+			}
 		}
 		const previous = pipelineWorkspaces;
 		pipelineWorkspaces = next;
+		cardActionWorkspaces = nextCardActions;
 		if (next.size === 0) {
 			if (child) {
 				deps.log("pipeline worker stopped: no workspace has landing mode qa and the watchdog is off");
@@ -416,6 +424,7 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 				clearTimeout(timer);
 				coalesceTimers.delete(workspaceId);
 			}
+			cardActionWorkspaces.delete(workspaceId);
 			if (pipelineWorkspaces.delete(workspaceId)) {
 				child?.send({ type: "forget", workspaceId });
 			}

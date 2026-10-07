@@ -122,7 +122,10 @@ describe("QA gate card actions over the worker's request channel", () => {
 		return child;
 	}
 
-	const createHost = async (runAction: (request: PipelineActionRequest) => Promise<PipelineActionResult>) => {
+	const createHost = async (
+		runAction: (request: PipelineActionRequest) => Promise<PipelineActionResult>,
+		config: unknown = { workspaces: { foo: { landing: { mode: "qa" } } } },
+	) => {
 		const child = createFakeChild();
 		const handleWatchdogRequest = vi.fn(async () => ({ ok: true, status: "delivered" }));
 		const host = createPipelineWorkerHost({
@@ -132,7 +135,7 @@ describe("QA gate card actions over the worker's request channel", () => {
 			],
 			buildSnapshot: async (workspaceId) =>
 				createSnapshot({ workspaceId, board: createBoard({}), selectedAgentId: "claude" }),
-			readConfig: async () => parsePipelineConfig({ workspaces: { foo: { landing: { mode: "qa" } } } }),
+			readConfig: async () => parsePipelineConfig(config),
 			spawnWorker: () => child,
 			runAction,
 			handleWatchdogRequest,
@@ -198,6 +201,54 @@ describe("QA gate card actions over the worker's request channel", () => {
 			error: "not in Backlog",
 		});
 		expect(runAction).toHaveBeenCalledTimes(1);
+		await host.close();
+	});
+
+	it("with the watchdog on, a landing-off workspace gets snapshots and watchdog actions but no card actions", async () => {
+		const runAction = vi.fn(async (): Promise<PipelineActionResult> => ({ ok: true }));
+		const { host, child, handleWatchdogRequest } = await createHost(runAction, {
+			watchdog: { mode: "on" },
+			workspaces: { foo: { landing: { mode: "qa" } } },
+		});
+		child.emit({ type: "ready", pid: 4242 });
+		await vi.waitFor(() => {
+			const snapshots = child.sent.flatMap((message) =>
+				message.type === "snapshot" ? [message.snapshot.workspaceId] : [],
+			);
+			expect(snapshots.sort()).toEqual(["foo", "kanban-2uge"]);
+		});
+
+		const offScope = { workspaceId: "kanban-2uge", workspacePath: "/repos/kanban-2uge" };
+		child.emit({ type: "request", id: 11, request: { ...startRequest, ...offScope } });
+		child.emit({
+			type: "request",
+			id: 12,
+			request: {
+				...offScope,
+				kind: "createTask",
+				task: { taskId: "qa002", title: "QA", prompt: "x", role: "qa", agentId: "claude", baseRef: "main" },
+			},
+		});
+		child.emit({
+			type: "request",
+			id: 13,
+			request: { kind: "deliverInput", workspaceId: "kanban-2uge", taskId: "t1", text: "x" },
+		});
+		child.emit({ type: "request", id: 14, request: startRequest });
+
+		const refused = { ok: false, error: "workspace kanban-2uge does not run the pipeline" };
+		expect(await waitForResponse(child, 11)).toMatchObject(refused);
+		expect(await waitForResponse(child, 12)).toMatchObject(refused);
+		expect(await waitForResponse(child, 13)).toMatchObject({ ok: true });
+		expect(await waitForResponse(child, 14)).toMatchObject({ ok: true, result: { ok: true } });
+		expect(handleWatchdogRequest).toHaveBeenCalledWith({
+			kind: "deliverInput",
+			workspaceId: "kanban-2uge",
+			taskId: "t1",
+			text: "x",
+		});
+		expect(runAction).toHaveBeenCalledTimes(1);
+		expect(runAction).toHaveBeenCalledWith(startRequest);
 		await host.close();
 	});
 });
