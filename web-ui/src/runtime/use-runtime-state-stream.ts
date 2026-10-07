@@ -13,6 +13,8 @@ import type {
 
 const STREAM_RECONNECT_BASE_DELAY_MS = 500;
 const STREAM_RECONNECT_MAX_DELAY_MS = 5_000;
+// After this long hidden (a backgrounded phone tab), treat an "open" socket as possibly dead and reconnect.
+const STREAM_STALE_AFTER_HIDDEN_MS = 30_000;
 
 function mergeTaskSessionSummaries(
 	currentSessions: Record<string, RuntimeTaskSessionSummary>,
@@ -368,10 +370,47 @@ export function useRuntimeStateStream(requestedWorkspaceId: string | null): UseR
 			};
 		};
 
+		// A phone or a backgrounded tab can lose the socket without a close event (the OS suspends the page,
+		// a tunnel drops it). When the page becomes visible again or the network comes back, reconnect right
+		// away if the socket is not open, or if the page was hidden long enough that it may be dead. Every
+		// connection starts with a full snapshot, so a reconnect resyncs the board without a reload.
+		let hiddenAt: number | null = null;
+		const reconnectNow = () => {
+			reconnectAttempt = 0;
+			connect();
+		};
+		const onVisibilityChange = () => {
+			if (document.visibilityState === "hidden") {
+				hiddenAt = Date.now();
+				return;
+			}
+			const hiddenForMs = hiddenAt === null ? 0 : Date.now() - hiddenAt;
+			hiddenAt = null;
+			if (!socket || socket.readyState !== WebSocket.OPEN || hiddenForMs >= STREAM_STALE_AFTER_HIDDEN_MS) {
+				reconnectNow();
+			}
+		};
+		const onOnline = () => {
+			if (!socket || socket.readyState !== WebSocket.OPEN) {
+				reconnectNow();
+			}
+		};
+		const onPageShow = (event: PageTransitionEvent) => {
+			if (event.persisted) {
+				reconnectNow();
+			}
+		};
+		document.addEventListener("visibilitychange", onVisibilityChange);
+		window.addEventListener("online", onOnline);
+		window.addEventListener("pageshow", onPageShow);
+
 		connect();
 
 		return () => {
 			cancelled = true;
+			document.removeEventListener("visibilitychange", onVisibilityChange);
+			window.removeEventListener("online", onOnline);
+			window.removeEventListener("pageshow", onPageShow);
 			if (reconnectTimer != null) {
 				window.clearTimeout(reconnectTimer);
 			}

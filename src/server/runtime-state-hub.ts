@@ -17,6 +17,7 @@ import type {
 import type { TerminalSessionManager } from "../terminal/session-manager";
 import { createWorkspaceMetadataMonitor } from "./workspace-metadata-monitor";
 import type { ResolvedWorkspaceStreamTarget, WorkspaceRegistry } from "./workspace-registry";
+import { RUNTIME_STATE_WS_HEARTBEAT_INTERVAL_MS, startWebSocketKeepalive } from "./ws-heartbeat";
 
 const TASK_SESSION_STREAM_BATCH_MS = 150;
 
@@ -30,6 +31,8 @@ export interface CreateRuntimeStateHubDependencies {
 		WorkspaceRegistry,
 		"resolveWorkspaceForStream" | "buildProjectsPayload" | "buildWorkspaceStateSnapshot"
 	>;
+	/** Keepalive ping interval for board-state sockets (tests use a short one). */
+	heartbeatIntervalMs?: number;
 }
 
 export interface RuntimeStateHub {
@@ -57,6 +60,11 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 	const runtimeStateClients = new Set<WebSocket>();
 	const runtimeStateWorkspaceIdByClient = new Map<WebSocket, string>();
 	const runtimeStateWebSocketServer = new WebSocketServer({ noServer: true });
+	// Tunnels drop idle websockets (Cloudflare after ~100 s); keep the board stream alive.
+	const stopKeepalive = startWebSocketKeepalive(runtimeStateWebSocketServer, {
+		intervalMs: deps.heartbeatIntervalMs ?? RUNTIME_STATE_WS_HEARTBEAT_INTERVAL_MS,
+		missedLimit: 2,
+	});
 	const workspaceMetadataMonitor = createWorkspaceMetadataMonitor({
 		onMetadataUpdated: (workspaceId, workspaceMetadata) => {
 			const clients = runtimeStateClientsByWorkspaceId.get(workspaceId);
@@ -409,6 +417,7 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 		broadcastRuntimeProjectsUpdated,
 		broadcastTaskReadyForReview,
 		close: async () => {
+			stopKeepalive();
 			for (const timer of taskSessionBroadcastTimersByWorkspaceId.values()) {
 				clearTimeout(timer);
 			}
