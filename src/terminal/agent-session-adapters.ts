@@ -25,6 +25,7 @@ import { resolveHomeAgentAppendSystemPrompt } from "../prompts/append-system-pro
 import { getClineDataPath } from "../state/kanban-home";
 import { getRuntimeHomePath } from "../state/workspace-state";
 import { getGitStdout } from "../workspace/git-utils";
+import { getClaudeCardSettingsPath } from "../workspace/task-launch-files";
 import {
 	buildClaudePermissionDeny,
 	buildCodexRulesFile,
@@ -190,10 +191,6 @@ function buildHooksCommand(args: string[]): string {
 /** The launch's guardrails when it is a task card's session; the orchestrator (home-agent session) never gets any. */
 function getCardGuardrails(input: AgentAdapterLaunchInput): TaskGuardrails | null {
 	return input.guardrails && !isHomeAgentSessionId(input.taskId) ? input.guardrails : null;
-}
-
-function toSafeFileName(value: string): string {
-	return value.replace(/[^A-Za-z0-9._-]/gu, "_");
 }
 
 function hasCliOption(args: string[], optionName: string): boolean {
@@ -727,19 +724,6 @@ function buildOpenCodePluginContent(
 
 function getHookAgentDirectory(agentId: RuntimeAgentId): string {
 	return join(getRuntimeHomePath(), "hooks", agentId);
-}
-
-/** A guarded Claude card's own --settings file (the shared settings.json is also the orchestrator's). */
-function getClaudeCardSettingsPath(taskId: string): string {
-	return join(getHookAgentDirectory("claude"), "cards", `${toSafeFileName(taskId)}.json`);
-}
-
-/**
- * Removes the files a card's launches left outside its worktree (a guarded Claude card's --settings file, which
- * embeds the card's guard policy). Called by the Done workflow's worktree cleanup; a resumed card writes them anew.
- */
-export async function removeTaskLaunchFiles(taskId: string): Promise<void> {
-	await rm(getClaudeCardSettingsPath(taskId), { force: true });
 }
 
 const KIRO_KANBAN_AGENT_NAME = "kanban";

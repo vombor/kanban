@@ -15,6 +15,7 @@
 //   trusted project; Kanban pre-trusts the repo). Verified to reject `git push` even with
 //   --dangerously-bypass-approvals-and-sandbox. Matching is by argv prefix, so `git -C <dir> push` is not caught,
 //   and option slots and `{shared}` are only caught right after the subcommand (each order of them is a rule).
+//   A `{shared-dest}` rule (`git fetch . card:main`) can't be a prefix rule without forbidding every fetch: prompt.
 //   Writes are confined by `--sandbox workspace-write` (reads stay unrestricted) only where Codex's Linux sandbox
 //   runs (bubblewrap with user namespaces; a rootless container usually can't), so it is probed first.
 // - Cline CLI (3.x): no deny flag, and tool policies are per tool. Its PreToolUse hook is blocking: `{"cancel":
@@ -23,7 +24,7 @@
 //   paths against the writable dirs. Shell commands that write files are not confined.
 // - GitHub Copilot CLI (1.0.92): `--deny-tool` wins over --allow-all-tools and doesn't trigger autopilot's
 //   blocking "Enable autopilot mode" dialog. `shell(<cmd> <sub>)` matches by command name, plus the first
-//   subcommand only for git and gh (`shell(podman restart)` blocks nothing). `write(<dir>/**)` denies the file
+//   subcommand only for git and gh (`shell(podman restart)` blocks nothing), so a `{shared-dest}` rule is prompt only. `write(<dir>/**)` denies the file
 //   tools in a subtree, but not shell writes, and there is no "allow only": deny wins over allow. Confining paths
 //   with --add-dir instead of --allow-all-paths would confine reads too, and without all permissions autopilot
 //   (0aa75) opens that dialog, which hangs the card. So Copilot keeps --allow-all-paths and denies writes into the
@@ -81,7 +82,10 @@ export function buildCopilotDenyTools(rules: readonly DeniedCommandRule[]): {
 	const unenforced: DeniedCommandRule[] = [];
 	for (const rule of rules) {
 		const [program, subcommands] = rule.words;
-		if (rule.words.length === 1 && program) {
+		if (rule.sharedDestination) {
+			// `shell(git fetch)` would deny every fetch: Copilot can't look at a refspec.
+			unenforced.push(rule);
+		} else if (rule.words.length === 1 && program) {
 			denyTools.push(...program.map((word) => `shell(${word})`));
 		} else if (
 			rule.words.length === 2 &&
@@ -129,13 +133,13 @@ export function listRuleSlotOrders(rule: DeniedCommandRule): string[][][] {
 /**
  * The execpolicy rules file: one `forbidden` prefix rule per pattern and order of its floating slots (a list
  * position = alternatives). A `{shared-push}` rule forbids every `git push`: an argv prefix can't tell the
- * target branch.
+ * target branch. A `{shared-dest}` rule is left out: forbidding its prefix would forbid every `git fetch`.
  */
 export function buildCodexRulesFile(rules: readonly DeniedCommandRule[]): string {
 	const lines = [
 		`# ${CODEX_GUARDRAIL_RULES_MARKER} (guardrails.denyCommands in Kanban's config.json). Rewritten at each launch.`,
 	];
-	for (const rule of rules) {
+	for (const rule of rules.filter((candidate) => !candidate.sharedDestination)) {
 		for (const slots of listRuleSlotOrders(rule)) {
 			// The program position is always a single word: one rule per program.
 			const [programs = [], ...rest] = slots;
@@ -181,13 +185,30 @@ export function listCodexWritableDirs(guardrails: TaskGuardrails, home = homedir
 }
 
 const CODEX_SANDBOX_PROBE_TIMEOUT_MS = 15_000;
-// Settled probes by binary. A probe that timed out is not kept: a slow first start must not turn the sandbox off
-// for the rest of the process.
-const codexSandboxProbes = new Map<string, Promise<boolean | null>>();
+const CODEX_SANDBOX_TIMEOUT_CACHE_MS = 10 * 60_000;
+
+interface CodexSandboxProbe {
+	result: Promise<boolean | null>;
+	timeoutMs: number;
+	/** Set once the probe timed out: until then the timeout answers callers that would wait no longer. */
+	timedOutUntil: number | null;
+}
+
+// Probes by binary. A settled answer is kept for the process. A timeout is kept for a short while only: a hanging
+// `codex sandbox` must not add the probe time to every Codex launch, and a slow first start must not turn the
+// sandbox off for the rest of the process.
+const codexSandboxProbes = new Map<string, CodexSandboxProbe>();
 
 export interface CodexSandboxProbeOptions {
 	/** How long the probe may run; default 15 s. */
 	timeoutMs?: number;
+	/** How long a timed-out probe answers "not known" before the next caller probes again; default 10 min. */
+	timeoutCacheMs?: number;
+	now?: () => number;
+}
+
+function isCodexSandboxProbeReusable(probe: CodexSandboxProbe, timeoutMs: number, now: number): boolean {
+	return probe.timedOutUntil === null || (now < probe.timedOutUntil && timeoutMs <= probe.timeoutMs);
 }
 
 /** Runs `codex sandbox` once: true/false, or null when it timed out. */
@@ -216,22 +237,32 @@ async function runCodexSandboxProbe(binary: string, timeoutMs: number): Promise<
 	}
 }
 
-/** Whether `codex sandbox` ran a command here, or null when the probe timed out (settled results cached per binary). */
+/**
+ * Whether `codex sandbox` ran a command here, or null when the probe timed out. Cached per binary: a settled result
+ * for the process, a timeout for `timeoutCacheMs` (and only for callers whose own timeout is no longer).
+ */
 export async function probeCodexSandboxResult(
 	binary = "codex",
 	options: CodexSandboxProbeOptions = {},
 ): Promise<boolean | null> {
-	let probe = codexSandboxProbes.get(binary);
-	if (!probe) {
-		probe = runCodexSandboxProbe(binary, options.timeoutMs ?? CODEX_SANDBOX_PROBE_TIMEOUT_MS);
-		codexSandboxProbes.set(binary, probe);
-		void probe.then((result) => {
-			if (result === null && codexSandboxProbes.get(binary) === probe) {
-				codexSandboxProbes.delete(binary);
-			}
-		});
+	const now = options.now ?? Date.now;
+	const timeoutMs = options.timeoutMs ?? CODEX_SANDBOX_PROBE_TIMEOUT_MS;
+	const cached = codexSandboxProbes.get(binary);
+	if (cached && isCodexSandboxProbeReusable(cached, timeoutMs, now())) {
+		return await cached.result;
 	}
-	return await probe;
+	const probe: CodexSandboxProbe = {
+		result: runCodexSandboxProbe(binary, timeoutMs),
+		timeoutMs,
+		timedOutUntil: null,
+	};
+	codexSandboxProbes.set(binary, probe);
+	void probe.result.then((result) => {
+		if (result === null) {
+			probe.timedOutUntil = now() + (options.timeoutCacheMs ?? CODEX_SANDBOX_TIMEOUT_CACHE_MS);
+		}
+	});
+	return await probe.result;
 }
 
 /** Whether `codex sandbox` can run a command here; a timed-out probe counts as no (the card keeps the bypass). */
@@ -278,6 +309,8 @@ function buildClaudeSharedPushDeny(sharedBranches: readonly string[]): string[] 
 			words.push(ref, `+${ref}`);
 			destinations.push(ref);
 		}
+		// Any destination ending in `/<shared>` (git's DWIM takes `card:heads/main` as the remote's main).
+		words.push(`*/${name}`);
 	}
 	const deny: string[] = [];
 	for (const prefix of listClaudeCommandPrefixes(["git", "push"])) {
@@ -293,6 +326,23 @@ function buildClaudeSharedPushDeny(sharedBranches: readonly string[]): string[] 
 }
 
 /**
+ * The deny rules for a `… {shared-dest}` rule: a refspec whose destination is a shared branch or ends in
+ * `/<shared>`. A pattern destination (`refs/heads/*:refs/heads/*`) is left to the guard hook: `*` can't match a
+ * literal star.
+ */
+function buildClaudeSharedDestinationDeny(head: readonly string[], sharedBranches: readonly string[]): string[] {
+	const deny: string[] = [];
+	for (const prefix of listClaudeCommandPrefixes(head)) {
+		for (const name of sharedBranches) {
+			for (const destination of [name, `*/${name}`]) {
+				deny.push(`Bash(${prefix}*:${destination})`, `Bash(${prefix}*:${destination} *)`);
+			}
+		}
+	}
+	return deny;
+}
+
+/**
  * The `Bash(...)` deny rules for one rule. `*` matches any text, so `git branch* -D* main` is `git branch`, then
  * ` -D` and ` main` as later words (each order of the floating slots is a rule), and the trailing ` *` form lets
  * anything follow.
@@ -300,6 +350,11 @@ function buildClaudeSharedPushDeny(sharedBranches: readonly string[]): string[] 
 export function buildClaudeBashDeny(rule: DeniedCommandRule): string[] {
 	if (rule.sharedPush) {
 		return buildClaudeSharedPushDeny(rule.sharedPush);
+	}
+	if (rule.sharedDestination) {
+		return expandSlots(rule.words).flatMap((head) =>
+			buildClaudeSharedDestinationDeny(head, rule.sharedDestination ?? []),
+		);
 	}
 	const deny: string[] = [];
 	for (const slots of listRuleSlotOrders(rule)) {
@@ -401,6 +456,7 @@ export function describeAgentGuardrails(
 				reads: unrestrictedReads,
 				unenforced: [
 					"command forms other than the plain prefix",
+					...describeUnenforcedRules((context.deniedCommands ?? []).filter((rule) => rule.sharedDestination)),
 					...(sandbox || !confineWrites ? [] : ["writes outside the worktree"]),
 				],
 			};

@@ -1,11 +1,11 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_GUARDRAIL_DENY_COMMANDS } from "../../../src/config/pipeline-config";
-import { parseDeniedCommandPatterns } from "../../../src/guardrails/command-patterns";
+import { allowOwnBranchPush, parseDeniedCommandPatterns } from "../../../src/guardrails/command-patterns";
 import type { TaskGuardrails } from "../../../src/guardrails/task-guardrails";
 import {
 	buildClaudePermissionDeny,
@@ -67,7 +67,14 @@ describe("Copilot guardrails", () => {
 		expect(denyTools).toEqual(["shell(git push)", "shell(git filter-branch)", "shell(git filter-repo)"]);
 		// `shell(podman restart)` blocks nothing in Copilot 1.0.92, and it has no argument matching.
 		expect(unenforced.map((rule) => rule.pattern)).toEqual(
-			expect.arrayContaining(["podman restart|stop|rm|kill", "git update-ref {shared}", "kanban home migrate"]),
+			expect.arrayContaining([
+				"podman restart|stop|rm|kill",
+				"git update-ref {shared}",
+				"kanban home migrate",
+				// `shell(git fetch)` would deny every fetch.
+				"git fetch {shared-dest}",
+				"git pull {shared-dest}",
+			]),
 		);
 		expect(buildCopilotDenyTools(parseDeniedCommandPatterns(["gh pr|release", "terraform"], [])).denyTools).toEqual([
 			"shell(gh pr)",
@@ -95,6 +102,12 @@ describe("Codex guardrails", () => {
 			'prefix_rule(pattern=["git", "branch", ["-D", "-d", "--delete", "-f", "--force", "-m", "-M"], ["main", "refs/heads/main", "fork/stack", "refs/heads/fork/stack"]], decision="forbidden"',
 		);
 		expect(file).toContain('prefix_rule(pattern=["systemctl", "--user", ["restart", "stop", "kill"]]');
+		// A prefix rule for `git fetch {shared-dest}` would forbid every fetch; the prompt note carries it.
+		expect(file).not.toContain('"fetch"');
+		expect(file).not.toContain('"pull"');
+		expect(describeAgentGuardrails("codex", { deniedCommands: rules }).unenforced).toContainEqual(
+			"commands: git fetch {shared-dest}; git pull {shared-dest}",
+		);
 		// Each order of the floating slots: `git branch main -D` too.
 		expect(file).toContain(
 			'prefix_rule(pattern=["git", "branch", ["main", "refs/heads/main", "fork/stack", "refs/heads/fork/stack"], ["-D", "-d", "--delete", "-f", "--force", "-m", "-M"]], decision="forbidden"',
@@ -174,8 +187,26 @@ describe("Claude Code deny rules against the documented rule syntax", () => {
 		}
 	});
 
+	it("denies fetches into a shared branch and keeps plain fetches allowed", () => {
+		for (const command of [
+			"git fetch . card:main",
+			"git fetch origin main:main",
+			"git fetch origin +main:refs/heads/fork/stack",
+			"git fetch origin card:heads/main --quiet",
+			"git -C /wt/card fetch origin main:main",
+			"git pull origin main:main",
+		]) {
+			expect(claudeDenies(deny, command), command).toBe(true);
+		}
+		for (const command of ["git fetch origin main", "git fetch origin main:card", "git pull origin main"]) {
+			expect(claudeDenies(deny, command), command).toBe(false);
+		}
+	});
+
 	it("lets a PR card push its own branch and denies shared or unnamed targets", () => {
 		const prDeny = buildClaudePermissionDeny(createGuardrails({ ownBranchPush: true }));
+		const prRules = allowOwnBranchPush(rules, ["main", "fork/stack"]);
+		const bash = (command: string) => ({ tool_name: "Bash", tool_input: { command } });
 		expect(prDeny).not.toContain("Bash(git push *)");
 		for (const command of [
 			"git push -u origin card-1234",
@@ -191,10 +222,16 @@ describe("Claude Code deny rules against the documented rule syntax", () => {
 			"git push origin +fork/stack",
 			"git push origin HEAD:main",
 			"git push origin card:refs/heads/fork/stack",
+			"git push origin card:heads/main",
+			"git push origin HEAD:heads/fork/stack",
+			"git push origin heads/main",
 			"git -C /projects/kanban push origin main",
 			"git push --all origin",
 		]) {
 			expect(claudeDenies(prDeny, command), command).toBe(true);
+			expect(
+				evaluateClaudeGuard(bash(command), { deniedCommands: prRules })?.hookSpecificOutput.permissionDecision,
+			).toBe("deny");
 		}
 		// The rest of the rules don't change.
 		expect(claudeDenies(prDeny, "git branch -q -D main")).toBe(true);
@@ -219,7 +256,38 @@ describe("Claude Code guard hook", () => {
 });
 
 describe("Codex sandbox probe", () => {
-	it("caps the probe and doesn't keep a timed-out result", async () => {
+	it("keeps a timed-out probe for a short while only", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "kanban-codex-probe-"));
+		try {
+			// A stand-in for a hanging `codex sandbox` that logs each run.
+			const binary = join(dir, "codex");
+			const runs = join(dir, "runs");
+			writeFileSync(binary, `#!/bin/sh\necho run >> '${runs}'\nexec sleep 5\n`);
+			chmodSync(binary, 0o755);
+			let now = 1_000_000;
+			const options = { timeoutMs: 200, timeoutCacheMs: 600_000, now: () => now };
+			const countRuns = () => readFileSync(runs, "utf8").trim().split("\n").length;
+			expect(await probeCodexSandboxResult(binary, options)).toBeNull();
+			expect(countRuns()).toBe(1);
+			// The next launches within the TTL get the timeout without probing again.
+			now += 599_000;
+			const startedAt = Date.now();
+			expect(await probeCodexSandboxResult(binary, options)).toBeNull();
+			expect(Date.now() - startedAt).toBeLessThan(150);
+			expect(countRuns()).toBe(1);
+			// After it, the next caller probes again.
+			now += 2_000;
+			expect(await probeCodexSandboxResult(binary, options)).toBeNull();
+			expect(countRuns()).toBe(2);
+			// A caller that would wait longer than the probe that timed out doesn't take its answer.
+			expect(await probeCodexSandboxResult(binary, { ...options, timeoutMs: 300 })).toBeNull();
+			expect(countRuns()).toBe(3);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("caps the probe and re-probes after a timeout for a caller that waits longer", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "kanban-codex-probe-"));
 		try {
 			// A stand-in for `codex sandbox`: hangs on its first run, succeeds afterwards.
@@ -307,6 +375,19 @@ describe("Cline guard", () => {
 		expect(evaluateClineGuard(call("run_commands", { commands: ["git rebase fork/stack"] }), policy)).toEqual({
 			cancel: false,
 		});
+		expect(evaluateClineGuard(call("run_commands", { commands: ["git fetch . card:main"] }), policy).cancel).toBe(
+			true,
+		);
+		expect(evaluateClineGuard(call("run_commands", { commands: ["git fetch origin main"] }), policy).cancel).toBe(
+			false,
+		);
+		const prPolicy = { ...policy, deniedCommands: allowOwnBranchPush(rules, ["main", "fork/stack"]) };
+		expect(
+			evaluateClineGuard(call("run_commands", { commands: ["git push origin card:heads/main"] }), prPolicy).cancel,
+		).toBe(true);
+		expect(evaluateClineGuard(call("run_commands", { commands: ["git push origin card"] }), prPolicy).cancel).toBe(
+			false,
+		);
 		// The string-valued copy in preToolUse.parameters when tool_call is missing.
 		expect(
 			evaluateClineGuard(

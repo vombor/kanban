@@ -9,6 +9,11 @@
 // `git branch -q -D main` are caught. Anything else may follow.
 // `{shared-push}` (only as `git push {shared-push}`) matches a push that may update a shared branch: no explicit
 // target, `HEAD` without `:<branch>`, `--all`/`--mirror`/`--prune`, or a refspec whose destination is shared.
+// `{shared-dest}` (only as a pattern's last word, e.g. `git fetch {shared-dest}`) matches a later word that is a
+// refspec `<src>:<dst>` with a shared destination: `git fetch . card:main` and `git fetch origin main:main`
+// fast-forward the local main, `git fetch origin main` (no destination) doesn't.
+// A destination is shared when, after stripping `refs/` and `heads/`, it is a shared branch or ends in
+// `/<shared>`: git's DWIM resolves `card:heads/main` to the remote's main (isSharedRefDestination).
 //
 //   "git push"                                → git push, git push --force origin x, …
 //   "git branch -D|-d|--delete {shared}"     → git branch -D main, git branch -q --delete refs/heads/fork/stack
@@ -24,6 +29,7 @@ import { basename } from "node:path";
 
 const SHARED_BRANCH_PLACEHOLDER = "{shared}";
 const SHARED_PUSH_PLACEHOLDER = "{shared-push}";
+const SHARED_DESTINATION_PLACEHOLDER = "{shared-dest}";
 
 /** One denied-command rule: `words[i]` lists the words allowed in slot i. */
 export interface DeniedCommandRule {
@@ -34,10 +40,48 @@ export interface DeniedCommandRule {
 	headLength: number;
 	/** `git push {shared-push}`: the shared branch names the push may not update (pushMayUpdateSharedBranch). */
 	sharedPush?: string[];
+	/** `… {shared-dest}`: the shared branch names no later refspec may name as its destination (hasSharedRefspec). */
+	sharedDestination?: string[];
 }
 
 function toSharedBranchName(branch: string): string {
 	return branch.trim().replace(/^refs\/heads\//u, "");
+}
+
+/**
+ * Whether a refspec destination names a shared branch: after stripping `refs/` and `heads/`, it is one or ends in
+ * `/<shared>`. Errs on the side of "shared": `refs/remotes/origin/main` and `feature/main` count too.
+ */
+export function isSharedRefDestination(destination: string, sharedBranches: readonly string[]): boolean {
+	const ref = destination
+		.trim()
+		.replace(/^refs\//u, "")
+		.replace(/^heads\//u, "");
+	return sharedBranches.some((branch) => {
+		const name = toSharedBranchName(branch);
+		return name.length > 0 && (ref === name || ref.endsWith(`/${name}`));
+	});
+}
+
+/**
+ * Whether some word is a refspec `[+]<src>:<dst>` whose destination is shared (`{shared-dest}`). A pattern
+ * destination counts unless it is under `refs/remotes/` (`refs/heads/*:refs/heads/*` writes the local main).
+ */
+export function hasSharedRefspec(args: readonly string[], sharedBranches: readonly string[]): boolean {
+	return args.some((arg) => {
+		if (arg.startsWith("-")) {
+			return false;
+		}
+		const colon = arg.indexOf(":");
+		if (colon === -1) {
+			return false;
+		}
+		const destination = arg.slice(colon + 1);
+		if (destination.includes("*")) {
+			return !destination.startsWith("refs/remotes/");
+		}
+		return isSharedRefDestination(destination, sharedBranches);
+	});
 }
 
 /** The words a `{shared}` slot stands for: each branch by name and as a full ref. */
@@ -73,6 +117,13 @@ export function parseDeniedCommandPatterns(
 				continue;
 			}
 		}
+		const sharedDestination = tokens.at(-1) === SHARED_DESTINATION_PLACEHOLDER;
+		if (sharedDestination) {
+			tokens.pop();
+			if (tokens.length === 0 || tokens.some((token) => token.startsWith("{"))) {
+				continue;
+			}
+		}
 		const words = tokens.map((token) =>
 			token === SHARED_BRANCH_PLACEHOLDER ? [...sharedWords] : token.split("|").filter((word) => word.length > 0),
 		);
@@ -88,13 +139,16 @@ export function parseDeniedCommandPatterns(
 				headLength = index + 1;
 			}
 		});
+		const sharedNames = sharedBranches.map(toSharedBranchName).filter((name) => name.length > 0);
+		if (sharedDestination && sharedNames.length === 0) {
+			continue;
+		}
 		rules.push({
 			pattern: pattern.trim(),
 			words,
 			headLength,
-			...(sharedPush
-				? { sharedPush: sharedBranches.map(toSharedBranchName).filter((name) => name.length > 0) }
-				: {}),
+			...(sharedPush ? { sharedPush: sharedNames } : {}),
+			...(sharedDestination ? { sharedDestination: sharedNames } : {}),
 		});
 	}
 	return rules;
@@ -104,6 +158,7 @@ function isPlainGitPushRule(rule: DeniedCommandRule): boolean {
 	const [program, subcommand] = rule.words;
 	return (
 		!rule.sharedPush &&
+		!rule.sharedDestination &&
 		rule.words.length === 2 &&
 		program?.length === 1 &&
 		program[0] === "git" &&
@@ -364,7 +419,6 @@ const GIT_PUSH_UNNAMED_REFS_OPTIONS = new Set(["--all", "--branches", "--mirror"
  * current branch, which could be a shared one), a pattern refspec and `--all`/`--mirror`/`--prune` count as "may".
  */
 export function pushMayUpdateSharedBranch(args: readonly string[], sharedBranches: readonly string[]): boolean {
-	const shared = new Set(sharedBranches.map(toSharedBranchName));
 	const positionals: string[] = [];
 	let repositoryGiven = false;
 	for (let index = 0; index < args.length; index += 1) {
@@ -397,7 +451,7 @@ export function pushMayUpdateSharedBranch(args: readonly string[], sharedBranche
 		if (destination === "" || destination === "HEAD" || destination === "@" || destination.includes("*")) {
 			return true;
 		}
-		return shared.has(toSharedBranchName(destination));
+		return isSharedRefDestination(destination, sharedBranches);
 	});
 }
 
@@ -429,6 +483,9 @@ function ruleMatchesWords(rule: DeniedCommandRule, words: string[]): boolean {
 	if (rule.sharedPush) {
 		return pushMayUpdateSharedBranch(after, rule.sharedPush);
 	}
+	if (rule.sharedDestination && !hasSharedRefspec(after, rule.sharedDestination)) {
+		return false;
+	}
 	return matchFloatingSlots(rule.words.slice(rule.headLength), after);
 }
 
@@ -454,5 +511,11 @@ export function describeDeniedCommand(match: DeniedCommandMatch): string {
 	if (match.rule.sharedPush) {
 		return `${blocked} may update a shared branch (${match.rule.sharedPush.join(", ")}). This card may push only its own branch, named explicitly: \`git push -u origin HEAD:<your-branch>\` or \`git push -u origin <your-branch>\`.`;
 	}
-	return `${blocked} matches "${match.rule.pattern}". Task cards never push, rewrite shared branches or restart services; leave that to the orchestrator.`;
+	if (match.rule.sharedDestination) {
+		return `${blocked} writes a shared branch (${match.rule.sharedDestination.join(", ")}) through a refspec destination. Fetch without a local destination (\`git fetch origin main\`, then use \`origin/main\`), and leave shared branches to the orchestrator.`;
+	}
+	const pushHint = isPlainGitPushRule(match.rule)
+		? " To let this card push its own branch, the user sets the card's git action to PR and restarts its session (with guardrails.prCardPush `own-branch`, the default); don't work around the block."
+		: "";
+	return `${blocked} matches "${match.rule.pattern}". Task cards never push, rewrite shared branches or restart services; leave that to the orchestrator.${pushHint}`;
 }

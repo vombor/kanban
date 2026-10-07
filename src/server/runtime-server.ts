@@ -43,7 +43,6 @@ import {
 	loadWorkspaceContextById,
 	mutateWorkspaceState,
 } from "../state/workspace-state";
-import { removeTaskLaunchFiles } from "../terminal/agent-session-adapters";
 import { createClineTurnMonitor } from "../terminal/cline-turn-monitor";
 import type { TerminalSessionManager } from "../terminal/session-manager";
 import { createTerminalWebSocketBridge } from "../terminal/ws-server";
@@ -295,13 +294,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			const terminalManager = await getScopedTerminalManager(scope);
 			terminalManager.stopTaskSession(taskId);
 		},
-		deleteTaskWorktree: async (scope, taskId) => {
-			// The card's launch files outside its worktree (a guarded Claude card's --settings file) go with it.
-			await removeTaskLaunchFiles(taskId).catch((error: unknown) =>
-				deps.warn(`Could not remove the launch files of task ${taskId}: ${String(error)}`),
-			);
-			return await deleteTaskWorktree({ repoPath: scope.workspacePath, taskId });
-		},
+		deleteTaskWorktree: async (scope, taskId) => await deleteTaskWorktree({ repoPath: scope.workspacePath, taskId }),
 		prepareProcessReap: prepareTaskProcessReap,
 		ensureTaskWorktree: async (scope, input) =>
 			await ensureTaskWorktreeIfDoesntExist({

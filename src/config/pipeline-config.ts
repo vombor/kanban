@@ -372,8 +372,10 @@ export function migrateLegacyConfigKeys(config: Record<string, unknown>): {
  * The commands a task card's agent must never run (src/guardrails/command-patterns.ts has the syntax): the program
  * and subcommand match the command's first words, option slots and `{shared}` match any later word, `a|b` is either
  * word, `{shared}` is any shared branch (`guardrails.sharedBranches` plus the card's base branch, also as
- * `refs/heads/<name>`). Card-local rebases and resets stay allowed: a card's worktree is on its own branch, and git
- * refuses to check out a branch another worktree has.
+ * `refs/heads/<name>`), `{shared-dest}` is a refspec whose destination is a shared branch or ends in `/<name>`
+ * (`git fetch . card:main` fast-forwards the local main; `git fetch origin main` stays allowed). Card-local rebases
+ * and resets stay allowed: a card's worktree is on its own branch, and git refuses to check out a branch another
+ * worktree has.
  */
 export const DEFAULT_GUARDRAIL_DENY_COMMANDS = [
 	"git push",
@@ -383,6 +385,8 @@ export const DEFAULT_GUARDRAIL_DENY_COMMANDS = [
 	"git branch -D|-d|--delete|-f|--force|-m|-M {shared}",
 	"git switch -C|--force-create {shared}",
 	"git checkout -B {shared}",
+	"git fetch {shared-dest}",
+	"git pull {shared-dest}",
 	"podman restart|stop|rm|kill",
 	"docker restart|stop|rm|kill",
 	"systemctl restart|stop|kill",

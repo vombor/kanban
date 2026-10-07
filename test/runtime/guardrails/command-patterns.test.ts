@@ -6,6 +6,8 @@ import {
 	describeDeniedCommand,
 	expandDeniedCommandRule,
 	findDeniedCommand,
+	hasSharedRefspec,
+	isSharedRefDestination,
 	listShellCommands,
 	parseDeniedCommandPatterns,
 	pushMayUpdateSharedBranch,
@@ -151,6 +153,12 @@ describe("denied-command patterns", () => {
 			"git push origin HEAD:main",
 			"git push origin HEAD:refs/heads/fork/stack",
 			"git push origin card:main",
+			// git's DWIM: `heads/main` is the remote's main.
+			"git push origin card:heads/main",
+			"git push origin card:refs/heads/main",
+			"git push origin HEAD:heads/fork/stack",
+			"git push origin heads/main",
+			"git push origin +card:heads/main",
 			"git push origin --delete main",
 			"git push origin :fork/stack",
 			"git push origin :",
@@ -167,11 +175,74 @@ describe("denied-command patterns", () => {
 		expect(prRules.filter((rule) => !rule.sharedPush)).toEqual(rules.filter((rule) => rule.pattern !== "git push"));
 	});
 
+	it("treats a destination that is or ends in /<shared> as shared", () => {
+		const shared = ["main", "refs/heads/fork/stack"];
+		for (const destination of [
+			"main",
+			"heads/main",
+			"refs/heads/main",
+			"refs/main",
+			"fork/stack",
+			"heads/fork/stack",
+			"refs/heads/fork/stack",
+			"refs/remotes/origin/main",
+		]) {
+			expect(isSharedRefDestination(destination, shared), destination).toBe(true);
+		}
+		for (const destination of ["card", "heads/card", "refs/heads/main-2", "domain", "stack", "fork/stack-x"]) {
+			expect(isSharedRefDestination(destination, shared), destination).toBe(false);
+		}
+		expect(isSharedRefDestination("main", [])).toBe(false);
+	});
+
+	it("denies fetches and pulls whose refspec writes a shared branch, and keeps plain fetches allowed", () => {
+		for (const command of [
+			"git fetch . card:main",
+			"git fetch origin main:main",
+			"git fetch origin +main:refs/heads/main",
+			"git fetch origin card:heads/fork/stack",
+			"git fetch --update-head-ok origin main:main",
+			"git -C /wt/card fetch -q origin main:main",
+			"git fetch origin 'refs/heads/*:refs/heads/*'",
+			"sh -c 'git fetch . HEAD:main'",
+		]) {
+			expect(denied(command), command).toBe("git fetch {shared-dest}");
+		}
+		expect(denied("git pull origin main:main")).toBe("git pull {shared-dest}");
+		for (const command of [
+			"git fetch",
+			"git fetch origin",
+			"git fetch origin main",
+			"git fetch origin fork/stack",
+			"git fetch --prune origin",
+			"git fetch origin main:card",
+			"git fetch origin main:refs/heads/card",
+			"git fetch origin '+refs/heads/*:refs/remotes/origin/*'",
+			"git pull origin main",
+			"git pull --rebase origin fork/stack",
+		]) {
+			expect(denied(command), command).toBeNull();
+		}
+		expect(hasSharedRefspec(["--refmap=x:main", "origin"], ["main"])).toBe(false);
+		const match = findDeniedCommand("git fetch . card:main", rules);
+		expect(match && describeDeniedCommand(match)).toContain("git fetch origin main");
+		// `{shared-dest}` stands for nothing without shared branches, and only as the last word.
+		expect(parseDeniedCommandPatterns(["git fetch {shared-dest}"], [])).toEqual([]);
+		expect(parseDeniedCommandPatterns(["git fetch {shared-dest} x"], ["main"])).toHaveLength(1);
+		expect(parseDeniedCommandPatterns(["git fetch {shared-dest} x"], ["main"])[0]?.sharedDestination).toBeUndefined();
+	});
+
 	it("says what a PR card may push when it blocks a push", () => {
 		const match = findDeniedCommand("git push origin main", allowOwnBranchPush(rules, ["main"]));
 		expect(match && describeDeniedCommand(match)).toContain("This card may push only its own branch");
 		const plain = findDeniedCommand("git push origin card", rules);
 		expect(plain && describeDeniedCommand(plain)).toContain('matches "git push"');
+		// A Commit-mode card's Make PR click: the message says how the user lets the card push.
+		expect(plain && describeDeniedCommand(plain)).toContain(
+			"sets the card's git action to PR and restarts its session",
+		);
+		const other = findDeniedCommand("git branch -D main", rules);
+		expect(other && describeDeniedCommand(other)).not.toContain("git action to PR");
 	});
 
 	it("denies container and service restarts and the home migration", () => {

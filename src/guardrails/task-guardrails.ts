@@ -207,11 +207,15 @@ export function buildGuardrailPromptNote(
 	rules: readonly DeniedCommandRule[] = guardrails.deniedCommands,
 ): string {
 	const shared = guardrails.sharedBranches.join(", ");
-	const patterns = rules.map((rule) =>
-		rule.sharedPush
-			? "git push to a shared branch or without naming the target branch (pushing your own branch, named explicitly, is fine)"
-			: rule.pattern.replaceAll("{shared}", "<shared branch>"),
-	);
+	const patterns = rules.map((rule) => {
+		if (rule.sharedPush) {
+			return "git push to a shared branch or without naming the target branch (pushing your own branch, named explicitly, is fine)";
+		}
+		if (rule.sharedDestination) {
+			return `${rule.pattern.replace(/\s*\{shared-dest\}$/u, "")} into a shared branch (a refspec <src>:<shared branch>)`;
+		}
+		return rule.pattern.replaceAll("{shared}", "<shared branch>");
+	});
 	const lines = [
 		"Kanban guardrails for this card:",
 		guardrails.confineWrites

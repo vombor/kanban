@@ -10,6 +10,7 @@ import { type LockRequest, lockedFileSystem } from "../fs/locked-file-system";
 import { getLegacyTaskWorktreeRootPaths, getTaskWorktreeSearchRootPaths } from "../state/kanban-home";
 import { getRuntimeHomePath, getTaskWorktreesHomePath, loadWorkspaceContext } from "../state/workspace-state";
 import { getGitCommandErrorMessage, getGitStdout, readGitHeadInfo, runGit } from "./git-utils";
+import { removeTaskLaunchFiles } from "./task-launch-files";
 import { getWorkspaceFolderLabelForWorktreePath, normalizeTaskIdForWorktreePath } from "./task-worktree-path";
 import { listTurbopackNodeModulesSymlinkSkipPaths } from "./task-worktree-turbopack";
 
@@ -633,11 +634,18 @@ export async function ensureTaskWorktreeIfDoesntExist(options: {
 	}
 }
 
+/**
+ * Deletes a card's worktree (capturing its patch first) and the card's launch files outside it
+ * (src/workspace/task-launch-files.ts). Every path that drops a card's worktree goes through here: Done, task delete,
+ * project removal and the shutdown cleanup.
+ */
 export async function deleteTaskWorktree(options: {
 	repoPath: string;
 	taskId: string;
 }): Promise<RuntimeWorktreeDeleteResponse> {
 	try {
+		// Best-effort: a leftover settings file must not keep the worktree.
+		await removeTaskLaunchFiles(options.taskId).catch(() => undefined);
 		const taskId = normalizeTaskIdForWorktreePath(options.taskId);
 		const { path: worktreePath, baseRootPath: rootPath } = await locateTaskWorktree(options.repoPath, taskId);
 		if (!(await pathExists(worktreePath))) {

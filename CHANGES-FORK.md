@@ -455,3 +455,19 @@ of this repository is the complete record of changes.
   differences such as QA for Claude-built cards are marked KNOWN). Replaces the legacy kit's `test/equivalence.sh`
   for the port. The docs rewrite the legacy kit's WORKFLOW/RUNBOOK/CONFIG for the core and add the kit schema, the
   `default` and `team` kits and how to write a user kit. Nothing runs on its own.
+- `src/guardrails/command-patterns.ts`, `src/guardrails/task-guardrails.ts`, `src/terminal/agent-guardrails.ts`,
+  `src/config/pipeline-config.ts`, `src/workspace/task-launch-files.ts` (new), `src/workspace/task-worktree.ts`,
+  `src/terminal/agent-session-adapters.ts`, `src/server/runtime-server.ts`,
+  `web-ui/src/git-actions/build-task-git-action-prompt.ts`, tests: guardrail follow-ups. A refspec destination that
+  is a shared branch or ends in `/<shared>` (after stripping `refs/` and `heads/`) counts as shared, so a PR card's
+  `git push origin card:heads/main` (git's DWIM for the remote's main) is denied by the Claude and Cline guards and
+  Claude's deny rules. New `{shared-dest}` pattern slot and default rules `git fetch {shared-dest}` / `git pull
+  {shared-dest}`: `git fetch . card:main` and `git fetch origin main:main` no longer fast-forward a local shared
+  branch, while `git fetch origin main` stays allowed (Claude and Cline enforce it; Codex and Copilot can't without
+  denying every fetch, so their cards get it in the prompt note). A Claude card's `hooks/claude/cards/<id>.json` is
+  removed by `deleteTaskWorktree`, so task delete and project removal clean it up as well as Done. A timed-out Codex
+  sandbox probe is cached for 10 minutes (for callers whose own timeout is no longer), so a hanging `codex sandbox`
+  no longer delays every Codex launch. The Make PR click's prompt says the guardrails may block `git push` for the
+  card (push permission is decided at launch from the card's git action) and that the user lets it push by setting
+  the git action to PR (`kanban task update --auto-review-mode pr`) and restarting its session; the guard hooks'
+  plain push block says the same.

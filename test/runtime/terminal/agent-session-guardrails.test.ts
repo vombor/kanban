@@ -9,8 +9,10 @@ import type { RuntimeAgentId } from "../../../src/core/api-contract";
 import { parseDeniedCommandPatterns } from "../../../src/guardrails/command-patterns";
 import type { TaskGuardrails } from "../../../src/guardrails/task-guardrails";
 import type { AgentAdapterLaunchInput } from "../../../src/terminal/agent-session-adapters";
-import { prepareAgentLaunch, removeTaskLaunchFiles } from "../../../src/terminal/agent-session-adapters";
+import { prepareAgentLaunch } from "../../../src/terminal/agent-session-adapters";
 import { evaluateClaudeGuard } from "../../../src/terminal/claude-guard";
+import { removeTaskLaunchFiles } from "../../../src/workspace/task-launch-files";
+import { deleteTaskWorktree } from "../../../src/workspace/task-worktree";
 
 const sandboxMocks = vi.hoisted(() => ({ probeCodexSandbox: vi.fn(async () => false) }));
 
@@ -284,7 +286,17 @@ describe("Claude Code guardrails at launch", () => {
 		);
 	});
 
-	it("removes the card's settings file when the card's launch files are cleaned up (Done)", async () => {
+	it("removes the card's settings file with the card's worktree (Done, task delete, project removal)", async () => {
+		const launch = await prepareAgentLaunch(launchInput("claude"));
+		const settingsPath = valuesOf(launch.args, "--settings")[0] ?? "";
+		expect(existsSync(settingsPath)).toBe(true);
+		// Every caller (the Done workflow, workspace.deleteWorktree, project removal) goes through deleteTaskWorktree.
+		const deleted = await deleteTaskWorktree({ repoPath: worktree, taskId: "card-1" });
+		expect(deleted.ok).toBe(true);
+		expect(existsSync(settingsPath)).toBe(false);
+	});
+
+	it("removes the card's settings file when the card's launch files are cleaned up", async () => {
 		const launch = await prepareAgentLaunch(launchInput("claude"));
 		const settingsPath = valuesOf(launch.args, "--settings")[0] ?? "";
 		expect(existsSync(settingsPath)).toBe(true);
