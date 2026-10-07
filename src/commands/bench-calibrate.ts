@@ -1,8 +1,9 @@
 // `kanban bench calibrate <spec>`: the team kit's calibration runner (src/kits/team/calibration/). It detaches by
 // default (a calibration lasts hours and must outlive the shell and a pipeline reload) and logs to
 // `<home>/logs/calibrate.log`; `--foreground` runs it in this process, `--print` only checks the inputs. A second
-// runner for the same calibration is refused while the first one lives (`<dir>/runner.pid`); a new runner after a
-// crash or restart resumes from state.json.
+// runner for the same calibration is refused while the first one lives (`<dir>/runner.pid`, calibration-runner-lock.ts;
+// the detaching command takes it and hands it to its worker); a new runner after a crash or restart resumes from
+// state.json.
 //
 // Ported from archive/devteam-kit:qa/calibrate.mjs@94247a7 (detach, --foreground, --print).
 import { spawn } from "node:child_process";
@@ -20,6 +21,11 @@ import { loadKitCatalog, resolveWorkspaceKit } from "../kits/resolve-kit";
 import { locateCard } from "../kits/team/bench/card-locator";
 import { stripReworkSections } from "../kits/team/calibration/calibration-prompt";
 import { type CalibrationDependencies, runCalibration } from "../kits/team/calibration/calibration-runner";
+import {
+	acquireCalibrationRunnerLock,
+	CalibrationRunnerBusyError,
+	type CalibrationRunnerLock,
+} from "../kits/team/calibration/calibration-runner-lock";
 import { type CalibrationSpec, parseCalibrationSpec } from "../kits/team/calibration/calibration-spec";
 import { measureCard } from "../kits/team/scoreboard/scoreboard-store";
 import { buildQaRequirements } from "../pipeline/qa-prompt";
@@ -40,6 +46,11 @@ import { getTaskWorktreeCandidatePaths } from "../workspace/task-worktree";
 import { createRuntimeTrpcClient } from "./runtime-trpc-client";
 import { createTask, startTask, trashTask } from "./task";
 import { resolveWorkspaceTarget } from "./workspace-target";
+
+export interface CalibrateCommandDependencies {
+	/** Starts the detached worker (node's spawn; tests inject a fake). */
+	spawn?: typeof spawn;
+}
 
 export interface CalibrateOptions {
 	project?: string;
@@ -65,19 +76,17 @@ async function exists(path: string): Promise<boolean> {
 	);
 }
 
-function isAlive(pid: number): boolean {
+/** The calibration's runner lock; `inheritFrom`: the detaching command, for its worker. */
+async function lockRunner(target: CalibrationTarget, inheritFrom: number[] = []): Promise<CalibrationRunnerLock> {
+	await mkdir(target.paths.dir, { recursive: true });
 	try {
-		process.kill(pid, 0);
-		return true;
+		return await acquireCalibrationRunnerLock(target.paths.lock, { inheritFrom });
 	} catch (error) {
-		return (error as NodeJS.ErrnoException).code === "EPERM";
+		if (error instanceof CalibrationRunnerBusyError) {
+			throw new Error(`calibration ${target.spec.name} is ${error.message}`);
+		}
+		throw error;
 	}
-}
-
-/** The pid of a live runner for this calibration (other than this process), or null. */
-async function readLiveRunnerPid(lockPath: string): Promise<number | null> {
-	const pid = Number((await readFile(lockPath, "utf8").catch(() => "")).trim());
-	return Number.isInteger(pid) && pid > 0 && pid !== process.pid && isAlive(pid) ? pid : null;
 }
 
 async function loadTarget(specArgument: string, options: CalibrateOptions): Promise<CalibrationTarget> {
@@ -145,7 +154,11 @@ async function printInputs(target: CalibrationTarget): Promise<void> {
 	);
 }
 
-function startDetached(target: CalibrationTarget, options: CalibrateOptions): number | undefined {
+function startDetached(
+	target: CalibrationTarget,
+	options: CalibrateOptions,
+	spawnProcess: typeof spawn,
+): number | undefined {
 	const logPath = getCalibrationLogPath();
 	mkdirSync(dirname(logPath), { recursive: true });
 	const output = openSync(logPath, "a");
@@ -161,7 +174,7 @@ function startDetached(target: CalibrationTarget, options: CalibrateOptions): nu
 	if (!command) {
 		throw new Error("cannot locate the Kanban CLI");
 	}
-	const child = spawn(command, args, {
+	const child = spawnProcess(command, args, {
 		cwd: target.repoPath,
 		detached: true,
 		stdio: ["ignore", output, output],
@@ -271,10 +284,8 @@ function createDependencies(target: CalibrationTarget, log: (message: string) =>
 	};
 }
 
-async function runInThisProcess(target: CalibrationTarget, echo: boolean): Promise<void> {
+async function runInThisProcess(target: CalibrationTarget, lock: CalibrationRunnerLock, echo: boolean): Promise<void> {
 	const { paths } = target;
-	await mkdir(paths.dir, { recursive: true });
-	await writeFile(paths.lock, `${process.pid}\n`);
 	const log = createLogger(echo);
 	try {
 		await writeFile(paths.spec, `${JSON.stringify(target.spec, null, 2)}\n`);
@@ -295,25 +306,33 @@ async function runInThisProcess(target: CalibrationTarget, echo: boolean): Promi
 		log(`calibration ${target.spec.name} stopped: ${error instanceof Error ? error.message : String(error)}`);
 		throw error;
 	} finally {
-		await rm(paths.lock, { force: true });
+		await lock.release();
 	}
 }
 
-export async function runCalibrateCommand(specArgument: string, options: CalibrateOptions): Promise<number> {
+export async function runCalibrateCommand(
+	specArgument: string,
+	options: CalibrateOptions,
+	deps: CalibrateCommandDependencies = {},
+): Promise<number> {
 	const target = await loadTarget(specArgument, options);
 	if (options.print) {
 		await printInputs(target);
 		return 0;
 	}
-	const livePid = await readLiveRunnerPid(target.paths.lock);
-	if (livePid !== null) {
-		throw new Error(`calibration ${target.spec.name} is already running (pid ${livePid}, ${target.paths.lock})`);
-	}
 	if (options.foreground || options.worker) {
-		await runInThisProcess(target, options.foreground === true);
+		// A worker takes the lock over from the command that spawned it (it may not have handed it over yet).
+		const lock = await lockRunner(target, options.worker ? [process.ppid] : []);
+		await runInThisProcess(target, lock, options.foreground === true);
 		return 0;
 	}
-	const pid = startDetached(target, options);
+	const lock = await lockRunner(target);
+	let pid: number | undefined;
+	try {
+		pid = startDetached(target, options, deps.spawn ?? spawn);
+	} finally {
+		await (pid === undefined ? lock.release() : lock.handOver(pid));
+	}
 	process.stdout.write(
 		`calibration ${target.spec.name} started (pid ${pid ?? "?"}); log ${getCalibrationLogPath()}; state ${target.paths.state}\n`,
 	);

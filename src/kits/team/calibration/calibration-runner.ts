@@ -19,7 +19,8 @@
 // - a stopped card without a verdict is nudged once a minute at most, `maxNudges` times (8ffce60); an unusable
 //   verdict.json is quoted in the nudge and kept as `badVerdict` for the judge (666a084);
 // - no native tool call after 2 nudges = the serving stack can't do tool calls for that model: DNF (94247a7);
-// - no run on an agent that is signed out (60c5538), and DNF for one that never started a turn in 10 min (de83bf8);
+// - no run on an agent that is signed out (60c5538; a rerun retries it), and DNF for one that never started a turn in
+//   10 min (de83bf8);
 // - the card's session state wins; the agent's own session file decides when Kanban has no summary (b5744b3).
 import { join } from "node:path";
 
@@ -147,6 +148,12 @@ export async function runCalibration(
 	const runs = listCalibrationRuns(spec);
 	const state = await readCalibrationState(paths.state);
 	state.finishedAt = null;
+	// A run not started because its agent was signed out says "sign it in, then rerun": this is the rerun.
+	for (const [key, entry] of Object.entries(state.runs)) {
+		if (entry.signedOut && !entry.id) {
+			delete state.runs[key];
+		}
+	}
 	const timeoutMs = spec.timeoutMin * 60_000;
 
 	const save = async (): Promise<void> => {
@@ -231,8 +238,13 @@ export async function runCalibration(
 		await writeResults();
 	};
 
-	const markNotStarted = async (run: CalibrationRunPlan, why: string): Promise<void> => {
-		state.runs[run.key] = { done: new Date(deps.now()).toISOString(), verdict: "DNF", why };
+	const markNotStarted = async (run: CalibrationRunPlan, why: string, signedOut = false): Promise<void> => {
+		state.runs[run.key] = {
+			done: new Date(deps.now()).toISOString(),
+			verdict: "DNF",
+			why,
+			...(signedOut ? { signedOut } : {}),
+		};
 		await save();
 	};
 
@@ -245,6 +257,7 @@ export async function runCalibration(
 				await markNotStarted(
 					run,
 					`${run.model.agent} is signed out (no login in its config or env); sign it in, then rerun`,
+					true,
 				);
 				deps.log(`${run.key}: not started, ${run.model.agent} is signed out`);
 				continue;
@@ -277,6 +290,25 @@ export async function runCalibration(
 		return workspacePath ? (await deps.signals.isSessionRunning(run.model.agent, workspacePath)) === true : false;
 	};
 
+	const finishIfTimedOut = async (
+		run: CalibrationRunPlan,
+		entry: CalibrationRunState,
+		verdict: QaVerdict | null,
+		note = "",
+	): Promise<boolean> => {
+		if (deps.now() - (entry.startedAt ?? deps.now()) <= timeoutMs) {
+			return false;
+		}
+		await finish(run, entry, verdict, `timed out after ${spec.timeoutMin} min${note}`);
+		return true;
+	};
+
+	/** A started run while the board can't be read: only the timeout applies (and a verdict, if one is written). */
+	const checkRunBlind = async (run: CalibrationRunPlan, entry: CalibrationRunState): Promise<void> => {
+		const read = await deps.readVerdict(entry.outDir ?? join(input.outboxRoot, run.key));
+		await finishIfTimedOut(run, entry, read.kind === "ok" ? read.verdict : null, " (board unreadable)");
+	};
+
 	/** One look at a started, unfinished run. */
 	const checkRun = async (
 		run: CalibrationRunPlan,
@@ -301,8 +333,7 @@ export async function runCalibration(
 			await finish(run, entry, verdict, `card ${column ?? "gone"}`);
 			return;
 		}
-		if (now - startedAt > timeoutMs) {
-			await finish(run, entry, verdict, `timed out after ${spec.timeoutMin} min`);
+		if (await finishIfTimedOut(run, entry, verdict)) {
 			return;
 		}
 		const agentId = run.model.agent;
@@ -390,20 +421,18 @@ export async function runCalibration(
 		await startWave(wave);
 		while (wave.some((run) => !state.runs[run.key]?.done)) {
 			await deps.sleep(CALIBRATION_POLL_MS);
-			let board: CalibrationBoardState;
-			try {
-				board = await deps.board.read();
-			} catch (error) {
+			// An unreadable board (the server down or restarting) still ends runs at their timeout; polls stay one apart.
+			const board = await deps.board.read().catch((error: unknown) => {
 				deps.log(`reading the board failed: ${toErrorMessage(error)}`);
-				continue;
-			}
+				return null;
+			});
 			const pid = await deps.readPidPressure();
 			for (const run of wave) {
 				const entry = state.runs[run.key];
 				if (!entry || entry.done || !entry.id) {
 					continue;
 				}
-				await checkRun(run, entry, board, pid);
+				await (board ? checkRun(run, entry, board, pid) : checkRunBlind(run, entry));
 			}
 		}
 	}

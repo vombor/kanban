@@ -95,6 +95,8 @@ function createHarness(options: {
 	signals?: Partial<AgentRunSignals>;
 	pidPressure?: () => { pressure: boolean; brownout: boolean };
 	measure?: CalibrationDependencies["measure"];
+	/** The Kanban server can't be reached for this poll. */
+	boardDown?: (harness: Harness) => boolean;
 }) {
 	let now = T0;
 	const cards: SimCard[] = [];
@@ -136,6 +138,9 @@ function createHarness(options: {
 	const deps: CalibrationDependencies = {
 		board: {
 			read: async (): Promise<CalibrationBoardState> => {
+				if (options.boardDown?.(harness)) {
+					throw new Error("connect ECONNREFUSED 127.0.0.1:3484");
+				}
 				options.onPoll?.(harness);
 				const byColumn: Partial<Record<RuntimeBoardColumnId, ReturnType<typeof createCard>[]>> = {};
 				const sessions: Record<string, RuntimeTaskSessionSummary> = {};
@@ -628,5 +633,61 @@ describe("runCalibration", () => {
 		});
 		expect(state.runs["B-sol"]).toMatchObject({ verdict: "DNF", why: "could not start: no prompt for card missing" });
 		expect(state.runs["A-mai"]?.id).toBeUndefined();
+		expect(state.runs["A-mai"]?.signedOut).toBe(true);
+	});
+
+	it("retries a run that was not started because its agent was signed out, on a rerun", async () => {
+		const spec = createSpec({
+			sets: [{ id: "A", ref: "r1", base: "b1", fromCard: "f80db" }],
+			models: [
+				{ key: "mai", agent: "copilot", model: "mai-flash" },
+				{ key: "sol", agent: "codex" },
+			],
+		});
+		const paths = createPaths();
+		await writeCalibrationState(paths.state, {
+			version: 1,
+			finishedAt: "2026-10-07T09:00:00.000Z",
+			runs: {
+				"A-mai": {
+					done: "2026-10-07T09:00:00.000Z",
+					verdict: "DNF",
+					why: "copilot is signed out (no login in its config or env); sign it in, then rerun",
+					signedOut: true,
+				},
+				"A-sol": { done: "2026-10-07T09:00:00.000Z", verdict: "DNF", why: "could not start: boom" },
+			},
+		});
+		const { harness, run } = createHarness({
+			spec,
+			paths,
+			onPoll: (h) => {
+				for (const card of h.cards) {
+					if (card.column === "in_progress") {
+						h.endTurn(card, { kind: "ok", verdict: verdictOf("PASS") });
+					}
+				}
+			},
+		});
+		const state = await run();
+		expect(harness.cards.map((card) => card.input.title)).toEqual(["QA-CAL A mai: f80db"]);
+		expect(state.runs["A-mai"]).toMatchObject({ verdict: "PASS", id: "c0001" });
+		expect(state.runs["A-mai"]?.signedOut).toBeUndefined();
+		expect(state.runs["A-sol"]).toMatchObject({ verdict: "DNF", why: "could not start: boom" });
+	});
+
+	it("still ends runs at their timeout while the board can't be read, one poll apart", async () => {
+		const spec = createSpec({ sets: [{ id: "A", ref: "r1", base: "b1", fromCard: "f80db" }], timeoutMin: 30 });
+		const { harness, run } = createHarness({ spec, paths: createPaths(), boardDown: () => true });
+		const state = await run();
+		const reason = "timed out after 30 min (board unreadable)";
+		expect(state.runs["A-sol"]).toMatchObject({ verdict: "DNF", why: reason });
+		expect(state.runs["A-haiku"]).toMatchObject({ verdict: "DNF", why: reason });
+		expect(harness.finished).toEqual(["c0001", "c0002"]);
+		expect(state.finishedAt).not.toBeNull();
+		// Polls stay CALIBRATION_POLL_MS apart: the run ends on the first poll past the timeout.
+		const failures = harness.log.filter((line) => line.startsWith("reading the board failed: connect ECONNREFUSED"));
+		expect(failures).toHaveLength((30 * 60_000) / CALIBRATION_POLL_MS + 1);
+		expect(harness.now() - T0).toBe(30 * 60_000 + CALIBRATION_POLL_MS);
 	});
 });

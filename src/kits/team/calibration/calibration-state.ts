@@ -24,6 +24,8 @@ export interface CalibrationRunState {
 	lastCostCheck?: number;
 	/** The first reason verdict.json was unusable (a judging fact: an invalid verdict disqualifies). */
 	badVerdict?: string;
+	/** Not started because its agent was signed out: the next run of the calibration retries it. */
+	signedOut?: boolean;
 	/** Set once the run is finished (ISO time). */
 	done?: string;
 	wallMin?: number;
