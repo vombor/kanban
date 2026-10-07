@@ -181,41 +181,86 @@ export async function runCheckStep(input: RunCheckStepInput): Promise<Omit<Check
 	}
 }
 
+interface ExportProcessOutcome {
+	code: number | null;
+	signal: NodeJS.Signals | null;
+	spawnError: NodeJS.ErrnoException | null;
+}
+
+/** Resolves once the child has closed, or right away when it never spawned (it then emits no close). */
+function waitForExportProcess(child: ChildProcess): Promise<ExportProcessOutcome> {
+	return new Promise((resolve) => {
+		let spawnError: NodeJS.ErrnoException | null = null;
+		child.on("error", (error: NodeJS.ErrnoException) => {
+			spawnError = error;
+			if (child.pid === undefined) {
+				resolve({ code: null, signal: null, spawnError });
+			}
+		});
+		child.on("close", (code, signal) => resolve({ code, signal, spawnError }));
+	});
+}
+
+function describeExportProcess(name: string, outcome: ExportProcessOutcome): string | null {
+	if (outcome.spawnError) {
+		return `${name} could not run (${outcome.spawnError.code ?? outcome.spawnError.message})`;
+	}
+	if (outcome.signal) {
+		return `${name} was killed by ${outcome.signal}`;
+	}
+	return outcome.code === 0 ? null : `${name} exited with ${outcome.code}`;
+}
+
+const EXPORT_STDERR_TAIL_CHARS = 2000;
+
 /** `git archive <snapshot> | tar -x -C <dir>` into a fresh dir. */
 export async function exportSnapshotToDir(repoPath: string, snapshot: string, dir: string): Promise<void> {
 	await rm(dir, { recursive: true, force: true });
 	await mkdir(dir, { recursive: true });
-	await new Promise<void>((resolve, reject) => {
-		const archive = spawn("git", ["archive", "--format=tar", snapshot], {
-			cwd: repoPath,
-			env: createGitProcessEnv(),
-			stdio: ["ignore", "pipe", "pipe"],
-		});
-		const untar = spawn("tar", ["-x", "-C", dir], { stdio: ["pipe", "ignore", "pipe"] });
-		let stderr = "";
-		archive.stderr.on("data", (chunk) => {
-			stderr += String(chunk);
-		});
-		untar.stderr.on("data", (chunk) => {
-			stderr += String(chunk);
-		});
-		archive.stdout.pipe(untar.stdin);
-		let archiveCode: number | null = null;
-		archive.on("error", reject);
-		untar.on("error", reject);
-		archive.on("close", (code) => {
-			archiveCode = code;
-		});
-		untar.on("close", (code) => {
-			if (archiveCode === 0 && code === 0) {
-				resolve();
-			} else {
-				reject(
-					new Error(`exporting ${snapshot.slice(0, 8)} failed: ${stderr.trim() || `exit ${archiveCode}/${code}`}`),
-				);
-			}
-		});
+	const archive = spawn("git", ["archive", "--format=tar", snapshot], {
+		cwd: repoPath,
+		env: createGitProcessEnv(),
+		stdio: ["ignore", "pipe", "pipe"],
 	});
+	const untar = spawn("tar", ["-x", "-C", dir], { stdio: ["pipe", "ignore", "pipe"] });
+	let stderr = "";
+	const collectStderr = (chunk: Buffer) => {
+		stderr = (stderr + String(chunk)).slice(-EXPORT_STDERR_TAIL_CHARS);
+	};
+	archive.stderr?.on("data", collectStderr);
+	untar.stderr?.on("data", collectStderr);
+	// tar may exit (or never start) while git still writes; that must not become an unhandled EPIPE.
+	untar.stdin?.on("error", () => {});
+	if (untar.stdin) {
+		archive.stdout?.pipe(untar.stdin);
+	}
+	const archiveDone = waitForExportProcess(archive).then((outcome) => {
+		if (outcome.spawnError) {
+			untar.kill("SIGKILL");
+		}
+		return outcome;
+	});
+	const untarDone = waitForExportProcess(untar).then((outcome) => {
+		// Once tar is gone nothing reads git's output, and git would block on a full pipe forever: drain it, and stop
+		// git when the export has failed anyway.
+		archive.stdout?.unpipe();
+		archive.stdout?.resume();
+		if (describeExportProcess("tar", outcome) !== null) {
+			archive.kill("SIGKILL");
+		}
+		return outcome;
+	});
+	// Decide only after both have closed: tar's close often comes before git's, whose code was then still unset
+	// ("exit null/0" on every foo export, 2026-10-07).
+	const [archiveOutcome, untarOutcome] = await Promise.all([archiveDone, untarDone]);
+	const problems = [
+		describeExportProcess("git archive", archiveOutcome),
+		describeExportProcess("tar", untarOutcome),
+	].filter((problem): problem is string => problem !== null);
+	if (problems.length > 0) {
+		const tail = stderr.trim();
+		throw new Error(`exporting ${snapshot.slice(0, 8)} failed: ${problems.join("; ")}${tail ? `: ${tail}` : ""}`);
+	}
 }
 
 /** The root plus every package up to two levels down (server/, tools/preview/), skipping dot dirs and node_modules. */

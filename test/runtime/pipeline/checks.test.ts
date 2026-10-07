@@ -10,11 +10,13 @@ import {
 	type ChecksSettings,
 	createCheckStepEnv,
 	createChecksRunner,
+	exportSnapshotToDir,
 	formatChecksReport,
 	type RunCheckStepInput,
 	resolveChecksEnabled,
 	runCheckStep,
 } from "../../../src/pipeline/checks";
+import { createRepoWithWorktree, git } from "../../utilities/git-repo";
 import { createTempDir } from "../../utilities/temp-dir";
 
 function createDeferred() {
@@ -304,5 +306,83 @@ describe("checks runner", () => {
 		await harness.runner.idle();
 		expect(harness.results).toEqual([]);
 		expect(harness.exported).toEqual(["aaaaaaaa11111111"]);
+	});
+});
+
+describe("exportSnapshotToDir", () => {
+	const cleanups: Array<() => void> = [];
+	const previousPath = process.env.PATH;
+	afterEach(() => {
+		process.env.PATH = previousPath;
+		for (const cleanup of cleanups.splice(0)) {
+			cleanup();
+		}
+	});
+
+	/** A `git` on PATH that runs `body` (sh) instead of the real git; without `systemPath` it is all there is on PATH. */
+	function useFakeGit(body: string, systemPath = true): string {
+		const temp = createTempDir("kanban-fake-git-");
+		cleanups.push(temp.cleanup);
+		const binDir = join(temp.path, "bin");
+		mkdirSync(binDir);
+		writeFileSync(join(binDir, "git"), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+		process.env.PATH = systemPath ? `${binDir}:${previousPath}` : binDir;
+		return temp.path;
+	}
+
+	function outDir(): string {
+		const temp = createTempDir("kanban-export-");
+		cleanups.push(temp.cleanup);
+		return join(temp.path, "out");
+	}
+
+	it("exports a commit of the repo's object store", async () => {
+		const repo = createRepoWithWorktree();
+		cleanups.push(repo.cleanup);
+		const dir = outDir();
+		await exportSnapshotToDir(repo.repoPath, git(repo.repoPath, ["rev-parse", "HEAD"]), dir);
+		expect(readFileSync(join(dir, "README.md"), "utf8")).toBe("hello\n");
+	});
+
+	it("waits for git to exit when tar finishes first (foo 27549: 'exit null/0' on every export)", async () => {
+		const root = useFakeGit("");
+		const source = join(root, "source");
+		mkdirSync(source);
+		writeFileSync(join(source, "file.txt"), "content\n");
+		// Writes the whole archive, closes stdout so tar exits, then takes its time to exit itself.
+		useFakeGit(`tar -cf - -C '${source}' .\nexec 1>&-\nsleep 0.3\nexit 0`);
+		const dir = outDir();
+		await exportSnapshotToDir(root, "ae949cde00000000", dir);
+		expect(readFileSync(join(dir, "file.txt"), "utf8")).toBe("content\n");
+	});
+
+	it("says which side failed, with git's stderr", async () => {
+		const repo = createRepoWithWorktree();
+		cleanups.push(repo.cleanup);
+		await expect(exportSnapshotToDir(repo.repoPath, "ae949cde00000000", outDir())).rejects.toThrow(
+			/^exporting ae949cde failed: git archive exited with 128; tar exited with \d+: fatal: not a valid object name/,
+		);
+	});
+
+	it("names the signal that killed git", async () => {
+		const root = useFakeGit("kill -TERM $$");
+		await expect(exportSnapshotToDir(root, "ae949cde00000000", outDir())).rejects.toThrow(
+			"exporting ae949cde failed: git archive was killed by SIGTERM",
+		);
+	});
+
+	it("names the spawn error of a missing tar and doesn't hang on git", async () => {
+		const root = useFakeGit("while :; do echo xxxxxxxxxxxxxxxx; done", false);
+		await expect(exportSnapshotToDir(root, "ae949cde00000000", outDir())).rejects.toThrow(
+			/^exporting ae949cde failed: git archive was killed by SIGKILL; tar could not run \(ENOENT\)/,
+		);
+	});
+
+	it("stops git when tar fails while git still writes, instead of hanging on the full pipe", async () => {
+		const root = useFakeGit("while :; do echo xxxxxxxxxxxxxxxx; done");
+		writeFileSync(join(root, "bin", "tar"), '#!/bin/sh\necho "tar: cannot write" >&2\nexit 2\n', { mode: 0o755 });
+		await expect(exportSnapshotToDir(root, "ae949cde00000000", outDir())).rejects.toThrow(
+			/^exporting ae949cde failed: git archive was killed by SIGKILL; tar exited with 2: tar: cannot write/,
+		);
 	});
 });
