@@ -1,6 +1,7 @@
 import * as Sentry from "@sentry/react";
 
-const sentryDsn = "https://061e8f494493d1cf3c7c918563cc0783@o4511098366263296.ingest.us.sentry.io/4511098568769536";
+// Error reporting is opt-in: builds only send to Sentry when a DSN is supplied at build time.
+const sentryDsn = import.meta.env.VITE_SENTRY_DSN?.trim();
 const sentryEnvironment = import.meta.env.MODE;
 
 let initialized = false;

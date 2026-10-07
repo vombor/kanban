@@ -23,3 +23,28 @@ of this repository is the complete record of changes.
 - `src/server/process-termination.ts`, `test/runtime/process-termination.test.ts`: removed (only used by
   `runCommand`).
 - `test/runtime/trpc/runtime-api.test.ts`: dropped the `runCommand` dependency stubs.
+- `web-ui/src/telemetry/posthog-config.ts`, `posthog-provider.tsx`, `events.ts`, `events.test.ts`: removed. The fork sends
+  no PostHog analytics (upstream defaulted to `https://data.cline.bot`).
+- `web-ui/src/main.tsx`, `web-ui/src/hooks/use-task-editor.ts`, `use-task-sessions.ts`,
+  `use-linked-backlog-task-actions.ts` (and their tests): removed the PostHog provider and event tracking calls.
+- `web-ui/package.json`, `web-ui/package-lock.json`: removed the `posthog-js` and `@posthog/react` dependencies.
+- `web-ui/vite.config.ts`, `web-ui/src/vite-env.d.ts`, `web-ui/.env.example`: dropped the `POSTHOG_` env plumbing;
+  documented the optional `VITE_SENTRY_DSN`.
+- `web-ui/src/telemetry/sentry.ts`, `src/telemetry/sentry-node.ts`: removed the hardcoded upstream (Cline-owned) Sentry
+  DSNs. Error reporting is off unless a build supplies `VITE_SENTRY_DSN` / `KANBAN_SENTRY_DSN`.
+- `scripts/build.mjs`: bakes the optional `KANBAN_SENTRY_DSN`; removed the unused OTEL env defines.
+- `scripts/upload-sentry-sourcemaps.mjs`: no hardcoded upstream Sentry org/projects; skipped unless `SENTRY_AUTH_TOKEN`,
+  `SENTRY_ORG`, `SENTRY_WEB_PROJECT` and `SENTRY_NODE_PROJECT` are set.
+- `.github/workflows/publish.yml`: no PostHog/OTEL secrets; passes the optional fork Sentry secrets instead.
+- `DEVELOPMENT.md`: replaced the PostHog section with the fork's telemetry/error-reporting notes.
+- `web-ui/src/components/project-navigation-panel.tsx`: sidebar header reads "Kanban v…" instead of "Cline v…".
+- `web-ui/index.html`, `web-ui/public/manifest.json`, `web-ui/public/assets/icon.svg`, `icon-192.png`, `icon-512.png`,
+  `icon-notification.png`: replaced the Cline logo favicon, PWA and notification icons with a neutral Kanban icon;
+  the PWA is named "Kanban".
+- `web-ui/public/sw.js`: offline fallback page says "Kanban" and tells you to run `kanban`.
+- `web-ui/src/components/app-error-boundary.tsx`, `web-ui/src/hooks/runtime-disconnected-fallback.tsx`,
+  `web-ui/src/components/task-start-agent-onboarding-carousel.tsx`: "Kanban" instead of "Cline" / "Cline Kanban"
+  as the product name (the Cline agent keeps its name).
+- `web-ui/src/components/runtime-settings-dialog.tsx`: "Read the docs" links to the fork's README.
+- `src/cli.ts`, `src/workspace/initialize-repo.ts` (and two integration tests): "Kanban" instead of "Cline Kanban" in
+  the startup message and the initial-commit message.

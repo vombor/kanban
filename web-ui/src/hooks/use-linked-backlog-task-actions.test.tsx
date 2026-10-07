@@ -7,19 +7,12 @@ import type { RuntimeTaskTrashResponse } from "@/runtime/types";
 import type { UseWorkspacePersistenceResult } from "@/runtime/use-workspace-persistence";
 import type { BoardCard, BoardData, BoardDependency } from "@/types";
 
-const trackTaskDependencyCreatedMock = vi.hoisted(() => vi.fn());
-const trackTasksAutoStartedFromDependencyMock = vi.hoisted(() => vi.fn());
 const notifyErrorMock = vi.hoisted(() => vi.fn());
 const showAppToastMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/components/app-toaster", () => ({
 	notifyError: notifyErrorMock,
 	showAppToast: showAppToastMock,
-}));
-
-vi.mock("@/telemetry/events", () => ({
-	trackTaskDependencyCreated: trackTaskDependencyCreatedMock,
-	trackTasksAutoStartedFromDependency: trackTasksAutoStartedFromDependencyMock,
 }));
 
 function createTask(taskId: string, prompt: string, createdAt: number): BoardCard {
@@ -138,8 +131,6 @@ describe("useLinkedBacklogTaskActions", () => {
 	let previousActEnvironment: boolean | undefined;
 
 	beforeEach(() => {
-		trackTaskDependencyCreatedMock.mockReset();
-		trackTasksAutoStartedFromDependencyMock.mockReset();
 		notifyErrorMock.mockReset();
 		showAppToastMock.mockReset();
 		previousActEnvironment = (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
@@ -193,7 +184,7 @@ describe("useLinkedBacklogTaskActions", () => {
 		return reviewTask;
 	}
 
-	it("tracks dependency creation after a valid link is added", async () => {
+	it("adds a dependency for a valid link", async () => {
 		const harness = await renderHarness({ trashTask: vi.fn() });
 
 		await act(async () => {
@@ -201,7 +192,6 @@ describe("useLinkedBacklogTaskActions", () => {
 		});
 
 		const snapshot = harness.current();
-		expect(trackTaskDependencyCreatedMock).toHaveBeenCalledTimes(1);
 		expect(snapshot.board.dependencies).toHaveLength(1);
 		expect(snapshot.board.dependencies[0]).toMatchObject({
 			fromTaskId: "task-1",
@@ -269,7 +259,7 @@ describe("useLinkedBacklogTaskActions", () => {
 		expect(board.dependencies.map((dependency) => dependency.id)).toEqual(["dep-1"]);
 	});
 
-	it("tracks how many linked tasks the runtime auto-started when a parent task is trashed", async () => {
+	it("requests notification permission when the runtime auto-starts linked tasks", async () => {
 		const trashTask: TrashTaskMock = vi.fn(async () =>
 			createTrashResponse({
 				readyTaskIds: ["task-1", "task-3"],
@@ -296,7 +286,6 @@ describe("useLinkedBacklogTaskActions", () => {
 		});
 
 		expect(maybeRequestNotificationPermissionForTaskStart).toHaveBeenCalledTimes(1);
-		expect(trackTasksAutoStartedFromDependencyMock).toHaveBeenCalledWith(2);
 	});
 
 	it("reports linked tasks the runtime could not start and worktree setup warnings", async () => {
@@ -320,7 +309,6 @@ describe("useLinkedBacklogTaskActions", () => {
 		expect(showAppToastMock).toHaveBeenCalledWith(
 			expect.objectContaining({ intent: "warning", message: "Saved patch could not be reapplied." }),
 		);
-		expect(trackTasksAutoStartedFromDependencyMock).toHaveBeenCalledWith(1);
 	});
 
 	it("trashes tasks directly through the request handler", async () => {

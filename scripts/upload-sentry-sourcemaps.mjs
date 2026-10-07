@@ -3,9 +3,10 @@ import { cp, mkdir, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { relative, resolve, sep } from "node:path";
 
-const SENTRY_ORG = "cline-bot-inc-xi";
-const SENTRY_WEB_PROJECT = "kanban-react";
-const SENTRY_NODE_PROJECT = "kanban-node";
+// Sourcemap upload targets the fork's own Sentry org/projects; nothing is uploaded unless all are configured.
+const SENTRY_ORG = process.env.SENTRY_ORG?.trim();
+const SENTRY_WEB_PROJECT = process.env.SENTRY_WEB_PROJECT?.trim();
+const SENTRY_NODE_PROJECT = process.env.SENTRY_NODE_PROJECT?.trim();
 
 const scriptDir = fileURLToPath(new URL(".", import.meta.url));
 const repoRoot = resolve(scriptDir, "..");
@@ -45,9 +46,15 @@ function shouldCopyToNodeStaging(sourcePath) {
 }
 
 async function main() {
-	const sentryAuthToken = process.env.SENTRY_AUTH_TOKEN?.trim();
-	if (!sentryAuthToken) {
-		console.log("Skipping Sentry sourcemap upload because SENTRY_AUTH_TOKEN is not set.");
+	const requiredEnv = {
+		SENTRY_AUTH_TOKEN: process.env.SENTRY_AUTH_TOKEN?.trim(),
+		SENTRY_ORG,
+		SENTRY_WEB_PROJECT,
+		SENTRY_NODE_PROJECT,
+	};
+	const missingEnv = Object.keys(requiredEnv).filter((name) => !requiredEnv[name]);
+	if (missingEnv.length > 0) {
+		console.log(`Skipping Sentry sourcemap upload; not set: ${missingEnv.join(", ")}.`);
 		return;
 	}
 

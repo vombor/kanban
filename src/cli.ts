@@ -579,7 +579,7 @@ async function runMainCommand(options: CliOptions, shouldAutoOpenBrowser: boolea
 		}
 		throw error;
 	}
-	console.log(`Cline Kanban running at ${runtime.url}`);
+	console.log(`Kanban running at ${runtime.url}`);
 	const releaseServerLock = writeKanbanServerLock(runtime.url, (message) => {
 		console.warn(`[kanban] ${message}`);
 	});

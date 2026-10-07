@@ -237,21 +237,13 @@ For a full technical breakdown, see:
 
 - `.plan/docs/runtime-hooks-architecture.md`
 
-## PostHog telemetry config
+## Telemetry and error reporting
 
-The web UI reads PostHog settings at build time:
+This fork sends no product analytics (the upstream PostHog integration was removed). Sentry error reporting is
+opt-in and off by default: nothing is sent unless a build supplies a DSN you own.
 
-- `POSTHOG_KEY`
-- `POSTHOG_HOST`
-
-Local development:
-- Set these in `web-ui/.env.local` (see `web-ui/.env.example`).
-- If `POSTHOG_KEY` is missing, telemetry does not initialize.
-
-Release builds:
-- The publish workflow injects `POSTHOG_KEY` and `POSTHOG_HOST` from GitHub Secrets.
-- `POSTHOG_HOST` is optional and defaults to `https://data.cline.bot`.
-
-Result:
-- Official releases have telemetry enabled.
-- Forks and source builds have telemetry disabled unless a key is explicitly provided.
+- `VITE_SENTRY_DSN`: browser DSN, read by the web UI build (`web-ui/.env.local`, see `web-ui/.env.example`).
+- `KANBAN_SENTRY_DSN`: runtime DSN, baked in by `scripts/build.mjs` (read from the environment under `npm run dev`).
+- Sourcemap upload (`scripts/upload-sentry-sourcemaps.mjs`, part of `npm run build`) is skipped unless
+  `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_WEB_PROJECT` and `SENTRY_NODE_PROJECT` are all set.
+- The publish workflow passes these from GitHub Secrets; unset secrets produce a release that reports nothing.

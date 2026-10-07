@@ -1,7 +1,8 @@
 import * as Sentry from "@sentry/node";
 import packageJson from "../../package.json" with { type: "json" };
 
-const nodeSentryDsn = "https://b597cbea54f43704439be10d843699b0@o4511098366263296.ingest.us.sentry.io/4511098558087168";
+// Error reporting is opt-in: the runtime only sends to Sentry when a DSN is supplied (baked in by scripts/build.mjs).
+const nodeSentryDsn = process.env.KANBAN_SENTRY_DSN?.trim();
 
 const appVersion = typeof packageJson.version === "string" ? packageJson.version : "0.1.0";
 

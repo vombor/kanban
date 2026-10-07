@@ -3,8 +3,8 @@
 declare const __APP_VERSION__: string;
 
 interface ImportMetaEnv {
-	readonly POSTHOG_KEY?: string;
-	readonly POSTHOG_HOST?: string;
+	/** Sentry DSN for browser error reports. Unset by default, so nothing is sent. */
+	readonly VITE_SENTRY_DSN?: string;
 }
 
 interface ImportMeta {

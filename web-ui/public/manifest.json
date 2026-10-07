@@ -1,12 +1,17 @@
 {
-	"name": "Cline",
-	"short_name": "Cline",
+	"name": "Kanban",
+	"short_name": "Kanban",
 	"start_url": "/",
 	"display": "standalone",
 	"display_override": ["window-controls-overlay"],
 	"background_color": "#1F2428",
 	"theme_color": "#24292E",
 	"icons": [
+		{
+			"src": "/assets/icon.svg",
+			"sizes": "any",
+			"type": "image/svg+xml"
+		},
 		{
 			"src": "/assets/icon-192.png",
 			"sizes": "192x192",

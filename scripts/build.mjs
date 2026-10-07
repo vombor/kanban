@@ -7,16 +7,13 @@ import * as esbuild from "esbuild";
  */
 const external = ["node-pty"];
 
-/** Bake OTEL telemetry env vars into the bundle at build time. */
+/**
+ * Bake build-time env into the bundle. Sentry error reporting stays off unless
+ * the build supplies a fork-owned KANBAN_SENTRY_DSN.
+ */
 const define = {
 	"process.env.NODE_ENV": '"production"',
-	"process.env.OTEL_TELEMETRY_ENABLED": JSON.stringify(process.env.OTEL_TELEMETRY_ENABLED ?? ""),
-	"process.env.OTEL_EXPORTER_OTLP_ENDPOINT": JSON.stringify(process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? ""),
-	"process.env.OTEL_METRICS_EXPORTER": JSON.stringify(process.env.OTEL_METRICS_EXPORTER ?? ""),
-	"process.env.OTEL_LOGS_EXPORTER": JSON.stringify(process.env.OTEL_LOGS_EXPORTER ?? ""),
-	"process.env.OTEL_EXPORTER_OTLP_PROTOCOL": JSON.stringify(process.env.OTEL_EXPORTER_OTLP_PROTOCOL ?? ""),
-	"process.env.OTEL_METRIC_EXPORT_INTERVAL": JSON.stringify(process.env.OTEL_METRIC_EXPORT_INTERVAL ?? ""),
-	"process.env.OTEL_EXPORTER_OTLP_HEADERS": JSON.stringify(process.env.OTEL_EXPORTER_OTLP_HEADERS ?? ""),
+	"process.env.KANBAN_SENTRY_DSN": JSON.stringify(process.env.KANBAN_SENTRY_DSN ?? ""),
 };
 
 /**
