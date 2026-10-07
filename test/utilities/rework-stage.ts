@@ -6,10 +6,12 @@ import type { RuntimeAgentId, RuntimeBoardCard, RuntimeBoardColumnId } from "../
 import type { OnFailAnswer, RoutingPolicy } from "../../src/kits/policy";
 import type { PipelineActionRequest, PipelineActionResult } from "../../src/pipeline/actions";
 import { createPipelineEventBus, type PipelineEventMap, type PipelineEventName } from "../../src/pipeline/events";
+import type { PipelineRunoffGroups } from "../../src/pipeline/features";
 import { createPipelineStateStore, type PipelineCardState } from "../../src/pipeline/pipeline-state";
 import type { QaPassEntry, QaVerdictRecord } from "../../src/pipeline/qa-gate";
 import { createQaLogAppender } from "../../src/pipeline/qa-log";
 import { createReworkStage } from "../../src/pipeline/rework";
+import type { PipelineFinishTaskRequest } from "../../src/pipeline/worker-protocol";
 import type { ClineSessionSize } from "../../src/terminal/cline-session-files";
 import { createSnapshot } from "./pipeline-worker";
 import { createTempDir } from "./temp-dir";
@@ -20,7 +22,8 @@ export const REWORK_T0 = Date.parse("2026-10-07T10:00:00.000Z");
 /** What the rework stage asked the server for, in order. */
 export type ReworkHarnessAction =
 	| PipelineActionRequest
-	| { kind: "deliverInput"; workspaceId: string; taskId: string; text: string };
+	| { kind: "deliverInput"; workspaceId: string; taskId: string; text: string }
+	| ({ kind: "finishTask" } & PipelineFinishTaskRequest);
 
 type OnFailInput = Parameters<RoutingPolicy["onFail"]>[0];
 
@@ -34,6 +37,8 @@ export interface ReworkHarnessOptions {
 	clearCommand?: string | null;
 	worktree?: string | null;
 	preserveWork?: (input: { workspacePath: string; taskId: string; tag: string }) => Promise<unknown>;
+	/** The runoff groups a runoff answer records into (the runoffs feature's). Default: none, so runoffs escalate. */
+	runoffGroups?: PipelineRunoffGroups;
 }
 
 /** The rework stage on its own: a temp pipeline state and QA log, a stub kit, a fake server. */
@@ -79,6 +84,20 @@ export function createReworkHarness(options: ReworkHarnessOptions = {}) {
 		readStaleBase: async () => null,
 		readSessionSize: async () => options.sessionSize ?? null,
 		getClearCommand: () => (options.clearCommand === undefined ? "/clear" : options.clearCommand),
+		runoffGroups: options.runoffGroups,
+		finishTask: async (request) => {
+			const result = answer({ kind: "finishTask", ...request });
+			return {
+				ok: result.ok,
+				status: result.ok ? "trashed" : "failed",
+				taskId: request.taskId,
+				previousColumnId: "backlog",
+				readyTaskIds: [],
+				autoStartedTasks: [],
+				worktreeDeleted: false,
+				...(result.ok ? {} : { error: result.error }),
+			};
+		},
 		getQaLogPath: qaLogPath,
 		getArtifactsPath: (workspaceId) => join(temp.path, "data", workspaceId, "qa-artifacts"),
 		randomUuid: () => {

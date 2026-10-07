@@ -1,11 +1,13 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { handbackTask } from "../../src/commands/task";
+import { readRunoffs } from "../../src/kits/team/runoffs/runoffs-store";
 import { createPipelineStateStore } from "../../src/pipeline/pipeline-state";
 import { readEscalationRecord, readHandbacks, readQaflow } from "../../src/pipeline/rework";
-import { getPipelineQaLogPath } from "../../src/state/kanban-home";
+import { getPipelineQaLogPath, getWatchdogWorkspacePaths } from "../../src/state/kanban-home";
 import type * as WorkspaceStateModule from "../../src/state/workspace-state";
 import { withTemporaryKanbanHome } from "../utilities/kanban-home";
 import {
@@ -138,6 +140,81 @@ describe("kanban task handback", () => {
 
 			expect(result.message).toContain("escalated over a STALLED QA round, which the pipeline does not rework");
 			expect(findCardInBoard(harness.store.stored.board, "d1111")?.columnId).toBe("backlog");
+		});
+	});
+
+	const writeRunoffs = (runoffs: unknown[]) => {
+		const path = getWatchdogWorkspacePaths("ws-1").runoffs;
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(path, JSON.stringify({ runoffs }));
+		return path;
+	};
+
+	it("refuses a card whose runoff has a landed winner (or is bench only): its next PASS would land too", async () => {
+		await withTemporaryKanbanHome(async () => {
+			harness.store = createWorkspaceStateStore({
+				board: createBoard({ backlog: [createCard({ id: "d1111", title: "BLOCKED: Wishlist" })] }),
+				sessions: {},
+				revision: 1,
+			});
+			await escalate("d1111");
+			writeRunoffs([
+				{
+					name: "tier2-coupons",
+					cards: ["d1111", "s0001"],
+					decided: "2026-10-07T09:30:00.000Z",
+					winner: "s0001",
+					actions: { s0001: "landed" },
+				},
+			]);
+
+			await expect(handbackTask({ cwd: "/repo", taskId: "d1111", note: "retry", extraRounds: 1 })).rejects.toThrow(
+				"raced in runoff tier2-coupons, which is decided (winner s0001); handing it back would let it land too",
+			);
+			// Nothing changed: still escalated, still BLOCKED in Backlog.
+			expect(
+				readEscalationRecord(readQaflow((await createPipelineStateStore().load("ws-1")).cards.d1111)),
+			).not.toBeNull();
+			expect(findCardInBoard(harness.store.stored.board, "d1111")).toMatchObject({
+				columnId: "backlog",
+				card: { title: "BLOCKED: Wishlist" },
+			});
+
+			writeRunoffs([
+				{
+					name: "rerun",
+					cards: ["d1111", "s0001"],
+					decided: "2026-10-07T09:30:00.000Z",
+					winner: null,
+					benchOnly: true,
+				},
+			]);
+			await expect(handbackTask({ cwd: "/repo", taskId: "d1111", note: "retry", extraRounds: 1 })).rejects.toThrow(
+				"bench only, nothing lands",
+			);
+		});
+	});
+
+	it("reopens a runoff decided with no winner, and says so in the QA log", async () => {
+		await withTemporaryKanbanHome(async () => {
+			harness.store = createWorkspaceStateStore({
+				board: createBoard({ backlog: [createCard({ id: "d1111", title: "BLOCKED: Wishlist" })] }),
+				sessions: {},
+				revision: 1,
+			});
+			await escalate("d1111");
+			writeRunoffs([
+				{ name: "tier2-coupons", cards: ["d1111", "s0001"], decided: "2026-10-07T09:30:00.000Z", winner: null },
+			]);
+
+			const result = await handbackTask({ cwd: "/repo", taskId: "d1111", note: "provider is back", extraRounds: 1 });
+
+			expect(result).toMatchObject({ ok: true, runoffReopened: "tier2-coupons" });
+			const [runoff] = (await readRunoffs(getWatchdogWorkspacePaths("ws-1").runoffs)).runoffs;
+			expect(runoff?.decided).toBeUndefined();
+			expect(readFileSync(getPipelineQaLogPath("ws-1"), "utf8")).toContain(
+				"- Runoff tier2-coupons had no winner; reopened.",
+			);
 		});
 	});
 });

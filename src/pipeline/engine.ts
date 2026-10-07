@@ -13,8 +13,8 @@
 // For each Review card it runs the submission stage (submission-stage.ts: snapshot, scripted checks), then asks the
 // QA-gate question (`qaPolicy`) for each submitted card and records the answer. A `qa` answer goes to the QA gate
 // (qa-gate.ts, through `submitQa`) unless the workspace is in shadow. The rework loop (rework.ts) acts on what the
-// gate records after a FAIL; recovery is a later card. A decision without a stage to act on it is logged as
-// `not_implemented` (or `shadow` on a shadow workspace).
+// gate records after a FAIL, and recovery (recovery.ts, recovery-stage.ts) continues crashed and stopped cards. A
+// decision without a stage to act on it is logged as `not_implemented` (or `shadow` on a shadow workspace).
 
 import type { PipelineConfig, WorkspacePipelineSettings } from "../config/pipeline-config";
 import type {
@@ -192,6 +192,20 @@ export function describeUnsettledReview(session: PipelineSessionView | null): st
 		: "the turn ended moments ago; QA waits for the Review to settle";
 }
 
+/** When the card was escalated (`qaflow.escalated.at`, written by the rework loop), or null; a handback clears it. */
+export function readEscalatedAt(entry: PipelineCardState | undefined): string | null {
+	const qaflow = entry?.qaflow;
+	if (!qaflow || typeof qaflow !== "object" || Array.isArray(qaflow)) {
+		return null;
+	}
+	const escalated = (qaflow as Record<string, unknown>).escalated;
+	if (!escalated) {
+		return null;
+	}
+	const at = typeof escalated === "object" ? (escalated as { at?: unknown }).at : undefined;
+	return typeof at === "string" ? at : "(unknown time)";
+}
+
 function describeQaAnswer(answer: QaPolicyAnswer): string {
 	if (answer.kind === "none") {
 		return `no QA: ${answer.reason}; the card waits for Approve & land`;
@@ -234,6 +248,19 @@ export async function evaluatePipelineWorkspace(input: PipelineEvaluationInput):
 			model: effective.model,
 			role: effective.role,
 		};
+		// An escalated card waits for a human (BLOCKED in Backlog). If it is back in Review without a handback (started
+		// by hand, or by a board link), it is never QA'd or landed: a sibling may have taken its task over.
+		const escalatedAt = readEscalatedAt(input.state.cards[card.id]);
+		if (escalatedAt) {
+			decisions.push({
+				...common,
+				stage: "qa_gate",
+				answer: null,
+				outcome: "none",
+				note: `escalated ${escalatedAt}: not QA'd or landed until \`kanban task handback\` gives it back to the pipeline`,
+			});
+			continue;
+		}
 		// A Review that hasn't settled may still resume (src/terminal/review-settle.ts): no snapshot, no QA yet. The
 		// worker host sends a snapshot once it has settled.
 		if (!isReviewSettled(session, input.now, snapshot.reviewSettleMs)) {

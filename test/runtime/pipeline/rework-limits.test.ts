@@ -1,7 +1,12 @@
 // The rework loop's limits against a stub kit (plan §9): the core caps a kit that always says `rework`, refuses a
 // rework that would switch model, and parks escalated cards in Backlog as BLOCKED. No test here reads kits/team.json.
 import { afterEach, describe, expect, it } from "vitest";
-
+import type { OnFailAnswer } from "../../../src/kits/policy";
+import type {
+	PipelineRunoffGroup,
+	PipelineRunoffGroupHandler,
+	PipelineRunoffGroups,
+} from "../../../src/pipeline/features";
 import { handBackTask } from "../../../src/pipeline/handback";
 import { REWORK_STARTED_CHECK_MS, readEscalationRecord, readQaflow, readReworks } from "../../../src/pipeline/rework";
 import { createReworkHarness, failVerdict, REWORK_T0, type ReworkHarnessOptions } from "../../utilities/rework-stage";
@@ -71,8 +76,8 @@ describe("rework limits", () => {
 
 		await harness.tick({ review: [DEV] }, [SESSION]);
 
-		// The stub always answers rework; the core never asked it at the cap.
-		expect(harness.onFailCalls).toEqual([]);
+		// The stub always answers rework; at the cap the core escalates to the orchestrator anyway.
+		expect(harness.onFailCalls).toHaveLength(1);
 		expect(kinds(harness.actions)).toEqual(["blockTask:d1111"]);
 		const escalated = readEscalationRecord(readQaflow(await harness.entry("d1111")));
 		expect(escalated).toMatchObject({
@@ -115,7 +120,9 @@ describe("rework limits", () => {
 		await harness.tick({ review: [DEV] }, [SESSION]);
 		await harness.tick({ review: [DEV] }, [SESSION]);
 		expect(kinds(harness.actions)).toEqual(["updateTask:d1111", "deliverInput:d1111"]);
-		expect(harness.onFailCalls).toMatchObject([{ history: { failRounds: [1, 2, 3], extraRounds: 2, handbacks: 1 } }]);
+		expect(harness.onFailCalls.at(-1)).toMatchObject({
+			history: { failRounds: [1, 2, 3], extraRounds: 2, handbacks: 1 },
+		});
 		const qaflow = readQaflow(await harness.entry("d1111"));
 		expect(qaflow.escalated).toBeUndefined();
 		expect(qaflow.handbackActed).toEqual(["2026-10-07T10:01:00.000Z"]);
@@ -214,7 +221,7 @@ describe("rework limits", () => {
 		expect(readEscalationRecord(readQaflow(await untagged.entry("d1111")))).toMatchObject({ to: "orchestrator" });
 	});
 
-	it("refuses a runoff until runoffs can hold the siblings: escalates instead, creates no card", async () => {
+	it("escalates a runoff when no feature holds the siblings' PASSes (a kit without runoffs), creating no card", async () => {
 		const harness = createHarness({
 			onFail: () => ({
 				action: "runoff",
@@ -228,9 +235,121 @@ describe("rework limits", () => {
 		expect(readEscalationRecord(readQaflow(await harness.entry("d1111")))).toMatchObject({
 			to: "orchestrator",
 			reason: expect.stringContaining(
-				"the kit answered runoff (us.moonshot.kimi-k3), but runoffs are not supported yet",
+				"the kit answered runoff (us.moonshot.kimi-k3), but the workspace's kit doesn't run the \"runoffs\" feature",
 			),
 		});
+	});
+
+	const runoffAnswer = (): OnFailAnswer => ({
+		action: "runoff",
+		models: [
+			{ agentId: "cline", provider: "bedrock", model: "us.moonshotai.kimi-k3" },
+			{ agentId: "codex", provider: null, model: "gpt-6.1" },
+		],
+	});
+
+	function createGroups(options: { racing?: string | null; failRecord?: boolean } = {}) {
+		const recorded: PipelineRunoffGroup[] = [];
+		const handler: PipelineRunoffGroupHandler = {
+			groupOf: async () => options.racing ?? null,
+			record: async (group) => {
+				if (options.failRecord) {
+					throw new Error("disk full");
+				}
+				recorded.push(structuredClone(group));
+			},
+		};
+		return { recorded, groups: { forWorkspace: () => handler } satisfies PipelineRunoffGroups };
+	}
+
+	it("a runoff answer records the group first, then races sibling cards (never board-linked) and reworks the failed card", async () => {
+		const { recorded, groups } = createGroups();
+		const harness = createHarness({ onFail: runoffAnswer, runoffGroups: groups });
+		await harness.seed("d1111", { qaVerdicts: [failVerdict(1)] });
+		await harness.tick({ review: [DEV] }, [SESSION]);
+
+		expect(recorded).toEqual([
+			{
+				name: "d1111-r1",
+				from: "d1111",
+				round: 1,
+				baseRef: "main",
+				cards: [
+					{ taskId: "d1111", agentId: "cline", model: { provider: "bedrock", model: "us.openai.gpt-6.1-sol" } },
+					{ taskId: "s0001", agentId: "cline", model: { provider: "bedrock", model: "us.moonshotai.kimi-k3" } },
+					{ taskId: "s0002", agentId: "codex", model: { provider: null, model: "gpt-6.1" } },
+				],
+			},
+		]);
+		expect(kinds(harness.actions)).toEqual([
+			"createTask:s0001",
+			"startTask:s0001",
+			"createTask:s0002",
+			"startTask:s0002",
+			"updateTask:d1111",
+			"deliverInput:d1111",
+		]);
+		const created = harness.actions[0];
+		expect(created).toMatchObject({
+			kind: "createTask",
+			task: {
+				title: "Wishlist [runoff d1111-r1: kimi-k3]",
+				role: "dev",
+				agentId: "cline",
+				agentSettings: { providerId: "bedrock", modelId: "us.moonshotai.kimi-k3" },
+			},
+		});
+		const prompt = created?.kind === "createTask" ? created.task.prompt : "";
+		expect(prompt).toContain("RUNOFF d1111-r1 (with card d1111, after its QA round 1;");
+		expect(prompt).toContain("- blocker of round 1");
+		expect(prompt.indexOf("RUNOFF d1111-r1")).toBeLessThan(prompt.indexOf("FINAL STEP"));
+		expect((await harness.entry("s0002"))?.sibling).toMatchObject({
+			of: "d1111",
+			kind: "runoff",
+			runoff: "d1111-r1",
+		});
+		expect(readEscalationRecord(readQaflow(await harness.entry("d1111")))).toBeNull();
+		expect(harness.readQaLog()).toContain(
+			"## RUNOFF d1111-r1 STARTED: d1111 (cline on bedrock/us.openai.gpt-6.1-sol) races s0001",
+		);
+	});
+
+	it("a card that already races is reworked instead of starting a nested runoff", async () => {
+		const { recorded, groups } = createGroups({ racing: "d0000-r1" });
+		const harness = createHarness({ onFail: runoffAnswer, runoffGroups: groups });
+		await harness.seed("d1111", { qaVerdicts: [failVerdict(1)] });
+		await harness.tick({ review: [DEV] }, [SESSION]);
+
+		expect(recorded).toEqual([]);
+		expect(kinds(harness.actions)).toEqual(["updateTask:d1111", "deliverInput:d1111"]);
+	});
+
+	it("creates no sibling when the group can't be recorded, and drops the ones that failed from it", async () => {
+		const failing = createGroups({ failRecord: true });
+		const unrecorded = createHarness({ onFail: runoffAnswer, runoffGroups: failing.groups });
+		await unrecorded.seed("d1111", { qaVerdicts: [failVerdict(1)] });
+		await unrecorded.tick({ review: [DEV] }, [SESSION]);
+		expect(kinds(unrecorded.actions)).toEqual(["blockTask:d1111"]);
+		expect(readEscalationRecord(readQaflow(await unrecorded.entry("d1111")))?.reason).toContain(
+			"recording runoff d1111-r1 failed (disk full)",
+		);
+
+		const partial = createGroups();
+		const harness = createHarness({
+			onFail: runoffAnswer,
+			runoffGroups: partial.groups,
+			actionResult: (action) =>
+				action.kind === "createTask" && action.task.taskId === "s0002"
+					? { ok: false, error: "board busy" }
+					: { ok: true },
+		});
+		await harness.seed("d1111", { qaVerdicts: [failVerdict(1)] });
+		await harness.tick({ review: [DEV] }, [SESSION]);
+		expect(partial.recorded.map((group) => group.cards.map((card) => card.taskId))).toEqual([
+			["d1111", "s0001", "s0002"],
+			["d1111", "s0001"],
+		]);
+		expect(kinds(harness.actions)).toContain("updateTask:d1111");
 	});
 
 	const handBack = async (harness: ReturnType<typeof createReworkHarness>, now: number, extraRounds = 1) =>

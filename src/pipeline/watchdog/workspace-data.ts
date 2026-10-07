@@ -72,13 +72,18 @@ export async function readCalibrationRunIds(
 	return ids;
 }
 
-/** Card ids of runoff groups that are not decided yet (`runoffs.json` `runoffs[].{decided,cards[]}`). */
+/** Card ids of runoff groups that are still open: not decided and not abandoned (`runoffs.json` `runoffs[]`). */
 export async function readUndecidedRunoffCardIds(runoffsPath: string): Promise<Set<string>> {
 	const ids = new Set<string>();
 	const document = await readJson(runoffsPath);
 	const runoffs = document && typeof document === "object" ? (document as { runoffs?: unknown }).runoffs : undefined;
 	for (const runoff of Array.isArray(runoffs) ? runoffs : []) {
-		if (!runoff || typeof runoff !== "object" || (runoff as { decided?: unknown }).decided) {
+		if (
+			!runoff ||
+			typeof runoff !== "object" ||
+			(runoff as { decided?: unknown }).decided ||
+			(runoff as { abandoned?: unknown }).abandoned
+		) {
 			continue;
 		}
 		const cards = (runoff as { cards?: unknown }).cards;

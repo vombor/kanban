@@ -147,6 +147,16 @@ export function createRoutingPolicy(kit: KitDocument): RoutingPolicy {
 			return { action: "escalate", to, requireApproval, reason };
 		}
 		if ("tier" in to) {
+			// Escalating to a senior tier is the team kit's `tiers` feature (plan §3.2, P4-T3): without it in
+			// `features`, the card goes to the orchestrator as for `"orchestrator"`.
+			if (!(kit.features ?? []).includes("tiers")) {
+				return {
+					action: "escalate",
+					to: "orchestrator",
+					requireApproval,
+					reason: `${reason}; escalate.to.tier needs the "tiers" feature in the kit's features`,
+				};
+			}
 			const lookup = lookupTierModel(kit, to.tier);
 			if (!lookup.ok) {
 				return { action: "escalate", to: "orchestrator", requireApproval, reason: `${reason}; ${lookup.error}` };

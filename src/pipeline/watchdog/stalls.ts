@@ -22,7 +22,9 @@ import type {
 } from "../../core/api-contract";
 import { resolveCardRole } from "../../core/card-role";
 import type { PipelineSessionView } from "../engine";
+import { readPipelineHold } from "../hold";
 import type { PipelineCardState } from "../pipeline-state";
+import { readQaPassEntry } from "../qa-gate";
 
 const MIN = 60_000;
 // The dev card a legacy QA card reviews, from its prompt (archive/devteam-kit:services/review-watch.mjs@6da71597
@@ -78,6 +80,8 @@ export interface StallInput {
 	/** The kit QA-gates this dev card (qaPolicy answers `qa`); a card the kit doesn't gate waits for Approve & land. */
 	qaGated: (card: RuntimeBoardCard) => boolean;
 	userItemIds: ReadonlySet<string>;
+	/** Cards of runoffs that are still open (runoffs.json): only their held PASS is parked on purpose. */
+	openRunoffCardIds: ReadonlySet<string>;
 	resumed: Readonly<Record<string, string>>;
 	pidPressure: boolean;
 	pidBrownout: boolean;
@@ -208,6 +212,13 @@ export function detectStalls(input: StallInput): StallResult {
 			const runoffSnapshot = asRecord(qaflow.runoffPass).snapshot;
 			if (runoffSnapshot && runoffSnapshot === entry?.snapshot) {
 				continue; // a runoff PASS parked until the other runoff cards finish
+			}
+			// The same for the core hold (the team kit's runoffs feature), only while its runoff is open: a card still held
+			// for a decided or closed runoff is stuck and must show up.
+			const heldPass =
+				readPipelineHold(entry) && input.openRunoffCardIds.has(card.id) ? readQaPassEntry(entry) : null;
+			if (heldPass && heldPass.snapshot === entry?.snapshot) {
+				continue;
 			}
 			items.push({
 				key: `${card.id}:review-stall`,

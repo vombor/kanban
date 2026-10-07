@@ -391,3 +391,38 @@ of this repository is the complete record of changes.
   `--allow-all-paths`, which autopilot needs). What a CLI can't enforce goes into a short launch prompt note.
   `kanban doctor` shows a row per installed agent. The orchestrator (home-agent sidebar session, headless wakes) is
   exempt.
+- `src/kits/team/runoffs/` (new: `runoffs-store.ts`, `runoff-decision.ts`, `runoffs-feature.ts`, `runoff-create.ts`),
+  `src/kits/team/tiers/tiers-report.ts` (new), `src/commands/bench-runoff.ts` (new), `src/kits/team/features.ts`,
+  `src/kits/policy.ts`, `src/pipeline/{features,hold,qa-gate,worker}.ts`, `src/pipeline/watchdog/stalls.ts`,
+  `src/commands/{bench,task}.ts`: the team kit's runoffs and tiers (plan step P4-T3, ported from the legacy kit's
+  runoff hold and `decideRunoffs` in `kanban-autoland.mjs`). The `runoffs` feature answers `onPass → hold` for a card
+  in an open runoff of `data/<ws>/runoffs.json` (the legacy format), and on each pipeline evaluation (landing `qa`,
+  not shadow) decides a runoff once every card has a held PASS for its current snapshot or is escalated: mean QA
+  score, then fewer FAIL rounds, then lower cost. The winner lands and losers are tagged `preserve/<id>-<model>` and
+  discarded, both through `releaseHold` (the Done workflow). `benchOnly` lands nothing. A runoff with cards trashed
+  or deleted by hand is only closed (winner = the only trashed card that held a PASS). Features can now answer
+  `onPass` before the kit (a feature that fails to answer leaves the PASS for the next evaluation, never lands it),
+  run per-evaluation ticks and append to the QA log. The QA gate re-asks `onPass` for a held card's newer PASS
+  (refreshing the hold) instead of skipping it, and a held PASS for the current snapshot is no review stall.
+  `escalate.to: { tier }` is answered with the tier's model only when the kit lists the `tiers` feature (else the
+  orchestrator). New commands: `kanban bench runoff create <name> (--model … | --tier …) (--prompt … | --from <id>)
+  [--bench-only] [--start]` (refuses a kit without `runoffs`), `kanban bench runoff status [name] [--all]`,
+  `kanban bench tiers`. Nothing changes for workspaces whose kit doesn't list these features (`default`), or that
+  are not on landing `qa`, or in shadow.
+  With P4-5 in: the kit's `onFail.runoff` answer now races sibling cards (one per model, prompt = the task plus what
+  QA found) while the failed card is reworked as usual. The rework stage records the group with the `runoffs`
+  feature (`PipelineRunoffGroups`, src/pipeline/features.ts) before it creates a sibling, so neither the failed card
+  nor a sibling can land before the runoff is decided; without the feature the answer still escalates, a card that
+  already races gets a plain rework, and a racing card's escalation to a model goes to the orchestrator. A sibling
+  that can't start is discarded and dropped from the group (or parked as escalated BLOCKED). Siblings are never
+  linked on the board (a link restarted a BLOCKED original after its sibling landed), and the engine and the QA gate
+  never QA or land an escalated card. At `pipeline.rework.maxFailRounds` the core now asks the kit first and keeps
+  its escalation target (team's `escalate.to: { tier }` opt-in works with the default cap). No hold is a dead end:
+  decisions are written with their pending actions and resumed after a crash, failing releases are retried 3 times,
+  a winner whose land conflicts goes down the rework conflict path, a runoff closed by hand unholds its other cards,
+  the review-stall exemption covers only open runoffs, and `kanban task release-hold --task-id <id> --land|--discard
+  [--tag]` is the human way out (logged). `kanban task handback` reopens a runoff decided with no winner and refuses a
+  card of a runoff that has a winner (or is `benchOnly`); `kanban bench runoff create` records the group before
+  creating its cards. Fixes from P4-5's review: until the started-check restarts a rework it belongs to the started
+  check whatever its age, then for one window from the restart (`isReworkAwaitingStart`), and the engine header names
+  recovery.

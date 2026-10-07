@@ -3,11 +3,21 @@
 // name built-in features. It runs for a workspace only while that workspace's resolved kit lists it, and it sees
 // only that workspace's pipeline events.
 //
-// The team kit registers its features in src/kits/team/features.ts (scoreboard from P4-T2; runoffs and calibration
-// come with P4-T3/P4-T4). A kit that names a feature nobody registered is reported once per workspace, not refused.
+// The team kit registers its features in src/kits/team/features.ts (scoreboard and bench from P4-T2, runoffs from
+// P4-T3; calibration comes with P4-T4). A kit that names a feature nobody registered is reported once per workspace,
+// not refused.
+//
+// Besides events and jobs, a feature may answer `onPass` (only the runoffs feature does: plan §4.0, "only the team
+// `runoffs` feature answers hold") and run on each pipeline tick of its workspace (outside shadow) to act on held
+// cards. The kit's own `onPass` answer is used when no active feature answers.
+import type { RuntimeAgentId } from "../core/api-contract";
+import type { EffectiveModel } from "../core/effective-agent";
 import type { KitDocument, KitFeature } from "../kits/kit-schema";
+import type { EffectiveCard, KitVerdict, OnPassAnswer } from "../kits/policy";
+import type { PipelineWorkspaceSnapshot } from "./engine";
 import type { PipelineEventBus, PipelineEventHandler, PipelineEventName } from "./events";
 import type { ReleaseHoldInput, ReleaseHoldResult } from "./hold";
+import type { PipelineWorkspaceState } from "./pipeline-state";
 
 /** What a feature may ask the core to do for its workspace. */
 export interface PipelineFeatureActions {
@@ -16,6 +26,67 @@ export interface PipelineFeatureActions {
 		workspaceId: string,
 		input: Omit<ReleaseHoldInput, "workspaceId" | "workspacePath">,
 	) => Promise<ReleaseHoldResult>;
+	/** Appends a section to the workspace's QA log (qa-log.md). */
+	appendQaLog?: (workspaceId: string, text: string) => Promise<void>;
+	/** Lifts a hold without finishing the card (src/pipeline/hold.ts clearHold); a human decides in Review. */
+	unhold?: (workspaceId: string, input: { taskId: string; reason: string }) => Promise<boolean>;
+}
+
+/** What the QA gate asks before a PASS lands. */
+export interface PipelineFeaturePassInput {
+	dev: EffectiveCard;
+	verdict: KitVerdict;
+}
+
+/** A feature's `onPass` answer; null = no opinion (the next feature, then the kit, answers). */
+export type PipelineFeaturePassHandler = (
+	input: PipelineFeaturePassInput,
+) => OnPassAnswer | null | Promise<OnPassAnswer | null>;
+
+/** One pipeline evaluation of the workspace (never in shadow), after the QA gate's tick. */
+export interface PipelineFeatureTickInput {
+	snapshot: PipelineWorkspaceSnapshot;
+	state: PipelineWorkspaceState;
+	now: number;
+}
+
+export type PipelineFeatureTickHandler = (input: PipelineFeatureTickInput) => Promise<void>;
+
+/** One card of a runoff group the rework stage starts after a FAIL (the kit's `onFail.runoff`). */
+export interface PipelineRunoffCard {
+	taskId: string;
+	agentId: RuntimeAgentId;
+	model: EffectiveModel | null;
+}
+
+export interface PipelineRunoffGroup {
+	name: string;
+	/** The card that failed. */
+	from: string;
+	/** The failed card first, then its siblings. */
+	cards: PipelineRunoffCard[];
+	baseRef: string;
+	/** The FAIL round the runoff answers. */
+	round: number;
+	/** Set when no sibling could be created: the group is recorded as abandoned (nothing is held for it). */
+	abandoned?: string;
+}
+
+/**
+ * Runoff groups, kept by the feature that holds their PASSes (the team kit's `runoffs`). The rework stage records a
+ * group before it creates the sibling cards, so neither the failed card nor a sibling can land before the runoff is
+ * decided. With no active feature providing them for a workspace, a runoff answer is escalated instead.
+ */
+export interface PipelineRunoffGroupHandler {
+	/** The open group a card races in, or null. */
+	groupOf: (taskId: string) => Promise<string | null>;
+	/** Creates the group, or replaces the one of that name (the cards that were really created). */
+	record: (group: PipelineRunoffGroup) => Promise<void>;
+}
+
+export interface PipelineRunoffGroups {
+	/** The workspace's handler, or null when no active feature provides one. */
+	forWorkspace: (workspaceId: string) => PipelineRunoffGroupHandler | null;
 }
 
 export interface PipelineFeatureContext {
@@ -28,6 +99,16 @@ export interface PipelineFeatureContext {
 	releaseHold: (input: Omit<ReleaseHoldInput, "workspaceId" | "workspacePath">) => Promise<ReleaseHoldResult>;
 	/** Registers a periodic job for this workspace; the watchdog's job runner runs it while the feature is active. */
 	job: (job: PipelineFeatureJob) => void;
+	/** Answers `onPass` for this workspace's PASSes before the kit does. */
+	onPass: (handler: PipelineFeaturePassHandler) => void;
+	/** Runs on each pipeline evaluation of this workspace outside shadow. */
+	onTick: (handler: PipelineFeatureTickHandler) => void;
+	/** Appends a section to this workspace's QA log. */
+	appendQaLog: (text: string) => Promise<void>;
+	/** Lifts a card's hold without finishing it (it stays in Review for a human). False when it wasn't held. */
+	unhold: (input: { taskId: string; reason: string }) => Promise<boolean>;
+	/** Keeps this workspace's runoff groups (only the runoffs feature does); the rework stage records into it. */
+	provideRunoffGroups: (handler: PipelineRunoffGroupHandler) => void;
 	log: (message: string) => void;
 }
 
@@ -61,12 +142,24 @@ export interface PipelineFeatureRegistry {
 	removeWorkspace: (workspaceId: string) => void;
 	/** The jobs of the features active for the workspace, named `<feature>:<job>`. */
 	listJobs: (workspaceId: string) => PipelineFeatureJob[];
+	/**
+	 * The first active feature's `onPass` answer for the workspace, or null (the kit answers). Rejects when a feature
+	 * fails to answer: the caller must then leave the PASS for the next evaluation, not land it.
+	 */
+	answerOnPass: (workspaceId: string, input: PipelineFeaturePassInput) => Promise<OnPassAnswer | null>;
+	/** Runs the tick handlers of the workspace's active features; one that fails is logged. */
+	tick: (workspaceId: string, input: PipelineFeatureTickInput) => Promise<void>;
+	/** The runoff groups of the workspaces' active features. */
+	runoffGroups: PipelineRunoffGroups;
 	close: () => void;
 }
 
 interface ActiveFeature {
 	kitKey: string;
 	jobs: PipelineFeatureJob[];
+	passHandlers: PipelineFeaturePassHandler[];
+	tickHandlers: PipelineFeatureTickHandler[];
+	runoffGroups: PipelineRunoffGroupHandler | null;
 	stop: () => void;
 }
 
@@ -91,6 +184,9 @@ export function createPipelineFeatureRegistry(deps: {
 	const startFeature = (workspaceId: string, feature: PipelineFeature, kit: KitDocument, kitKey: string) => {
 		const unsubscribes: Array<() => void> = [];
 		const jobs: PipelineFeatureJob[] = [];
+		const passHandlers: PipelineFeaturePassHandler[] = [];
+		const tickHandlers: PipelineFeatureTickHandler[] = [];
+		let runoffGroups: PipelineRunoffGroupHandler | null = null;
 		const context: PipelineFeatureContext = {
 			workspaceId,
 			kit,
@@ -110,6 +206,19 @@ export function createPipelineFeatureRegistry(deps: {
 			job: (job) => {
 				jobs.push({ ...job, name: `${feature.name}:${job.name}` });
 			},
+			onPass: (handler) => {
+				passHandlers.push(handler);
+			},
+			onTick: (handler) => {
+				tickHandlers.push(handler);
+			},
+			appendQaLog: async (text) => {
+				await deps.actions?.appendQaLog?.(workspaceId, text);
+			},
+			unhold: async (input) => (await deps.actions?.unhold?.(workspaceId, input)) ?? false,
+			provideRunoffGroups: (handler) => {
+				runoffGroups = handler;
+			},
 			log: (message) => log(`pipeline ${workspaceId} [${feature.name}]: ${message}`),
 		};
 		let stop: (() => void) | undefined;
@@ -125,6 +234,9 @@ export function createPipelineFeatureRegistry(deps: {
 		return {
 			kitKey,
 			jobs,
+			passHandlers,
+			tickHandlers,
+			runoffGroups,
 			stop: () => {
 				for (const unsubscribe of unsubscribes) {
 					unsubscribe();
@@ -193,6 +305,43 @@ export function createPipelineFeatureRegistry(deps: {
 		removeWorkspace,
 		listJobs: (workspaceId) =>
 			[...(activeByWorkspace.get(workspaceId)?.values() ?? [])].flatMap((active) => active.jobs),
+		answerOnPass: async (workspaceId, input) => {
+			for (const [name, active] of activeByWorkspace.get(workspaceId) ?? []) {
+				for (const handler of active.passHandlers) {
+					try {
+						const answer = await handler(input);
+						if (answer) {
+							return answer;
+						}
+					} catch (error) {
+						// Never fall through to the kit's "land": a feature that can't tell may be holding this card.
+						throw new Error(`feature ${name} failed to answer onPass: ${String(error)}`);
+					}
+				}
+			}
+			return null;
+		},
+		tick: async (workspaceId, input) => {
+			for (const [name, active] of [...(activeByWorkspace.get(workspaceId) ?? [])]) {
+				for (const handler of active.tickHandlers) {
+					try {
+						await handler(input);
+					} catch (error) {
+						log(`pipeline ${workspaceId}: feature ${name} tick failed: ${String(error)}`);
+					}
+				}
+			}
+		},
+		runoffGroups: {
+			forWorkspace: (workspaceId) => {
+				for (const active of activeByWorkspace.get(workspaceId)?.values() ?? []) {
+					if (active.runoffGroups) {
+						return active.runoffGroups;
+					}
+				}
+				return null;
+			},
+		},
 		close: () => {
 			for (const workspaceId of [...activeByWorkspace.keys()]) {
 				removeWorkspace(workspaceId);

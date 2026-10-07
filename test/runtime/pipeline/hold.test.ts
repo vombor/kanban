@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { RuntimeTaskTrashResponse } from "../../../src/core/api-contract";
 import type { RoutingPolicy } from "../../../src/kits/policy";
-import { decideOnPass, readPipelineHold, releaseHold } from "../../../src/pipeline/hold";
+import { clearHold, decideOnPass, readPipelineHold, releaseHold } from "../../../src/pipeline/hold";
 import { createPipelineStateStore } from "../../../src/pipeline/pipeline-state";
 import { createEffectiveCard } from "../../utilities/effective-card";
 import { createTempDir } from "../../utilities/temp-dir";
@@ -108,7 +108,7 @@ describe("the hold", () => {
 			{ workspaceId: "foo", workspacePath: "/repo", taskId: "dev-1", decision: "land" },
 		);
 
-		expect(result).toEqual({ ok: false, error: "task dev-1 is not held" });
+		expect(result).toEqual({ ok: false, code: "not_held", error: "task dev-1 is not held" });
 		expect(finishTask).not.toHaveBeenCalled();
 	});
 
@@ -154,19 +154,56 @@ describe("the hold", () => {
 		]);
 	});
 
-	it("keeps the hold when the land is refused (a conflict), so the card stays held in Review", async () => {
+	it("a land that conflicts takes the card out of the hold and records the conflict as a PASS whose land conflicted", async () => {
 		const store = await heldStore();
 		const finishTask = vi.fn(async () =>
-			trashed(false, { error: "conflicts", landing: { decision: "conflict", files: ["a.ts"] } }),
+			trashed(false, { error: "conflicts", landing: { decision: "conflict", baseRef: "main", files: ["a.ts"] } }),
 		);
 
 		const result = await releaseHold(
-			{ store, finishTask, preserveWork: vi.fn() },
+			{ store, finishTask, preserveWork: vi.fn(), now: () => NOW },
 			{ workspaceId: "foo", workspacePath: "/repo", taskId: "dev-1", decision: "land" },
 		);
 
-		expect(result).toMatchObject({ ok: false, error: "conflicts" });
+		expect(result).toMatchObject({ ok: false, code: "conflict", error: "conflicts" });
+		const entry = (await store.peek("foo"))?.cards["dev-1"];
+		expect(readPipelineHold(entry)).toBeNull();
+		expect(entry?.qaPass).toMatchObject({
+			action: "land",
+			at: NOW,
+			landing: { decision: "conflict", baseRef: "main", files: ["a.ts"] },
+		});
+		expect(entry?.holdReleases).toMatchObject([{ group: "g1", decision: "land", conflict: true }]);
+	});
+
+	it("keeps the hold when the Done workflow fails for another reason (retried by the caller)", async () => {
+		const store = await heldStore();
+		const result = await releaseHold(
+			{ store, finishTask: vi.fn(async () => trashed(false, { error: "server busy" })), preserveWork: vi.fn() },
+			{ workspaceId: "foo", workspacePath: "/repo", taskId: "dev-1", decision: "discard" },
+		);
+		expect(result).toEqual(expect.objectContaining({ ok: false, error: "server busy" }));
+		expect(result.ok === false && result.code).toBeUndefined();
 		expect(readPipelineHold((await store.peek("foo"))?.cards["dev-1"])?.group).toBe("g1");
+	});
+
+	it("clearHold lifts a hold without finishing the card, logged with who and why", async () => {
+		const store = await heldStore();
+		expect(
+			await clearHold(store, {
+				workspaceId: "foo",
+				taskId: "dev-1",
+				by: "user",
+				reason: "runoff closed by hand",
+				now: NOW,
+			}),
+		).toMatchObject({ group: "g1" });
+		const entry = (await store.peek("foo"))?.cards["dev-1"];
+		expect(readPipelineHold(entry)).toBeNull();
+		expect(entry?.holdReleases).toMatchObject([{ decision: "unheld", by: "user", reason: "runoff closed by hand" }]);
+		expect(
+			await clearHold(store, { workspaceId: "foo", taskId: "dev-1", by: "user", reason: "again", now: NOW }),
+		).toBeNull();
 	});
 
 	it("does not finish the card when its tag can't be written", async () => {

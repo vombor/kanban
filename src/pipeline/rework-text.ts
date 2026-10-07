@@ -1,5 +1,6 @@
 // The texts of the rework loop (src/pipeline/rework.ts): the REWORK section a failed card gets back, the prompt of
-// a sibling card that takes over an escalated task on another model, and the preserve tag of the work it replaces.
+// a sibling card that takes over an escalated task on another model (or races a failed card in a runoff), and the
+// preserve tag of the work it replaces.
 // Pure: the caller reads the QA log, the stale-base check and the staged QA notes and passes them in.
 //
 // Ported from archive/devteam-kit:services/kanban-autoland.mjs@6da71597 (reworkText, withRework, modelSlug) and
@@ -163,6 +164,35 @@ export function buildSiblingPrompt(input: SiblingPromptInput): string {
 		`Its work is kept at git tag ${input.tag} for reference (git show ${input.tag}).`,
 		...(input.blocking.length > 0
 			? ["What QA found in its last round:", ...input.blocking.map((item) => `- ${item}`)]
+			: []),
+	];
+	return insertBeforeFinalStep(input.prompt, lines.join("\n"));
+}
+
+export interface RunoffSiblingPromptInput {
+	prompt: string;
+	fromTaskId: string;
+	from: { agentId: string; model: EffectiveModel | null };
+	runoff: string;
+	/** The QA round the card failed. */
+	round: number;
+	blocking: string[];
+	/** Epoch ms. */
+	now: number;
+}
+
+/**
+ * The prompt of a sibling card racing a failed card on another model (the kit's `onFail.runoff`): the task as the
+ * failed card has it, plus what QA found. The failed card is reworked at the same time; only the better PASS lands.
+ */
+export function buildRunoffSiblingPrompt(input: RunoffSiblingPromptInput): string {
+	const stamp = new Date(input.now).toISOString().slice(0, 16);
+	const model = input.from.model ? ` on ${input.from.model.model}` : "";
+	const lines = [
+		`RUNOFF ${input.runoff} (with card ${input.fromTaskId}, after its QA round ${input.round}; ${stamp}Z, from Kanban)`,
+		`Card ${input.fromTaskId} works on this task with ${input.from.agentId}${model} and did not pass QA round ${input.round}. You do the same task on another model, in your own worktree, starting from the base as usual; both cards go through QA, and only the better PASS lands. Any REWORK section above was written for card ${input.fromTaskId}: do the task itself.`,
+		...(input.blocking.length > 0
+			? [`What QA found in its round ${input.round}:`, ...input.blocking.map((item) => `- ${item}`)]
 			: []),
 	];
 	return insertBeforeFinalStep(input.prompt, lines.join("\n"));

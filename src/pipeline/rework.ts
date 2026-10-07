@@ -6,7 +6,9 @@
 //   land because of a merge conflict (the gate's `qaPass.landing`), or a rework came back with its snapshot
 //   unchanged. Each trigger is acted on once (`qaflow.handled[]`, marked before acting, so a failure never loops).
 // - the cap: at `pipeline.rework.maxFailRounds` FAIL rounds (land conflicts count, plus the extra rounds of each
-//   `kanban task handback`) the core escalates to the orchestrator, whatever the kit says.
+//   `kanban task handback`) the core escalates whatever the kit says: to the kit's own target when the kit escalates
+//   too (a tier or model), else to the orchestrator. The kit is asked first because its rounds usually equal the cap.
+// - a card racing in an open runoff only escalates to the orchestrator (a sibling would race outside the group).
 // - rework: the REWORK section goes into the card prompt before FINAL STEP, the QA notes into `.qa/r<N>/` in the
 //   worktree; the section is typed into the card's own session (after the agent's clear command when the session is
 //   past `clearAfterTurns`/`clearAfterTokens`, then with the whole prompt); a card with no session to type into gets
@@ -18,8 +20,15 @@
 //   `BLOCKED: …`; the watchdog lists it in ATTENTION.md and wakes the orchestrator. Escalate to a model: the work is
 //   kept as `preserve/<id>-<model>`, a sibling card takes the task over on that model (started at once, or left in
 //   Backlog for the orchestrator or the user when the kit says `requireApproval`), and the original is blocked.
-// - runoff: refused (escalated to the orchestrator) until the team kit's `runoffs` feature (P4-T3) can hold the
-//   racing siblings' PASSes; without the hold a sibling and the original could both land.
+// - runoff: sibling cards on the kit's models race the failed card, which is reworked as usual. The group is recorded
+//   with the feature that holds every racing card's PASS (the team kit's `runoffs`, through
+//   PipelineRunoffGroups) before any sibling is created, so neither the failed card nor a sibling can land before
+//   the runoff is decided. Without such a feature for the workspace the answer is escalated to the orchestrator; a
+//   card that already races gets a plain rework (runoffs never nest).
+// - siblings (escalation and runoff) are never linked to the failed card on the board: a board link starts a Backlog
+//   card when the other goes Review → Done (and flips direction when one leaves Backlog), so a link restarted a
+//   BLOCKED original after its sibling landed (both land). The relation is the sibling's `sibling.of` entry, the
+//   escalation record's `sibling` and the runoff group.
 // - stop: the card stays in Review; `qaflow.stopped` puts one line in ATTENTION.md (watchdog) and wakes the
 //   orchestrator.
 //
@@ -43,6 +52,7 @@ import type {
 	RuntimeBoardCard,
 	RuntimeBoardColumnId,
 	RuntimeTaskAgentSettings,
+	RuntimeTaskTrashResponse,
 } from "../core/api-contract";
 import { resolveCardRole } from "../core/card-role";
 import type { EffectiveModel, EffectiveModelConfig } from "../core/effective-agent";
@@ -53,6 +63,7 @@ import type {
 	EscalationTarget,
 	FailCause,
 	KitVerdict,
+	OnFailAnswer,
 	RoutingPolicy,
 } from "../kits/policy";
 import { getPipelineQaLogPath, getQaArtifactsPath } from "../state/kanban-home";
@@ -68,6 +79,7 @@ import {
 	toEffectiveCard,
 } from "./engine";
 import type { PipelineEventBus } from "./events";
+import type { PipelineRunoffGroup, PipelineRunoffGroupHandler, PipelineRunoffGroups } from "./features";
 import { readPipelineHold } from "./hold";
 import type { PipelineCardState, PipelineStateStore } from "./pipeline-state";
 import { readQaPassEntry, readQaVerdictRecords } from "./qa-gate";
@@ -79,6 +91,7 @@ import {
 	buildClearedReworkMessage,
 	buildPreserveTag,
 	buildReworkText,
+	buildRunoffSiblingPrompt,
 	buildSiblingPrompt,
 	insertBeforeFinalStep,
 	modelSlug,
@@ -87,6 +100,7 @@ import {
 	stripBlockedPrefix,
 } from "./rework-text";
 import { readTaskSnapshot } from "./snapshots";
+import type { PipelineFinishTaskRequest } from "./worker-protocol";
 
 export { REWORK_STARTED_CHECK_MS } from "./rework-state";
 
@@ -158,8 +172,10 @@ export interface StopRecord {
 /** A sibling card's own entry (`cards[<sibling>].sibling`). */
 export interface SiblingRecord {
 	of: string;
-	kind: "escalation";
+	kind: "escalation" | "runoff";
 	at: string;
+	/** The runoff group, for kind `runoff`. */
+	runoff?: string;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -265,6 +281,10 @@ export interface ReworkDependencies {
 	store: PipelineStateStore;
 	bus: PipelineEventBus;
 	appendQaLog: AppendQaLog;
+	/** The Done workflow (`trigger: "pipeline"`): a runoff sibling that could not start is discarded. */
+	finishTask?: (request: PipelineFinishTaskRequest) => Promise<RuntimeTaskTrashResponse>;
+	/** Where a runoff answer records its group (the worker's feature registry). Absent: runoffs are escalated. */
+	runoffGroups?: PipelineRunoffGroups;
 	/** Tags a card's current work (preserveTaskWork in hold.ts). */
 	preserveWork: (input: { workspacePath: string; taskId: string; tag: string }) => Promise<unknown>;
 	readSnapshot?: (repoPath: string, taskId: string) => Promise<string | null>;
@@ -406,6 +426,23 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 			.deliverInput({ workspaceId: scope.context.snapshot.workspaceId, taskId: scope.entry.card.id, text })
 			.catch((error: unknown) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }));
 
+	/**
+	 * The open runoff group a card races in. A group file that can't be read counts as racing ("unknown"): the caller
+	 * then takes the safe path (no sibling outside the group).
+	 */
+	const findRunoffGroup = async (workspaceId: string, taskId: string): Promise<string | null> => {
+		const groups = deps.runoffGroups?.forWorkspace(workspaceId);
+		if (!groups) {
+			return null;
+		}
+		try {
+			return await groups.groupOf(taskId);
+		} catch (error) {
+			deps.log(`rework ${taskId}: the runoff groups can't be read: ${String(error)}`);
+			return "(unreadable runoff groups)";
+		}
+	};
+
 	const escalate = async (
 		scope: CardScope,
 		input: {
@@ -427,6 +464,15 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 		let reason = input.reason;
 		const requireApproval = input.requireApproval ?? false;
 		let sibling: EscalationRecord["sibling"];
+		if (to !== "orchestrator") {
+			// A card racing in a runoff never hands its task to a sibling: the sibling would race outside the group and
+			// could land next to the runoff's winner. The orchestrator decides instead.
+			const racing = await findRunoffGroup(workspaceId, card.id);
+			if (racing) {
+				reason = `${reason}; it races in runoff ${racing}, so it goes to the orchestrator instead of ${describeTarget(to)}`;
+				to = "orchestrator";
+			}
+		}
 		if (to !== "orchestrator") {
 			const target = to;
 			const tag = buildPreserveTag(card.id, scope.dev.model?.model ?? target.model.model);
@@ -503,48 +549,57 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 		const created = await createSibling(scope, {
 			agentId: input.target.agentId,
 			model: input.target.model,
-			reason: input.reason,
-			tag: input.tag,
-			blocking: input.blocking,
+			prompt: buildSiblingPrompt({
+				prompt: scope.entry.card.prompt,
+				fromTaskId: card.id,
+				from: { agentId: scope.dev.agentId, model: scope.dev.model },
+				reason: input.reason,
+				tag: input.tag,
+				blocking: input.blocking,
+				now: context.now,
+			}),
+			title: `${stripBlockedPrefix(card.title ?? "")} [${modelSlug(input.target.model.model)}]`,
+			sibling: { of: card.id, kind: "escalation", at: new Date(context.now).toISOString() },
 			start: !input.requireApproval,
 		});
 		return created.ok ? { ok: true, taskId: created.taskId, started: created.started } : created;
 	};
 
+	/** Card ids on the board or in the pipeline state, so a new card's id is unique in both. */
+	const loadKnownTaskIds = async (scope: CardScope): Promise<Set<string>> => {
+		const { context } = scope;
+		const known = new Set(context.snapshot.board.columns.flatMap((column) => column.cards.map((other) => other.id)));
+		for (const id of Object.keys((await deps.store.load(context.snapshot.workspaceId)).cards)) {
+			known.add(id);
+		}
+		return known;
+	};
+
+	/** A dev card on another model for the failed card's task, in Backlog (then started if `start`). */
 	const createSibling = async (
 		scope: CardScope,
 		input: {
+			/** Chosen beforehand (a runoff records its group first); default a fresh one. */
+			taskId?: string;
 			agentId: RuntimeAgentId;
 			model: EffectiveModel;
-			reason: string;
-			tag: string;
-			blocking: string[];
+			title: string;
+			prompt: string;
+			sibling: SiblingRecord;
 			start: boolean;
 		},
 	): Promise<{ ok: true; taskId: string; started: boolean } | { ok: false; error: string }> => {
 		const { context } = scope;
 		const { card } = scope.entry;
 		const workspaceId = context.snapshot.workspaceId;
-		const known = new Set(context.snapshot.board.columns.flatMap((column) => column.cards.map((other) => other.id)));
-		for (const id of Object.keys((await deps.store.load(workspaceId)).cards)) {
-			known.add(id);
-		}
-		const taskId = createUniqueTaskId(known, randomUuid);
+		const taskId = input.taskId ?? createUniqueTaskId(await loadKnownTaskIds(scope), randomUuid);
 		const created = await run({
 			...scopeOf(scope),
 			kind: "createTask",
 			task: {
 				taskId,
-				title: `${stripBlockedPrefix(card.title ?? "")} [${modelSlug(input.model.model)}]`.slice(0, 200),
-				prompt: buildSiblingPrompt({
-					prompt: card.prompt,
-					fromTaskId: card.id,
-					from: { agentId: scope.dev.agentId, model: scope.dev.model },
-					reason: input.reason,
-					tag: input.tag,
-					blocking: input.blocking,
-					now: context.now,
-				}),
+				title: input.title.slice(0, 200),
+				prompt: input.prompt,
 				role: "dev",
 				agentId: input.agentId,
 				agentSettings: toAgentSettings(input.model),
@@ -554,7 +609,7 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 		if (!created.ok) {
 			return { ok: false, error: `creating the sibling card failed: ${created.error}` };
 		}
-		const sibling: SiblingRecord = { of: card.id, kind: "escalation", at: new Date(context.now).toISOString() };
+		const sibling = input.sibling;
 		await deps.store.update(workspaceId, (state) => {
 			state.cards[taskId] = { ...(state.cards[taskId] ?? {}), sibling };
 			return state;
@@ -741,6 +796,195 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 		}
 	};
 
+	/**
+	 * The kit's runoff answer. Racing siblings need a feature that holds every racing card's PASS until the runoff is
+	 * decided (without it a sibling and the failed card could both land), so with none the answer is escalated. A
+	 * card that already races is reworked instead: runoffs never nest.
+	 */
+	const actOnRunoff = async (
+		scope: CardScope,
+		trigger: ReworkTrigger,
+		answer: Extract<OnFailAnswer, { action: "runoff" }>,
+	): Promise<void> => {
+		const workspaceId = scope.context.snapshot.workspaceId;
+		const models = answer.models.map((model) => model.model).join(", ");
+		const refuse = async (why: string): Promise<void> =>
+			await escalate(scope, {
+				round: trigger.round,
+				reason: `the kit answered runoff (${models}), but ${why}`,
+				cause: trigger.cause,
+				blocking: trigger.verdict?.blocking,
+				answer,
+			});
+		const groups = deps.runoffGroups?.forWorkspace(workspaceId) ?? null;
+		if (!groups) {
+			await refuse(`the workspace's kit doesn't run the "runoffs" feature, which holds the racing cards' PASSes`);
+			return;
+		}
+		let racing: string | null;
+		try {
+			racing = await groups.groupOf(scope.entry.card.id);
+		} catch (error) {
+			await refuse(`the runoff groups can't be read (${error instanceof Error ? error.message : String(error)})`);
+			return;
+		}
+		if (racing) {
+			record(scope, "acted", `already races in runoff ${racing}; a runoff answer is a rework`, answer);
+			await sendRework(scope, trigger, "auto", answer);
+			return;
+		}
+		await startRunoff(scope, trigger, answer, groups);
+	};
+
+	/** A runoff sibling that never started leaves through the Done workflow (no worktree, nothing to land). */
+	const discardUnstartedSibling = async (scope: CardScope, taskId: string): Promise<boolean> => {
+		if (!deps.finishTask) {
+			return false;
+		}
+		const result = await deps
+			.finishTask({
+				workspaceId: scope.context.snapshot.workspaceId,
+				taskId,
+				landing: "discard",
+				trigger: "pipeline",
+			})
+			.catch(() => null);
+		return result?.ok === true;
+	};
+
+	const parkUnstartedSibling = async (scope: CardScope, taskId: string, runoff: string): Promise<void> => {
+		const workspaceId = scope.context.snapshot.workspaceId;
+		const escalation: EscalationRecord = {
+			at: new Date(scope.context.now).toISOString(),
+			round: 0,
+			reason: `runoff ${runoff}: the sibling card could not start, nor be discarded`,
+			cause: "never_started",
+			to: "orchestrator",
+			requireApproval: false,
+		};
+		await updateFlow(workspaceId, taskId, (qaflow) => ({ ...qaflow, escalated: escalation }));
+		const blocked = await run({ ...scopeOf(scope), kind: "blockTask", taskId });
+		if (!blocked.ok) {
+			deps.log(`rework: parking runoff sibling ${taskId} as BLOCKED failed: ${blocked.error}`);
+		}
+	};
+
+	const startRunoff = async (
+		scope: CardScope,
+		trigger: ReworkTrigger,
+		answer: Extract<OnFailAnswer, { action: "runoff" }>,
+		groups: PipelineRunoffGroupHandler,
+	): Promise<void> => {
+		const { context } = scope;
+		const { card } = scope.entry;
+		const workspaceId = context.snapshot.workspaceId;
+		const name = `${card.id}-r${trigger.round}`;
+		const known = await loadKnownTaskIds(scope);
+		const contenders = answer.models.map((model) => {
+			const taskId = createUniqueTaskId(known, randomUuid);
+			known.add(taskId);
+			return {
+				taskId,
+				agentId: model.agentId,
+				model: { provider: model.provider, model: model.model } satisfies EffectiveModel,
+			};
+		});
+		const group: PipelineRunoffGroup = {
+			name,
+			from: card.id,
+			round: trigger.round,
+			baseRef: card.baseRef,
+			cards: [{ taskId: card.id, agentId: scope.dev.agentId, model: scope.dev.model }, ...contenders],
+		};
+		// Recorded first: from here on every PASS of these cards is held until the runoff is decided.
+		try {
+			await groups.record(group);
+		} catch (error) {
+			await escalate(scope, {
+				round: trigger.round,
+				reason: `the kit answered runoff, but recording runoff ${name} failed (${error instanceof Error ? error.message : String(error)})`,
+				cause: trigger.cause,
+				blocking: trigger.verdict?.blocking,
+				answer,
+			});
+			return;
+		}
+		const blocking = trigger.verdict?.blocking ?? [];
+		const created: typeof contenders = [];
+		const failures: string[] = [];
+		for (const contender of contenders) {
+			const sibling = await createSibling(scope, {
+				taskId: contender.taskId,
+				agentId: contender.agentId,
+				model: contender.model,
+				title: `${stripBlockedPrefix(card.title ?? "")} [runoff ${name}: ${modelSlug(contender.model.model)}]`,
+				prompt: buildRunoffSiblingPrompt({
+					prompt: card.prompt,
+					fromTaskId: card.id,
+					from: { agentId: scope.dev.agentId, model: scope.dev.model },
+					runoff: name,
+					round: trigger.round,
+					blocking,
+					now: context.now,
+				}),
+				sibling: { of: card.id, kind: "runoff", runoff: name, at: new Date(context.now).toISOString() },
+				start: true,
+			});
+			if (!sibling.ok) {
+				failures.push(`${contender.model.model}: ${sibling.error}`);
+			} else if (sibling.started) {
+				created.push(contender);
+			} else if (await discardUnstartedSibling(scope, contender.taskId)) {
+				failures.push(`${contender.model.model}: card ${contender.taskId} could not start and was discarded`);
+			} else {
+				// Still on the board and in the group, parked as escalated: the runoff counts it as finished, and the
+				// pipeline never QAs or lands it if someone starts it by hand.
+				created.push(contender);
+				await parkUnstartedSibling(scope, contender.taskId, name);
+				failures.push(`${contender.model.model}: card ${contender.taskId} could not start; parked as BLOCKED`);
+			}
+		}
+		if (created.length < contenders.length) {
+			await groups
+				.record({
+					...group,
+					cards: [
+						group.cards[0] ?? { taskId: card.id, agentId: scope.dev.agentId, model: scope.dev.model },
+						...created,
+					],
+					...(created.length === 0
+						? { abandoned: `no sibling card could be created (${failures.join("; ")})` }
+						: {}),
+				})
+				.catch((error: unknown) => deps.log(`rework ${card.id}: updating runoff ${name} failed: ${String(error)}`));
+		}
+		if (created.length === 0) {
+			await escalate(scope, {
+				round: trigger.round,
+				reason: `the kit answered runoff, but no sibling card could be created (${failures.join("; ")})`,
+				cause: trigger.cause,
+				blocking,
+				answer,
+			});
+			return;
+		}
+		await deps.appendQaLog(
+			workspaceId,
+			`\n${[
+				`## RUNOFF ${name} STARTED: ${card.id} (${scope.dev.agentId} on ${describeModel(scope.dev.model)}) races ${created.map((contender) => `${contender.taskId} (${contender.agentId} on ${describeModel(contender.model)})`).join(", ")}`,
+				`- ${new Date(context.now).toISOString()} by Kanban: kit "${context.kitName}" answered runoff on the FAIL of round ${trigger.round}. ${card.id} is reworked as usual; every racing card's PASS is held, and the best one lands once all have passed or are escalated.`,
+				...failures.map((failure) => `- Not created: ${failure}`),
+			].join("\n")}\n`,
+		);
+		record(
+			scope,
+			"acted",
+			`runoff ${name}: siblings ${created.map((contender) => contender.taskId).join(", ")}${failures.length > 0 ? ` (${failures.length} not created)` : ""}; the card is reworked too`,
+			answer,
+		);
+		await sendRework(scope, trigger, "auto", answer);
+	};
+
 	/** Asks the kit (below the cap) and carries out the answer. */
 	const actOnTrigger = async (scope: CardScope, trigger: ReworkTrigger): Promise<void> => {
 		const { context } = scope;
@@ -769,21 +1013,6 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 		const { history } = readCardHistory(await loadEntry(workspaceId, card.id));
 		const cap = context.rework.maxFailRounds + history.extraRounds;
 		const handbackNote = handback ? `handback ${handback.at} (+${handback.extraRounds} rounds); ` : "";
-		if (failRound && failRounds.length >= cap) {
-			await escalate(scope, {
-				round: trigger.round,
-				reason: `${failRounds.length} FAIL rounds (rounds ${failRounds.join(", ")}${trigger.cause === "conflict" ? `; the last was a merge conflict with ${card.baseRef}` : ""})`,
-				cause: trigger.cause,
-				details: [
-					trigger.conflict
-						? `Conflicts in: ${trigger.conflict.files.join(", ")}`
-						: `Last blocking: ${(trigger.verdict?.blocking ?? []).join(" | ").slice(0, 600) || "see the QA section"}`,
-				],
-				blocking: trigger.verdict?.blocking,
-				answer: { core: "maxFailRounds", maxFailRounds: cap },
-			});
-			return;
-		}
 		const answer = context.policy.onFail({
 			dev: scope.dev,
 			cause: trigger.cause,
@@ -791,6 +1020,27 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 			history: { ...history, failRounds } satisfies CardHistory,
 			limits: { maxFailRounds: context.rework.maxFailRounds },
 		});
+		if (failRound && failRounds.length >= cap) {
+			// The core's cap is a backstop: at it the card is escalated whatever the kit says, but to the kit's own
+			// escalation target when the kit escalates too (team's `escalate.to: { tier }` opt-in, plan §12). Asking
+			// first matters because the kit's rounds and the cap are usually equal (team: 3 and 3).
+			const capReason = `${failRounds.length} FAIL rounds (rounds ${failRounds.join(", ")}${trigger.cause === "conflict" ? `; the last was a merge conflict with ${card.baseRef}` : ""})`;
+			const kitEscalates = answer.action === "escalate" ? answer : null;
+			await escalate(scope, {
+				round: trigger.round,
+				reason: capReason,
+				cause: trigger.cause,
+				...(kitEscalates ? { to: kitEscalates.to, requireApproval: kitEscalates.requireApproval } : {}),
+				details: [
+					trigger.conflict
+						? `Conflicts in: ${trigger.conflict.files.join(", ")}`
+						: `Last blocking: ${(trigger.verdict?.blocking ?? []).join(" | ").slice(0, 600) || "see the QA section"}`,
+				],
+				blocking: trigger.verdict?.blocking,
+				answer: { core: "maxFailRounds", maxFailRounds: cap, kit: answer },
+			});
+			return;
+		}
 		if (handbackNote) {
 			record(scope, "acted", `${handbackNote}acting again on ${trigger.key}`, null);
 		}
@@ -799,15 +1049,7 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 				await sendRework(scope, trigger, answer.clearContext, answer);
 				return;
 			case "runoff":
-				// Racing siblings need the team kit's `runoffs` feature (P4-T3) to hold every PASS until one is chosen;
-				// without it a sibling and the original could both land. Until then a runoff answer goes to a human.
-				await escalate(scope, {
-					round: trigger.round,
-					reason: `the kit answered runoff (${answer.models.map((model) => model.model).join(", ")}), but runoffs are not supported yet (no hold for the sibling cards)`,
-					cause: trigger.cause,
-					blocking: trigger.verdict?.blocking,
-					answer,
-				});
+				await actOnRunoff(scope, trigger, answer);
 				return;
 			case "escalate":
 				await escalate(scope, {

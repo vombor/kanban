@@ -13,7 +13,13 @@ import type { PipelineActionRequest, PipelineActionResult } from "../../src/pipe
 import type { ChecksResult, ChecksRunner } from "../../src/pipeline/checks";
 import { createPipelineDecisionLog, type PipelineDecisionRecord } from "../../src/pipeline/decision-log";
 import type { PipelineSessionView, PipelineWorkspaceSnapshot } from "../../src/pipeline/engine";
-import { createPipelineEventBus, type PipelineEventMap, type PipelineEventName } from "../../src/pipeline/events";
+import {
+	createPipelineEventBus,
+	type PipelineEventBus,
+	type PipelineEventMap,
+	type PipelineEventName,
+} from "../../src/pipeline/events";
+import type { PipelineFeatureRegistry } from "../../src/pipeline/features";
 import { createPipelineStateStore } from "../../src/pipeline/pipeline-state";
 import { createQaGate } from "../../src/pipeline/qa-gate";
 import { type AppendQaLog, createQaLogAppender } from "../../src/pipeline/qa-log";
@@ -62,6 +68,12 @@ export interface PipelineWorkerHarnessOptions {
 	clearCommand?: (agentId: RuntimeAgentId) => string | null;
 	/** preserveWork for an escalation to a model. Default: records the tag. */
 	preserveWork?: (input: { workspacePath: string; taskId: string; tag: string }) => Promise<unknown>;
+	/** The worker's feature registry (default: the team kit's features with the worker's own actions). */
+	createFeatures?: (input: {
+		bus: PipelineEventBus;
+		appendQaLog: AppendQaLog;
+		root: string;
+	}) => PipelineFeatureRegistry;
 }
 
 /**
@@ -144,7 +156,9 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 		},
 		log: () => {},
 	});
+	const features = options.createFeatures?.({ bus, appendQaLog, root: temp.path });
 	const reworkStage = createReworkStage({
+		runoffGroups: features?.runoffGroups,
 		actions: { run: async (request) => answer(request) },
 		deliverInput: async (input) => answer({ kind: "deliverInput", ...input }),
 		store,
@@ -194,6 +208,7 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 		qaGate,
 		createRecovery: options.createRecovery,
 		reworkStage,
+		features,
 		now: () => now,
 	});
 

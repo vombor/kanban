@@ -3,9 +3,13 @@
 // board.
 import type { PipelineFeatureRegistry } from "../../pipeline/features";
 import { createBenchFeature } from "./bench/bench-feature";
+import { createRunoffsFeature } from "./runoffs/runoffs-feature";
 import { createScoreboardFeature } from "./scoreboard/scoreboard-feature";
+import { createTiersFeature } from "./tiers/tiers-report";
 
 export function registerTeamKitFeatures(registry: PipelineFeatureRegistry): void {
 	registry.register(createScoreboardFeature());
 	registry.register(createBenchFeature());
+	registry.register(createRunoffsFeature());
+	registry.register(createTiersFeature());
 }

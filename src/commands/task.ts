@@ -32,11 +32,14 @@ import {
 	updateTask,
 } from "../core/task-board-mutations";
 import { type DevAssignmentDecision, recordDevAssignment, resolveDevAssignment } from "../kits/dev-assignment";
+import { readRunoffs, reopenRunoffWithoutWinner } from "../kits/team/runoffs/runoffs-store";
 import { BLOCKED_TITLE_PREFIX } from "../pipeline/actions";
 import { handBackTask } from "../pipeline/handback";
+import { clearHold, preserveTaskWork, readPipelineHold } from "../pipeline/hold";
 import { createPipelineStateStore } from "../pipeline/pipeline-state";
 import { createQaLogAppender } from "../pipeline/qa-log";
 import { resolveProjectInputPath } from "../projects/project-path";
+import { getWatchdogWorkspacePaths } from "../state/kanban-home";
 import { loadWorkspaceContext, mutateWorkspaceState } from "../state/workspace-state";
 import {
 	createRuntimeTrpcClient,
@@ -525,6 +528,8 @@ function reportDevAssignment(decision: DevAssignmentDecision): void {
 
 export async function createTask(input: {
 	cwd: string;
+	/** A card id chosen beforehand (unique on the board); default a fresh one. */
+	taskId?: string;
 	title?: string;
 	prompt: string;
 	projectPath?: string;
@@ -566,6 +571,7 @@ export async function createTask(input: {
 			state.board,
 			"backlog",
 			{
+				...(input.taskId ? { taskId: input.taskId } : {}),
 				title: input.title,
 				prompt: input.prompt,
 				startInPlanMode: input.startInPlanMode,
@@ -1061,6 +1067,17 @@ export async function handbackTask(input: {
 	const workspaceRepoPath = await resolveWorkspaceRepoPath(input.projectPath, input.cwd);
 	const workspaceId = await ensureRuntimeWorkspace(workspaceRepoPath);
 	const runtimeClient = createRuntimeTrpcClient(workspaceId);
+	const runoffsPath = getWatchdogWorkspacePaths(workspaceId).runoffs;
+	// A card of a decided runoff that has a winner (or lands nothing: benchOnly) must not come back: its next PASS
+	// would land next to the winner. Only a runoff decided with no winner reopens (below).
+	const decidedRunoff = (await readRunoffs(runoffsPath)).runoffs.find(
+		(runoff) => runoff.cards.includes(input.taskId) && runoff.decided && (runoff.winner || runoff.benchOnly === true),
+	);
+	if (decidedRunoff) {
+		throw new Error(
+			`Task "${input.taskId}" raced in runoff ${decidedRunoff.name}, which is decided (${decidedRunoff.benchOnly === true ? "bench only, nothing lands" : `winner ${decidedRunoff.winner}`}); handing it back would let it land too. Discard it (kanban task done --task-id ${input.taskId} --discard) or start a new card.`,
+		);
+	}
 	const result = await handBackTask(createPipelineStateStore(), {
 		workspaceId,
 		taskId: input.taskId,
@@ -1069,7 +1086,15 @@ export async function handbackTask(input: {
 		by: input.by?.trim() || "orchestrator",
 		now: Date.now(),
 	});
-	await createQaLogAppender()(workspaceId, result.qaLogSection);
+	// A runoff decided with no winner (every card escalated) reopens when one of its cards comes back. Ported from
+	// archive/devteam-kit:bin/kit@6da71597 (158817d; tier2-coupons 10/06).
+	const runoffReopened = await reopenRunoffWithoutWinner(runoffsPath, input.taskId, result.handback.at);
+	await createQaLogAppender()(
+		workspaceId,
+		runoffReopened
+			? `${result.qaLogSection}- Runoff ${runoffReopened} had no winner; reopened.\n`
+			: result.qaLogSection,
+	);
 	const task = await updateRuntimeWorkspaceState(runtimeClient, workspaceRepoPath, (state) => {
 		const record = findTaskRecord(state, input.taskId);
 		if (!record) {
@@ -1108,12 +1133,55 @@ export async function handbackTask(input: {
 		task,
 		workspacePath: workspaceRepoPath,
 		handback: result.handback,
+		...(runoffReopened ? { runoffReopened } : {}),
 		message: result.reworks
 			? `Escalation cleared with ${input.extraRounds} more FAIL round(s); the pipeline reworks the card's last FAIL once it is in Review.`
 			: input.extraRounds > 0
 				? `Escalation cleared with ${input.extraRounds} more FAIL round(s), but it was escalated over a STALLED QA round, which the pipeline does not rework: restart the card (or change it) so it gets a new snapshot and QA round.`
 				: "Escalation cleared, no extra rounds: restart or rework the card yourself.",
 	};
+}
+
+/**
+ * `kanban task release-hold`: the human way out of the pipeline's hold (src/pipeline/hold.ts). The hold is lifted
+ * (logged in the pipeline state and the QA log), then the card goes through the ordinary Done workflow with the
+ * chosen landing, as `kanban task done --land|--discard` does. `--discard --tag preserve/…` tags its work first. A land that
+ * fails (a conflict) leaves the card unheld in Review.
+ */
+export async function releaseHoldTask(input: {
+	cwd: string;
+	taskId: string;
+	landing: RuntimeTaskLandingChoice;
+	tag?: string;
+	note?: string;
+	by?: string;
+	projectPath?: string;
+}): Promise<JsonRecord> {
+	const workspaceRepoPath = await resolveWorkspaceRepoPath(input.projectPath, input.cwd);
+	const workspaceId = await ensureRuntimeWorkspace(workspaceRepoPath);
+	const store = createPipelineStateStore();
+	const hold = readPipelineHold((await store.peek(workspaceId))?.cards[input.taskId]);
+	if (!hold) {
+		throw new Error(`Task "${input.taskId}" is not held in the pipeline state of ${workspaceId}.`);
+	}
+	const tag = input.tag?.trim() || null;
+	if (tag) {
+		await preserveTaskWork({ workspacePath: workspaceRepoPath, taskId: input.taskId, tag });
+	}
+	const by = input.by?.trim() || "orchestrator";
+	const note = input.note?.trim() || `kanban task release-hold --${input.landing}`;
+	await clearHold(store, { workspaceId, taskId: input.taskId, by, reason: note, now: Date.now() });
+	await createQaLogAppender()(
+		workspaceId,
+		`\n## HOLD RELEASED ${input.taskId}: ${input.landing}${tag ? ` (work kept as tag ${tag})` : ""}\n- ${new Date().toISOString()} by ${by} (kanban task release-hold): ${note}\n- Was held for ${hold.group} since ${hold.at} (round ${hold.round}).\n`,
+	);
+	const done = await trashTask({
+		cwd: input.cwd,
+		taskId: input.taskId,
+		projectPath: workspaceRepoPath,
+		landing: input.landing,
+	});
+	return { ...done, released: { group: hold.group, landing: input.landing, tag } };
 }
 
 async function deleteTaskCommand(input: {
@@ -1542,6 +1610,45 @@ export function registerTaskCommand(program: Command): void {
 							projectPath: options.projectPath,
 						}),
 				);
+			},
+		);
+
+	task
+		.command("release-hold")
+		.description(
+			"Release a task the pipeline holds (a runoff PASS, landing mode qa): lift the hold and finish it with --land or --discard.",
+		)
+		.requiredOption("--task-id <id>", "Task ID.")
+		.option("--land", "Land the task onto its base, then Done.")
+		.option("--discard", "Done without landing.")
+		.option("--tag <tag>", "Tag its work first (preserve/<id>-<model>), e.g. with --discard.")
+		.option("--note <text>", "Why (recorded in the QA log).")
+		.option("--by <name>", "Who releases it (default: orchestrator).")
+		.option("--project-path <path>", "Workspace path. Defaults to current directory workspace.")
+		.action(
+			async (options: {
+				taskId: string;
+				land?: boolean;
+				discard?: boolean;
+				tag?: string;
+				note?: string;
+				by?: string;
+				projectPath?: string;
+			}) => {
+				await runTaskCommand(async () => {
+					if (Boolean(options.land) === Boolean(options.discard)) {
+						throw new Error("task release-hold needs exactly one of --land or --discard.");
+					}
+					return await releaseHoldTask({
+						cwd: process.cwd(),
+						taskId: options.taskId,
+						landing: options.land ? "land" : "discard",
+						tag: options.tag,
+						note: options.note,
+						by: options.by,
+						projectPath: options.projectPath,
+					});
+				});
 			},
 		);
 

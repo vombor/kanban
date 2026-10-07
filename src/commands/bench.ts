@@ -1,4 +1,4 @@
-// `kanban bench metrics|record-verdict|scoreboard|reset|calibrate`: the team kit's scoring tools for humans and backfills (plan
+// `kanban bench metrics|record-verdict|scoreboard|reset|calibrate` (and `runoff create|status`, `tiers` in bench-runoff.ts): the team kit's scoring tools for humans and backfills (plan
 // §2.4). The pipeline records verdicts itself through the `scoreboard` feature; these commands write the same files
 // (`<home>/data/<workspace>/scoreboard.jsonl`, `scoreboard.md`), whatever the workspace's kit.
 //
@@ -29,6 +29,7 @@ import {
 import { getPipelineStatePath, getPricesDataPaths, getTeamBenchWorkspacePaths } from "../state/kanban-home";
 import { loadWorkspaceBoardById } from "../state/workspace-state";
 import { type CalibrateOptions, runCalibrateCommand } from "./bench-calibrate";
+import { registerBenchRunoffCommands } from "./bench-runoff";
 import { resolveWorkspaceTarget, type WorkspaceTarget } from "./workspace-target";
 
 function toErrorMessage(error: unknown): string {
@@ -255,7 +256,7 @@ export function registerBenchCommand(program: Command): void {
 	const bench = program
 		.command("bench")
 		.description(
-			"The team kit's scoring tools: card metrics, the QA scoreboard, benchmark resets and QA calibrations.",
+			"The team kit's scoring tools: card metrics, the QA scoreboard, benchmark resets, QA calibrations, runoffs and model tiers.",
 		);
 	bench
 		.command("metrics")
@@ -329,4 +330,5 @@ export function registerBenchCommand(program: Command): void {
 		.option("--force", "Run on a workspace whose kit doesn't list the calibration feature.")
 		.addOption(new Option("--worker", "The detached runner (started by calibrate itself).").hideHelp())
 		.action(runAction("calibrate", (spec: string, options: CalibrateOptions) => runCalibrateCommand(spec, options)));
+	registerBenchRunoffCommands(bench, runAction);
 }

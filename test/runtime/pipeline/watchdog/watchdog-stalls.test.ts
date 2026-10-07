@@ -28,6 +28,7 @@ function input(board: RuntimeBoardData, overrides: Partial<StallInput> = {}): St
 		pipelineCards: {},
 		qaGated: () => true,
 		userItemIds: new Set(),
+		openRunoffCardIds: new Set(),
 		resumed: {},
 		pidPressure: false,
 		pidBrownout: false,
@@ -97,6 +98,23 @@ describe("detectStalls", () => {
 			[],
 		);
 		expect(readNewestHandledVerdictAt(verdictAfterMove)).toBe(NOW - 30 * MIN);
+	});
+
+	it("skips a PASS held for an open runoff for the current snapshot; not an older one, nor one of a decided runoff", () => {
+		const held = (snapshot: string): PipelineCardState => ({
+			snapshot,
+			hold: { group: "race", at: new Date(NOW - 60 * MIN).toISOString(), round: 1 },
+			qaPass: { qaTaskId: "qa001", snapshot: "abc", at: NOW - 60 * MIN, action: "hold", status: null, error: null },
+		});
+		const board = createBoard({ review: [old("d0001"), old("d0002"), old("d0003")] });
+		const result = detectStalls(
+			input(board, {
+				pipelineCards: { d0001: held("abc"), d0002: held("def"), d0003: held("abc") },
+				// d0003's runoff is decided (or abandoned): a card still held for it is stuck.
+				openRunoffCardIds: new Set(["d0001", "d0002"]),
+			}),
+		);
+		expect(result.items.map((item) => item.key)).toEqual(["d0002:review-stall", "d0003:review-stall"]);
 	});
 
 	it("flags a QA or TRIAGE card in progress past qaMin whose session isn't running; never a calibration card", () => {

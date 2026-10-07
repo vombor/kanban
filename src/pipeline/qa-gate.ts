@@ -46,7 +46,7 @@ import { resolveCardRole, resolveReviewedTaskId } from "../core/card-role";
 import type { EffectiveModel, EffectiveModelConfig } from "../core/effective-agent";
 import { createUniqueTaskId } from "../core/task-id";
 import type { KitDocument } from "../kits/kit-schema";
-import type { EffectiveCard, QaPolicyAnswer, RoutingPolicy } from "../kits/policy";
+import type { EffectiveCard, KitVerdict, OnPassAnswer, QaPolicyAnswer, RoutingPolicy } from "../kits/policy";
 import { getKanbanHomeDisplayPath, getPipelineQaLogPath, getQaArtifactsPath } from "../state/kanban-home";
 import { isReviewSettled } from "../terminal/review-settle";
 import type { PipelineActions } from "./actions";
@@ -55,6 +55,7 @@ import {
 	describeUnsettledReview,
 	type PipelineSessionView,
 	type PipelineWorkspaceSnapshot,
+	readEscalatedAt,
 	toEffectiveCard,
 } from "./engine";
 import type { PipelineEventBus } from "./events";
@@ -144,6 +145,8 @@ export interface QaGateContext {
 	kitName: string;
 	/** The workspace's resolved kit, asked `onPass` before a PASS lands. */
 	policy: RoutingPolicy;
+	/** The workspace's active features, asked `onPass` before the kit (the team `runoffs` feature holds). */
+	featureOnPass?: (input: { dev: EffectiveCard; verdict: KitVerdict }) => Promise<OnPassAnswer | null>;
 	agentDefaultModels?: EffectiveModelConfig["agentDefaultModels"];
 	now: number;
 }
@@ -550,6 +553,8 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 	 * its entry): the kit's `onPass` (decideOnPass) may hold it; otherwise the Done workflow lands it (trigger
 	 * `pipeline`). A land that fails (a conflict) is recorded and not retried: FAIL handling is the rework stage's.
 	 * A PASS for an older snapshot (the card changed after QA) is skipped; the new snapshot gets its own QA.
+	 * A held card is never landed here (only releaseHold does that), but a newer PASS (it was reworked after the hold)
+	 * refreshes its hold, so the runoff compares the PASS of its current snapshot.
 	 */
 	const actOnPasses = async (
 		context: QaGateContext,
@@ -567,13 +572,17 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 				continue;
 			}
 			const session = sessions.get(card.id) ?? null;
+			// An escalated card never lands on a PASS: a sibling may have taken its task over (engine.ts readEscalatedAt).
+			// A held card is not skipped: a newer PASS refreshes its hold (below), so the runoff compares the PASS of its
+			// current snapshot.
 			if (
 				resolveCardRole(card) !== "dev" ||
 				!isReviewSettled(session, context.now, snapshot.reviewSettleMs) ||
-				readPipelineHold(entry)
+				readEscalatedAt(entry)
 			) {
 				continue;
 			}
+			const heldFor = readPipelineHold(entry)?.group ?? null;
 			const markHandled = async (pass: Omit<QaPassEntry, "qaTaskId" | "snapshot" | "at">): Promise<void> => {
 				const value: QaPassEntry = {
 					qaTaskId: latest.qaTaskId,
@@ -603,13 +612,35 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 				selectedAgentId: snapshot.selectedAgentId,
 				agentDefaultModels: context.agentDefaultModels,
 			});
-			const answer = await decideOnPass({
-				store: deps.store,
-				policy: context.policy,
-				dev: effective,
-				verdict: { verdict: "PASS", round: latest.round, blocking: latest.blocking, notes: latest.notes },
-				now: context.now,
-			});
+			let answer: OnPassAnswer;
+			try {
+				answer = await decideOnPass({
+					store: deps.store,
+					policy: context.policy,
+					dev: effective,
+					verdict: { verdict: "PASS", round: latest.round, blocking: latest.blocking, notes: latest.notes },
+					now: context.now,
+					featureAnswer: context.featureOnPass,
+				});
+			} catch (error) {
+				// Not marked handled: asked again on the next evaluation.
+				deps.log(
+					`qa-gate ${card.id}: PASS of round ${latest.round} left for the next evaluation: ${error instanceof Error ? error.message : String(error)}`,
+				);
+				continue;
+			}
+			if (heldFor && answer.action === "land") {
+				await markHandled({ action: "hold", status: null, error: null });
+				records.push(
+					record(
+						context,
+						card.id,
+						"qa_pass",
+						`PASS of round ${latest.round}: the card is still held for ${heldFor}; only releaseHold lands or discards it`,
+					),
+				);
+				continue;
+			}
 			if (answer.action === "hold") {
 				await markHandled({ action: "hold", status: null, error: null });
 				records.push(record(context, card.id, "qa_pass", `PASS of round ${latest.round} held for ${answer.group}`));

@@ -7,8 +7,8 @@
 // had to stop and restart autoland around the same edit.
 //
 // Ported from archive/devteam-kit:bin/kit@6da71597 (cmdHandback) and services/kanban-autoland.mjs@158817d
-// (maxFailsOf: each handback grants its extra rounds). Reopening a runoff decided with no winner is the team kit's
-// `runoffs` feature.
+// (maxFailsOf: each handback grants its extra rounds). Reopening a runoff decided with no winner (the team kit's
+// runoffs.json, reopenRunoffWithoutWinner) and unlinking a waiting sibling are done by `kanban task handback` itself.
 import type { PipelineStateStore } from "./pipeline-state";
 import { type HandbackRecord, readEscalationRecord, readQaflow, readReworks } from "./rework";
 

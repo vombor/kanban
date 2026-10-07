@@ -94,7 +94,7 @@ import {
 import { buildWakeText, isOrchestratorSessionLive, type WakeOutcome, wakeKey, wakeOrchestrator } from "./wake";
 import { checkWakeRequests, readWakeRequests, updateWakeRequests } from "./wake-requests";
 import { loadWatchdogState, saveWatchdogState, type WatchdogWorkspaceState } from "./watchdog-state";
-import { readCalibrationRunIds } from "./workspace-data";
+import { readCalibrationRunIds, readUndecidedRunoffCardIds } from "./workspace-data";
 
 const MIN = 60_000;
 /** Prune-done runs about once an hour per workspace (archive/devteam-kit:services/review-watch.mjs PRUNE_EVERY). */
@@ -372,6 +372,7 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 				pipelineCards: pipelineState.cards,
 				qaGated,
 				userItemIds,
+				openRunoffCardIds: await readUndecidedRunoffCardIds(paths.runoffs),
 				resumed: state.resumed,
 				pidPressure: context.pidLevel !== "none",
 				pidBrownout: context.pidLevel === "brownout",

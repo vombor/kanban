@@ -42,8 +42,13 @@ import {
 	type PipelineWorkspaceSnapshot,
 } from "./engine";
 import { createPipelineEventBus, type PipelineEventBus } from "./events";
-import { createPipelineFeatureRegistry, type PipelineFeatureActions, type PipelineFeatureRegistry } from "./features";
-import { preserveTaskWork, releaseHold } from "./hold";
+import {
+	createPipelineFeatureRegistry,
+	type PipelineFeatureActions,
+	type PipelineFeaturePassInput,
+	type PipelineFeatureRegistry,
+} from "./features";
+import { clearHold, preserveTaskWork, releaseHold } from "./hold";
 import { createPipelineStateStore, type PipelineStateStore } from "./pipeline-state";
 import { createQaGate, type QaGate } from "./qa-gate";
 import { type AppendQaLog, createQaLogAppender } from "./qa-log";
@@ -193,6 +198,11 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 				{ ...input, workspaceId, workspacePath },
 			);
 		},
+		appendQaLog: async (workspaceId, text) => {
+			await appendQaLog(workspaceId, text);
+		},
+		unhold: async (workspaceId, input) =>
+			(await clearHold(store, { workspaceId, ...input, by: "pipeline", now: now() })) !== null,
 	};
 	const features = deps.features ?? createDefaultFeatureRegistry({ bus, actions, log });
 	const appendQaLog = deps.appendQaLog ?? createQaLogAppender();
@@ -377,6 +387,8 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			preserveWork,
 			readSessionSize: readAgentSessionSize,
 			getClearCommand: getAgentClearCommand,
+			runoffGroups: features.runoffGroups,
+			finishTask,
 			log,
 		});
 	const watchdog = (deps.createWatchdog ?? createWatchdog)({
@@ -498,6 +510,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			kit: resolution.kit,
 			kitName: resolution.kitName,
 			policy,
+			featureOnPass: async (input: PipelineFeaturePassInput) => await features.answerOnPass(workspaceId, input),
 			agentDefaultModels,
 			now: now(),
 		};
@@ -571,6 +584,8 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 					now: now(),
 				})),
 			);
+			// Features acting on held cards (the team kit's runoffs) see the state the QA gate and the rework stage just wrote.
+			await features.tick(workspaceId, { snapshot, state: await store.load(workspaceId), now: now() });
 		}
 		if (records.length > 0) {
 			await decisionLog.append(records);

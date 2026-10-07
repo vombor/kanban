@@ -391,6 +391,31 @@ describe("QA gate", () => {
 		]);
 	});
 
+	it("never QAs or lands an escalated card back in Review without a handback (a sibling may have its task)", async () => {
+		const harness = createHarness({ config: { workspaces: { foo: QA_WORKSPACE } } });
+		await harness.store.update("foo", (state) => {
+			state.cards.d1111 = { qaflow: { escalated: { at: "2026-10-07T09:00:00.000Z", reason: "tier 2" } } };
+			return state;
+		});
+		await send(harness, { review: [createCard({ id: "d1111", ...OPENAI_DEV })] });
+		expect(createdTasks(harness.actions)).toEqual([]);
+		expect(harness.readCardDecisions("foo")[0]?.note).toContain(
+			"escalated 2026-10-07T09:00:00.000Z: not QA'd or landed",
+		);
+
+		// Escalated after its QA card was made: its PASS is recorded but never landed.
+		const passed = createHarness({ config: { workspaces: { foo: QA_WORKSPACE } } });
+		await startQa(passed);
+		passed.setVerdict("/tmp/kanban-qa-out/qa001", { kind: "ok", verdict: createVerdict() });
+		await passed.store.update("foo", (state) => {
+			state.cards.d1111 = { ...state.cards.d1111, qaflow: { escalated: { at: "2026-10-07T09:00:00.000Z" } } };
+			return state;
+		});
+		await send(passed, qaInReview);
+		await send(passed, qaInReview);
+		expect(kinds(passed.actions)).toEqual(["finishTask:qa001"]);
+	});
+
 	it("records a failed land (a conflict) once and leaves the card in Review for the rework stage", async () => {
 		const harness = createHarness({
 			config: { workspaces: { foo: QA_WORKSPACE } },

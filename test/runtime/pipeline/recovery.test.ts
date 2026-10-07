@@ -452,12 +452,15 @@ describe("recovery state", () => {
 		expect(expectKind(decideRecovery({ ...crashed, flow: sent }), "none").reason).toContain(
 			"the rework stage's started-check owns it",
 		);
-		// Started, returned, closed, or older than the started-check's two windows: recovery's again.
+		// Not restarted yet, however old (a slow or stopped worker runs the started-check late): still its card.
+		const old = new Date(NOW - 60 * MIN).toISOString();
+		expectKind(decideRecovery({ ...crashed, flow: flow({ lastReworkAt: old, reworks: [{ at: old }] }) }), "none");
+		// Started, returned, closed, or restarted more than one started-check window ago: recovery's again.
 		for (const rework of [
 			{ at: reworkAt, startedAt: reworkAt },
 			{ at: reworkAt, returned: reworkAt },
 			{ at: reworkAt, closedBy: "handback" },
-			{ at: new Date(NOW - 5 * MIN).toISOString() },
+			{ at: new Date(NOW - 5 * MIN).toISOString(), restartAt: new Date(NOW - 3 * MIN).toISOString() },
 		]) {
 			expectKind(
 				decideRecovery({ ...crashed, flow: flow({ lastReworkAt: rework.at, reworks: [rework] }) }),
