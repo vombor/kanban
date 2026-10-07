@@ -108,7 +108,7 @@ user kit file), never a silent no-op. A missing key means "no answer", so the `d
 | `land.postLand[]` | `{ paths, run, stopUnder? }` | commands the core runs after a land that touched a file matching `paths` (regex) | `[]` | `[]` (foo overrides it) |
 | `features[]` | `scoreboard`, `bench`, `runoffs`, `calibration`, `tiers` | built-in team features that run for the project | `[]` | all five |
 | `tiers.<name>[]` | `{ provider?, model, default?, note? }` | `dev.model: { tier }`, `escalate.to: { tier }`, `kanban bench tiers`, `bench runoff create --tier` | | `tier3`, `tier2`, `tier1`, `qa` |
-| `dropped[]` | `{ provider?, model, at?, why? }` | models no tier lookup returns, on any provider | | six models |
+| `dropped[]` | `{ provider?, model, at?, why? }` | models no tier lookup returns, on any provider | | five models |
 | `tierRules`, `tierNotes` | text per tier | shown by `kanban bench tiers` | | |
 | `prices.{region,autoSync}` | | the `bench` feature's daily AWS price check | | `us-west-2`, `true` |
 | `recommends.landingMode` | landing mode | shown by `kanban kit show/apply`, **never applied** without `--landing` | | `qa` |

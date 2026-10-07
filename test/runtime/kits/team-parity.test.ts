@@ -23,13 +23,22 @@ describe("team kit parity with foo's legacy kit.config.json", () => {
 			(entry) => entry.workspaceId === "foo",
 		) as Record<string, unknown>;
 		// Everything foo inherits from the top level (devAgent, qaAgent, the built-in qaRoutes, benchmark tiers and
-		// dropped models with the deprecated openai-native provider mapped to bedrock) is already what kits/team.json
-		// says, so nothing of it becomes an override.
-		expect(getFooImportedOverrides()).toEqual({
+		// dropped models with the deprecated openai-native provider mapped to bedrock) is what kits/team.json says,
+		// except Nova 2 Lite: kits/team.json brought it back on 2026-10-07 (tier3 candidate, qa), the legacy kit still
+		// drops it. So an import pins foo's legacy lists as overrides and foo keeps Nova dropped until the user says.
+		const overrides = getFooImportedOverrides();
+		expect(Object.keys(overrides).sort()).toEqual(
+			["qa.blurb", "qa.promptNotes.dbSetup", "land.postLand", "tiers.tier3", "tiers.qa", "dropped"].sort(),
+		);
+		expect(overrides).toMatchObject({
 			"qa.blurb": project.projectBlurb,
 			"qa.promptNotes.dbSetup": (project.qaPrompt as Record<string, unknown>).dbSetup,
 			"land.postLand": project.postLand,
 		});
+		const models = (key: string) => (overrides[key] as Array<{ model: string }>).map((entry) => entry.model);
+		expect(models("tiers.tier3")).toEqual(["us.openai.gpt-6.1-sol"]);
+		expect(models("tiers.qa")).toEqual(["us.anthropic.claude-haiku-4-5-20251001-v1:0", "us.amazon.nova-2-lite-v1:0"]);
+		expect(models("dropped")).toContain("us.amazon.nova-2-lite-v1:0");
 	});
 
 	it("assigns new dev cards to Cline on the tier-3 default", () => {

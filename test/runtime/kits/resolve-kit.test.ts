@@ -187,8 +187,10 @@ describe("kanban kit show report", () => {
 		expect(sourceOf("land.postLand")).toBe("default");
 		expect(report.devAssignment).toMatchObject({ agentId: "cline", tier: "tier3" });
 		expect(report.qa[0]).toMatchObject({ devModel: { model: "us.openai.gpt-6.1-sol" }, answer: { kind: "qa" } });
-		// Dropped tier models are not offered as sample dev cards.
-		expect(report.qa.some((row) => row.devModel?.model === "us.amazon.nova-2-lite-v1:0")).toBe(false);
+		// Every usable tier model is a sample dev card once, also when two tiers list it (Nova 2 Lite: tier3 and qa);
+		// dropped ones are not offered.
+		expect(report.qa.filter((row) => row.devModel?.model === "us.amazon.nova-2-lite-v1:0")).toHaveLength(1);
+		expect(report.qa.some((row) => row.devModel?.model === "qwen.qwen3-next-80b-a3b")).toBe(false);
 		expect(report.recommendedLandingMode).toBe("qa");
 		expect(report.warnings).toEqual([]);
 		expect(formatKitReport(report).join("\n")).toContain('qa.blurb = "Project: Pawsome"  [override]');

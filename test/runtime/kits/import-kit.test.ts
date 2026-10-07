@@ -28,6 +28,11 @@ function liveLikeKitConfig(): Record<string, unknown> {
 						default: true,
 						note: "tier-3 default since 2026-10-06 (won runoff tier3-multiregion: 4.0 vs 3.67, ~21 min vs ~2h45); provider becomes bedrock after the fork switch (kit providers --for)",
 					},
+					{
+						provider: "bedrock",
+						model: "us.amazon.nova-2-lite-v1:0",
+						note: "candidate; dropped 2026-10-05 (ends turns narrating instead of calling tools; no Cline caching made it ~$26 per 62a99-sized run vs luna ~$1); back 2026-10-07: with the Cline Bedrock cache patch (deploy/patch-cline-bedrock-cache.mjs) probe card 717a9 (Cline 3.0.69) ran 16 turns at ~21K input, cache read on almost every turn after the first, ~$0.0018/turn vs ~$0.007 uncached, $0.045 total, 15 tool calls, STATUS: DONE (small task: narrating not ruled out)",
+					},
 				],
 			},
 		},

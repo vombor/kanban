@@ -244,8 +244,13 @@ describe("runoff create", () => {
 			"us.moonshotai.kimi-k3",
 			"us.anthropic.claude-opus-5-5",
 		]);
-		// nova-2-lite is listed under qa but dropped.
-		expect(getTierContenders(team, "qa", "cline").map((contender) => contender.model)).toEqual([
+		// A candidate races next to the default (nova-2-lite, back in tier3 and qa since 2026-10-07).
+		expect(getTierContenders(team, "tier3", "cline").map((contender) => contender.model)).toEqual([
+			"us.openai.gpt-6.1-sol",
+			"us.amazon.nova-2-lite-v1:0",
+		]);
+		const novaDropped = { ...team, dropped: [...(team.dropped ?? []), { model: "us.amazon.nova-2-lite-v1:0" }] };
+		expect(getTierContenders(novaDropped, "qa", "cline").map((contender) => contender.model)).toEqual([
 			"us.anthropic.claude-haiku-4-5-20251001-v1:0",
 		]);
 		expect(() => getTierContenders(team, "tier9", "cline")).toThrow('tier "tier9" is not in kit "team"');

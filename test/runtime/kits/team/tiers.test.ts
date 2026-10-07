@@ -54,12 +54,17 @@ describe("tiers feature", () => {
 		expect(report.uses).toEqual({ devTier: "tier3", escalateTier: null });
 		const tier3 = report.tiers.find((tier) => tier.name === "tier3");
 		expect(tier3?.pick).toEqual({ provider: "bedrock", model: "us.openai.gpt-6.1-sol" });
-		expect(tier3?.entries[0]).toMatchObject({ default: true, picked: true, dropped: false });
+		// A candidate after the default is listed, not dropped, and not picked (Nova 2 Lite, back 2026-10-07).
+		expect(tier3?.entries.map((entry) => [entry.model, entry.default, entry.dropped, entry.picked])).toEqual([
+			["us.openai.gpt-6.1-sol", true, false, true],
+			["us.amazon.nova-2-lite-v1:0", false, false, false],
+		]);
 		const qa = report.tiers.find((tier) => tier.name === "qa");
 		expect(qa?.entries.map((entry) => [entry.model, entry.dropped, entry.picked])).toEqual([
 			["us.anthropic.claude-haiku-4-5-20251001-v1:0", false, true],
-			["us.amazon.nova-2-lite-v1:0", true, false],
+			["us.amazon.nova-2-lite-v1:0", false, false],
 		]);
+		expect(report.dropped.map((entry) => entry.model)).not.toContain("us.amazon.nova-2-lite-v1:0");
 		expect(report.tiers.find((tier) => tier.name === "tier1")?.pick).toMatchObject({
 			error: expect.stringContaining("no model that isn't dropped"),
 		});
@@ -67,7 +72,9 @@ describe("tiers feature", () => {
 		const text = formatTiersReport(report).join("\n");
 		expect(text).toContain("Kit team: tiers feature on");
 		expect(text).toContain("tier3: picks bedrock/us.openai.gpt-6.1-sol");
-		expect(text).toContain("bedrock/us.amazon.nova-2-lite-v1:0 [DROPPED]");
+		expect(text).toContain("  - bedrock/us.amazon.nova-2-lite-v1:0: candidate; dropped 2026-10-05");
+		expect(text).not.toContain("[DROPPED]");
+		expect(text).toContain("Dropped (skipped on every provider):");
 		expect(text).toContain("dev.model: tier tier3; escalate.to: no tier");
 
 		const off = formatTiersReport(buildTiersReport(team({ "escalate.to": { tier: "tier2" }, features: [] }))).join(
