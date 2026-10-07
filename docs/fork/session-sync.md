@@ -37,6 +37,27 @@ happens when the turn is over:
 
 So switch to `on` together with the turn detector, when the kit's column-sync is turned off.
 
+## Review settle: when Review counts as a finished turn
+
+The column move above is immediate. Code that treats Review as "the turn is over" waits longer: it acts only once
+the card's session has been `awaiting_review`, with no new state change or hook activity, for
+`sessionSync.reviewSettleSec` (default 12 s; `src/terminal/review-settle.ts`, `isReviewSettled()`). Some agents
+end a turn and start the next one right away: Copilot with `--autopilot` fires agentStop on every continuation
+and its own continue prompt about 100 ms later, and a background shell that finishes after the final agentStop
+starts a new turn about 6 s later. Without the wait, the pipeline snapshotted half-done work and queued QA on it,
+and auto-review typed its commit prompt into the working agent (whose card then stuck in Review).
+
+The consumers: the pipeline's snapshot and QA queue (`src/pipeline/engine.ts`), the QA gate's submit, ingest and
+PASS landing (`qa-gate.ts`), the rework stage's "back in Review" check and new reworks (`rework.ts`), recovery's
+Review decisions (`recovery.ts`; a "running" summary that isn't working is still recovered at once) and the
+auto-review reconciler. The clock is the session summary's `stateChangedAt` (or a later session start or
+`lastHookAt`); terminal output doesn't count, since an idle TUI repaints. A summary without `stateChangedAt`
+(from an older build) counts as settled. The pipeline worker host sends a snapshot once a Review has settled, so
+the pipeline doesn't wait for its 30 s sweep.
+
+12 s is twice the longest resume seen (the 6 s late turn), and holding QA or a commit prompt back by 12 s costs
+nothing next to them. `0` turns the wait off. It applies with session sync on or off.
+
 ## Setting
 
 `sessionSync.enabled` in the Kanban home's `config.json` (the global config path in Settings; on the pod today that
@@ -45,6 +66,11 @@ is the legacy home, `~/.cline/kanban/config.json`):
 ```json
 { "sessionSync": { "enabled": false } }
 ```
+
+`sessionSync.reviewSettleSec` (0 to 600, default 12) sits next to it and is read at the same time; the server
+hands the value to auto-review and, in each snapshot, to the pipeline worker. A build from before it reads an
+object with `reviewSettleSec` as invalid and uses the defaults for the whole section, so after rolling back, drop
+the key.
 
 P2-1 wrote it as a top-level boolean (`"sessionSync": false`). That form still reads the same; `kanban doctor`
 reports it and `kanban doctor --fix` (or `kanban config import-kit`) rewrites it. A build from before P3-2 reads the

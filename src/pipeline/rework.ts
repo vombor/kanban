@@ -57,6 +57,7 @@ import type {
 } from "../kits/policy";
 import { getPipelineQaLogPath, getQaArtifactsPath } from "../state/kanban-home";
 import type { ClineSessionSize } from "../terminal/cline-session-files";
+import { isReviewSettled } from "../terminal/review-settle";
 import type { PipelineActionRequest, PipelineActionResult, PipelineActions } from "./actions";
 import type { PipelineDecisionOutcome, PipelineDecisionRecord } from "./decision-log";
 import {
@@ -943,7 +944,9 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 		const hookSince =
 			(session?.lastHookAt ?? 0) > sentAt || (session?.startedAt ?? 0) > sentAt || recoverySentAt > sentAt;
 		let trigger: ReworkTrigger | null = null;
-		if (columnId === "review" && session?.state !== "running") {
+		// Back in Review only once the Review has settled: a turn that ends and resumes at once (Copilot autopilot)
+		// would otherwise count as returned with half-done work, and as "unchanged" if it hadn't committed yet.
+		if (columnId === "review" && isReviewSettled(session, context.now, context.snapshot.reviewSettleMs)) {
 			const current = await readSnapshot(context.snapshot.workspacePath, card.id);
 			const changed = Boolean(current && current !== last.snapshot);
 			if (sawIt || changed || (hookSince && context.now - sentAt >= REWORK_STARTED_CHECK_MS)) {
@@ -1041,7 +1044,7 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 			record(scope, "acted", `rework round ${last.next} was left pending, but the card ran since; counted as sent`);
 			return;
 		}
-		if (columnId !== "review" || session?.state === "running") {
+		if (columnId !== "review" || !isReviewSettled(session, context.now, context.snapshot.reviewSettleMs)) {
 			return;
 		}
 		const nowIso = new Date(context.now).toISOString();
@@ -1123,7 +1126,8 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 			});
 		}
 		const unchanged = await watchRework(scope, entry);
-		if (columnId !== "review" || scope.session?.state === "running") {
+		const { context } = scope;
+		if (columnId !== "review" || !isReviewSettled(scope.session, context.now, context.snapshot.reviewSettleMs)) {
 			return;
 		}
 		entry = await loadEntry(workspaceId, card.id);

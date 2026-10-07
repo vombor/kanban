@@ -50,7 +50,10 @@ function createFakeChild(pid: number): FakeChild {
 
 function createHostHarness(
 	initialConfig: unknown,
-	options: { handleWatchdogRequest?: (request: WatchdogActionRequest) => Promise<unknown> } = {},
+	options: {
+		handleWatchdogRequest?: (request: WatchdogActionRequest) => Promise<unknown>;
+		reviewSettleMs?: number;
+	} = {},
 ) {
 	let rawConfig = initialConfig;
 	const children: FakeChild[] = [];
@@ -75,6 +78,7 @@ function createHostHarness(
 		coalesceMs: 2_000,
 		restartDelaysMs: [1_000, 5_000],
 		handleWatchdogRequest: options.handleWatchdogRequest,
+		reviewSettleMs: options.reviewSettleMs,
 		log,
 	});
 	const snapshotsSent = (child: FakeChild | undefined) =>
@@ -158,6 +162,38 @@ describe("pipeline worker host", () => {
 		harness.host.notifyActivity({ workspaceId: "foo", summary: summary("dev-1", "awaiting_review") });
 		await vi.advanceTimersByTimeAsync(2_000);
 		expect(harness.snapshotsSent(child).length).toBe(initial + 2);
+		await harness.host.close();
+	});
+
+	it("sends a snapshot once a session's Review has settled, with the settle period; a resume cancels it", async () => {
+		const harness = createHostHarness(QA_FOO, { reviewSettleMs: 12_000 });
+		await harness.startReady();
+		const child = harness.children[0];
+		const initial = harness.snapshotsSent(child).length;
+		const settleMsSent = () =>
+			(child?.sent ?? []).flatMap((message) =>
+				message.type === "snapshot" ? [message.snapshot.reviewSettleMs] : [],
+			);
+
+		// A flicker: Review, then running again before it settles. Only the state changes send snapshots.
+		harness.host.notifyActivity({ workspaceId: "foo", summary: summary("dev-1", "awaiting_review") });
+		await vi.advanceTimersByTimeAsync(2_000);
+		harness.host.notifyActivity({ workspaceId: "foo", summary: summary("dev-1", "running") });
+		await vi.advanceTimersByTimeAsync(2_000);
+		expect(harness.snapshotsSent(child).length).toBe(initial + 2);
+		// Past the first Review's settle time (and before the 30 s sweep): its timer was cancelled.
+		await vi.advanceTimersByTimeAsync(9_000);
+		expect(harness.snapshotsSent(child).length).toBe(initial + 2);
+
+		harness.host.notifyActivity({ workspaceId: "foo", summary: summary("dev-1", "awaiting_review") });
+		await vi.advanceTimersByTimeAsync(2_000);
+		expect(harness.snapshotsSent(child).length).toBe(initial + 3);
+		// 12 s settle plus the 2 s coalescing delay after the state change.
+		await vi.advanceTimersByTimeAsync(11_999);
+		expect(harness.snapshotsSent(child).length).toBe(initial + 3);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(harness.snapshotsSent(child).length).toBe(initial + 4);
+		expect(new Set(settleMsSent())).toEqual(new Set([12_000]));
 		await harness.host.close();
 	});
 

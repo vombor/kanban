@@ -9,6 +9,10 @@
 // Git metadata is probed on demand: each cycle selects candidate cards from
 // the board first, then probes only the worktrees of those candidates. A
 // workspace with no auto-review candidates costs zero git work.
+//
+// A card is armed only once its session's Review has settled (isReviewSettled, src/terminal/review-settle.ts): a
+// turn that ends and resumes at once (Copilot autopilot, a late background shell) would otherwise get the commit
+// prompt typed into a working agent, and the armed card would then stick in Review.
 
 import type {
 	RuntimeAgentId,
@@ -22,6 +26,7 @@ import type {
 import { resolveEffectiveAgent } from "../core/effective-agent";
 import { isPendingGitActionStale } from "../core/task-board-mutations";
 import { type DeliverTaskInputResult, deliverTaskInput } from "../terminal/deliver-task-input";
+import { isReviewSettled } from "../terminal/review-settle";
 import type { TerminalSessionManager } from "../terminal/session-manager";
 import { probeGitWorkspaceState } from "../workspace/git-sync";
 import { getTaskWorkspacePathInfo } from "../workspace/task-worktree";
@@ -80,6 +85,8 @@ export interface CreateAutoReviewReconcilerDependencies {
 	onBoardMutated?: (workspaceId: string, workspacePath: string) => Promise<void> | void;
 	/** The shared Done workflow (src/server/task-trash-workflow.ts); completes armed cards. */
 	trashTask: TaskTrashWorkflow["trashTask"];
+	/** `sessionSync.reviewSettleSec` in ms (read at server start); absent: the default. */
+	reviewSettleMs?: number;
 	evaluationIntervalMs?: number;
 	now?: () => number;
 	warn?: (message: string) => void;
@@ -479,6 +486,10 @@ export function createAutoReviewReconciler(deps: CreateAutoReviewReconcilerDepen
 				// "complete" via the staleness timeout, which silently strands it.
 				if (!workspace.terminalManager || !summary) {
 					// No terminal session to deliver the prompt to.
+					continue;
+				}
+				// The turn may still resume; a later cycle arms the card once its Review has settled.
+				if (!isReviewSettled(summary, timestamp, deps.reviewSettleMs)) {
 					continue;
 				}
 

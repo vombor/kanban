@@ -30,6 +30,7 @@ import {
 	resolveEffectiveModel,
 } from "../core/effective-agent";
 import type { CardHistory, EffectiveCard, QaPolicyAnswer, RoutingPolicy } from "../kits/policy";
+import { isReviewSettled } from "../terminal/review-settle";
 import type { PipelineDecisionOutcome, PipelineDecisionRecord } from "./decision-log";
 import type { PipelineCardState, PipelineWorkspaceState } from "./pipeline-state";
 import { recoveryHoldReason } from "./recovery";
@@ -43,6 +44,7 @@ export type PipelineSessionView = Pick<RuntimeTaskSessionSummary, "taskId" | "ag
 			| "pid"
 			| "startedAt"
 			| "updatedAt"
+			| "stateChangedAt"
 			| "lastOutputAt"
 			| "lastHookAt"
 			| "latestHookActivity"
@@ -68,6 +70,8 @@ export interface PipelineWorkspaceSnapshot {
 	serverStartedAt?: number;
 	/** The start of the server that ran before this one (its start record), or null: a restart manifest it wrote is the only one used. */
 	previousServerStartedAt?: number | null;
+	/** `sessionSync.reviewSettleSec` in ms, as the server read it at start (isReviewSettled, src/terminal/review-settle.ts). */
+	reviewSettleMs?: number;
 }
 
 export interface PipelineEvaluationInput {
@@ -181,6 +185,13 @@ export function readCardHistory(entry: PipelineCardState | undefined): { history
 	};
 }
 
+/** Why QA waits for a card whose Review hasn't settled (isReviewSettled). */
+export function describeUnsettledReview(session: PipelineSessionView | null): string {
+	return session?.state === "running"
+		? "the session is still running; QA waits for the turn to end"
+		: "the turn ended moments ago; QA waits for the Review to settle";
+}
+
 function describeQaAnswer(answer: QaPolicyAnswer): string {
 	if (answer.kind === "none") {
 		return `no QA: ${answer.reason}; the card waits for Approve & land`;
@@ -212,7 +223,6 @@ export async function evaluatePipelineWorkspace(input: PipelineEvaluationInput):
 			selectedAgentId: snapshot.selectedAgentId,
 			agentDefaultModels: input.agentDefaultModels,
 		});
-		const submission = await input.inspectSubmission({ card, effective, session });
 		const common = {
 			at,
 			workspaceId: snapshot.workspaceId,
@@ -224,6 +234,19 @@ export async function evaluatePipelineWorkspace(input: PipelineEvaluationInput):
 			model: effective.model,
 			role: effective.role,
 		};
+		// A Review that hasn't settled may still resume (src/terminal/review-settle.ts): no snapshot, no QA yet. The
+		// worker host sends a snapshot once it has settled.
+		if (!isReviewSettled(session, input.now, snapshot.reviewSettleMs)) {
+			decisions.push({
+				...common,
+				stage: "qa_gate",
+				answer: null,
+				outcome: "none",
+				note: describeUnsettledReview(session),
+			});
+			continue;
+		}
+		const submission = await input.inspectSubmission({ card, effective, session });
 		for (const record of submission.records) {
 			decisions.push({ ...common, ...record, answer: null });
 		}

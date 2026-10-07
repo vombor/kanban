@@ -8,18 +8,49 @@ import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
 
 describe("parseSessionSyncSetting", () => {
 	it("is on by default in this fork", () => {
-		expect(parseSessionSyncSetting({})).toEqual({ enabled: true, warning: null });
-		expect(parseSessionSyncSetting(null)).toEqual({ enabled: true, warning: null });
+		expect(parseSessionSyncSetting({})).toEqual({ enabled: true, reviewSettleMs: 12_000, warning: null });
+		expect(parseSessionSyncSetting(null)).toEqual({ enabled: true, reviewSettleMs: 12_000, warning: null });
 	});
 
 	it("reads true and false", () => {
-		expect(parseSessionSyncSetting({ sessionSync: false })).toEqual({ enabled: false, warning: null });
-		expect(parseSessionSyncSetting({ sessionSync: true })).toEqual({ enabled: true, warning: null });
+		expect(parseSessionSyncSetting({ sessionSync: false })).toEqual({
+			enabled: false,
+			reviewSettleMs: 12_000,
+			warning: null,
+		});
+		expect(parseSessionSyncSetting({ sessionSync: true })).toEqual({
+			enabled: true,
+			reviewSettleMs: 12_000,
+			warning: null,
+		});
 	});
 
 	it("reads the core settings form, sessionSync.enabled", () => {
-		expect(parseSessionSyncSetting({ sessionSync: { enabled: false } })).toEqual({ enabled: false, warning: null });
-		expect(parseSessionSyncSetting({ sessionSync: {} })).toEqual({ enabled: true, warning: null });
+		expect(parseSessionSyncSetting({ sessionSync: { enabled: false } })).toEqual({
+			enabled: false,
+			reviewSettleMs: 12_000,
+			warning: null,
+		});
+		expect(parseSessionSyncSetting({ sessionSync: {} })).toEqual({
+			enabled: true,
+			reviewSettleMs: 12_000,
+			warning: null,
+		});
+	});
+
+	it("reads the review settle period, sessionSync.reviewSettleSec, and refuses a negative one", () => {
+		expect(parseSessionSyncSetting({ sessionSync: { reviewSettleSec: 30 } })).toEqual({
+			enabled: true,
+			reviewSettleMs: 30_000,
+			warning: null,
+		});
+		expect(parseSessionSyncSetting({ sessionSync: { enabled: false, reviewSettleSec: 0 } })).toMatchObject({
+			enabled: false,
+			reviewSettleMs: 0,
+		});
+		const negative = parseSessionSyncSetting({ sessionSync: { reviewSettleSec: -1 } });
+		expect(negative).toMatchObject({ enabled: true, reviewSettleMs: 12_000 });
+		expect(negative.warning).toContain("reviewSettleSec");
 	});
 
 	it("warns and uses the default for a value that isn't a boolean", () => {
@@ -32,7 +63,7 @@ describe("parseSessionSyncSetting", () => {
 describe.sequential("readSessionSyncSetting", () => {
 	it("uses the default without a warning when config.json does not exist", async () => {
 		await withTemporaryKanbanHome(async () => {
-			expect(await readSessionSyncSetting()).toEqual({ enabled: true, warning: null });
+			expect(await readSessionSyncSetting()).toEqual({ enabled: true, reviewSettleMs: 12_000, warning: null });
 		});
 	});
 
@@ -44,7 +75,7 @@ describe.sequential("readSessionSyncSetting", () => {
 				JSON.stringify({ selectedAgentId: "claude", sessionSync: false }),
 				"utf8",
 			);
-			expect(await readSessionSyncSetting()).toEqual({ enabled: false, warning: null });
+			expect(await readSessionSyncSetting()).toEqual({ enabled: false, reviewSettleMs: 12_000, warning: null });
 		});
 	});
 

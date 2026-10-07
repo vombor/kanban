@@ -271,6 +271,7 @@ export function createSnapshot(input: {
 				state: session.state ?? "awaiting_review",
 				...(session.lastHookAt !== undefined ? { lastHookAt: session.lastHookAt } : {}),
 				...(session.startedAt !== undefined ? { startedAt: session.startedAt } : {}),
+				...(session.stateChangedAt !== undefined ? { stateChangedAt: session.stateChangedAt } : {}),
 			}),
 		),
 	};

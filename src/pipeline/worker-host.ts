@@ -11,7 +11,9 @@
 //   with no Kanban restart, and sends a snapshot of each pipeline workspace (a backstop for missed events).
 // - Between sweeps, board writes and session state changes from the state hub send a snapshot of that workspace
 //   after a short coalescing delay. Session summaries that don't change the state (output, hook activity) are
-//   ignored.
+//   ignored. A session that enters Review also gets a snapshot once its Review has settled (`reviewSettleMs` plus
+//   the coalescing delay): the pipeline acts on a Review card only then (src/terminal/review-settle.ts), and the
+//   next sweep could be 30 s away.
 // - The worker asks the server to finish a card (the Done workflow, with its landing step) with a `finishTask`
 //   request; the host runs it and answers `finishTaskResult`. Lands from any trigger reach the worker as `landed`.
 // - A worker that exits on its own is restarted after a growing delay. `pipeline.workerEntry` points the child at
@@ -30,6 +32,7 @@ import type {
 	RuntimeTaskSessionSummary,
 	RuntimeTaskTrashResponse,
 } from "../core/api-contract";
+import { DEFAULT_REVIEW_SETTLE_MS } from "../terminal/review-settle";
 import type { PipelineActionRequest, PipelineActionResult } from "./actions";
 import { getRecoveryScope, isPipelineWorkspace, type PipelineWorkspaceSnapshot } from "./engine";
 import type { PipelineEventMap } from "./events";
@@ -75,6 +78,8 @@ export interface CreatePipelineWorkerHostDependencies {
 	handleWatchdogRequest?: (request: WatchdogActionRequest) => Promise<unknown>;
 	/** Runs a worker's action request on the server (src/server/pipeline-actions.ts). */
 	runAction?: (request: PipelineActionRequest) => Promise<PipelineActionResult>;
+	/** `sessionSync.reviewSettleSec` in ms, as the server read it at start; also sent in every snapshot. */
+	reviewSettleMs?: number;
 	sweepIntervalMs?: number;
 	coalesceMs?: number;
 	restartDelaysMs?: number[];
@@ -151,6 +156,7 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 	const spawnWorker = deps.spawnWorker ?? spawnPipelineWorkerProcess;
 	const restartDelays = deps.restartDelaysMs ?? DEFAULT_RESTART_DELAYS_MS;
 	const coalesceMs = deps.coalesceMs ?? DEFAULT_COALESCE_MS;
+	const reviewSettleMs = deps.reviewSettleMs ?? DEFAULT_REVIEW_SETTLE_MS;
 	const now = deps.now ?? Date.now;
 
 	let child: PipelineWorkerChild | null = null;
@@ -167,6 +173,8 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 	/** The subset of `pipelineWorkspaces` on landing mode `qa`: the only ones the QA gate's card actions may touch. */
 	let cardActionWorkspaces = new Map<string, string>();
 	const coalesceTimers = new Map<string, NodeJS.Timeout>();
+	/** `workspaceId:taskId` → the snapshot sent once that session's Review has settled. */
+	const settleTimers = new Map<string, NodeJS.Timeout>();
 	const lastSessionStates = new Map<string, RuntimeTaskSessionState>();
 
 	const runAction = async (request: PipelineActionRequest): Promise<PipelineActionResult> => {
@@ -191,12 +199,34 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 		try {
 			const snapshot = await deps.buildSnapshot(workspaceId, workspacePath);
 			if (snapshot && child && pipelineWorkspaces.has(workspaceId)) {
-				child.send({ type: "snapshot", snapshot });
+				child.send({ type: "snapshot", snapshot: { reviewSettleMs, ...snapshot } });
 			}
 		} catch (error) {
 			deps.log(
 				`pipeline ${workspaceId}: could not read the workspace for the worker: ${error instanceof Error ? error.message : String(error)}`,
 			);
+		}
+	};
+
+	/** A snapshot of the workspace after the coalescing delay; requests meanwhile share it. */
+	const scheduleSnapshot = (workspaceId: string): void => {
+		const workspacePath = pipelineWorkspaces.get(workspaceId);
+		if (!child || !workspacePath || coalesceTimers.has(workspaceId)) {
+			return;
+		}
+		const timer = setTimeout(() => {
+			coalesceTimers.delete(workspaceId);
+			void sendSnapshot(workspaceId, workspacePath);
+		}, coalesceMs);
+		timer.unref();
+		coalesceTimers.set(workspaceId, timer);
+	};
+
+	const clearSettleTimer = (key: string): void => {
+		const timer = settleTimers.get(key);
+		if (timer) {
+			clearTimeout(timer);
+			settleTimers.delete(key);
 		}
 	};
 
@@ -409,22 +439,27 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 				if (previous === summary.state) {
 					return;
 				}
+				clearSettleTimer(key);
+				if (summary.state === "awaiting_review" && reviewSettleMs > 0) {
+					const timer = setTimeout(() => {
+						settleTimers.delete(key);
+						scheduleSnapshot(workspaceId);
+					}, reviewSettleMs);
+					timer.unref();
+					settleTimers.set(key, timer);
+				}
 			}
-			const workspacePath = pipelineWorkspaces.get(workspaceId);
-			if (!child || !workspacePath || coalesceTimers.has(workspaceId)) {
-				return;
-			}
-			const timer = setTimeout(() => {
-				coalesceTimers.delete(workspaceId);
-				void sendSnapshot(workspaceId, workspacePath);
-			}, coalesceMs);
-			timer.unref();
-			coalesceTimers.set(workspaceId, timer);
+			scheduleSnapshot(workspaceId);
 		},
 		forgetWorkspace: (workspaceId) => {
 			for (const key of [...lastSessionStates.keys()]) {
 				if (key.startsWith(`${workspaceId}:`)) {
 					lastSessionStates.delete(key);
+				}
+			}
+			for (const key of [...settleTimers.keys()]) {
+				if (key.startsWith(`${workspaceId}:`)) {
+					clearSettleTimer(key);
 				}
 			}
 			const timer = coalesceTimers.get(workspaceId);
@@ -461,6 +496,10 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 				clearTimeout(timer);
 			}
 			coalesceTimers.clear();
+			for (const timer of settleTimers.values()) {
+				clearTimeout(timer);
+			}
+			settleTimers.clear();
 			await sweepRunning;
 			stopChild();
 		},

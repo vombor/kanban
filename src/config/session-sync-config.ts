@@ -1,7 +1,10 @@
 // Reads `sessionSync` from the global config.json: whether the runtime moves cards between In Progress and Review
 // (src/server/session-column-sync.ts) instead of the browser.
 //
-//   "sessionSync": { "enabled": false }
+//   "sessionSync": { "enabled": false, "reviewSettleSec": 12 }
+//
+// `reviewSettleSec` is the review settle rule's period (src/terminal/review-settle.ts), read with `enabled` and
+// passed to the auto-review reconciler and, in every snapshot, to the pipeline worker, so both use one value.
 //
 // The key is a core settings section (`sessionSyncSectionSchema` in pipeline-config.ts, the one schema for it).
 // P2-1's top-level boolean (`"sessionSync": false`) still reads the same; `kanban doctor --fix` rewrites it.
@@ -14,12 +17,15 @@
 import { readFile } from "node:fs/promises";
 
 import { getKanbanGlobalConfigPath } from "../state/kanban-home";
+import { DEFAULT_REVIEW_SETTLE_MS } from "../terminal/review-settle";
 import { DEFAULT_SESSION_SYNC_ENABLED, sessionSyncSectionSchema } from "./pipeline-config";
 
 export { DEFAULT_SESSION_SYNC_ENABLED };
 
 export interface SessionSyncSetting {
 	enabled: boolean;
+	/** `reviewSettleSec` in ms. */
+	reviewSettleMs: number;
 	/** Why the default was used although config.json has (or may have) a value. */
 	warning: string | null;
 }
@@ -30,15 +36,16 @@ export function parseSessionSyncSetting(config: unknown): SessionSyncSetting {
 			? (config as Record<string, unknown>).sessionSync
 			: undefined;
 	if (raw === undefined) {
-		return { enabled: DEFAULT_SESSION_SYNC_ENABLED, warning: null };
+		return { enabled: DEFAULT_SESSION_SYNC_ENABLED, reviewSettleMs: DEFAULT_REVIEW_SETTLE_MS, warning: null };
 	}
 	const parsed = sessionSyncSectionSchema.safeParse(raw);
 	if (parsed.success) {
-		return { enabled: parsed.data.enabled, warning: null };
+		return { enabled: parsed.data.enabled, reviewSettleMs: parsed.data.reviewSettleSec * 1000, warning: null };
 	}
 	return {
 		enabled: DEFAULT_SESSION_SYNC_ENABLED,
-		warning: `sessionSync ${JSON.stringify(raw)} is not { "enabled": true | false } (or the old true / false); using ${DEFAULT_SESSION_SYNC_ENABLED}.`,
+		reviewSettleMs: DEFAULT_REVIEW_SETTLE_MS,
+		warning: `sessionSync ${JSON.stringify(raw)} is not { "enabled": true | false, "reviewSettleSec": 0-600 } (or the old true / false); using ${DEFAULT_SESSION_SYNC_ENABLED}.`,
 	};
 }
 
@@ -50,11 +57,12 @@ export async function readSessionSyncSetting(
 		raw = await readFile(configPath, "utf8");
 	} catch (error) {
 		if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-			return { enabled: DEFAULT_SESSION_SYNC_ENABLED, warning: null };
+			return { enabled: DEFAULT_SESSION_SYNC_ENABLED, reviewSettleMs: DEFAULT_REVIEW_SETTLE_MS, warning: null };
 		}
 		const message = error instanceof Error ? error.message : String(error);
 		return {
 			enabled: DEFAULT_SESSION_SYNC_ENABLED,
+			reviewSettleMs: DEFAULT_REVIEW_SETTLE_MS,
 			warning: `Could not read ${configPath} (${message}); sessionSync is ${DEFAULT_SESSION_SYNC_ENABLED}.`,
 		};
 	}
@@ -64,6 +72,7 @@ export async function readSessionSyncSetting(
 		const message = error instanceof Error ? error.message : String(error);
 		return {
 			enabled: DEFAULT_SESSION_SYNC_ENABLED,
+			reviewSettleMs: DEFAULT_REVIEW_SETTLE_MS,
 			warning: `Could not parse ${configPath} (${message}); sessionSync is ${DEFAULT_SESSION_SYNC_ENABLED}.`,
 		};
 	}

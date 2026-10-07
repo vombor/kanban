@@ -145,12 +145,14 @@ function cloneSummary(summary: RuntimeTaskSessionSummary): RuntimeTaskSessionSum
 
 function updateSummary(entry: SessionEntry, patch: Partial<RuntimeTaskSessionSummary>): RuntimeTaskSessionSummary {
 	const updatedAt = now();
-	if (patch.state !== undefined && patch.state !== entry.summary.state) {
+	const stateChanged = patch.state !== undefined && patch.state !== entry.summary.state;
+	if (stateChanged) {
 		entry.stateChangedAt = updatedAt;
 	}
 	entry.summary = {
 		...entry.summary,
 		...patch,
+		...(stateChanged ? { stateChangedAt: updatedAt } : {}),
 		updatedAt,
 	};
 	return entry.summary;

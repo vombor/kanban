@@ -85,8 +85,11 @@ describe("pipeline config", () => {
 	});
 
 	it("has session sync on by default, as sessionSync.enabled, and still reads P2-1's top-level boolean", () => {
-		expect(parsePipelineConfig({}).config.sessionSync).toEqual({ enabled: true });
-		expect(parsePipelineConfig({ sessionSync: { enabled: false } }).config.sessionSync).toEqual({ enabled: false });
+		expect(parsePipelineConfig({}).config.sessionSync).toEqual({ enabled: true, reviewSettleSec: 12 });
+		expect(parsePipelineConfig({ sessionSync: { enabled: false } }).config.sessionSync).toEqual({
+			enabled: false,
+			reviewSettleSec: 12,
+		});
 		expect(parsePipelineConfig({ sessionSync: false })).toMatchObject({
 			config: { sessionSync: { enabled: false } },
 			issues: [],

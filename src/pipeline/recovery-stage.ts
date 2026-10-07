@@ -378,6 +378,7 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 				slowFirstCall: Boolean(effective.model?.provider && capacity[effective.model.provider]),
 				continuesPrematureStops: input.settings.landing.mode === "qa",
 				settings,
+				reviewSettleMs: input.snapshot.reviewSettleMs,
 				now: deps.now(),
 			});
 			if (decision.kind === "none") {

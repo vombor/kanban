@@ -365,3 +365,14 @@ of this repository is the complete record of changes.
   autonomous mode start in autopilot (`--autopilot`, plus `--allow-all-urls`, without which Copilot 1.0.92 blocks the
   launch on an "Enable autopilot mode" permission dialog), as a trial at the user's request (2026-10-07). A user's
   `--autopilot` / `--mode` / `--max-autopilot-continues` is kept; plan mode is unchanged.
+- `src/terminal/review-settle.ts` (new), `src/core/api-contract.ts`, `src/terminal/session-manager.ts`,
+  `src/config/pipeline-config.ts`, `src/config/session-sync-config.ts`, `src/cli.ts`, `src/pipeline/engine.ts`,
+  `qa-gate.ts`, `rework.ts`, `recovery.ts`, `recovery-stage.ts`, `worker-host.ts`,
+  `src/server/auto-review-reconciler.ts`, `docs/fork/session-sync.md` (and tests): the review settle rule. Code that
+  treats Review as a finished turn (the pipeline's snapshot and QA queue, QA ingest and PASS landing, the rework
+  stage's returned check, recovery's Review nudges, auto-review's commit prompt) acts only once the session has been
+  in Review with no new state change or hook activity for `sessionSync.reviewSettleSec` (default 12 s, `0` = off),
+  through one helper, `isReviewSettled()`. Found by the Copilot autopilot trial: each continuation flips the card
+  to Review for ~100 ms, and a background shell can start a new turn ~6 s after the final stop, so QA snapshotted
+  half-done work and auto-review typed into a working agent. Session summaries carry `stateChangedAt`; the
+  pipeline worker host sends a snapshot once a Review has settled. The column move itself is unchanged.

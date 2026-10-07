@@ -327,6 +327,8 @@ export const runtimeTaskSessionSummarySchema = z.object({
 	pid: z.number().nullable(),
 	startedAt: z.number().nullable(),
 	updatedAt: z.number(),
+	/** When the session entered its current state; the review settle rule's clock (src/terminal/review-settle.ts). */
+	stateChangedAt: z.number().nullable().optional(),
 	lastOutputAt: z.number().nullable(),
 	reviewReason: runtimeTaskSessionReviewReasonSchema,
 	exitCode: z.number().nullable(),

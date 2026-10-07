@@ -528,6 +528,7 @@ async function startServer(): Promise<{
 		},
 		mutateWorkspaceState,
 		trashTask: runtimeServer.taskTrashWorkflow.trashTask,
+		reviewSettleMs: sessionSyncSetting.reviewSettleMs,
 		getPromptTemplates: async (workspaceId, workspacePath) => {
 			const config = await workspaceRegistry.loadScopedRuntimeConfig({ workspaceId, workspacePath });
 			return {
@@ -586,6 +587,7 @@ async function startServer(): Promise<{
 					pid: summary.pid,
 					startedAt: summary.startedAt,
 					updatedAt: summary.updatedAt,
+					stateChangedAt: summary.stateChangedAt ?? null,
 					lastOutputAt: summary.lastOutputAt,
 					lastHookAt: summary.lastHookAt,
 					latestHookActivity: summary.latestHookActivity,
@@ -598,6 +600,7 @@ async function startServer(): Promise<{
 				selectedAgentId: config.selectedAgentId,
 				serverStartedAt,
 				previousServerStartedAt,
+				reviewSettleMs: sessionSyncSetting.reviewSettleMs,
 			};
 		},
 		finishTask: async (request) => {
@@ -614,6 +617,7 @@ async function startServer(): Promise<{
 			});
 		},
 		runAction: runtimeServer.runPipelineAction,
+		reviewSettleMs: sessionSyncSetting.reviewSettleMs,
 		log: (message) => {
 			console.warn(`[kanban] ${message}`);
 		},

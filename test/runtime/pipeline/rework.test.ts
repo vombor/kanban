@@ -135,6 +135,35 @@ describe("rework loop", () => {
 		expect(readReworks(readQaflow(await changed.entry("d1111")))[0]).toMatchObject({ returnedSnapshot: "snap-new" });
 	});
 
+	it("counts a rework as returned only once its Review has settled, so an autopilot flicker isn't 'unchanged'", async () => {
+		const harness = createHarness({
+			onFail: (input) =>
+				input.cause === "unchanged"
+					? { action: "escalate", to: "orchestrator", requireApproval: false, reason: "unchanged" }
+					: { action: "rework", clearContext: "never" },
+		});
+		await harness.seed("d1111", { qaVerdicts: [failVerdict(1)] });
+		await harness.tick({ review: [DEV] }, [SESSION]);
+		await harness.tick({ in_progress: [DEV] }, [{ ...SESSION, state: "running" }]);
+		harness.actions.length = 0;
+
+		// The rework's first autopilot continuation stops for a moment, before anything is committed.
+		harness.setNow(REWORK_T0 + 60_000);
+		await harness.tick({ review: [DEV] }, [
+			{ ...SESSION, state: "awaiting_review", stateChangedAt: REWORK_T0 + 59_900 },
+		]);
+		expect(harness.onFailCalls.map((call) => call.cause)).toEqual(["fail"]);
+		expect(harness.actions).toEqual([]);
+		expect(readReworks(readQaflow(await harness.entry("d1111")))[0]?.returned).toBeUndefined();
+
+		// Settled: now it is back, still unchanged.
+		harness.setNow(REWORK_T0 + 72_000);
+		await harness.tick({ review: [DEV] }, [
+			{ ...SESSION, state: "awaiting_review", stateChangedAt: REWORK_T0 + 59_900 },
+		]);
+		expect(harness.onFailCalls.map((call) => call.cause)).toEqual(["fail", "unchanged"]);
+	});
+
 	it("reworks a PASS that did not land because of a merge conflict, counting it as a FAIL round", async () => {
 		const harness = createHarness();
 		await harness.seed("d1111", conflictPass(1));

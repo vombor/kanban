@@ -48,9 +48,15 @@ import { createUniqueTaskId } from "../core/task-id";
 import type { KitDocument } from "../kits/kit-schema";
 import type { EffectiveCard, QaPolicyAnswer, RoutingPolicy } from "../kits/policy";
 import { getKanbanHomeDisplayPath, getPipelineQaLogPath, getQaArtifactsPath } from "../state/kanban-home";
+import { isReviewSettled } from "../terminal/review-settle";
 import type { PipelineActions } from "./actions";
 import type { PipelineDecisionOutcome, PipelineDecisionRecord } from "./decision-log";
-import { type PipelineSessionView, type PipelineWorkspaceSnapshot, toEffectiveCard } from "./engine";
+import {
+	describeUnsettledReview,
+	type PipelineSessionView,
+	type PipelineWorkspaceSnapshot,
+	toEffectiveCard,
+} from "./engine";
 import type { PipelineEventBus } from "./events";
 import { decideOnPass, readPipelineHold } from "./hold";
 import type { PipelineCardState, PipelineStateStore, PipelineWorkspaceState } from "./pipeline-state";
@@ -286,8 +292,8 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 	const submit: QaGate["submit"] = async ({ context, card, session, dev, answer }) => {
 		const { snapshot } = context;
 		const workspaceId = snapshot.workspaceId;
-		if (session?.state === "running") {
-			return { outcome: "none", note: "the session is still running; QA waits for the turn to end" };
+		if (!isReviewSettled(session, context.now, snapshot.reviewSettleMs)) {
+			return { outcome: "none", note: describeUnsettledReview(session) };
 		}
 		const reviewer = listCards(snapshot).find(
 			({ columnId, card: other }) =>
@@ -561,7 +567,11 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 				continue;
 			}
 			const session = sessions.get(card.id) ?? null;
-			if (resolveCardRole(card) !== "dev" || session?.state === "running" || readPipelineHold(entry)) {
+			if (
+				resolveCardRole(card) !== "dev" ||
+				!isReviewSettled(session, context.now, snapshot.reviewSettleMs) ||
+				readPipelineHold(entry)
+			) {
 				continue;
 			}
 			const markHandled = async (pass: Omit<QaPassEntry, "qaTaskId" | "snapshot" | "at">): Promise<void> => {
@@ -648,7 +658,8 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			if (entry.status === "ingested" && entry.trashed) {
 				continue;
 			}
-			if (sessions.get(qaTaskId)?.state === "running") {
+			// A QA card whose turn ended moments ago may still be writing its verdict.
+			if (!isReviewSettled(sessions.get(qaTaskId), context.now, snapshot.reviewSettleMs)) {
 				continue;
 			}
 			const note = await ingest(context, qaTaskId, entry);

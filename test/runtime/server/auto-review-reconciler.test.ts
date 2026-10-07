@@ -24,15 +24,22 @@ import {
 
 function createFakeTerminalManager() {
 	const unavailableTaskIds = new Set<string>();
+	const summaryFields = new Map<string, Partial<RuntimeTaskSessionSummary>>();
 	const writeInput = vi.fn((taskId: string, _data: Buffer) => ({ taskId }) as unknown as RuntimeTaskSessionSummary);
 	const getSummary = vi.fn((taskId: string) =>
-		unavailableTaskIds.has(taskId) ? null : ({ taskId } as unknown as RuntimeTaskSessionSummary),
+		unavailableTaskIds.has(taskId)
+			? null
+			: ({ taskId, ...summaryFields.get(taskId) } as unknown as RuntimeTaskSessionSummary),
 	);
 	return {
 		writeInput,
 		getSummary,
 		dropSession: (taskId: string) => {
 			unavailableTaskIds.add(taskId);
+		},
+		/** The session's state and when it entered it (the review settle rule's clock). */
+		setSession: (taskId: string, fields: Pick<RuntimeTaskSessionSummary, "state" | "stateChangedAt">) => {
+			summaryFields.set(taskId, fields);
 		},
 		manager: { writeInput, getSummary } as unknown as TerminalSessionManager,
 	};
@@ -365,6 +372,42 @@ describe("auto-review reconciler", () => {
 
 		expect(harness.terminal.writeInput).toHaveBeenCalledTimes(1);
 		expect(findCardInBoard(harness.store.stored.board, "task-1")?.card.pendingGitAction).not.toBeNull();
+	});
+
+	it("types no commit prompt until the Review has settled: not in a Review → running flicker, not before the 6 s late turn", async () => {
+		const T0 = Date.parse("2026-10-07T10:00:00.000Z");
+		let now = T0;
+		const card = createCard({ id: "task-1", autoReviewEnabled: true });
+		const harness = createHarness({ board: createBoard({ review: [card] }), now: () => now });
+		harness.setProbe("task-1", { exists: true, headCommit: "commit-1", changedFiles: 3 });
+		const expectUnarmed = async (at: number) => {
+			now = at;
+			await harness.evaluate();
+			expect(harness.terminal.writeInput).not.toHaveBeenCalled();
+			expect(findCardInBoard(harness.store.stored.board, "task-1")?.card.pendingGitAction ?? null).toBeNull();
+		};
+
+		// An autopilot continuation: agentStop, then its own continue prompt 100 ms later.
+		harness.terminal.setSession("task-1", { state: "awaiting_review", stateChangedAt: T0 });
+		await expectUnarmed(T0 + 50);
+		harness.terminal.setSession("task-1", { state: "running", stateChangedAt: T0 + 100 });
+		await expectUnarmed(T0 + 5_000);
+		// The final agentStop, then a background shell starts a new turn 6 s later.
+		harness.terminal.setSession("task-1", { state: "awaiting_review", stateChangedAt: T0 + 6_000 });
+		await expectUnarmed(T0 + 11_000);
+		harness.terminal.setSession("task-1", { state: "running", stateChangedAt: T0 + 12_000 });
+		await expectUnarmed(T0 + 15_000);
+		// That turn ends; the prompt goes in only once the card has been in Review for the settle period (12 s).
+		harness.terminal.setSession("task-1", { state: "awaiting_review", stateChangedAt: T0 + 20_000 });
+		await expectUnarmed(T0 + 31_999);
+
+		now = T0 + 32_000;
+		await harness.evaluate();
+		expect(harness.terminal.writeInput).toHaveBeenCalledTimes(1);
+		expect(findCardInBoard(harness.store.stored.board, "task-1")?.card.pendingGitAction).toMatchObject({
+			action: "commit",
+			requestedAt: T0 + 32_000,
+		});
 	});
 
 	it("starts exactly one git action when two evaluations race", async () => {

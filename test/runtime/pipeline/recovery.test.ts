@@ -272,6 +272,17 @@ describe("decideRecovery: Review cards", () => {
 		);
 	});
 
+	it("types nothing into a Review that hasn't settled, but still recovers a running summary that isn't working", () => {
+		const premature = detail([message("user", "go"), message("assistant", "I'll now run the tests.")]);
+		const justStopped = input({ session: session({ stateChangedAt: NOW - 5_000 }), detail: premature });
+		expect(expectKind(decideRecovery(justStopped), "wait").reason).toContain("settle");
+		expectKind(decideRecovery({ ...justStopped, now: NOW + 7_000 }), "nudge");
+		expectKind(decideRecovery({ ...justStopped, reviewSettleMs: 5_000 }), "nudge");
+		// A "running" summary in Review whose process is gone is recovery's to act on, not a turn that may resume.
+		const lost = input({ session: session({ state: "running", live: false, stateChangedAt: NOW - 1_000 }) });
+		expect(decideRecovery(lost).reason ?? "").not.toContain("settle");
+	});
+
 	it("continues a premature stop; an empty reply gets /clear + the prompt (bd4eeff)", () => {
 		const announced = expectKind(
 			decideRecovery(input({ detail: detail([message("assistant", "Now I'll update the tests:")]) })),

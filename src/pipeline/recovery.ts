@@ -25,6 +25,7 @@ import type { EffectiveModel } from "../core/effective-agent";
 import type { AgentRecoveryProfile } from "../terminal/agent-session-adapters";
 import type { ClineSessionDetail } from "../terminal/cline-session-files";
 import { getClineFinalReplyText, parseClineStatusLine } from "../terminal/cline-turn-outcome";
+import { isReviewSettled } from "../terminal/review-settle";
 import type { PipelineSessionView } from "./engine";
 import type { ProviderCapacityHold } from "./provider-capacity";
 import {
@@ -188,6 +189,8 @@ export interface RecoveryCardInput {
 	 */
 	continuesPrematureStops: boolean;
 	settings: RecoverySettings;
+	/** The snapshot's `reviewSettleMs` (isReviewSettled); absent: the default. */
+	reviewSettleMs?: number;
 	now: number;
 }
 
@@ -494,6 +497,12 @@ function decideReview(input: RecoveryCardInput): RecoveryDecision {
 			reason: `in Review but ${dir} is still running; no nudge, no QA until it ends`,
 			...(flow.liveHold !== dir ? { patch: { liveHold: dir } } : {}),
 		};
+	}
+	// A turn that ended moments ago may resume on its own (src/terminal/review-settle.ts): nothing is typed into it
+	// until its Review has settled. Only awaiting_review waits: a "running" summary that isn't working (an idle
+	// Cline TUI, a lost process) is what recovery is for.
+	if (input.session?.state === "awaiting_review" && !isReviewSettled(input.session, now, input.reviewSettleMs)) {
+		return { kind: "wait", reason: "the turn ended moments ago; waiting for the Review to settle" };
 	}
 	const clearHold: RecoveryFlowPatch = flow.liveHold ? { liveHold: null } : {};
 	const pending = decidePendingHold(input, clearHold);

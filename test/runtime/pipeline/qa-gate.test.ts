@@ -131,6 +131,68 @@ describe("QA gate", () => {
 		]);
 	});
 
+	it("snapshots and queues QA only once the Review has settled: not in a flicker, not before the 6 s late turn", async () => {
+		const inspected: number[] = [];
+		const harness = createHarness({
+			config: { workspaces: { foo: QA_WORKSPACE } },
+			inspectSubmission: async () => {
+				inspected.push(now);
+				return { hasWork: true, records: [] };
+			},
+		});
+		let now = T0;
+		const dev = createCard({ id: "d1111", ...OPENAI_DEV });
+		const sendAt = async (at: number, state: "awaiting_review" | "running", stateChangedAt: number) => {
+			now = at;
+			harness.setNow(at);
+			await send(harness, { review: [dev] }, { sessions: [{ taskId: "d1111", state, stateChangedAt }] });
+		};
+
+		// An autopilot continuation: agentStop, then its own continue prompt 100 ms later.
+		await sendAt(T0 + 50, "awaiting_review", T0);
+		await sendAt(T0 + 150, "running", T0 + 100);
+		// The final agentStop, then a background shell starts a new turn 6 s later.
+		await sendAt(T0 + 11_000, "awaiting_review", T0 + 6_000);
+		await sendAt(T0 + 12_100, "running", T0 + 12_000);
+		// That turn ends; until it has been in Review for the settle period (12 s), nothing is snapshotted.
+		await sendAt(T0 + 31_999, "awaiting_review", T0 + 20_000);
+		expect(inspected).toEqual([]);
+		expect(createdTasks(harness.actions)).toEqual([]);
+		expect(harness.readCardDecisions("foo").map((record) => record.note)).toEqual([
+			"the turn ended moments ago; QA waits for the Review to settle",
+			"the session is still running; QA waits for the turn to end",
+			"the turn ended moments ago; QA waits for the Review to settle",
+			"the session is still running; QA waits for the turn to end",
+			"the turn ended moments ago; QA waits for the Review to settle",
+		]);
+
+		await sendAt(T0 + 32_000, "awaiting_review", T0 + 20_000);
+		expect(inspected).toEqual([T0 + 32_000]);
+		expect(createdTasks(harness.actions)).toMatchObject([{ taskId: "qa001", reviewsTaskId: "d1111" }]);
+	});
+
+	it("uses the server's settle period from the snapshot, and a summary without stateChangedAt is settled", async () => {
+		const harness = createHarness({ config: { workspaces: { foo: QA_WORKSPACE } } });
+		const board = createBoard({ review: [createCard({ id: "d1111", ...OPENAI_DEV })] });
+		const snapshot = (reviewSettleMs: number) => ({
+			...createSnapshot({
+				workspaceId: "foo",
+				board,
+				selectedAgentId: "claude",
+				sessions: [{ taskId: "d1111", state: "awaiting_review", stateChangedAt: T0 - 5_000 }],
+			}),
+			reviewSettleMs,
+		});
+		await harness.send(snapshot(10_000));
+		expect(createdTasks(harness.actions)).toEqual([]);
+		await harness.send(snapshot(5_000));
+		expect(createdTasks(harness.actions)).toHaveLength(1);
+
+		const legacy = createHarness({ config: { workspaces: { foo: QA_WORKSPACE } } });
+		await send(legacy, { review: [createCard({ id: "d2222", ...OPENAI_DEV })] }, { sessions: [{ taskId: "d2222" }] });
+		expect(createdTasks(legacy.actions)).toHaveLength(1);
+	});
+
 	it("leaves a dev card alone while another QA card reviews it, including a legacy one without a role", async () => {
 		const harness = createHarness({ config: { workspaces: { foo: QA_WORKSPACE } } });
 		const legacyQa = createCard({

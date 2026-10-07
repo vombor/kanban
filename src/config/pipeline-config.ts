@@ -317,7 +317,20 @@ export const DEFAULT_SESSION_SYNC_ENABLED = true;
 // server start. P2-1 shipped it as a top-level boolean (`"sessionSync": false`); that form still parses to the same
 // value, so a config written for a P2-1 build keeps working, and `kanban doctor --fix` / `kanban config import-kit`
 // rewrite it as `"sessionSync": { "enabled": false }` (isLegacySessionSyncValue).
-const sessionSyncObjectSchema = z.object({ enabled: z.boolean().default(DEFAULT_SESSION_SYNC_ENABLED) }).strict();
+//
+// `reviewSettleSec` is the review settle rule's period (src/terminal/review-settle.ts): code that acts on a finished
+// turn (QA snapshot and queue, auto-review's commit prompt, rework, recovery) waits until a card's session has been
+// in Review this long with no new activity. It applies with session sync on or off, and is read at server start
+// like `enabled`. 12 s: the longest resume seen is a Copilot turn that a background shell started about 6 s after
+// the final agentStop (autopilot continuations come back within ~100 ms); twice that leaves room for a slower
+// machine, and holding QA or a commit prompt back by 12 s costs nothing next to them. 0 turns the rule off.
+export const DEFAULT_REVIEW_SETTLE_SEC = 12;
+const sessionSyncObjectSchema = z
+	.object({
+		enabled: z.boolean().default(DEFAULT_SESSION_SYNC_ENABLED),
+		reviewSettleSec: z.number().min(0).max(600).default(DEFAULT_REVIEW_SETTLE_SEC),
+	})
+	.strict();
 export const sessionSyncSectionSchema = z.preprocess(
 	(value) => (typeof value === "boolean" ? { enabled: value } : value),
 	sessionSyncObjectSchema,

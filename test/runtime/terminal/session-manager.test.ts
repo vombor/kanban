@@ -71,6 +71,26 @@ describe("TerminalSessionManager", () => {
 		expect(typeof updated?.lastHookAt).toBe("number");
 	});
 
+	it("records stateChangedAt on state changes only (the review settle rule's clock)", () => {
+		vi.useFakeTimers();
+		try {
+			const t0 = Date.parse("2026-10-07T10:00:00.000Z");
+			vi.setSystemTime(t0);
+			const manager = new TerminalSessionManager();
+			manager.hydrateFromRecord({ "task-1": createSummary({ state: "running" }) });
+
+			vi.setSystemTime(t0 + 1_000);
+			expect(manager.transitionToReview("task-1", "hook")?.stateChangedAt).toBe(t0 + 1_000);
+			vi.setSystemTime(t0 + 2_000);
+			const hooked = manager.applyHookActivity("task-1", { source: "copilot", activityText: "Done" });
+			expect(hooked).toMatchObject({ stateChangedAt: t0 + 1_000, lastHookAt: t0 + 2_000 });
+			vi.setSystemTime(t0 + 3_000);
+			expect(manager.transitionToRunning("task-1")?.stateChangedAt).toBe(t0 + 3_000);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("resets stale running sessions without active processes", () => {
 		const manager = new TerminalSessionManager();
 		manager.hydrateFromRecord({

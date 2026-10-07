@@ -32,6 +32,10 @@
 //   second board step. Ported from archive/devteam-kit:services/kanban-column-sync.mjs@6da71597 (the
 //   clineTurnEnded check before a running → in_progress move).
 //
+// The move to Review is immediate, but Review here doesn't mean "finished work": a turn can end and resume at once
+// (Copilot autopilot). Code that acts on a finished turn waits for the review settle rule (isReviewSettled,
+// src/terminal/review-settle.ts) instead of reading the column or the state alone.
+//
 // Session sync makes no agent-dependent decision: a move depends only on the summary's state and the card's
 // column. A rule that ever needs the agent must take it from resolveEffectiveAgent() (src/core/effective-agent.ts),
 // never from card.agentId (the 2026-10-06 incident; test/runtime/pipeline/effective-agent-incident.test.ts gates it).
