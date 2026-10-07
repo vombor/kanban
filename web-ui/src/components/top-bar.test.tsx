@@ -48,17 +48,7 @@ describe("TopBar script shortcut onboarding", () => {
 
 		await act(async () => {
 			root.render(
-				<TopBar
-					openTargetOptions={[]}
-					selectedOpenTargetId="vscode"
-					onSelectOpenTarget={() => {}}
-					onOpenWorkspace={() => {}}
-					canOpenWorkspace={false}
-					isOpeningWorkspace={false}
-					shortcuts={[]}
-					onRunShortcut={onRunShortcut}
-					onCreateFirstShortcut={onCreateFirstShortcut}
-				/>,
+				<TopBar shortcuts={[]} onRunShortcut={onRunShortcut} onCreateFirstShortcut={onCreateFirstShortcut} />,
 			);
 		});
 
@@ -103,22 +93,20 @@ describe("TopBar script shortcut onboarding", () => {
 		expect(onRunShortcut).not.toHaveBeenCalled();
 	});
 
+	it("does not render an open-in-local-app button for the workspace path", async () => {
+		await act(async () => {
+			root.render(<TopBar workspacePath="/repo/project" />);
+		});
+
+		expect(container.textContent).toContain("project");
+		expect(findButtonByText(container, "Open")).toBeNull();
+	});
+
 	it("opens settings when the runtime hint is clicked", async () => {
 		const onOpenSettings = vi.fn();
 
 		await act(async () => {
-			root.render(
-				<TopBar
-					openTargetOptions={[]}
-					selectedOpenTargetId="vscode"
-					onSelectOpenTarget={() => {}}
-					onOpenWorkspace={() => {}}
-					canOpenWorkspace={false}
-					isOpeningWorkspace={false}
-					runtimeHint="No agent configured"
-					onOpenSettings={onOpenSettings}
-				/>,
-			);
+			root.render(<TopBar runtimeHint="No agent configured" onOpenSettings={onOpenSettings} />);
 		});
 
 		const runtimeHintButton = findButtonByText(container, "No agent configured");

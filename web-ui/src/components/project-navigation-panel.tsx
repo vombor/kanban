@@ -3,7 +3,6 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { ChevronDown, ChevronUp, Ellipsis, ExternalLink, Info, Lightbulb, Plus, X } from "lucide-react";
 import { type MouseEvent as ReactMouseEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { ClineIcon } from "@/components/ui/cline-icon";
 import { cn } from "@/components/ui/cn";
 import {
 	AlertDialog,
@@ -33,7 +32,7 @@ const COLLAPSED_WIDTH = 48;
 const SIDEBAR_COLLAPSE_THRESHOLD = 120;
 const SIDEBAR_MIN_EXPANDED_WIDTH = 200;
 const SIDEBAR_MAX_EXPANDED_WIDTH = 600;
-const GITHUB_ISSUES_URL = "https://github.com/cline/kanban/issues";
+const GITHUB_ISSUES_URL = "https://github.com/vombor/kanban/issues";
 
 interface TaskCountBadge {
 	id: string;
@@ -288,7 +287,6 @@ export function ProjectNavigationPanel({
 			<div style={{ padding: "12px 12px 8px" }}>
 				<div className="flex items-center justify-between">
 					<div className="font-semibold text-base flex items-baseline gap-1.5">
-						<ClineIcon size={18} className="text-text-primary shrink-0 self-center" />
 						Cline <span className="text-text-secondary font-normal text-xs">v{__APP_VERSION__}</span>
 					</div>
 					{isMobile ? (

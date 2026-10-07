@@ -16,7 +16,6 @@ import {
 	Terminal,
 } from "lucide-react";
 import { useState } from "react";
-import { OpenWorkspaceButton } from "@/components/open-workspace-button";
 import {
 	getRuntimeShortcutIconComponent,
 	getRuntimeShortcutPickerOption,
@@ -35,7 +34,6 @@ import {
 	useTaskWorkspaceInfoValue,
 	useTaskWorkspaceSnapshotValue,
 } from "@/stores/workspace-metadata-store";
-import type { OpenTargetId, OpenTargetOption } from "@/utils/open-targets";
 import { formatPathForDisplay } from "@/utils/path-display";
 import { isMacPlatform } from "@/utils/platform";
 
@@ -306,12 +304,6 @@ export function TopBar({
 	runningShortcutLabel,
 	onRunShortcut,
 	onCreateFirstShortcut,
-	openTargetOptions,
-	selectedOpenTargetId,
-	onSelectOpenTarget,
-	onOpenWorkspace,
-	canOpenWorkspace,
-	isOpeningWorkspace,
 	hideProjectDependentActions = false,
 }: {
 	onToggleSidebar?: () => void;
@@ -341,12 +333,6 @@ export function TopBar({
 	runningShortcutLabel?: string | null;
 	onRunShortcut?: (shortcutLabel: string) => void;
 	onCreateFirstShortcut?: (shortcut: RuntimeProjectShortcut) => Promise<CreateShortcutResult>;
-	openTargetOptions: readonly OpenTargetOption[];
-	selectedOpenTargetId: OpenTargetId;
-	onSelectOpenTarget: (targetId: OpenTargetId) => void;
-	onOpenWorkspace: () => void;
-	canOpenWorkspace: boolean;
-	isOpeningWorkspace: boolean;
 	hideProjectDependentActions?: boolean;
 }): React.ReactElement {
 	const isMobile = useIsMobile();
@@ -465,21 +451,9 @@ export function TopBar({
 						</div>
 					) : null}
 
-					{/* Desktop-only: open-workspace button, hints, git status */}
+					{/* Desktop-only: hints, git status */}
 					{!isMobile ? (
 						<>
-							{displayWorkspacePath && !isWorkspacePathLoading ? (
-								<div className="ml-2 shrink-0">
-									<OpenWorkspaceButton
-										options={openTargetOptions}
-										selectedOptionId={selectedOpenTargetId}
-										disabled={!canOpenWorkspace || isOpeningWorkspace}
-										loading={isOpeningWorkspace}
-										onOpen={onOpenWorkspace}
-										onSelectOption={onSelectOpenTarget}
-									/>
-								</div>
-							) : null}
 							{!hideProjectDependentActions && workspaceHint ? (
 								<span className="kb-navbar-tag inline-flex items-center rounded border border-border bg-surface-2 px-1.5 py-0.5 text-xs text-text-secondary">
 									{workspaceHint}
