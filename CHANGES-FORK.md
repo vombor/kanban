@@ -114,3 +114,11 @@ of this repository is the complete record of changes.
   `sessionSyncEnabled`.
 - `.gitattributes` (new): `CHANGES-FORK.md` and `AGENTS.md` use `merge=union` (both are append-only), so two branches
   that both append an entry merge without a conflict.
+- `src/terminal/cline-turn-outcome.ts`, `src/terminal/cline-session-files.ts`, `src/terminal/cline-turn-monitor.ts`,
+  `src/config/cline-turn-detector-config.ts` (new), `src/config/pipeline-config.ts` (schema), `src/terminal/agent-session-adapters.ts`,
+  `src/terminal/session-manager.ts`, `src/server/runtime-server.ts`, `src/state/kanban-home.ts` (comment), tests:
+  Cline CLI turn-end detector. Some providers end a cline 3.x turn without the TaskComplete hook; the server reads
+  Cline's session files and ends the turn in Kanban (hooks ingest `to_review`) on an idle final reply with a
+  `STATUS:` line, a QA final line, a no-images rejection or bare provider error (2 min), or 5 quiet min after a
+  bounce back to running. Ported from the legacy kit's column-sync. `agents.cline.turnDetector.mode` in config.json:
+  `off` | `report` (default: log only, the legacy kit still does it) | `on`.

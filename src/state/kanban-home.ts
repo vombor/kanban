@@ -114,7 +114,7 @@ export function getLegacyTaskWorktreesRootPath(): string {
 	return join(getUserHomePath(), LEGACY_HOME_PARENT_DIR, LEGACY_WORKTREES_DIR);
 }
 
-/** Cline's own data dir. It belongs to Cline, not Kanban; only the debug reset touches it. */
+/** Cline's own data dir. It belongs to Cline, not Kanban: the debug reset clears it, the Cline turn detector reads its sessions. */
 export function getClineDataPath(): string {
 	return join(getUserHomePath(), LEGACY_HOME_PARENT_DIR, CLINE_DATA_DIR);
 }

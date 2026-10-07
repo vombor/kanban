@@ -16,6 +16,16 @@ describe("pipeline config", () => {
 		expect(config.workspaces).toEqual({});
 	});
 
+	it("accepts the Cline turn detector settings under agents.cline", () => {
+		expect(parsePipelineConfig({}).config.agents.cline.turnDetector).toEqual({ mode: "report", intervalSec: 15 });
+		const { config, issues } = parsePipelineConfig({
+			agents: { pretrust: false, cline: { dataDir: "/data", turnDetector: { mode: "on", intervalSec: 30 } } },
+		});
+		expect(issues).toEqual([]);
+		expect(config.agents.pretrust).toBe(false);
+		expect(config.agents.cline).toEqual({ dataDir: "/data", turnDetector: { mode: "on", intervalSec: 30 } });
+	});
+
 	it("gives an unconfigured workspace landing off and no kit", () => {
 		const { config } = parsePipelineConfig({
 			workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" } } },

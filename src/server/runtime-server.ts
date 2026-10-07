@@ -4,6 +4,7 @@ import { createServer as createHttpsServer } from "node:https";
 import { join } from "node:path";
 
 import { createHTTPHandler } from "@trpc/server/adapters/standalone";
+import { createClineTurnDetectorSettingsLoader } from "../config/cline-turn-detector-config";
 import { createLemonadeModelListSettingsLoader } from "../config/model-lists-config";
 import { createProcessReaperSettingsLoader } from "../config/process-reaper-config";
 import type {
@@ -39,6 +40,7 @@ import {
 	loadWorkspaceContextById,
 	mutateWorkspaceState,
 } from "../state/workspace-state";
+import { createClineTurnMonitor } from "../terminal/cline-turn-monitor";
 import type { TerminalSessionManager } from "../terminal/session-manager";
 import { createTerminalWebSocketBridge } from "../terminal/ws-server";
 import { type RuntimeTrpcContext, type RuntimeTrpcWorkspaceScope, runtimeAppRouter } from "../trpc/app-router";
@@ -190,6 +192,33 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 				})),
 			),
 		loadSettings: createProcessReaperSettingsLoader(deps.warn),
+		log: deps.warn,
+	});
+	// Ends Cline CLI turns that Cline's TaskComplete hook missed, through the same ingest path the hook uses.
+	const inProcessHooksApi = createHooksApi({
+		getWorkspacePathById: deps.workspaceRegistry.getWorkspacePathById,
+		ensureTerminalManagerForWorkspace: deps.ensureTerminalManagerForWorkspace,
+		broadcastRuntimeWorkspaceStateUpdated: deps.runtimeStateHub.broadcastRuntimeWorkspaceStateUpdated,
+		broadcastTaskReadyForReview: deps.runtimeStateHub.broadcastTaskReadyForReview,
+	});
+	const clineTurnMonitor = createClineTurnMonitor({
+		listWorkspaces: () =>
+			deps.workspaceRegistry.listManagedWorkspaces().map((workspace) => ({
+				workspaceId: workspace.workspaceId,
+				sessions: workspace.terminalManager,
+			})),
+		loadSettings: createClineTurnDetectorSettingsLoader(deps.warn),
+		endTurn: async ({ workspaceId, taskId }) =>
+			await inProcessHooksApi.ingest({
+				taskId,
+				workspaceId,
+				event: "to_review",
+				metadata: {
+					source: "cline-turn-detector",
+					hookEventName: "TaskComplete",
+					activityText: "Waiting for review",
+				},
+			}),
 		log: deps.warn,
 	});
 	/** Task delete, project removal and Done reap a card's processes before its worktree is deleted. */
@@ -543,6 +572,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		throw new Error("Failed to start local server.");
 	}
 	orphanProcessSweeper.start();
+	clineTurnMonitor.start();
 	const activeWorkspaceId = deps.workspaceRegistry.getActiveWorkspaceId();
 	const url = activeWorkspaceId
 		? buildKanbanRuntimeUrl(`/${encodeURIComponent(activeWorkspaceId)}`)
@@ -553,6 +583,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		taskTrashWorkflow,
 		close: async () => {
 			orphanProcessSweeper.close();
+			clineTurnMonitor.close();
 			await deps.runtimeStateHub.close();
 			await terminalWebSocketBridge.close();
 			await new Promise<void>((resolveClose, rejectClose) => {

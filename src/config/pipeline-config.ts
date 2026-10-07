@@ -12,6 +12,7 @@ import { z } from "zod";
 
 import { lockedFileSystem } from "../fs/locked-file-system";
 import { getKanbanGlobalConfigPath, KANBAN_HOME_MARKER_VERSION, shouldMarkKanbanHome } from "../state/kanban-home";
+import { clineTurnDetectorModeSchema, getDefaultClineTurnDetectorSettings } from "./cline-turn-detector-config";
 import { DEFAULT_LEMONADE_MODEL_LIST_SETTINGS } from "./model-lists-config";
 
 export const landingModeSchema = z.enum(["off", "commit", "pr", "qa"]);
@@ -213,14 +214,30 @@ const modelsSectionSchema = z
 	})
 	.strict();
 
+const DEFAULT_CLINE_TURN_DETECTOR = {
+	mode: getDefaultClineTurnDetectorSettings().mode,
+	intervalSec: getDefaultClineTurnDetectorSettings().intervalSec,
+};
+
+// The Cline CLI turn-end detector (cline-turn-detector-config.ts reads it on every tick).
+const clineTurnDetectorSchema = z
+	.object({
+		mode: clineTurnDetectorModeSchema.default(DEFAULT_CLINE_TURN_DETECTOR.mode),
+		intervalSec: z.number().int().positive().default(DEFAULT_CLINE_TURN_DETECTOR.intervalSec),
+	})
+	.strict();
+
 // Agent data dirs: null = the agent's own default location.
 const agentsSectionSchema = z
 	.object({
 		pretrust: z.boolean().default(true),
 		cline: z
-			.object({ dataDir: z.string().nullable().default(null) })
+			.object({
+				dataDir: z.string().nullable().default(null),
+				turnDetector: clineTurnDetectorSchema.default(DEFAULT_CLINE_TURN_DETECTOR),
+			})
 			.strict()
-			.default({ dataDir: null }),
+			.default({ dataDir: null, turnDetector: DEFAULT_CLINE_TURN_DETECTOR }),
 		codex: z
 			.object({ home: z.string().nullable().default(null) })
 			.strict()

@@ -88,9 +88,13 @@ const DEFAULT_INPUT_DELIVERY_PROFILE: AgentInputDeliveryProfile = {
 	focusInBeforeInput: false,
 };
 
+/** Where a turn end that the agent's hooks missed can be read from (see cline-turn-monitor.ts). */
+export type AgentTurnEndSource = "cline-session-files";
+
 interface AgentSessionAdapter {
 	prepare(input: AgentAdapterLaunchInput): Promise<PreparedAgentLaunch>;
 	inputDelivery?: AgentInputDeliveryProfile;
+	turnEndSource?: AgentTurnEndSource;
 }
 
 function escapeForTemplateLiteral(value: string): string {
@@ -1504,6 +1508,8 @@ const kiroAdapter: AgentSessionAdapter = {
 // terminals stay open for follow-ups after the first turn completes. (The embedded Cline SDK
 // agent was removed in this fork; "cline-cli", the old id of this agent, is an alias of "cline".)
 const clineCliAdapter: AgentSessionAdapter = {
+	// Some providers end a turn without Cline's TaskComplete hook; the session files show it (cline-turn-outcome.ts).
+	turnEndSource: "cline-session-files",
 	async prepare(input) {
 		// --worktree/--zen/--kanban/--update would detach, recurse, or exit
 		// instead of running the task session Kanban launched.
@@ -2023,6 +2029,10 @@ const ADAPTERS: Record<RuntimeAgentId, AgentSessionAdapter> = {
 
 export function getAgentInputDeliveryProfile(agentId: RuntimeAgentId | null): AgentInputDeliveryProfile {
 	return (agentId ? ADAPTERS[agentId].inputDelivery : undefined) ?? DEFAULT_INPUT_DELIVERY_PROFILE;
+}
+
+export function getAgentTurnEndSource(agentId: RuntimeAgentId | null): AgentTurnEndSource | null {
+	return (agentId ? ADAPTERS[agentId].turnEndSource : undefined) ?? null;
 }
 
 export async function prepareAgentLaunch(input: AgentAdapterLaunchInput): Promise<PreparedAgentLaunch> {

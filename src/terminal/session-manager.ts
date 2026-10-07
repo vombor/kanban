@@ -79,6 +79,8 @@ interface SessionEntry {
 	suppressAutoRestartOnExit: boolean;
 	autoRestartTimestamps: number[];
 	pendingAutoRestart: Promise<void> | null;
+	/** When summary.state last changed (null until it does). */
+	stateChangedAt: number | null;
 }
 
 export interface StartTaskSessionRequest {
@@ -142,10 +144,14 @@ function cloneSummary(summary: RuntimeTaskSessionSummary): RuntimeTaskSessionSum
 }
 
 function updateSummary(entry: SessionEntry, patch: Partial<RuntimeTaskSessionSummary>): RuntimeTaskSessionSummary {
+	const updatedAt = now();
+	if (patch.state !== undefined && patch.state !== entry.summary.state) {
+		entry.stateChangedAt = updatedAt;
+	}
 	entry.summary = {
 		...entry.summary,
 		...patch,
-		updatedAt: now(),
+		updatedAt,
 	};
 	return entry.summary;
 }
@@ -295,6 +301,7 @@ export class TerminalSessionManager implements TerminalSessionService {
 				suppressAutoRestartOnExit: false,
 				autoRestartTimestamps: [],
 				pendingAutoRestart: null,
+				stateChangedAt: null,
 			});
 		}
 	}
@@ -302,6 +309,20 @@ export class TerminalSessionManager implements TerminalSessionService {
 	getSummary(taskId: string): RuntimeTaskSessionSummary | null {
 		const entry = this.entries.get(taskId);
 		return entry ? cloneSummary(entry.summary) : null;
+	}
+
+	/** When the session entered its current state: the last state change, or its start if that came later. */
+	getStateEnteredAt(taskId: string): number | null {
+		const entry = this.entries.get(taskId);
+		if (!entry) {
+			return null;
+		}
+		const changedAt = entry.stateChangedAt;
+		const startedAt = entry.summary.startedAt ?? null;
+		if (changedAt === null || startedAt === null) {
+			return changedAt ?? startedAt;
+		}
+		return Math.max(changedAt, startedAt);
 	}
 
 	listSummaries(): RuntimeTaskSessionSummary[] {
@@ -1035,6 +1056,7 @@ export class TerminalSessionManager implements TerminalSessionService {
 			suppressAutoRestartOnExit: false,
 			autoRestartTimestamps: [],
 			pendingAutoRestart: null,
+			stateChangedAt: null,
 		};
 		this.entries.set(taskId, created);
 		return created;
