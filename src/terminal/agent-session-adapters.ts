@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
-import { access, mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import type {
@@ -18,6 +18,7 @@ import { lockedFileSystem } from "../fs/locked-file-system";
 import {
 	buildGuardrailPromptNote,
 	listGuardrailWritableRoots,
+	listMatcherDeniedCommands,
 	type TaskGuardrails,
 } from "../guardrails/task-guardrails";
 import { resolveHomeAgentAppendSystemPrompt } from "../prompts/append-system-prompt";
@@ -30,10 +31,13 @@ import {
 	buildCopilotDenyTools,
 	buildCopilotWriteDenyTools,
 	type ClineGuardPolicy,
+	CODEX_GUARDRAIL_RULES_MARKER,
 	CODEX_GUARDRAIL_RULES_RELATIVE_PATH,
+	type CommandGuardPolicy,
 	describeAgentGuardrails,
 	listCodexWritableDirs,
 	probeCodexSandbox,
+	usesKanbanCommandMatcher,
 } from "./agent-guardrails";
 import { isRuntimeDebugModeEnabled } from "./agent-registry";
 import { ensureClaudeWorkspaceTrusted } from "./claude-workspace-trust";
@@ -250,13 +254,13 @@ function buildClineGuardCommandParts(guardrails: TaskGuardrails): string[] {
 		worktreePath: guardrails.worktreePath,
 		confineWrites: guardrails.confineWrites,
 		writableRoots: [...listGuardrailWritableRoots(guardrails), getClineDataPath()],
-		deniedCommands: guardrails.deniedCommands,
+		deniedCommands: listMatcherDeniedCommands(guardrails),
 	};
-	return buildHooksCommandParts([
-		"cline-guard",
-		"--policy-base64",
-		Buffer.from(JSON.stringify(policy), "utf8").toString("base64"),
-	]);
+	return buildHooksCommandParts(["cline-guard", "--policy-base64", encodeGuardPolicy(policy)]);
+}
+
+function encodeGuardPolicy(policy: CommandGuardPolicy): string {
+	return Buffer.from(JSON.stringify(policy), "utf8").toString("base64");
 }
 const KANBAN_MANAGED_CLINE_CLI_HOOK_MARKER = "kanban-managed: cline-cli hook";
 const CLINE_CLI_ASK_TOOL_PATTERN = "ask_followup_question|ask_question|plan_mode_respond|submit_and_exit";
@@ -725,6 +729,19 @@ function getHookAgentDirectory(agentId: RuntimeAgentId): string {
 	return join(getRuntimeHomePath(), "hooks", agentId);
 }
 
+/** A guarded Claude card's own --settings file (the shared settings.json is also the orchestrator's). */
+function getClaudeCardSettingsPath(taskId: string): string {
+	return join(getHookAgentDirectory("claude"), "cards", `${toSafeFileName(taskId)}.json`);
+}
+
+/**
+ * Removes the files a card's launches left outside its worktree (a guarded Claude card's --settings file, which
+ * embeds the card's guard policy). Called by the Done workflow's worktree cleanup; a resumed card writes them anew.
+ */
+export async function removeTaskLaunchFiles(taskId: string): Promise<void> {
+	await rm(getClaudeCardSettingsPath(taskId), { force: true });
+}
+
 const KIRO_KANBAN_AGENT_NAME = "kanban";
 
 function getKiroAgentConfigPath(): string {
@@ -806,8 +823,22 @@ const claudeAdapter: AgentSessionAdapter = {
 		if (hooks || guardrails) {
 			// A card with guardrails gets its own file: the shared one is also the orchestrator's.
 			const settingsPath = guardrails
-				? join(getHookAgentDirectory("claude"), "cards", `${toSafeFileName(input.taskId)}.json`)
+				? getClaudeCardSettingsPath(input.taskId)
 				: join(getHookAgentDirectory("claude"), "settings.json");
+			// Kanban's matcher on every Bash call (agent-guardrails.ts): the deny rules only match the command as written.
+			const guardHook = guardrails && {
+				matcher: "Bash",
+				hooks: [
+					{
+						type: "command",
+						command: buildHooksCommand([
+							"claude-guard",
+							"--policy-base64",
+							encodeGuardPolicy({ deniedCommands: listMatcherDeniedCommands(guardrails) }),
+						]),
+					},
+				],
+			};
 			const claudeHooks = hooks && {
 				Stop: [{ hooks: [{ type: "command", command: buildHookCommand("to_review", { source: "claude" }) }] }],
 				SubagentStop: [
@@ -853,8 +884,11 @@ const claudeAdapter: AgentSessionAdapter = {
 					},
 				],
 			};
+			const settingsHooks = guardHook
+				? { ...claudeHooks, PreToolUse: [guardHook, ...(claudeHooks ? claudeHooks.PreToolUse : [])] }
+				: claudeHooks;
 			const settings = {
-				...(claudeHooks ? { hooks: claudeHooks } : {}),
+				...(settingsHooks ? { hooks: settingsHooks } : {}),
 				...(guardrails ? { permissions: { deny: buildClaudePermissionDeny(guardrails) } } : {}),
 			};
 			await ensureTextFile(settingsPath, JSON.stringify(settings, null, 2));
@@ -960,6 +994,12 @@ const codexAdapter: AgentSessionAdapter = {
 				buildCodexRulesFile(guardrails.deniedCommands),
 			);
 			await addToWorktreeGitExclude(input.cwd, `/${CODEX_GUARDRAIL_RULES_RELATIVE_PATH}`);
+		} else {
+			// Guardrails off (or the orchestrator): a rules file an earlier launch wrote would still forbid commands.
+			await removeKanbanManagedFile(
+				join(input.cwd, ...CODEX_GUARDRAIL_RULES_RELATIVE_PATH.split("/")),
+				CODEX_GUARDRAIL_RULES_MARKER,
+			);
 		}
 
 		if (guardrails && (await shouldConfineCodexWrites(input, guardrails))) {
@@ -1706,7 +1746,10 @@ const clineCliAdapter: AgentSessionAdapter = {
 				const written = await ensureKanbanManagedHookFile(hookPath, hookFile.content, executable);
 				if (!written) {
 					skippedHooks.push(hookFile.name);
+					continue;
 				}
+				// Kanban's hooks (the PreToolUse one embeds the card's guard policy) never land with the card's work.
+				await addToWorktreeGitExclude(input.cwd, `/${relative(input.cwd, hookPath).split("\\").join("/")}`);
 			}
 			if (skippedHooks.length > 0) {
 				sessionWarning = `Cline hooks not installed for ${skippedHooks.join(", ")}: a user-owned .cline/hooks file already exists. Kanban card state will not track those events.${
@@ -1765,6 +1808,14 @@ const clineCliAdapter: AgentSessionAdapter = {
 		};
 	},
 };
+
+/** Deletes a file Kanban wrote (its first line has `marker`); a user's file of the same name is left alone. */
+async function removeKanbanManagedFile(path: string, marker: string): Promise<void> {
+	const content = await readFile(path, "utf8").catch(() => null);
+	if (content?.split("\n", 1)[0]?.includes(marker)) {
+		await rm(path, { force: true }).catch(() => undefined);
+	}
+}
 
 async function addToWorktreeGitExclude(worktreePath: string, pattern: string): Promise<void> {
 	try {
@@ -2225,7 +2276,11 @@ async function withGuardrailPromptNote(input: AgentAdapterLaunchInput, prompt: s
 	if (report.unenforced.length === 0) {
 		return prompt;
 	}
-	return `${prompt.trimEnd()}\n\n${buildGuardrailPromptNote(guardrails, report.unenforced)}`;
+	// Agents whose guard runs Kanban's matcher let a PR card push its own branch; the others keep the push deny.
+	const rules = usesKanbanCommandMatcher(input.agentId)
+		? listMatcherDeniedCommands(guardrails)
+		: guardrails.deniedCommands;
+	return `${prompt.trimEnd()}\n\n${buildGuardrailPromptNote(guardrails, report.unenforced, rules)}`;
 }
 
 export async function prepareAgentLaunch(input: AgentAdapterLaunchInput): Promise<PreparedAgentLaunch> {

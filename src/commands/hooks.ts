@@ -7,7 +7,8 @@ import type { RuntimeHookEvent, RuntimeTaskHookActivity } from "../core/api-cont
 import { buildKanbanCommandParts } from "../core/kanban-command";
 import { buildKanbanRuntimeUrl, getRuntimeFetch } from "../core/runtime-endpoint";
 import { buildWindowsCmdArgsArray, resolveWindowsComSpec, shouldUseWindowsCmdLaunch } from "../core/windows-cmd-launch";
-import type { ClineGuardPolicy } from "../terminal/agent-guardrails";
+import type { ClineGuardPolicy, CommandGuardPolicy } from "../terminal/agent-guardrails";
+import { evaluateClaudeGuard } from "../terminal/claude-guard";
 import { evaluateClineGuard } from "../terminal/cline-guard";
 import { parseHookRuntimeContextFromEnv } from "../terminal/hook-runtime-context";
 import type { RuntimeAppRouter } from "../trpc/app-router";
@@ -574,6 +575,20 @@ async function runClineGuardSubcommand(policyBase64: string): Promise<void> {
 	process.stdout.write(`${JSON.stringify(decision)}\n`);
 }
 
+// Prints Claude Code's PreToolUse deny decision for a blocked Bash command (claude-guard.ts), or nothing. Fails open
+// like the Cline guard; the card's permissions.deny rules still apply.
+async function runClaudeGuardSubcommand(policyBase64: string): Promise<void> {
+	try {
+		const policy = JSON.parse(Buffer.from(policyBase64, "base64").toString("utf8")) as CommandGuardPolicy;
+		const output = evaluateClaudeGuard(JSON.parse(await readStdinText()), policy);
+		if (output) {
+			process.stdout.write(`${JSON.stringify(output)}\n`);
+		}
+	} catch {
+		// fail open
+	}
+}
+
 async function runGeminiHookSubcommand(): Promise<void> {
 	let payload = "";
 	try {
@@ -805,6 +820,14 @@ export function registerHooksCommand(program: Command): void {
 		.requiredOption("--policy-base64 <base64>", "Base64-encoded JSON guard policy.")
 		.action(async (options: { policyBase64: string }) => {
 			await runClineGuardSubcommand(options.policyBase64);
+		});
+
+	hooks
+		.command("claude-guard")
+		.description("Claude Code PreToolUse guard for a task card's guardrails (prints a deny decision).")
+		.requiredOption("--policy-base64 <base64>", "Base64-encoded JSON guard policy.")
+		.action(async (options: { policyBase64: string }) => {
+			await runClaudeGuardSubcommand(options.policyBase64);
 		});
 
 	hooks

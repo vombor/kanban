@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -9,7 +9,8 @@ import type { RuntimeAgentId } from "../../../src/core/api-contract";
 import { parseDeniedCommandPatterns } from "../../../src/guardrails/command-patterns";
 import type { TaskGuardrails } from "../../../src/guardrails/task-guardrails";
 import type { AgentAdapterLaunchInput } from "../../../src/terminal/agent-session-adapters";
-import { prepareAgentLaunch } from "../../../src/terminal/agent-session-adapters";
+import { prepareAgentLaunch, removeTaskLaunchFiles } from "../../../src/terminal/agent-session-adapters";
+import { evaluateClaudeGuard } from "../../../src/terminal/claude-guard";
 
 const sandboxMocks = vi.hoisted(() => ({ probeCodexSandbox: vi.fn(async () => false) }));
 
@@ -36,6 +37,7 @@ function createGuardrails(overrides: Partial<TaskGuardrails> = {}): TaskGuardrai
 		extraWritableDirs: [],
 		sharedBranches: ["main", "fork/stack"],
 		deniedCommands: parseDeniedCommandPatterns(DEFAULT_GUARDRAIL_DENY_COMMANDS, ["main", "fork/stack"]),
+		ownBranchPush: false,
 		...overrides,
 	};
 }
@@ -149,7 +151,16 @@ describe("Codex guardrails at launch", () => {
 		expect(launch.args).not.toContain("--dangerously-bypass-approvals-and-sandbox");
 		expect(valuesOf(launch.args, "--sandbox")).toEqual(["workspace-write"]);
 		expect(valuesOf(launch.args, "--ask-for-approval")).toEqual(["never"]);
-		expect(valuesOf(launch.args, "--add-dir")).toEqual(["/projects/repo/.git", "/projects/repo/node_modules"]);
+		// npm ci and Playwright write their caches under the home.
+		expect(valuesOf(launch.args, "--add-dir")).toEqual([
+			"/projects/repo/.git",
+			"/projects/repo/node_modules",
+			join(tempHome, ".npm"),
+			join(tempHome, ".cache"),
+			join(tempHome, ".pnpm-store"),
+			join(tempHome, ".yarn"),
+			join(tempHome, ".bun", "install", "cache"),
+		]);
 		expect(valuesOf(launch.args, "-c")).toContain("sandbox_workspace_write.network_access=true");
 		expect(launch.args.at(-1)).not.toContain("writes outside the worktree");
 	});
@@ -159,6 +170,24 @@ describe("Codex guardrails at launch", () => {
 		const launch = await prepareAgentLaunch(launchInput("codex", { args: ["--sandbox", "read-only"] }));
 		expect(valuesOf(launch.args, "--sandbox")).toEqual(["read-only"]);
 		expect(sandboxMocks.probeCodexSandbox).not.toHaveBeenCalled();
+	});
+
+	it("removes a rules file an earlier launch left once guardrails are off, but never a user's file", async () => {
+		const rulesPath = join(worktree, ".codex", "rules", "kanban-guardrails.rules");
+		await prepareAgentLaunch(launchInput("codex"));
+		expect(existsSync(rulesPath)).toBe(true);
+		const launch = await prepareAgentLaunch(launchInput("codex", { guardrails: null }));
+		expect(existsSync(rulesPath)).toBe(false);
+		expect(launch.args).toContain("--dangerously-bypass-approvals-and-sandbox");
+		writeFileSync(rulesPath, 'prefix_rule(pattern=["rm"], decision="forbidden")\n');
+		await prepareAgentLaunch(launchInput("codex", { guardrails: null }));
+		expect(readFileSync(rulesPath, "utf8")).toContain('pattern=["rm"]');
+	});
+
+	it("keeps the push deny for a PR card: an argv prefix can't tell its own branch", async () => {
+		await prepareAgentLaunch(launchInput("codex", { guardrails: createGuardrails({ ownBranchPush: true }) }));
+		const rules = readFileSync(join(worktree, ".codex", "rules", "kanban-guardrails.rules"), "utf8");
+		expect(rules).toContain('prefix_rule(pattern=["git", "push"], decision="forbidden"');
 	});
 
 	it("keeps the rules in plan mode", async () => {
@@ -188,6 +217,18 @@ describe("Cline guardrails at launch", () => {
 		expect(launch.args.at(-1)).toContain("shell commands that write outside the worktree");
 	});
 
+	it("lets a PR card push its own branch, and says so in the prompt note", async () => {
+		const launch = await prepareAgentLaunch(
+			launchInput("cline", { guardrails: createGuardrails({ ownBranchPush: true }) }),
+		);
+		const policyBase64 = /--policy-base64'? '?([A-Za-z0-9+/=]+)/u.exec(readPreToolUseHook())?.[1] ?? "";
+		const policy = JSON.parse(Buffer.from(policyBase64, "base64").toString("utf8"));
+		const patterns = policy.deniedCommands.map((rule: { pattern: string }) => rule.pattern);
+		expect(patterns).toContain("git push {shared-push}");
+		expect(patterns).not.toContain("git push");
+		expect(launch.args.at(-1)).toContain("pushing your own branch, named explicitly, is fine");
+	});
+
 	it("keeps the guard in plan mode", async () => {
 		const launch = await prepareAgentLaunch(launchInput("cline", { startInPlanMode: true, args: ["--yolo"] }));
 		expect(launch.args).toContain("--plan");
@@ -208,6 +249,49 @@ describe("Claude Code guardrails at launch", () => {
 		);
 		expect(valuesOf(launch.args, "--permission-mode")).toEqual(["auto"]);
 		expect(launch.args.at(-1)).toBe("Fix the bug");
+	});
+
+	it("runs Kanban's matcher from a PreToolUse hook on Bash, ahead of the activity hook", async () => {
+		const launch = await prepareAgentLaunch(launchInput("claude"));
+		const settings = JSON.parse(readFileSync(valuesOf(launch.args, "--settings")[0] ?? "", "utf8"));
+		const [guard, activity] = settings.hooks.PreToolUse;
+		expect(guard.matcher).toBe("Bash");
+		const command: string = guard.hooks[0].command;
+		expect(command).toContain("claude-guard");
+		expect(activity.matcher).toBe("*");
+		const policyBase64 = /--policy-base64'? '?([A-Za-z0-9+/=]+)/u.exec(command)?.[1] ?? "";
+		const policy = JSON.parse(Buffer.from(policyBase64, "base64").toString("utf8"));
+		const output = evaluateClaudeGuard({ tool_name: "Bash", tool_input: { command: "sh -c 'git push'" } }, policy);
+		expect(output?.hookSpecificOutput.permissionDecision).toBe("deny");
+	});
+
+	it("has the guard hook without Kanban's hook context too", async () => {
+		const launch = await prepareAgentLaunch(launchInput("claude", { workspaceId: undefined }));
+		const settings = JSON.parse(readFileSync(valuesOf(launch.args, "--settings")[0] ?? "", "utf8"));
+		expect(settings.hooks.PreToolUse).toHaveLength(1);
+		expect(settings.hooks.PreToolUse[0].hooks[0].command).toContain("claude-guard");
+		expect(settings.hooks.Stop).toBeUndefined();
+	});
+
+	it("lets a PR card push its own branch", async () => {
+		const launch = await prepareAgentLaunch(
+			launchInput("claude", { guardrails: createGuardrails({ ownBranchPush: true }) }),
+		);
+		const settings = JSON.parse(readFileSync(valuesOf(launch.args, "--settings")[0] ?? "", "utf8"));
+		expect(settings.permissions.deny).not.toContain("Bash(git push *)");
+		expect(settings.permissions.deny).toEqual(
+			expect.arrayContaining(["Bash(git push)", "Bash(git push* main)", "Bash(git push*:fork/stack *)"]),
+		);
+	});
+
+	it("removes the card's settings file when the card's launch files are cleaned up (Done)", async () => {
+		const launch = await prepareAgentLaunch(launchInput("claude"));
+		const settingsPath = valuesOf(launch.args, "--settings")[0] ?? "";
+		expect(existsSync(settingsPath)).toBe(true);
+		await removeTaskLaunchFiles("card-1");
+		expect(existsSync(settingsPath)).toBe(false);
+		// Nothing to remove: no error.
+		await removeTaskLaunchFiles("card-1");
 	});
 });
 

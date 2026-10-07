@@ -26,6 +26,7 @@ import { isHomeAgentSessionId } from "../core/home-agent-session";
 import { resolveTaskGuardrails } from "../guardrails/task-guardrails";
 import { openInBrowser } from "../server/browser";
 import { getDebugResetTargetPaths } from "../state/kanban-home";
+import { loadWorkspaceBoardById } from "../state/workspace-state";
 import { buildRuntimeConfigResponse, resolveAgentCommand } from "../terminal/agent-registry";
 import { deliverTaskInput } from "../terminal/deliver-task-input";
 import type { TerminalSessionManager } from "../terminal/session-manager";
@@ -181,6 +182,14 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 							worktreePath: taskCwd,
 							projectPath: workspaceScope.workspacePath,
 							baseRef: body.baseRef,
+							// The card's git action: a PR card may push its own branch (guardrails.prCardPush).
+							gitAction: await loadWorkspaceBoardById(workspaceScope.workspaceId)
+								.then(
+									(board) =>
+										board.columns.flatMap((column) => column.cards).find((card) => card.id === body.taskId)
+											?.autoReviewMode ?? null,
+								)
+								.catch(() => null),
 						});
 				const summary = await terminalManager.startTaskSession({
 					taskId: body.taskId,

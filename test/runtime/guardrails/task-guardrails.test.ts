@@ -9,6 +9,7 @@ import { parsePipelineConfig } from "../../../src/config/pipeline-config";
 import {
 	buildGuardrailPromptNote,
 	listGuardrailWritableRoots,
+	listMatcherDeniedCommands,
 	resolveTaskGuardrails,
 } from "../../../src/guardrails/task-guardrails";
 
@@ -43,6 +44,33 @@ describe("task guardrails", () => {
 
 	afterEach(() => {
 		rmSync(root, { recursive: true, force: true });
+	});
+
+	it("lets a card launched with the PR git action push its own branch, unless prCardPush is deny", async () => {
+		const resolve = async (raw: unknown, gitAction: "commit" | "pr" | null) =>
+			await resolveTaskGuardrails({
+				config: parsePipelineConfig(raw).config,
+				taskId: "card-1",
+				workspaceId: "ws",
+				worktreePath: worktree,
+				projectPath: repo,
+				baseRef: "fork/stack",
+				gitAction,
+			});
+		const pr = await resolve({}, "pr");
+		expect(pr?.ownBranchPush).toBe(true);
+		// CLI-native deny lists keep the plain rule; Kanban's matcher gets the own-branch one.
+		expect(pr?.deniedCommands.map((rule) => rule.pattern)).toContain("git push");
+		const matcherRules = pr ? listMatcherDeniedCommands(pr) : [];
+		const sharedPush = matcherRules.find((rule) => rule.sharedPush);
+		expect(sharedPush?.pattern).toBe("git push {shared-push}");
+		expect(sharedPush?.sharedPush).toEqual(["main", "master", "fork/stack"]);
+		expect(matcherRules.map((rule) => rule.pattern)).not.toContain("git push");
+		expect((await resolve({}, "commit"))?.ownBranchPush).toBe(false);
+		expect((await resolve({}, null))?.ownBranchPush).toBe(false);
+		expect((await resolve({ guardrails: { prCardPush: "deny" } }, "pr"))?.ownBranchPush).toBe(false);
+		const commit = await resolve({}, "commit");
+		expect(commit ? listMatcherDeniedCommands(commit) : null).toBe(commit?.deniedCommands);
 	});
 
 	it("resolves a card's writable dirs, protected dirs, shared branches and denied commands", async () => {

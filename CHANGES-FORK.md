@@ -426,3 +426,20 @@ of this repository is the complete record of changes.
   creating its cards. Fixes from P4-5's review: until the started-check restarts a rework it belongs to the started
   check whatever its age, then for one window from the restart (`isReworkAwaitingStart`), and the engine header names
   recovery.
+- `src/guardrails/command-patterns.ts`, `src/guardrails/task-guardrails.ts`, `src/terminal/agent-guardrails.ts`,
+  `src/terminal/claude-guard.ts` (new), `src/terminal/cline-guard.ts`, `src/terminal/agent-session-adapters.ts`,
+  `src/commands/hooks.ts`, `src/trpc/runtime-api.ts`, `src/server/runtime-server.ts`, `src/config/pipeline-config.ts`,
+  `src/doctor/guardrail-checks.ts`, tests: guardrail review fixes. Option slots and `{shared}` in a deny pattern now
+  match any word after the subcommand (`git update-ref -m msg refs/heads/main X`, `git branch -q -D main`), and
+  the matcher sees through `timeout`/`nice`/`setsid`/`stdbuf` and wrapper option values. Claude Code's deny rules
+  also cover git's global options (`git -* push *`) and every order of the floating slots, and Claude cards get a
+  PreToolUse hook on Bash (`kanban hooks claude-guard`) with Kanban's matcher for the forms rules can't express.
+  The PR git action (a card whose `autoReviewMode` is `pr` at launch, `guardrails.prCardPush: own-branch` by
+  default) may push its own branch, named explicitly, never a shared one, on Claude Code and Cline; Codex and
+  Copilot keep the push deny, and `kanban doctor` says so, as it says the Commit action's conflict step in the base
+  worktree is a denied write. Kanban's `.cline/hooks` files are git-excluded (the PreToolUse one embeds the card's
+  policy); a stale `.codex/rules/kanban-guardrails.rules` is removed when guardrails are off; a Claude card's
+  `hooks/claude/cards/<id>.json` is removed on Done; the Cline guard decides on a write's resolved path against
+  roots as given and resolved; Codex's workspace-write sandbox may write `~/.npm`, `~/.cache` and the other package
+  caches; the doctor shows per-workspace guardrail overrides and caps its Codex sandbox probe at 5 s (a timed-out
+  probe is no longer cached as "no sandbox").

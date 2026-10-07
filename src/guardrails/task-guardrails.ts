@@ -8,10 +8,11 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 import { getWorkspacePipelineSettings, type PipelineConfig } from "../config/pipeline-config";
+import type { RuntimeTaskAutoReviewMode } from "../core/api-contract";
 import { isHomeAgentSessionId } from "../core/home-agent-session";
 import { getGitStdout } from "../workspace/git-utils";
 import { readSymlinkedIgnoredPaths } from "../workspace/task-worktree";
-import { type DeniedCommandRule, parseDeniedCommandPatterns } from "./command-patterns";
+import { allowOwnBranchPush, type DeniedCommandRule, parseDeniedCommandPatterns } from "./command-patterns";
 
 export interface TaskGuardrails {
 	/** The card's worktree (the agent's cwd). */
@@ -37,6 +38,11 @@ export interface TaskGuardrails {
 	/** Branches no card may rewrite: `guardrails.sharedBranches`, the workspace's default base and the card's base. */
 	sharedBranches: string[];
 	deniedCommands: DeniedCommandRule[];
+	/**
+	 * The card was launched with the PR git action and `guardrails.prCardPush` is `own-branch`: where Kanban's command
+	 * matcher guards the shell, it may push its own branch (listMatcherDeniedCommands); elsewhere push stays denied.
+	 */
+	ownBranchPush: boolean;
 }
 
 export interface ResolveTaskGuardrailsInput {
@@ -46,6 +52,8 @@ export interface ResolveTaskGuardrailsInput {
 	worktreePath: string;
 	projectPath: string;
 	baseRef?: string | null;
+	/** The card's git action (`autoReviewMode`) at launch; `pr` may allow pushing its own branch. */
+	gitAction?: RuntimeTaskAutoReviewMode | null;
 }
 
 function toBranchName(ref: string | null | undefined): string | null {
@@ -160,7 +168,19 @@ export async function resolveTaskGuardrails(input: ResolveTaskGuardrailsInput): 
 			[...settings.denyCommands, ...workspace.guardrails.extraDenyCommands],
 			sharedBranches,
 		),
+		ownBranchPush: input.gitAction === "pr" && settings.prCardPush === "own-branch",
 	};
+}
+
+/**
+ * The rules for agents whose guard runs Kanban's own command matcher (Claude Code's and Cline's PreToolUse hooks):
+ * a PR card's plain `git push` deny becomes `git push {shared-push}`. CLI-native deny lists (Codex, Copilot) can't
+ * tell a card's own branch from a shared one, so they keep `deniedCommands` as is.
+ */
+export function listMatcherDeniedCommands(guardrails: TaskGuardrails): DeniedCommandRule[] {
+	return guardrails.ownBranchPush
+		? allowOwnBranchPush(guardrails.deniedCommands, guardrails.sharedBranches)
+		: guardrails.deniedCommands;
 }
 
 /** Every directory the card may write: its worktree first. */
@@ -181,9 +201,17 @@ export function listGuardrailWritableRoots(guardrails: TaskGuardrails): string[]
  * The guardrails as one short paragraph for the launch prompt, for agents whose CLI can't enforce some of them.
  * `unenforced` names what the CLI does not block; the note says so, because a prompt line is the weaker guard.
  */
-export function buildGuardrailPromptNote(guardrails: TaskGuardrails, unenforced: readonly string[]): string {
+export function buildGuardrailPromptNote(
+	guardrails: TaskGuardrails,
+	unenforced: readonly string[],
+	rules: readonly DeniedCommandRule[] = guardrails.deniedCommands,
+): string {
 	const shared = guardrails.sharedBranches.join(", ");
-	const patterns = guardrails.deniedCommands.map((rule) => rule.pattern.replaceAll("{shared}", "<shared branch>"));
+	const patterns = rules.map((rule) =>
+		rule.sharedPush
+			? "git push to a shared branch or without naming the target branch (pushing your own branch, named explicitly, is fine)"
+			: rule.pattern.replaceAll("{shared}", "<shared branch>"),
+	);
 	const lines = [
 		"Kanban guardrails for this card:",
 		guardrails.confineWrites

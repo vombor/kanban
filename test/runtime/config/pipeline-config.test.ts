@@ -37,6 +37,7 @@ describe("pipeline config", () => {
 			extraWritableDirs: [],
 			sharedBranches: ["main", "master"],
 			denyCommands: [...DEFAULT_GUARDRAIL_DENY_COMMANDS],
+			prCardPush: "own-branch",
 		});
 		expect(config.guardrails.denyCommands).toEqual(
 			expect.arrayContaining(["git push", "git filter-branch", "git update-ref {shared}", "kanban home migrate"]),

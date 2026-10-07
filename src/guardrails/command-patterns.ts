@@ -2,32 +2,49 @@
 // command lines. Agent-agnostic: each agent adapter translates the parsed rules into its CLI's own mechanism
 // (src/terminal/agent-guardrails.ts), and the matcher is what Kanban's own hooks use where the CLI only offers a hook.
 //
-// Pattern syntax: words separated by spaces, matched against a command's words from the start (a prefix: anything
-// may follow). `a|b` matches either word. `{shared}` matches any shared branch, as `<name>` or `refs/heads/<name>`.
+// Pattern syntax: words separated by spaces. `a|b` matches either word. `{shared}` matches any shared branch, as
+// `<name>` or `refs/heads/<name>`. The leading words (the program and its subcommand: up to the last slot that is
+// neither an option slot nor `{shared}`) match the command's first words in order. The option slots and `{shared}`
+// after them match any later words, in any order, so `git update-ref -m msg refs/heads/main X` and
+// `git branch -q -D main` are caught. Anything else may follow.
+// `{shared-push}` (only as `git push {shared-push}`) matches a push that may update a shared branch: no explicit
+// target, `HEAD` without `:<branch>`, `--all`/`--mirror`/`--prune`, or a refspec whose destination is shared.
 //
 //   "git push"                                → git push, git push --force origin x, …
-//   "git branch -D|-d|--delete {shared}"     → git branch -D main, git branch --delete refs/heads/fork/stack
+//   "git branch -D|-d|--delete {shared}"     → git branch -D main, git branch -q --delete refs/heads/fork/stack
+//
+// Because `{shared}` matches anywhere after the subcommand, a command that names a shared branch only as a start
+// point is caught as well (`git checkout -B card main`); `origin/main` is not a shared-branch word.
 //
 // The matcher splits a command line on `&&`, `||`, `;`, `|`, `&`, newlines and parentheses, drops leading
-// `VAR=value` words and wrappers (`sudo`, `env`, `command`, `exec`, `nohup`, `time`), looks inside `sh|bash|zsh -c
-// '<script>'`, and skips git's global options (`git -C <dir> push`). It is a guard against an agent's ordinary
-// command forms, not a sandbox: `eval`, scripts or aliases get past it.
+// `VAR=value` words and wrappers (`sudo`, `env`, `timeout`, `nice`, …), looks inside `sh|bash|zsh -c '<script>'`,
+// and skips git's global options (`git -C <dir> push`). It is a guard against an agent's ordinary command forms, not
+// a sandbox: `eval`, scripts or aliases get past it.
 import { basename } from "node:path";
 
 const SHARED_BRANCH_PLACEHOLDER = "{shared}";
+const SHARED_PUSH_PLACEHOLDER = "{shared-push}";
 
-/** One denied-command rule: `words[i]` lists the words allowed at position i. */
+/** One denied-command rule: `words[i]` lists the words allowed in slot i. */
 export interface DeniedCommandRule {
 	/** The pattern as configured, `{shared}` included. */
 	pattern: string;
 	words: string[][];
+	/** Slots `[0, headLength)` match the command's first words in order; the others match any later words. */
+	headLength: number;
+	/** `git push {shared-push}`: the shared branch names the push may not update (pushMayUpdateSharedBranch). */
+	sharedPush?: string[];
+}
+
+function toSharedBranchName(branch: string): string {
+	return branch.trim().replace(/^refs\/heads\//u, "");
 }
 
 /** The words a `{shared}` slot stands for: each branch by name and as a full ref. */
 export function expandSharedBranchWords(sharedBranches: readonly string[]): string[] {
 	const words: string[] = [];
 	for (const branch of sharedBranches) {
-		const name = branch.trim().replace(/^refs\/heads\//u, "");
+		const name = toSharedBranchName(branch);
 		if (!name) {
 			continue;
 		}
@@ -48,28 +65,77 @@ export function parseDeniedCommandPatterns(
 	const sharedWords = expandSharedBranchWords(sharedBranches);
 	const rules: DeniedCommandRule[] = [];
 	for (const pattern of patterns) {
-		const words = pattern
-			.trim()
-			.split(/\s+/u)
-			.filter(Boolean)
-			.map((token) =>
-				token === SHARED_BRANCH_PLACEHOLDER ? [...sharedWords] : token.split("|").filter((word) => word.length > 0),
-			);
+		const tokens = pattern.trim().split(/\s+/u).filter(Boolean);
+		const sharedPush = tokens.at(-1) === SHARED_PUSH_PLACEHOLDER;
+		if (sharedPush) {
+			tokens.pop();
+			if (tokens.join(" ") !== "git push") {
+				continue;
+			}
+		}
+		const words = tokens.map((token) =>
+			token === SHARED_BRANCH_PLACEHOLDER ? [...sharedWords] : token.split("|").filter((word) => word.length > 0),
+		);
 		if (words.length === 0 || words.some((alternatives) => alternatives.length === 0)) {
 			continue;
 		}
-		rules.push({ pattern: pattern.trim(), words });
+		// The head runs through the last slot that is neither `{shared}` nor an option slot.
+		let headLength = 1;
+		tokens.forEach((token, index) => {
+			const floats =
+				token === SHARED_BRANCH_PLACEHOLDER || (words[index] ?? []).every((word) => word.startsWith("-"));
+			if (index > 0 && !floats) {
+				headLength = index + 1;
+			}
+		});
+		rules.push({
+			pattern: pattern.trim(),
+			words,
+			headLength,
+			...(sharedPush
+				? { sharedPush: sharedBranches.map(toSharedBranchName).filter((name) => name.length > 0) }
+				: {}),
+		});
 	}
 	return rules;
 }
 
-/** Every word sequence a rule stands for (the cartesian product of its alternatives). */
-export function expandDeniedCommandRule(rule: DeniedCommandRule): string[][] {
+function isPlainGitPushRule(rule: DeniedCommandRule): boolean {
+	const [program, subcommand] = rule.words;
+	return (
+		!rule.sharedPush &&
+		rule.words.length === 2 &&
+		program?.length === 1 &&
+		program[0] === "git" &&
+		subcommand?.length === 1 &&
+		subcommand[0] === "push"
+	);
+}
+
+/**
+ * The rules of a card that may push its own branch (the PR git action): a plain `git push` rule becomes
+ * `git push {shared-push}`, so a push that names a non-shared target branch is allowed.
+ */
+export function allowOwnBranchPush(
+	rules: readonly DeniedCommandRule[],
+	sharedBranches: readonly string[],
+): DeniedCommandRule[] {
+	const [sharedPushRule] = parseDeniedCommandPatterns([`git push ${SHARED_PUSH_PLACEHOLDER}`], sharedBranches);
+	return rules.map((rule) => (sharedPushRule && isPlainGitPushRule(rule) ? sharedPushRule : rule));
+}
+
+/** The cartesian product of slot alternatives. */
+export function expandSlots(slots: readonly (readonly string[])[]): string[][] {
 	let sequences: string[][] = [[]];
-	for (const alternatives of rule.words) {
+	for (const alternatives of slots) {
 		sequences = sequences.flatMap((sequence) => alternatives.map((word) => [...sequence, word]));
 	}
 	return sequences;
+}
+
+/** Every word sequence a rule stands for (the cartesian product of its alternatives), in pattern order. */
+export function expandDeniedCommandRule(rule: DeniedCommandRule): string[][] {
+	return expandSlots(rule.words);
 }
 
 const SEPARATORS = new Set(["&&", "||", ";", "|", "|&", "&", "\n", "(", ")"]);
@@ -190,13 +256,40 @@ export function splitShellCommandLine(commandLine: string): string[][] {
 		inWord = true;
 	}
 	endCommand();
+
 	return commands;
 }
 
-const WRAPPERS = new Set(["sudo", "env", "command", "exec", "nohup", "time", "builtin"]);
+// Wrappers that run their arguments as the command, with the options of each that take a separate value.
+const WRAPPERS = new Map<string, ReadonlySet<string>>([
+	["sudo", new Set(["-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "-T"])],
+	["env", new Set(["-u", "-C", "--unset", "--chdir"])],
+	["command", new Set()],
+	["exec", new Set(["-a"])],
+	["nohup", new Set()],
+	["time", new Set(["-f", "-o"])],
+	["builtin", new Set()],
+	["nice", new Set(["-n", "--adjustment"])],
+	["timeout", new Set(["-s", "--signal", "-k", "--kill-after"])],
+	["stdbuf", new Set(["-i", "-o", "-e"])],
+	["setsid", new Set()],
+	["ionice", new Set(["-c", "-n", "-p", "-P", "-u"])],
+	["xargs", new Set(["-n", "-L", "-I", "-P", "-d", "-a", "-E", "-s"])],
+]);
+// Wrappers with a positional argument before the command (`timeout 30 git push`).
+const WRAPPER_POSITIONAL_ARGUMENTS = new Map<string, number>([["timeout", 1]]);
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
 // git's global options that take a separate value (`git -C <dir> push`).
-const GIT_OPTIONS_WITH_VALUE = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"]);
+const GIT_OPTIONS_WITH_VALUE = new Set([
+	"-C",
+	"-c",
+	"--git-dir",
+	"--work-tree",
+	"--namespace",
+	"--exec-path",
+	"--config-env",
+	"--super-prefix",
+]);
 
 function isAssignment(word: string): boolean {
 	return /^[A-Za-z_][A-Za-z0-9_]*=/u.test(word);
@@ -211,12 +304,15 @@ function normalizeCommandWords(words: string[]): string[] {
 			index += 1;
 			continue;
 		}
-		if (WRAPPERS.has(basename(word))) {
+		const wrapper = basename(word);
+		const optionsWithValue = WRAPPERS.get(wrapper);
+		if (optionsWithValue) {
 			index += 1;
-			// The wrapper's own options (`sudo -u root`, `env -i`): skip dash words.
+			// The wrapper's own options (`sudo -u root`, `env -i`, `nice -n 5`) and positional arguments (`timeout 30`).
 			while (index < words.length && (words[index] ?? "").startsWith("-")) {
-				index += 1;
+				index += optionsWithValue.has(words[index] ?? "") ? 2 : 1;
 			}
+			index += WRAPPER_POSITIONAL_ARGUMENTS.get(wrapper) ?? 0;
 			continue;
 		}
 		break;
@@ -258,18 +354,91 @@ export function listShellCommands(commandLine: string, depth = 0): string[][] {
 	return commands;
 }
 
+// `git push` options that take a separate value, and the ones that push (or prune) refs without naming them.
+const GIT_PUSH_OPTIONS_WITH_VALUE = new Set(["-o", "--push-option", "--receive-pack", "--exec", "--repo"]);
+const GIT_PUSH_UNNAMED_REFS_OPTIONS = new Set(["--all", "--branches", "--mirror", "--prune"]);
+
+/**
+ * Whether `git push <args>` may update a shared branch: true unless every refspec names a destination branch that
+ * is not shared. A push without refspecs (push.default picks the target), `HEAD`/`@` without `:<branch>` (the
+ * current branch, which could be a shared one), a pattern refspec and `--all`/`--mirror`/`--prune` count as "may".
+ */
+export function pushMayUpdateSharedBranch(args: readonly string[], sharedBranches: readonly string[]): boolean {
+	const shared = new Set(sharedBranches.map(toSharedBranchName));
+	const positionals: string[] = [];
+	let repositoryGiven = false;
+	for (let index = 0; index < args.length; index += 1) {
+		const arg = args[index] ?? "";
+		if (arg === "--") {
+			positionals.push(...args.slice(index + 1));
+			break;
+		}
+		if (arg.startsWith("-")) {
+			const name = arg.split("=")[0] ?? arg;
+			if (GIT_PUSH_UNNAMED_REFS_OPTIONS.has(name)) {
+				return true;
+			}
+			repositoryGiven ||= name === "--repo";
+			if (GIT_PUSH_OPTIONS_WITH_VALUE.has(arg)) {
+				index += 1;
+			}
+			continue;
+		}
+		positionals.push(arg);
+	}
+	const refspecs = repositoryGiven ? positionals : positionals.slice(1);
+	if (refspecs.length === 0) {
+		return true;
+	}
+	return refspecs.some((refspec) => {
+		const spec = refspec.replace(/^\+/u, "");
+		const colon = spec.indexOf(":");
+		const destination = colon === -1 ? spec : spec.slice(colon + 1);
+		if (destination === "" || destination === "HEAD" || destination === "@" || destination.includes("*")) {
+			return true;
+		}
+		return shared.has(toSharedBranchName(destination));
+	});
+}
+
+/** Whether each floating slot is matched by a different one of `words`, in any order. */
+function matchFloatingSlots(slots: readonly string[][], words: readonly string[], used: boolean[] = []): boolean {
+	const [slot, ...rest] = slots;
+	if (!slot) {
+		return true;
+	}
+	return words.some((word, index) => {
+		if (used[index] || !slot.includes(word)) {
+			return false;
+		}
+		const nextUsed = [...used];
+		nextUsed[index] = true;
+		return matchFloatingSlots(rest, words, nextUsed);
+	});
+}
+
 function ruleMatchesWords(rule: DeniedCommandRule, words: string[]): boolean {
 	if (words.length < rule.words.length) {
 		return false;
 	}
-	return rule.words.every((alternatives, index) => alternatives.includes(words[index] ?? ""));
+	const head = rule.words.slice(0, rule.headLength);
+	if (!head.every((alternatives, index) => alternatives.includes(words[index] ?? ""))) {
+		return false;
+	}
+	const after = words.slice(rule.headLength);
+	if (rule.sharedPush) {
+		return pushMayUpdateSharedBranch(after, rule.sharedPush);
+	}
+	return matchFloatingSlots(rule.words.slice(rule.headLength), after);
+}
+
+export interface DeniedCommandMatch {
+	rule: DeniedCommandRule;
+	command: string;
 }
 
 /** The first rule a command line breaks, or null. */
-export function findDeniedCommand(
-	commandLine: string,
-	rules: readonly DeniedCommandRule[],
-): { rule: DeniedCommandRule; command: string } | null {
+export function findDeniedCommand(commandLine: string, rules: readonly DeniedCommandRule[]): DeniedCommandMatch | null {
 	for (const words of listShellCommands(commandLine)) {
 		const rule = rules.find((candidate) => ruleMatchesWords(candidate, words));
 		if (rule) {
@@ -277,4 +446,13 @@ export function findDeniedCommand(
 		}
 	}
 	return null;
+}
+
+/** What Kanban's guard hooks tell the agent about a blocked command. */
+export function describeDeniedCommand(match: DeniedCommandMatch): string {
+	const blocked = `Blocked by Kanban's task-card guardrails: \`${match.command}\``;
+	if (match.rule.sharedPush) {
+		return `${blocked} may update a shared branch (${match.rule.sharedPush.join(", ")}). This card may push only its own branch, named explicitly: \`git push -u origin HEAD:<your-branch>\` or \`git push -u origin <your-branch>\`.`;
+	}
+	return `${blocked} matches "${match.rule.pattern}". Task cards never push, rewrite shared branches or restart services; leave that to the orchestrator.`;
 }

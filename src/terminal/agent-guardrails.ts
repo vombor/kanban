@@ -1,13 +1,20 @@
 // How each agent CLI enforces a task card's guardrails (src/guardrails/task-guardrails.ts), kept with the other
 // per-agent adapter knowledge. Every mechanism below was checked against the installed CLI on 2026-10-07:
 //
-// - Claude Code (2.1.x): `permissions.deny` in the card's --settings file. `Bash(<prefix> *)` rules apply to each
-//   subcommand of a compound command, also in auto mode; `Edit(//<abs>/**)` covers the file tools, the Bash file
-//   commands Claude Code recognizes and redirect targets (code.claude.com/docs/en/permissions). The user's own
-//   autoMode rules apply on top.
+// - Claude Code (2.1.292): `permissions.deny` in the card's --settings file, plus a PreToolUse hook on Bash that runs
+//   `kanban hooks claude-guard` (Kanban's own matcher, as for Cline). Deny rules apply to each subcommand of a
+//   compound command, also in auto mode, and `*` matches any text, spaces included; but a rule only matches the
+//   command text as written, so `Bash(git push *)` misses `git -C . push`, `git 'push'`, `/usr/bin/git push` and
+//   `sh -c 'git push'` (code.claude.com/docs/en/permissions, "What a Bash rule doesn't match"). The rules here also
+//   cover git's global options (`git -* push *`) and `{shared}` anywhere after the subcommand; the hook covers the
+//   rest the matcher knows (quoting, paths, wrappers, `sh -c`) and a PR card's own-branch push, which globs can't
+//   express. A hook's `permissionDecision: "deny"` prevents the tool call in every permission mode, and deny rules
+//   still apply whatever the hook says (code.claude.com/docs/en/hooks). `Edit(//<abs>/**)` covers the file tools,
+//   the Bash file commands Claude Code recognizes and redirect targets. The user's own autoMode rules apply on top.
 // - Codex (0.160): `prefix_rule(..., decision="forbidden")` in `<worktree>/.codex/rules/` (project rules of a
 //   trusted project; Kanban pre-trusts the repo). Verified to reject `git push` even with
-//   --dangerously-bypass-approvals-and-sandbox. Matching is by argv prefix, so `git -C <dir> push` is not caught.
+//   --dangerously-bypass-approvals-and-sandbox. Matching is by argv prefix, so `git -C <dir> push` is not caught,
+//   and option slots and `{shared}` are only caught right after the subcommand (each order of them is a rule).
 //   Writes are confined by `--sandbox workspace-write` (reads stay unrestricted) only where Codex's Linux sandbox
 //   runs (bubblewrap with user namespaces; a rootless container usually can't), so it is probed first.
 // - Cline CLI (3.x): no deny flag, and tool policies are per tool. Its PreToolUse hook is blocking: `{"cancel":
@@ -24,12 +31,12 @@
 // - Gemini, OpenCode, Droid, Kiro: not installed here, so nothing was verified against their CLI: prompt only.
 import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { RuntimeAgentId } from "../core/api-contract";
-import { type DeniedCommandRule, expandDeniedCommandRule } from "../guardrails/command-patterns";
-import { isPathInside, type TaskGuardrails } from "../guardrails/task-guardrails";
+import { type DeniedCommandRule, expandSlots } from "../guardrails/command-patterns";
+import { isPathInside, listMatcherDeniedCommands, type TaskGuardrails } from "../guardrails/task-guardrails";
 
 export type GuardrailEnforcement = "native" | "partial" | "prompt" | "none";
 
@@ -48,6 +55,14 @@ export interface AgentGuardrailContext {
 	deniedCommands?: readonly DeniedCommandRule[];
 	/** `guardrails.confineWrites`; default true. */
 	confineWrites?: boolean;
+}
+
+/**
+ * Whether the agent's command guard is Kanban's own matcher (a PreToolUse hook running command-patterns.ts), so a
+ * PR card's `git push {shared-push}` can be enforced. CLI-native deny lists can't tell the target branch.
+ */
+export function usesKanbanCommandMatcher(agentId: RuntimeAgentId): boolean {
+	return agentId === "claude" || agentId === "cline";
 }
 
 // ---------------------------------------------------------------------------
@@ -92,59 +107,101 @@ export function buildCopilotWriteDenyTools(guardrails: TaskGuardrails): string[]
 // ---------------------------------------------------------------------------
 
 export const CODEX_GUARDRAIL_RULES_RELATIVE_PATH = ".codex/rules/kanban-guardrails.rules";
+/** The first line of the rules file Kanban writes; a file without it is the user's. */
+export const CODEX_GUARDRAIL_RULES_MARKER = "kanban-managed: task-card guardrails";
 
 function toStarlarkString(value: string): string {
 	return JSON.stringify(value);
 }
 
-/** The execpolicy rules file: one `forbidden` prefix rule per pattern (a list position = alternatives). */
+/** Every order of a rule's floating slots (options, `{shared}`), each after its head slots. */
+export function listRuleSlotOrders(rule: DeniedCommandRule): string[][][] {
+	const head = rule.words.slice(0, rule.headLength);
+	const permute = (slots: string[][]): string[][][] =>
+		slots.length <= 1
+			? [slots]
+			: slots.flatMap((slot, index) =>
+					permute([...slots.slice(0, index), ...slots.slice(index + 1)]).map((rest) => [slot, ...rest]),
+				);
+	return permute(rule.words.slice(rule.headLength)).map((tail) => [...head, ...tail]);
+}
+
+/**
+ * The execpolicy rules file: one `forbidden` prefix rule per pattern and order of its floating slots (a list
+ * position = alternatives). A `{shared-push}` rule forbids every `git push`: an argv prefix can't tell the
+ * target branch.
+ */
 export function buildCodexRulesFile(rules: readonly DeniedCommandRule[]): string {
 	const lines = [
-		"# kanban-managed: task-card guardrails (guardrails.denyCommands in Kanban's config.json). Rewritten at each launch.",
+		`# ${CODEX_GUARDRAIL_RULES_MARKER} (guardrails.denyCommands in Kanban's config.json). Rewritten at each launch.`,
 	];
 	for (const rule of rules) {
-		// The program position is always a single word: one rule per program.
-		const [programs = [], ...rest] = rule.words;
-		for (const program of programs) {
-			const pattern = [toStarlarkString(program)].concat(
-				rest.map((alternatives) =>
-					alternatives.length === 1
-						? toStarlarkString(alternatives[0] ?? "")
-						: `[${alternatives.map(toStarlarkString).join(", ")}]`,
-				),
-			);
-			lines.push(
-				`prefix_rule(pattern=[${pattern.join(", ")}], decision="forbidden", justification=${toStarlarkString(
-					`Kanban guardrail for task cards: ${rule.pattern}`,
-				)})`,
-			);
+		for (const slots of listRuleSlotOrders(rule)) {
+			// The program position is always a single word: one rule per program.
+			const [programs = [], ...rest] = slots;
+			for (const program of programs) {
+				const pattern = [toStarlarkString(program)].concat(
+					rest.map((alternatives) =>
+						alternatives.length === 1
+							? toStarlarkString(alternatives[0] ?? "")
+							: `[${alternatives.map(toStarlarkString).join(", ")}]`,
+					),
+				);
+				lines.push(
+					`prefix_rule(pattern=[${pattern.join(", ")}], decision="forbidden", justification=${toStarlarkString(
+						`Kanban guardrail for task cards: ${rule.pattern}`,
+					)})`,
+				);
+			}
 		}
 	}
 	return `${lines.join("\n")}\n`;
 }
 
+/**
+ * The tool caches a card's installs and test runs write under the user's home: npm's cache (`npm ci`), the XDG
+ * cache (Playwright's browsers, node-gyp, pip, …) and the other package managers' stores.
+ */
+export function listToolCacheDirs(home = homedir()): string[] {
+	if (!home) {
+		return [];
+	}
+	return [".npm", ".cache", ".pnpm-store", ".yarn", ".bun/install/cache"].map((dir) => join(home, dir));
+}
+
 /** The --add-dir dirs of Codex's workspace-write sandbox (the cwd, /tmp and $TMPDIR are always writable). */
-export function listCodexWritableDirs(guardrails: TaskGuardrails): string[] {
-	const dirs = [guardrails.gitCommonDir, ...guardrails.linkedDirs, ...guardrails.extraWritableDirs].filter(
-		(dir): dir is string => Boolean(dir),
-	);
+export function listCodexWritableDirs(guardrails: TaskGuardrails, home = homedir()): string[] {
+	const dirs = [
+		guardrails.gitCommonDir,
+		...guardrails.linkedDirs,
+		...guardrails.extraWritableDirs,
+		...listToolCacheDirs(home),
+	].filter((dir): dir is string => Boolean(dir));
 	return [...new Set(dirs)].filter((dir) => !isPathInside(guardrails.worktreePath, dir));
 }
 
 const CODEX_SANDBOX_PROBE_TIMEOUT_MS = 15_000;
-const codexSandboxProbes = new Map<string, Promise<boolean>>();
+// Settled probes by binary. A probe that timed out is not kept: a slow first start must not turn the sandbox off
+// for the rest of the process.
+const codexSandboxProbes = new Map<string, Promise<boolean | null>>();
 
-async function runCodexSandboxProbe(binary: string): Promise<boolean> {
+export interface CodexSandboxProbeOptions {
+	/** How long the probe may run; default 15 s. */
+	timeoutMs?: number;
+}
+
+/** Runs `codex sandbox` once: true/false, or null when it timed out. */
+async function runCodexSandboxProbe(binary: string, timeoutMs: number): Promise<boolean | null> {
 	const dir = await mkdtemp(join(tmpdir(), "kanban-codex-sandbox-"));
 	try {
-		return await new Promise<boolean>((resolvePromise) => {
+		return await new Promise<boolean | null>((resolvePromise) => {
 			const child = spawn(binary, ["sandbox", "-P", ":workspace", "-C", dir, "--", "true"], {
 				stdio: "ignore",
 			});
 			const timer = setTimeout(() => {
 				child.kill("SIGKILL");
-				resolvePromise(false);
-			}, CODEX_SANDBOX_PROBE_TIMEOUT_MS);
+				resolvePromise(null);
+			}, timeoutMs);
 			child.once("error", () => {
 				clearTimeout(timer);
 				resolvePromise(false);
@@ -159,33 +216,109 @@ async function runCodexSandboxProbe(binary: string): Promise<boolean> {
 	}
 }
 
-/** Whether `codex sandbox` can run a command here (once per binary per process). */
-export async function probeCodexSandbox(binary = "codex"): Promise<boolean> {
+/** Whether `codex sandbox` ran a command here, or null when the probe timed out (settled results cached per binary). */
+export async function probeCodexSandboxResult(
+	binary = "codex",
+	options: CodexSandboxProbeOptions = {},
+): Promise<boolean | null> {
 	let probe = codexSandboxProbes.get(binary);
 	if (!probe) {
-		probe = runCodexSandboxProbe(binary);
+		probe = runCodexSandboxProbe(binary, options.timeoutMs ?? CODEX_SANDBOX_PROBE_TIMEOUT_MS);
 		codexSandboxProbes.set(binary, probe);
+		void probe.then((result) => {
+			if (result === null && codexSandboxProbes.get(binary) === probe) {
+				codexSandboxProbes.delete(binary);
+			}
+		});
 	}
 	return await probe;
 }
 
-/** Whether the agent's OS sandbox runs here, for agents that have one (Codex); null for the others. */
-export async function probeAgentSandbox(agentId: RuntimeAgentId, binary: string): Promise<boolean | null> {
-	return agentId === "codex" ? await probeCodexSandbox(binary) : null;
+/** Whether `codex sandbox` can run a command here; a timed-out probe counts as no (the card keeps the bypass). */
+export async function probeCodexSandbox(binary = "codex"): Promise<boolean> {
+	return (await probeCodexSandboxResult(binary)) === true;
+}
+
+/**
+ * Whether the agent's OS sandbox runs here, for agents that have one (Codex); null for the others, and when the
+ * probe timed out (not known).
+ */
+export async function probeAgentSandbox(
+	agentId: RuntimeAgentId,
+	binary: string,
+	options: CodexSandboxProbeOptions = {},
+): Promise<boolean | null> {
+	return agentId === "codex" ? await probeCodexSandboxResult(binary, options) : null;
 }
 
 // ---------------------------------------------------------------------------
 // Claude Code
 // ---------------------------------------------------------------------------
 
+/** The text a rule's head may start with: as written and, for git, after global options (`git -C <dir> push`). */
+function listClaudeCommandPrefixes(head: readonly string[]): string[] {
+	const [program, ...rest] = head;
+	const plain = head.join(" ");
+	return program === "git" && rest.length > 0 ? [plain, `git -* ${rest.join(" ")}`] : [plain];
+}
+
+// A `git push` without a target branch, or one that pushes refs it doesn't name (pushMayUpdateSharedBranch).
+const CLAUDE_UNNAMED_PUSH_WORDS = ["HEAD", "+HEAD", "@", "+@", ":", "--all", "--branches", "--mirror", "--prune"];
+
+/**
+ * The deny rules for a `git push {shared-push}` rule (a PR card's own-branch push): a shared branch as a refspec or
+ * as its destination, an unnamed target, and the bare command. A push naming only its remote (`git push origin`)
+ * can't be told from one naming a branch, so only the guard hook catches that.
+ */
+function buildClaudeSharedPushDeny(sharedBranches: readonly string[]): string[] {
+	const words = [...CLAUDE_UNNAMED_PUSH_WORDS];
+	const destinations: string[] = [];
+	for (const name of sharedBranches) {
+		for (const ref of [name, `refs/heads/${name}`]) {
+			words.push(ref, `+${ref}`);
+			destinations.push(ref);
+		}
+	}
+	const deny: string[] = [];
+	for (const prefix of listClaudeCommandPrefixes(["git", "push"])) {
+		deny.push(`Bash(${prefix})`);
+		for (const word of words) {
+			deny.push(`Bash(${prefix}* ${word})`, `Bash(${prefix}* ${word} *)`);
+		}
+		for (const destination of destinations) {
+			deny.push(`Bash(${prefix}*:${destination})`, `Bash(${prefix}*:${destination} *)`);
+		}
+	}
+	return deny;
+}
+
+/**
+ * The `Bash(...)` deny rules for one rule. `*` matches any text, so `git branch* -D* main` is `git branch`, then
+ * ` -D` and ` main` as later words (each order of the floating slots is a rule), and the trailing ` *` form lets
+ * anything follow.
+ */
+export function buildClaudeBashDeny(rule: DeniedCommandRule): string[] {
+	if (rule.sharedPush) {
+		return buildClaudeSharedPushDeny(rule.sharedPush);
+	}
+	const deny: string[] = [];
+	for (const slots of listRuleSlotOrders(rule)) {
+		for (const words of expandSlots(slots)) {
+			const tail = words.slice(rule.headLength);
+			for (const prefix of listClaudeCommandPrefixes(words.slice(0, rule.headLength))) {
+				const command = tail.length > 0 ? `${prefix}${tail.map((word) => `* ${word}`).join("")}` : prefix;
+				deny.push(`Bash(${command})`, `Bash(${command} *)`);
+			}
+		}
+	}
+	return deny;
+}
+
 /** `permissions.deny` entries for a card's --settings file. */
 export function buildClaudePermissionDeny(guardrails: TaskGuardrails): string[] {
 	const deny: string[] = [];
-	for (const rule of guardrails.deniedCommands) {
-		for (const words of expandDeniedCommandRule(rule)) {
-			const command = words.join(" ");
-			deny.push(`Bash(${command})`, `Bash(${command} *)`);
-		}
+	for (const rule of listMatcherDeniedCommands(guardrails)) {
+		deny.push(...buildClaudeBashDeny(rule));
 	}
 	if (guardrails.confineWrites) {
 		// `//` is an absolute path from the filesystem root in a permission rule.
@@ -198,12 +331,16 @@ export function buildClaudePermissionDeny(guardrails: TaskGuardrails): string[] 
 // Cline CLI
 // ---------------------------------------------------------------------------
 
+/** What `kanban hooks claude-guard` gets (base64 JSON on its command line). */
+export interface CommandGuardPolicy {
+	deniedCommands: DeniedCommandRule[];
+}
+
 /** What `kanban hooks cline-guard` gets (base64 JSON on its command line). */
-export interface ClineGuardPolicy {
+export interface ClineGuardPolicy extends CommandGuardPolicy {
 	worktreePath: string;
 	confineWrites: boolean;
 	writableRoots: string[];
-	deniedCommands: DeniedCommandRule[];
 }
 
 // ---------------------------------------------------------------------------
@@ -227,7 +364,11 @@ export function describeAgentGuardrails(
 	switch (agentId) {
 		case "claude":
 			return {
-				commands: { level: "native", mechanism: "permissions.deny Bash rules in the card's --settings file" },
+				commands: {
+					level: "native",
+					mechanism:
+						"permissions.deny Bash rules in the card's --settings file (also after git's global options, {shared} anywhere after the subcommand) plus Kanban's PreToolUse hook on Bash, which also catches quoted, wrapped and sh -c forms and checks a PR card's own-branch push",
+				},
 				writes: confineWrites
 					? {
 							level: "partial",
@@ -243,7 +384,8 @@ export function describeAgentGuardrails(
 			return {
 				commands: {
 					level: "partial",
-					mechanism: "execpolicy forbidden rules in .codex/rules (argv prefix: `git -C <dir> push` is not caught)",
+					mechanism:
+						"execpolicy forbidden rules in .codex/rules (argv prefix: `git -C <dir> push` is not caught, and options or {shared} only right after the subcommand)",
 				},
 				writes: !confineWrites
 					? notConfined
@@ -254,7 +396,7 @@ export function describeAgentGuardrails(
 								mechanism:
 									context.codexSandbox === false
 										? "Codex's sandbox can't run on this host (bubblewrap), so cards keep --dangerously-bypass-approvals-and-sandbox"
-										: "workspace-write sandbox when Codex's sandbox runs on the host (not probed)",
+										: "workspace-write sandbox when Codex's sandbox runs on the host (not probed, or the probe timed out)",
 							},
 				reads: unrestrictedReads,
 				unenforced: [

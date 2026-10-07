@@ -62,8 +62,9 @@ export const workspacePipelineSettingsSchema = z
 			.strict()
 			.default({ enabled: true }),
 		kit: workspaceKitRefSchema.nullable().default(null),
-		// Task-card guardrails (src/guardrails/): null keeps the machine-wide `guardrails.enabled`. The lists are
-		// added to the machine-wide ones, so a workspace can only tighten them.
+		// Task-card guardrails (src/guardrails/): `enabled` overrides the machine-wide `guardrails.enabled` either
+		// way (null keeps it). The lists are added to the machine-wide ones: extra deny patterns tighten, extra
+		// writable dirs loosen.
 		guardrails: z
 			.object({
 				enabled: z.boolean().nullable().default(null),
@@ -368,17 +369,17 @@ export function migrateLegacyConfigKeys(config: Record<string, unknown>): {
 }
 
 /**
- * The commands a task card's agent must never run (src/guardrails/command-patterns.ts has the syntax): words match
- * the command's own words from the start, `a|b` is either word, `{shared}` is any shared branch (`guardrails.sharedBranches`
- * plus the card's base branch, also as `refs/heads/<name>`). Card-local rebases and resets stay allowed: a card's
- * worktree is on its own branch, and git refuses to check out a branch another worktree has.
+ * The commands a task card's agent must never run (src/guardrails/command-patterns.ts has the syntax): the program
+ * and subcommand match the command's first words, option slots and `{shared}` match any later word, `a|b` is either
+ * word, `{shared}` is any shared branch (`guardrails.sharedBranches` plus the card's base branch, also as
+ * `refs/heads/<name>`). Card-local rebases and resets stay allowed: a card's worktree is on its own branch, and git
+ * refuses to check out a branch another worktree has.
  */
 export const DEFAULT_GUARDRAIL_DENY_COMMANDS = [
 	"git push",
 	"git filter-branch",
 	"git filter-repo",
 	"git update-ref {shared}",
-	"git update-ref -d {shared}",
 	"git branch -D|-d|--delete|-f|--force|-m|-M {shared}",
 	"git switch -C|--force-create {shared}",
 	"git checkout -B {shared}",
@@ -402,6 +403,11 @@ const guardrailsSectionSchema = z
 		extraWritableDirs: z.array(z.string().min(1)).default([]),
 		sharedBranches: z.array(z.string().min(1)).default(() => [...DEFAULT_GUARDRAIL_SHARED_BRANCHES]),
 		denyCommands: z.array(z.string().min(1)).default(() => [...DEFAULT_GUARDRAIL_DENY_COMMANDS]),
+		// Cards launched with the PR git action (Open PR, auto-review `pr`): `own-branch` turns the plain `git push`
+		// deny into `git push {shared-push}` where Kanban's command matcher guards the shell (Claude Code, Cline), so
+		// the card can push its own branch but never a shared one; `deny` keeps every push denied. Codex and Copilot
+		// cards keep the push deny either way (src/terminal/agent-guardrails.ts).
+		prCardPush: z.enum(["own-branch", "deny"]).default("own-branch"),
 	})
 	.strict();
 export type GuardrailsSettings = z.infer<typeof guardrailsSectionSchema>;

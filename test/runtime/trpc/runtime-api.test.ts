@@ -26,6 +26,10 @@ const guardrailMocks = vi.hoisted(() => ({
 	resolveTaskGuardrails: vi.fn(),
 }));
 
+const boardMocks = vi.hoisted(() => ({
+	loadWorkspaceBoardById: vi.fn(),
+}));
+
 vi.mock("../../../src/terminal/agent-registry.js", () => ({
 	resolveAgentCommand: agentRegistryMocks.resolveAgentCommand,
 	buildRuntimeConfigResponse: agentRegistryMocks.buildRuntimeConfigResponse,
@@ -41,6 +45,11 @@ vi.mock("../../../src/workspace/turn-checkpoints.js", () => ({
 
 vi.mock("../../../src/guardrails/task-guardrails.js", () => ({
 	resolveTaskGuardrails: guardrailMocks.resolveTaskGuardrails,
+}));
+
+vi.mock("../../../src/state/workspace-state.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../src/state/workspace-state")>()),
+	loadWorkspaceBoardById: boardMocks.loadWorkspaceBoardById,
 }));
 
 vi.mock("../../../src/server/browser.js", () => ({
@@ -140,6 +149,8 @@ describe("createRuntimeApi startTaskSession", () => {
 		turnCheckpointMocks.captureTaskTurnCheckpoint.mockReset();
 		browserMocks.openInBrowser.mockReset();
 		guardrailMocks.resolveTaskGuardrails.mockReset();
+		boardMocks.loadWorkspaceBoardById.mockReset();
+		boardMocks.loadWorkspaceBoardById.mockRejectedValue(new Error("no board"));
 		guardrailMocks.resolveTaskGuardrails.mockResolvedValue(null);
 		agentRegistryMocks.resolveAgentCommand.mockReturnValue({
 			agentId: "claude",
@@ -314,6 +325,42 @@ describe("createRuntimeApi startTaskSession", () => {
 			}),
 		);
 		expect(terminalManager.startTaskSession).toHaveBeenCalledWith(expect.objectContaining({ guardrails }));
+	});
+
+	it("passes the card's git action to the guardrails, so a PR card may push its own branch", async () => {
+		taskWorktreeMocks.resolveTaskCwd.mockResolvedValue("/tmp/existing-worktree");
+		boardMocks.loadWorkspaceBoardById.mockResolvedValue({
+			columns: [{ id: "review", title: "Review", cards: [{ id: "task-1", autoReviewMode: "pr" }] }],
+			dependencies: [],
+		});
+		const terminalManager = {
+			startTaskSession: vi.fn(async () => createSummary()),
+			applyTurnCheckpoint: vi.fn(),
+		};
+		const api = createTestRuntimeApi({
+			getActiveWorkspaceId: vi.fn(() => "workspace-1"),
+			loadScopedRuntimeConfig: vi.fn(async () => createRuntimeConfigState()),
+			setActiveRuntimeConfig: vi.fn(),
+			getScopedTerminalManager: vi.fn(async () => terminalManager as never),
+			resolveInteractiveShellCommand: vi.fn(),
+		});
+
+		await api.startTaskSession(
+			{ workspaceId: "workspace-1", workspacePath: "/tmp/repo" },
+			{ taskId: "task-1", baseRef: "fork/stack", prompt: "Fix it" },
+		);
+		expect(boardMocks.loadWorkspaceBoardById).toHaveBeenCalledWith("workspace-1");
+		expect(guardrailMocks.resolveTaskGuardrails).toHaveBeenCalledWith(expect.objectContaining({ gitAction: "pr" }));
+
+		// No readable board: no git action, so push stays denied.
+		boardMocks.loadWorkspaceBoardById.mockRejectedValue(new Error("unreadable"));
+		await api.startTaskSession(
+			{ workspaceId: "workspace-1", workspacePath: "/tmp/repo" },
+			{ taskId: "task-1", baseRef: "fork/stack", prompt: "Fix it" },
+		);
+		expect(guardrailMocks.resolveTaskGuardrails).toHaveBeenLastCalledWith(
+			expect.objectContaining({ gitAction: null }),
+		);
 	});
 
 	it("launches Cline cards as a terminal agent with the card's provider and model", async () => {

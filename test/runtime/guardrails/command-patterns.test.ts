@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import { DEFAULT_GUARDRAIL_DENY_COMMANDS } from "../../../src/config/pipeline-config";
 import {
+	allowOwnBranchPush,
+	describeDeniedCommand,
 	expandDeniedCommandRule,
 	findDeniedCommand,
 	listShellCommands,
 	parseDeniedCommandPatterns,
+	pushMayUpdateSharedBranch,
 	splitShellCommandLine,
 } from "../../../src/guardrails/command-patterns";
 
@@ -24,6 +27,11 @@ describe("denied-command patterns", () => {
 			["-D", "--delete"],
 			["main", "refs/heads/main", "fork/stack", "refs/heads/fork/stack"],
 		]);
+		// `git branch` is the head; the option slot and {shared} float.
+		expect(rule?.headLength).toBe(2);
+		expect(parseDeniedCommandPatterns(["systemctl --user restart|stop"], [])[0]?.headLength).toBe(3);
+		// {shared-push} only after `git push`.
+		expect(parseDeniedCommandPatterns(["git fetch {shared-push}"], ["main"])).toEqual([]);
 		expect(rule ? expandDeniedCommandRule(rule) : []).toHaveLength(8);
 		// No shared branches: a {shared} rule stands for nothing, so it is dropped.
 		expect(parseDeniedCommandPatterns(["git update-ref {shared}", " "], [])).toEqual([]);
@@ -52,7 +60,7 @@ describe("denied-command patterns", () => {
 
 	it("denies history rewrites of shared branches and keeps card-local ones allowed", () => {
 		expect(denied("git update-ref refs/heads/fork/stack HEAD")).toBe("git update-ref {shared}");
-		expect(denied("git update-ref -d refs/heads/main")).toBe("git update-ref -d {shared}");
+		expect(denied("git update-ref -d refs/heads/main")).toBe("git update-ref {shared}");
 		expect(denied("git branch -D fork/stack")).toBe("git branch -D|-d|--delete|-f|--force|-m|-M {shared}");
 		expect(denied("git branch --force main HEAD~3")).toBe("git branch -D|-d|--delete|-f|--force|-m|-M {shared}");
 		expect(denied("git checkout -B main")).toBe("git checkout -B {shared}");
@@ -70,6 +78,100 @@ describe("denied-command patterns", () => {
 		]) {
 			expect(denied(command), command).toBeNull();
 		}
+	});
+
+	it("matches option slots and {shared} anywhere after the subcommand", () => {
+		const branchRule = "git branch -D|-d|--delete|-f|--force|-m|-M {shared}";
+		for (const [command, pattern] of [
+			["git update-ref -m msg refs/heads/main X", "git update-ref {shared}"],
+			["git update-ref --no-deref refs/heads/main", "git update-ref {shared}"],
+			["git update-ref --stdin -z refs/heads/fork/stack", "git update-ref {shared}"],
+			["git -C /projects/kanban branch -f main X", branchRule],
+			["git branch -q -D main", branchRule],
+			["git branch --verbose --force fork/stack HEAD~1", branchRule],
+			["git branch main -f", branchRule],
+			["git switch --quiet -C fork/stack", "git switch -C|--force-create {shared}"],
+			["git checkout -q -B refs/heads/main", "git checkout -B {shared}"],
+		] as const) {
+			expect(denied(command), command).toBe(pattern);
+		}
+		// The option and the shared branch must both be there, as different words.
+		for (const command of [
+			"git branch -D card-branch",
+			"git branch -f card-branch HEAD~1",
+			"git branch --list main",
+			"git update-ref refs/heads/card refs/heads/card-old",
+			"git switch -c card origin/main",
+		]) {
+			expect(denied(command), command).toBeNull();
+		}
+		// Positional head words stay positional: `--user` is part of the subcommand here.
+		expect(denied("systemctl restart --user kanban")).toBe("systemctl restart|stop|kill");
+		expect(denied("systemctl --user status kanban")).toBeNull();
+	});
+
+	it("sees through wrappers and their option values", () => {
+		for (const command of [
+			"timeout 30 git push",
+			"timeout -s KILL 30 git push",
+			"sudo -u root git push",
+			"nice -n 5 git push",
+			"setsid git push",
+			"stdbuf -o L git push",
+			"git --git-dir /projects/kanban/.git --work-tree /projects/kanban push",
+			"git --git-dir=/x/.git push",
+			"git --config-env core.x=Y push",
+		]) {
+			expect(denied(command), command).toBe("git push");
+		}
+	});
+
+	it("lets a PR card push its own branch, named explicitly, and nothing that may update a shared branch", () => {
+		const prRules = allowOwnBranchPush(rules, ["main", "fork/stack"]);
+		expect(prRules.find((rule) => rule.pattern.startsWith("git push"))?.pattern).toBe("git push {shared-push}");
+		const pushDenied = (command: string) => findDeniedCommand(command, prRules)?.rule.pattern ?? null;
+		for (const command of [
+			"git push -u origin card-1234",
+			"git push --set-upstream origin HEAD:kanban/card-1234",
+			"git push -f origin card",
+			"git push --force-with-lease=card:abc origin card",
+			"git -C /wt/card push -o ci.skip origin HEAD:refs/heads/card",
+			"git push origin v1.2.0",
+			"git push --repo=origin card",
+		]) {
+			expect(pushDenied(command), command).toBeNull();
+		}
+		for (const command of [
+			"git push",
+			"git push origin",
+			"git push -u origin HEAD",
+			"git push origin @",
+			"git push origin main",
+			"git push origin +main",
+			"git push origin HEAD:main",
+			"git push origin HEAD:refs/heads/fork/stack",
+			"git push origin card:main",
+			"git push origin --delete main",
+			"git push origin :fork/stack",
+			"git push origin :",
+			"git push --all origin",
+			"git push --mirror origin",
+			"git push --prune origin 'refs/heads/*:refs/heads/*'",
+			"git -C /projects/kanban push origin main",
+			"bash -c 'git push origin card main'",
+		]) {
+			expect(pushDenied(command), command).toBe("git push {shared-push}");
+		}
+		expect(pushMayUpdateSharedBranch(["origin", "card"], [])).toBe(false);
+		// The other rules are unchanged.
+		expect(prRules.filter((rule) => !rule.sharedPush)).toEqual(rules.filter((rule) => rule.pattern !== "git push"));
+	});
+
+	it("says what a PR card may push when it blocks a push", () => {
+		const match = findDeniedCommand("git push origin main", allowOwnBranchPush(rules, ["main"]));
+		expect(match && describeDeniedCommand(match)).toContain("This card may push only its own branch");
+		const plain = findDeniedCommand("git push origin card", rules);
+		expect(plain && describeDeniedCommand(plain)).toContain('matches "git push"');
 	});
 
 	it("denies container and service restarts and the home migration", () => {

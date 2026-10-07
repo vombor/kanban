@@ -2,9 +2,10 @@
 // the card's worktree (agent-session-adapters.ts). Cline has no command deny list, but a PreToolUse hook that prints
 // `{"cancel": true, "errorMessage": …}` stops the tool call before it runs (see agent-guardrails.ts). The hook
 // payload carries the raw tool input as `tool_call.input` and a string-valued copy as `preToolUse.parameters`.
-import { isAbsolute, resolve } from "node:path";
+import { realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
-import { findDeniedCommand } from "../guardrails/command-patterns";
+import { describeDeniedCommand, findDeniedCommand } from "../guardrails/command-patterns";
 import { isPathInside } from "../guardrails/task-guardrails";
 import type { ClineGuardPolicy } from "./agent-guardrails";
 
@@ -98,6 +99,34 @@ function readToolCall(payload: unknown): { toolName: string; input: Record<strin
 	return { toolName, input };
 }
 
+/** A path's resolved form: the realpath of its nearest existing ancestor, plus the rest (the file may not exist yet). */
+function resolveExistingPrefix(path: string): string {
+	const missing: string[] = [];
+	let current = path;
+	for (;;) {
+		try {
+			return join(realpathSync(current), ...missing.reverse());
+		} catch {
+			const parent = dirname(current);
+			if (parent === current) {
+				return path;
+			}
+			missing.push(basename(current));
+			current = parent;
+		}
+	}
+}
+
+/**
+ * Whether a write to `path` stays inside a writable root. The decision is on where the write really lands (a
+ * symlink in the worktree that points at the main checkout is outside), compared with each root as configured and
+ * as resolved, so a root or path reached through a symlinked parent (`/projects` → `/mnt/projects`) still matches.
+ */
+export function isWritablePath(path: string, roots: readonly string[]): boolean {
+	const resolved = resolveExistingPrefix(path);
+	return roots.some((root) => isPathInside(root, resolved) || isPathInside(resolveExistingPrefix(root), resolved));
+}
+
 export function evaluateClineGuard(payload: unknown, policy: ClineGuardPolicy): ClineGuardDecision {
 	const call = readToolCall(payload);
 	if (!call) {
@@ -107,10 +136,7 @@ export function evaluateClineGuard(payload: unknown, policy: ClineGuardPolicy): 
 		for (const line of listCommandLines(call.input)) {
 			const denied = findDeniedCommand(line, policy.deniedCommands);
 			if (denied) {
-				return {
-					cancel: true,
-					errorMessage: `Blocked by Kanban's task-card guardrails: \`${denied.command}\` matches "${denied.rule.pattern}". Task cards never push, rewrite shared branches or restart services; leave that to the orchestrator.`,
-				};
+				return { cancel: true, errorMessage: describeDeniedCommand(denied) };
 			}
 		}
 		return ALLOW;
@@ -120,7 +146,7 @@ export function evaluateClineGuard(payload: unknown, policy: ClineGuardPolicy): 
 	}
 	for (const path of listWritePaths(call.toolName, call.input)) {
 		const absolute = isAbsolute(path) ? path : resolve(policy.worktreePath, path);
-		if (!policy.writableRoots.some((root) => isPathInside(root, absolute))) {
+		if (!isWritablePath(absolute, policy.writableRoots)) {
 			return {
 				cancel: true,
 				errorMessage: `Blocked by Kanban's task-card guardrails: ${absolute} is outside this card's worktree ${policy.worktreePath}. Write only inside the worktree (or a temp dir).`,
