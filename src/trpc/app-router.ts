@@ -26,6 +26,7 @@ import type {
 	RuntimeHookIngestResponse,
 	RuntimeOpenFileRequest,
 	RuntimeOpenFileResponse,
+	RuntimeProcessSweepResponse,
 	RuntimeProjectAddRequest,
 	RuntimeProjectAddResponse,
 	RuntimeProjectDirectoryPickerResponse,
@@ -81,6 +82,7 @@ import {
 	runtimeHookIngestResponseSchema,
 	runtimeOpenFileRequestSchema,
 	runtimeOpenFileResponseSchema,
+	runtimeProcessSweepResponseSchema,
 	runtimeProjectAddRequestSchema,
 	runtimeProjectAddResponseSchema,
 	runtimeProjectDirectoryPickerResponseSchema,
@@ -154,6 +156,8 @@ export interface RuntimeTrpcContext {
 		openFile: (input: RuntimeOpenFileRequest) => Promise<RuntimeOpenFileResponse>;
 		getUpdateStatus: (scope: RuntimeTrpcWorkspaceScope | null) => Promise<RuntimeUpdateStatusResponse>;
 		runUpdateNow: (scope: RuntimeTrpcWorkspaceScope | null) => Promise<RuntimeRunUpdateResponse>;
+		getProcessSweep: () => Promise<RuntimeProcessSweepResponse>;
+		runProcessSweep: () => Promise<RuntimeProcessSweepResponse>;
 	};
 	workspaceApi: {
 		loadGitSummary: (
@@ -344,6 +348,13 @@ export const runtimeAppRouter = t.router({
 		}),
 		runUpdateNow: t.procedure.output(runtimeRunUpdateResponseSchema).mutation(async ({ ctx }) => {
 			return await ctx.runtimeApi.runUpdateNow(ctx.workspaceScope);
+		}),
+		// Process hygiene: the last orphan sweep, and a sweep on demand (debug dialog).
+		getProcessSweep: t.procedure.output(runtimeProcessSweepResponseSchema).query(async ({ ctx }) => {
+			return await ctx.runtimeApi.getProcessSweep();
+		}),
+		runProcessSweep: t.procedure.output(runtimeProcessSweepResponseSchema).mutation(async ({ ctx }) => {
+			return await ctx.runtimeApi.runProcessSweep();
 		}),
 	}),
 	workspace: t.router({

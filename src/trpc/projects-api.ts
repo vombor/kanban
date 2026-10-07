@@ -8,6 +8,7 @@ import type {
 	RuntimeProjectTaskCounts,
 } from "../core/api-contract";
 import { parseDirectoryListRequest, parseProjectAddRequest, parseProjectRemoveRequest } from "../core/api-validation";
+import type { PreparedWorktreeReap } from "../server/process-reaper";
 import {
 	listWorkspaceIndexEntries,
 	loadWorkspaceContext,
@@ -49,6 +50,11 @@ export interface CreateProjectsApiDependencies {
 		options?: DisposeWorkspaceOptions,
 	) => { terminalManager: TerminalSessionManager | null; workspacePath: string | null };
 	collectProjectWorktreeTaskIdsForRemoval: (board: RuntimeBoardData) => Set<string>;
+	/** Process reaping before a worktree is deleted (src/server/process-reaper.ts). */
+	prepareTaskProcessReap?: (
+		scope: { workspaceId: string; workspacePath: string },
+		taskId: string,
+	) => Promise<PreparedWorktreeReap>;
 	warn: (message: string) => void;
 	buildProjectsPayload: (preferredCurrentProjectId: string | null) => Promise<{
 		currentProjectId: string | null;
@@ -177,6 +183,24 @@ export function createProjectsApi(deps: CreateProjectsApiDependencies): RuntimeT
 					// Best effort: if board state cannot be read, skip worktree cleanup IDs.
 				}
 
+				// Captured before the sessions stop, while their process trees are still linked.
+				const processReaps = new Map<string, PreparedWorktreeReap>();
+				for (const taskId of taskIdsToCleanup) {
+					try {
+						const reap = await deps.prepareTaskProcessReap?.(
+							{ workspaceId: body.projectId, workspacePath: projectToRemove.repoPath },
+							taskId,
+						);
+						if (reap) {
+							processReaps.set(taskId, reap);
+						}
+					} catch (error) {
+						deps.warn(
+							`Could not inspect processes of task "${taskId}": ${error instanceof Error ? error.message : String(error)}`,
+						);
+					}
+				}
+
 				const removedTerminalManager = deps.getTerminalManagerForWorkspace(body.projectId);
 				if (removedTerminalManager) {
 					removedTerminalManager.markInterruptedAndStopAll();
@@ -205,13 +229,23 @@ export function createProjectsApi(deps: CreateProjectsApiDependencies): RuntimeT
 					const cleanupTaskIds = Array.from(taskIdsToCleanup);
 					void (async () => {
 						const deletions = await Promise.all(
-							cleanupTaskIds.map(async (taskId) => ({
-								taskId,
-								deleted: await deleteTaskWorktree({
-									repoPath: projectToRemove.repoPath,
+							cleanupTaskIds.map(async (taskId) => {
+								await processReaps
+									.get(taskId)
+									?.reap()
+									.catch((error: unknown) => {
+										deps.warn(
+											`Could not reap processes of task "${taskId}": ${error instanceof Error ? error.message : String(error)}`,
+										);
+									});
+								return {
 									taskId,
-								}),
-							})),
+									deleted: await deleteTaskWorktree({
+										repoPath: projectToRemove.repoPath,
+										taskId,
+									}),
+								};
+							}),
 						);
 						for (const { taskId, deleted } of deletions) {
 							if (deleted.ok) {

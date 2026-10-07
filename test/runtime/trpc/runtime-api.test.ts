@@ -42,9 +42,17 @@ vi.mock("../../../src/server/browser.js", () => ({
 import type { RuntimeTrpcContext } from "../../../src/trpc/app-router";
 import { type CreateRuntimeApiDependencies, createRuntimeApi } from "../../../src/trpc/runtime-api";
 
+type OptionalRuntimeApiDependency = "getUpdateStatus" | "runUpdateNow" | "getProcessSweep" | "runProcessSweep";
+
+const PROCESS_SWEEP_RESPONSE = {
+	supported: true,
+	settings: { enabled: true, intervalSec: 300, mode: "terminate" as const },
+	lastSweep: null,
+};
+
 function createTestRuntimeApi(
-	deps: Omit<CreateRuntimeApiDependencies, "getUpdateStatus" | "runUpdateNow"> &
-		Partial<Pick<CreateRuntimeApiDependencies, "getUpdateStatus" | "runUpdateNow">>,
+	deps: Omit<CreateRuntimeApiDependencies, OptionalRuntimeApiDependency> &
+		Partial<Pick<CreateRuntimeApiDependencies, OptionalRuntimeApiDependency>>,
 ): RuntimeTrpcContext["runtimeApi"] {
 	return createRuntimeApi({
 		...deps,
@@ -65,6 +73,8 @@ function createTestRuntimeApi(
 				latestVersion: null,
 				message: "On-demand updates are not available in this test runtime.",
 			})),
+		getProcessSweep: deps.getProcessSweep ?? vi.fn(async () => PROCESS_SWEEP_RESPONSE),
+		runProcessSweep: deps.runProcessSweep ?? vi.fn(async () => PROCESS_SWEEP_RESPONSE),
 	});
 }
 

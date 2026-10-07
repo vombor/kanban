@@ -6,6 +6,7 @@ import type {
 	RuntimeAgentId,
 	RuntimeConfigResponse,
 	RuntimeDebugResetAllStateResponse,
+	RuntimeProcessSweepResponse,
 	RuntimeProjectShortcut,
 	RuntimeRunUpdateResponse,
 	RuntimeUpdateStatusResponse,
@@ -50,4 +51,12 @@ export async function fetchRuntimeUpdateStatus(workspaceId: string | null): Prom
 export async function runRuntimeUpdateNow(workspaceId: string | null): Promise<RuntimeRunUpdateResponse> {
 	const trpcClient = getRuntimeTrpcClient(workspaceId);
 	return await trpcClient.runtime.runUpdateNow.mutate();
+}
+
+export async function fetchProcessSweep(): Promise<RuntimeProcessSweepResponse> {
+	return await getRuntimeTrpcClient(null).runtime.getProcessSweep.query();
+}
+
+export async function runProcessSweepNow(): Promise<RuntimeProcessSweepResponse> {
+	return await getRuntimeTrpcClient(null).runtime.runProcessSweep.mutate();
 }

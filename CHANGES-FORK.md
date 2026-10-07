@@ -60,3 +60,18 @@ of this repository is the complete record of changes.
 - `test/runtime/terminal/claude-workspace-trust.test.ts`: the concurrent-writer pre-trust test steps the other
   process at fixed points inside the compare-and-swap (change before the swap, stale overwrite after it) instead of
   racing a timed writer loop.
+- `src/server/process-table.ts`, `src/server/process-reaper.ts`, `src/server/orphan-process-sweeper.ts`,
+  `src/config/process-reaper-config.ts` (new), `src/server/task-trash-workflow.ts`, `src/server/runtime-server.ts`,
+  `src/trpc/workspace-api.ts`, `src/trpc/projects-api.ts`, `src/trpc/runtime-api.ts`, `src/trpc/app-router.ts`,
+  `src/core/api-contract.ts`, `src/workspace/task-worktree.ts`: process hygiene. Done, task delete and project
+  removal terminate a card's processes (its session trees and everything whose cwd or executable is inside its
+  worktree, including detached dev servers) before the worktree is deleted: SIGTERM, then SIGKILL after 5 s. A
+  periodic sweep (`processes.reaper` in config.json: `enabled`, `intervalSec` default 300, `mode` `terminate` |
+  `report`) reaps leftovers of cards that are Done on a readable board and reports the rest (missing cards,
+  unreadable boards) and zombies. Shared processes are never signalled: the Cline hub daemon, and anything with
+  incoming connections from outside the card or children in another worktree. Kernel threads are detected by
+  PF_KTHREAD. An unreadable config.json, an unknown `mode` or a manual sweep while disabled only report. Linux
+  only (/proc); a no-op elsewhere. The last sweep is exposed as `runtime.getProcessSweep` / `runtime.runProcessSweep`.
+- `web-ui/src/components/process-sweep-panel.tsx`, `web-ui/src/runtime/use-process-sweep.ts` (new),
+  `web-ui/src/components/debug-dialog.tsx`, `web-ui/src/runtime/runtime-config-query.ts`: the debug dialog shows the
+  last process sweep (processes and RSS per card, reaped orphans, zombies) with a "Sweep now" button.

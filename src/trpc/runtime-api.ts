@@ -8,6 +8,7 @@ import { TRPCError } from "@trpc/server";
 import type { RuntimeConfigState } from "../config/runtime-config";
 import { updateGlobalRuntimeConfig, updateRuntimeConfig } from "../config/runtime-config";
 import type {
+	RuntimeProcessSweepResponse,
 	RuntimeRunUpdateResponse,
 	RuntimeUpdateStatusResponse,
 } from "../core/api-contract";
@@ -39,6 +40,9 @@ export interface CreateRuntimeApiDependencies {
 	prepareForStateReset?: () => Promise<void>;
 	getUpdateStatus: () => RuntimeUpdateStatusResponse;
 	runUpdateNow: () => Promise<RuntimeRunUpdateResponse>;
+	/** The orphan process sweeper (src/server/orphan-process-sweeper.ts). */
+	getProcessSweep: () => Promise<RuntimeProcessSweepResponse>;
+	runProcessSweep: () => Promise<RuntimeProcessSweepResponse>;
 }
 
 async function resolveExistingTaskCwdOrEnsure(options: {
@@ -322,5 +326,7 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 		runUpdateNow: async () => {
 			return await deps.runUpdateNow();
 		},
+		getProcessSweep: async () => await deps.getProcessSweep(),
+		runProcessSweep: async () => await deps.runProcessSweep(),
 	};
 }

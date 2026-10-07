@@ -17,6 +17,7 @@ import {
 	parseWorktreeDeleteRequest,
 	parseWorktreeEnsureRequest,
 } from "../core/api-validation";
+import type { PreparedWorktreeReap } from "../server/process-reaper";
 import { saveWorkspaceState, WorkspaceStateConflictError } from "../state/workspace-state";
 import type { TerminalSessionManager } from "../terminal/session-manager";
 import {
@@ -46,6 +47,11 @@ export interface CreateWorkspaceApiDependencies {
 		scope: { workspaceId: string; workspacePath: string },
 		input: RuntimeTaskTrashRequest,
 	) => Promise<RuntimeTaskTrashResponse>;
+	/** Process reaping before the worktree is deleted (src/server/process-reaper.ts). */
+	prepareTaskProcessReap?: (
+		scope: { workspaceId: string; workspacePath: string },
+		taskId: string,
+	) => Promise<PreparedWorktreeReap>;
 }
 
 function normalizeOptionalTaskWorkspaceScopeInput(
@@ -298,6 +304,12 @@ export function createWorkspaceApi(deps: CreateWorkspaceApiDependencies): Runtim
 		},
 		deleteWorktree: async (workspaceScope, input) => {
 			const body = parseWorktreeDeleteRequest(input);
+			try {
+				const reap = await deps.prepareTaskProcessReap?.(workspaceScope, body.taskId);
+				await reap?.reap();
+			} catch {
+				// Best effort: the orphan sweeper finds anything left once the worktree is gone.
+			}
 			return await deleteTaskWorktree({
 				repoPath: workspaceScope.workspacePath,
 				taskId: body.taskId,

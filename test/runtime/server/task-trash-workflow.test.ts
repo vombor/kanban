@@ -94,6 +94,60 @@ describe("task trash workflow", () => {
 		});
 	});
 
+	it("captures the session trees before the sessions stop and reaps the card's processes before the worktree is deleted", async () => {
+		const order: string[] = [];
+		const { effects, trash } = createHarness(linkedBoard(), {
+			prepareProcessReap: async (_scope, taskId) => {
+				order.push(`prepare-reap:${taskId}`);
+				return {
+					reap: async () => {
+						order.push(`reap:${taskId}`);
+					},
+				};
+			},
+		});
+		effects.stopTaskSession.mockImplementation(async (_scope, taskId) => {
+			order.push(`stop:${taskId}`);
+		});
+		effects.startTaskSession.mockImplementation(async (_scope, input) => {
+			order.push(`start:${input.taskId}`);
+			return { ok: true, summary: { taskId: input.taskId } as never };
+		});
+		effects.deleteTaskWorktree.mockImplementation(async () => {
+			order.push("delete-worktree");
+			return { ok: true, removed: true };
+		});
+
+		await trash({ taskId: "task-1" });
+
+		expect(order).toEqual([
+			"prepare-reap:task-1",
+			"stop:task-1",
+			"stop:__detail_terminal__:task-1",
+			"start:task-linked",
+			"reap:task-1",
+			"delete-worktree",
+		]);
+	});
+
+	it("still deletes the worktree when reaping fails", async () => {
+		const warn = vi.fn();
+		const { effects, trash } = createHarness(linkedBoard(), {
+			warn,
+			prepareProcessReap: async () => ({
+				reap: async () => {
+					throw new Error("proc unreadable");
+				},
+			}),
+		});
+
+		const result = await trash({ taskId: "task-1" });
+
+		expect(result).toMatchObject({ ok: true, status: "trashed", worktreeDeleted: true });
+		expect(effects.deleteTaskWorktree).toHaveBeenCalledTimes(1);
+		expect(warn).toHaveBeenCalledWith("Could not reap processes of task task-1: proc unreadable");
+	});
+
 	it("is a no-op for a card that is already done", async () => {
 		const { store, effects, trash } = createHarness(createBoard({ trash: [createCard({ id: "task-1" })] }));
 

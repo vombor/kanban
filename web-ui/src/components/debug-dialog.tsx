@@ -1,6 +1,7 @@
 import { Bug, RotateCcw } from "lucide-react";
 import { Fragment, type ReactElement, type ReactNode, useEffect, useState } from "react";
 
+import { ProcessSweepPanel } from "@/components/process-sweep-panel";
 import { Button } from "@/components/ui/button";
 import {
 	AlertDialog,
@@ -77,6 +78,7 @@ export function DebugDialog({
 							Show onboarding
 						</Button>
 					</div>
+					<ProcessSweepPanel open={open} />
 					<div className="rounded-md border border-border bg-surface-2 p-3">
 						<p className="text-sm font-medium text-text-primary">Reset all state</p>
 						<p className="mt-1 text-xs text-text-secondary">

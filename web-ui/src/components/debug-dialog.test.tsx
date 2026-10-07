@@ -1,9 +1,18 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DebugDialog } from "@/components/debug-dialog";
 import { setKanbanPaths } from "@/stores/kanban-paths-store";
+
+vi.mock("@/runtime/runtime-config-query", () => ({
+	fetchProcessSweep: vi.fn(async () => ({
+		supported: true,
+		settings: { enabled: true, intervalSec: 300, mode: "terminate" },
+		lastSweep: null,
+	})),
+	runProcessSweepNow: vi.fn(),
+}));
 
 type ActGlobal = typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
 

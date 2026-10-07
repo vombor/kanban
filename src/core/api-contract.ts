@@ -635,6 +635,98 @@ export const runtimeDebugResetAllStateResponseSchema = z.object({
 });
 export type RuntimeDebugResetAllStateResponse = z.infer<typeof runtimeDebugResetAllStateResponseSchema>;
 
+// Process hygiene (src/server/process-reaper.ts, src/server/orphan-process-sweeper.ts).
+export const runtimeProcessReaperModeSchema = z.enum(["terminate", "report"]);
+export type RuntimeProcessReaperMode = z.infer<typeof runtimeProcessReaperModeSchema>;
+
+/** `processes.reaper` in the global config.json. */
+export const runtimeProcessReaperSettingsSchema = z.object({
+	enabled: z.boolean(),
+	intervalSec: z.number().int().positive(),
+	mode: runtimeProcessReaperModeSchema,
+});
+export type RuntimeProcessReaperSettings = z.infer<typeof runtimeProcessReaperSettingsSchema>;
+
+/**
+ * Card state for processes found in a task worktree. `missing`: a registered project owns the worktree folder
+ * but has no such card. `unknown`: no registered project owns it (another Kanban home, or a removed project).
+ */
+export const runtimeProcessCardStatusSchema = z.enum(["active", "done", "missing", "unknown"]);
+export type RuntimeProcessCardStatus = z.infer<typeof runtimeProcessCardStatusSchema>;
+
+export const runtimeProcessSweepCardSchema = z.object({
+	taskId: z.string(),
+	workspaceId: z.string().nullable(),
+	status: runtimeProcessCardStatusSchema,
+	processCount: z.number(),
+	rssBytes: z.number(),
+});
+export type RuntimeProcessSweepCard = z.infer<typeof runtimeProcessSweepCardSchema>;
+
+export const runtimeProcessOrphanReasonSchema = z.enum(["card_done", "card_missing", "worktree_deleted"]);
+export type RuntimeProcessOrphanReason = z.infer<typeof runtimeProcessOrphanReasonSchema>;
+
+/**
+ * `terminated`: exited after SIGTERM. `killed`: needed SIGKILL. `reported`: left running (report-only, or the
+ * card is not known to be Done). `shared_daemon` / `shared`: left running because other cards use it (the Cline
+ * hub daemon; incoming connections from outside the card, or children working in another worktree).
+ */
+export const runtimeProcessReapActionSchema = z.enum([
+	"terminated",
+	"killed",
+	"failed",
+	"reported",
+	"shared_daemon",
+	"shared",
+]);
+export type RuntimeProcessReapAction = z.infer<typeof runtimeProcessReapActionSchema>;
+
+export const runtimeProcessOrphanSchema = z.object({
+	pid: z.number(),
+	taskId: z.string(),
+	command: z.string(),
+	cwd: z.string().nullable(),
+	rssBytes: z.number(),
+	reason: runtimeProcessOrphanReasonSchema,
+	action: runtimeProcessReapActionSchema,
+	error: z.string().optional(),
+	/** Why a shared process was left running (which outside process uses it). */
+	detail: z.string().optional(),
+	/** The card is Done and nothing else uses the process: `terminate` mode ends it. */
+	eligible: z.boolean(),
+});
+export type RuntimeProcessOrphan = z.infer<typeof runtimeProcessOrphanSchema>;
+
+/** A zombie (state Z) can't be killed; only its parent can reap it. */
+export const runtimeProcessZombieSchema = z.object({
+	pid: z.number(),
+	ppid: z.number(),
+	command: z.string(),
+	parentCommand: z.string().nullable(),
+});
+export type RuntimeProcessZombie = z.infer<typeof runtimeProcessZombieSchema>;
+
+export const runtimeProcessSweepResultSchema = z.object({
+	startedAt: z.number(),
+	finishedAt: z.number(),
+	mode: runtimeProcessReaperModeSchema,
+	processCount: z.number(),
+	rssBytes: z.number(),
+	cards: z.array(runtimeProcessSweepCardSchema),
+	orphans: z.array(runtimeProcessOrphanSchema),
+	zombies: z.array(runtimeProcessZombieSchema),
+	error: z.string().nullable(),
+});
+export type RuntimeProcessSweepResult = z.infer<typeof runtimeProcessSweepResultSchema>;
+
+export const runtimeProcessSweepResponseSchema = z.object({
+	/** False off Linux: process cleanup reads /proc and is a no-op elsewhere. */
+	supported: z.boolean(),
+	settings: runtimeProcessReaperSettingsSchema,
+	lastSweep: runtimeProcessSweepResultSchema.nullable(),
+});
+export type RuntimeProcessSweepResponse = z.infer<typeof runtimeProcessSweepResponseSchema>;
+
 export const runtimeUpdateStatusResponseSchema = z.object({
 	currentVersion: z.string(),
 	latestVersion: z.string().nullable(),

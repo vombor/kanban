@@ -7,7 +7,7 @@ import type {
 	RuntimeWorktreeEnsureResponse,
 } from "../core/api-contract";
 import { type LockRequest, lockedFileSystem } from "../fs/locked-file-system";
-import { getLegacyTaskWorktreeRootPaths } from "../state/kanban-home";
+import { getLegacyTaskWorktreeRootPaths, getTaskWorktreeSearchRootPaths } from "../state/kanban-home";
 import { getRuntimeHomePath, getTaskWorktreesHomePath, loadWorkspaceContext } from "../state/workspace-state";
 import { getGitCommandErrorMessage, getGitStdout, readGitHeadInfo, runGit } from "./git-utils";
 import { getWorkspaceFolderLabelForWorktreePath, normalizeTaskIdForWorktreePath } from "./task-worktree-path";
@@ -128,6 +128,11 @@ function getTrashedTaskPatchesRootPath(): string {
 function getTaskWorktreePath(repoPath: string, taskId: string, baseRootPath = getTaskWorktreesHomePath()): string {
 	const workspaceLabel = getWorkspaceFolderLabelForWorktreePath(repoPath);
 	return join(getWorktreesRootPath(taskId, baseRootPath), workspaceLabel);
+}
+
+/** Where the task's worktree for this repo is or may be: the current root, then the legacy roots. */
+export function getTaskWorktreeCandidatePaths(repoPath: string, taskId: string): string[] {
+	return getTaskWorktreeSearchRootPaths().map((rootPath) => getTaskWorktreePath(repoPath, taskId, rootPath));
 }
 
 interface LocatedTaskWorktree {

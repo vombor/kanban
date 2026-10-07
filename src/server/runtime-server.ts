@@ -4,11 +4,13 @@ import { createServer as createHttpsServer } from "node:https";
 import { join } from "node:path";
 
 import { createHTTPHandler } from "@trpc/server/adapters/standalone";
+import { createProcessReaperSettingsLoader } from "../config/process-reaper-config";
 import type {
 	RuntimeRunUpdateResponse,
 	RuntimeUpdateStatusResponse,
 	RuntimeWorkspaceStateResponse,
 } from "../core/api-contract";
+import { getDetailTerminalTaskId } from "../core/detail-terminal-session";
 import {
 	buildKanbanRuntimeUrl,
 	getKanbanRuntimeHost,
@@ -29,7 +31,13 @@ import {
 	validatePasscode,
 	validateSession,
 } from "../security/passcode-manager";
-import { loadWorkspaceContextById, mutateWorkspaceState } from "../state/workspace-state";
+import { getTaskWorktreeSearchRootPaths } from "../state/kanban-home";
+import {
+	listWorkspaceIndexEntries,
+	loadWorkspaceBoardById,
+	loadWorkspaceContextById,
+	mutateWorkspaceState,
+} from "../state/workspace-state";
 import type { TerminalSessionManager } from "../terminal/session-manager";
 import { createTerminalWebSocketBridge } from "../terminal/ws-server";
 import { type RuntimeTrpcContext, type RuntimeTrpcWorkspaceScope, runtimeAppRouter } from "../trpc/app-router";
@@ -37,9 +45,16 @@ import { createHooksApi } from "../trpc/hooks-api";
 import { createProjectsApi } from "../trpc/projects-api";
 import { createRuntimeApi } from "../trpc/runtime-api";
 import { createWorkspaceApi } from "../trpc/workspace-api";
-import { deleteTaskWorktree, ensureTaskWorktreeIfDoesntExist } from "../workspace/task-worktree";
+import {
+	deleteTaskWorktree,
+	ensureTaskWorktreeIfDoesntExist,
+	getTaskWorktreeCandidatePaths,
+} from "../workspace/task-worktree";
 import { getWebUiDir, normalizeRequestPath, readAsset } from "./assets";
 import { handleHttpRequest, handleSocketUpgrade } from "./middleware";
+import { createOrphanProcessSweeper } from "./orphan-process-sweeper";
+import { createProcessReaper, type PreparedWorktreeReap } from "./process-reaper";
+import { createProcProcessTableReader, isProcessTableSupported } from "./process-table";
 import type { RuntimeStateHub } from "./runtime-state-hub";
 import { createTaskTrashWorkflow, createTrashTaskRequestHandler, type TaskTrashWorkflow } from "./task-trash-workflow";
 import type { WorkspaceRegistry } from "./workspace-registry";
@@ -154,6 +169,50 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		deps.workspaceRegistry.clearActiveWorkspace();
 	};
 
+	const processReaper = createProcessReaper({
+		reader: isProcessTableSupported() ? createProcProcessTableReader() : null,
+		getWorktreeRoots: getTaskWorktreeSearchRootPaths,
+		log: deps.warn,
+	});
+	const orphanProcessSweeper = createOrphanProcessSweeper({
+		reaper: processReaper,
+		getWorktreeRoots: getTaskWorktreeSearchRootPaths,
+		listWorkspaceBoards: async () =>
+			await Promise.all(
+				(await listWorkspaceIndexEntries()).map(async (entry) => ({
+					workspaceId: entry.workspaceId,
+					repoPath: entry.repoPath,
+					board: await loadWorkspaceBoardById(entry.workspaceId).catch(() => null),
+				})),
+			),
+		loadSettings: createProcessReaperSettingsLoader(deps.warn),
+		log: deps.warn,
+	});
+	/** Task delete, project removal and Done reap a card's processes before its worktree is deleted. */
+	const prepareTaskProcessReap = async (
+		scope: RuntimeTrpcWorkspaceScope,
+		taskId: string,
+	): Promise<PreparedWorktreeReap> => {
+		const terminalManager = deps.workspaceRegistry.getTerminalManagerForWorkspace(scope.workspaceId);
+		const sessionPids = [taskId, getDetailTerminalTaskId(taskId)]
+			.map((sessionId) => terminalManager?.getSummary(sessionId)?.pid)
+			.filter((pid): pid is number => typeof pid === "number" && pid > 0);
+		const prepared = await processReaper.prepareWorktreeReap({
+			taskId,
+			worktreePaths: getTaskWorktreeCandidatePaths(scope.workspacePath, taskId),
+			sessionPids,
+		});
+		return {
+			reap: async () =>
+				await prepared.reap().catch((error: unknown) => {
+					deps.warn(
+						`Could not reap processes of task ${taskId}: ${error instanceof Error ? error.message : String(error)}`,
+					);
+					return [];
+				}),
+		};
+	};
+
 	const runtimeApi = createRuntimeApi({
 		getActiveWorkspaceId: deps.workspaceRegistry.getActiveWorkspaceId,
 		getActiveRuntimeConfig: deps.workspaceRegistry.getActiveRuntimeConfig,
@@ -164,6 +223,11 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		prepareForStateReset,
 		getUpdateStatus: deps.getUpdateStatus,
 		runUpdateNow: deps.runUpdateNow,
+		getProcessSweep: orphanProcessSweeper.getStatus,
+		runProcessSweep: async () => {
+			await orphanProcessSweeper.sweep();
+			return await orphanProcessSweeper.getStatus();
+		},
 	});
 
 	const taskTrashWorkflow = createTaskTrashWorkflow({
@@ -173,6 +237,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			terminalManager.stopTaskSession(taskId);
 		},
 		deleteTaskWorktree: async (scope, taskId) => await deleteTaskWorktree({ repoPath: scope.workspacePath, taskId }),
+		prepareProcessReap: prepareTaskProcessReap,
 		ensureTaskWorktree: async (scope, input) =>
 			await ensureTaskWorktreeIfDoesntExist({
 				cwd: scope.workspacePath,
@@ -199,6 +264,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 				broadcastRuntimeProjectsUpdated: deps.runtimeStateHub.broadcastRuntimeProjectsUpdated,
 				buildWorkspaceStateSnapshot: deps.workspaceRegistry.buildWorkspaceStateSnapshot,
 				trashTask: handleTrashTaskRequest,
+				prepareTaskProcessReap,
 			}),
 			projectsApi: createProjectsApi({
 				getActiveWorkspacePath: deps.workspaceRegistry.getActiveWorkspacePath,
@@ -215,6 +281,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 				getTerminalManagerForWorkspace: deps.workspaceRegistry.getTerminalManagerForWorkspace,
 				disposeWorkspace: deps.disposeWorkspace,
 				collectProjectWorktreeTaskIdsForRemoval: deps.collectProjectWorktreeTaskIdsForRemoval,
+				prepareTaskProcessReap,
 				warn: deps.warn,
 				buildProjectsPayload: deps.workspaceRegistry.buildProjectsPayload,
 				pickDirectoryPathFromSystemDialog: deps.pickDirectoryPathFromSystemDialog,
@@ -459,6 +526,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 	if (!address || typeof address === "string") {
 		throw new Error("Failed to start local server.");
 	}
+	orphanProcessSweeper.start();
 	const activeWorkspaceId = deps.workspaceRegistry.getActiveWorkspaceId();
 	const url = activeWorkspaceId
 		? buildKanbanRuntimeUrl(`/${encodeURIComponent(activeWorkspaceId)}`)
@@ -468,6 +536,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		url,
 		taskTrashWorkflow,
 		close: async () => {
+			orphanProcessSweeper.close();
 			await deps.runtimeStateHub.close();
 			await terminalWebSocketBridge.close();
 			await new Promise<void>((resolveClose, rejectClose) => {

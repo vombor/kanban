@@ -9,9 +9,11 @@
 // session running, kept the worktree and never started the linked backlog
 // tasks.
 //
-// Order: (optional done gate) → board move to Done → broadcast → stop the task
-// and detail-terminal sessions → start the linked backlog tasks that became
-// ready → delete the worktree (deleteTaskWorktree captures the patch first).
+// Order: (optional done gate) → board move to Done → broadcast → capture the
+// session process trees → stop the task and detail-terminal sessions → start
+// the linked backlog tasks that became ready → reap the card's processes (its
+// session trees and everything running inside its worktree, including detached
+// dev servers) → delete the worktree (deleteTaskWorktree captures the patch first).
 // Dependents start before the slow worktree removal, as both earlier copies
 // did. The gate is the hook point for the `qa` landing step (land on the base
 // before Done, kit-merge plan §4.2); nothing installs one yet.
@@ -89,6 +91,12 @@ export interface CreateTaskTrashWorkflowDependencies {
 		scope: TaskTrashWorkspaceScope,
 		input: RuntimeTaskSessionStartRequest,
 	) => Promise<RuntimeTaskSessionStartResponse>;
+	/**
+	 * Captures the card's session process trees; called before the sessions are stopped, while the trees are
+	 * still linked. `reap` terminates them and every process inside the worktree, right before the worktree
+	 * is deleted (src/server/process-reaper.ts).
+	 */
+	prepareProcessReap?: (scope: TaskTrashWorkspaceScope, taskId: string) => Promise<{ reap: () => Promise<unknown> }>;
 	/** Broadcasts the new board to connected browsers. Awaited before sessions are stopped. */
 	onBoardMutated?: (scope: TaskTrashWorkspaceScope) => Promise<void> | void;
 	doneGate?: TaskDoneGate;
@@ -304,6 +312,20 @@ export function createTaskTrashWorkflow(deps: CreateTaskTrashWorkflowDependencie
 		);
 	};
 
+	const prepareProcessReap = async (request: TaskTrashRequest): Promise<() => Promise<void>> => {
+		const reapFailed = (error: unknown) =>
+			deps.warn?.(`Could not reap processes of task ${request.taskId}: ${toErrorMessage(error)}`);
+		try {
+			const prepared = await deps.prepareProcessReap?.(request, request.taskId);
+			return async () => {
+				await prepared?.reap().catch(reapFailed);
+			};
+		} catch (error) {
+			reapFailed(error);
+			return async () => {};
+		}
+	};
+
 	const deleteWorktree = async (request: TaskTrashRequest): Promise<{ removed: boolean; error?: string }> => {
 		try {
 			const deleted = await deps.deleteTaskWorktree(request, request.taskId);
@@ -412,6 +434,7 @@ export function createTaskTrashWorkflow(deps: CreateTaskTrashWorkflowDependencie
 		}
 		await broadcast(request);
 
+		const reapProcesses = await prepareProcessReap(request);
 		await stopSessions(request, boardStep.previousColumnId);
 
 		const autoStartedTasks: RuntimeTaskTrashAutoStart[] = [];
@@ -425,6 +448,7 @@ export function createTaskTrashWorkflow(deps: CreateTaskTrashWorkflowDependencie
 			}
 			autoStartedTasks.push(started);
 		}
+		await reapProcesses();
 		const worktree = await deleteWorktree(request);
 
 		return createResult(request, "trashed", {
