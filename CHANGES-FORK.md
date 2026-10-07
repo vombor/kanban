@@ -132,3 +132,12 @@ of this repository is the complete record of changes.
   [--migrate-cards] [--apply] [--workspace]` reports and removes deprecated provider workarounds in Cline's
   providers.json/models.json (Mantle endpoints and `models.providers.deprecated`; backup first; Codex reported only)
   and moves open cards off them with the same model. Read-only unless `--apply`; nothing runs on its own.
+- `src/kits/dev-assignment.ts` (new), `src/commands/task.ts`, `src/core/api-contract.ts`, `src/trpc/app-router.ts`,
+  `src/trpc/workspace-api.ts`, `src/state/kanban-home.ts`, `web-ui/src/hooks/use-kit-dev-assignment.ts` (new),
+  `web-ui/src/hooks/use-task-editor.ts`, `web-ui/src/components/task-kit-assignment-hint.tsx` (new),
+  `web-ui/src/components/task-create-dialog.tsx`, `web-ui/src/App.tsx`: the kit's `devAssignment` at card creation
+  (plan step P3-5). When the creator sets no agent and no model, `kanban task create` stores the workspace kit's
+  agent and model on the card (provider from the kit, else P3-3's `providerForModel`), and the create dialog preselects
+  them (from tRPC `workspace.getDevAssignment`) with a "from kit `team`" hint. An explicit agent or model wins
+  (`--agent-id default` too). No change on the `default` kit; with `workspaces.<id>.pipeline.shadow` the proposal
+  is only logged. Proposals go to `data/<workspace>/dev-assignment.jsonl`.

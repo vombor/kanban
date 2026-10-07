@@ -22,6 +22,7 @@ import {
 	removeTaskDependency,
 	updateTask,
 } from "../core/task-board-mutations";
+import { type DevAssignmentDecision, recordDevAssignment, resolveDevAssignment } from "../kits/dev-assignment";
 import { resolveProjectInputPath } from "../projects/project-path";
 import { loadWorkspaceContext, mutateWorkspaceState } from "../state/workspace-state";
 import {
@@ -478,7 +479,24 @@ async function deleteTaskWorkspace(
 	}
 }
 
-async function createTask(input: {
+function formatDevAssignment(decision: DevAssignmentDecision): JsonRecord {
+	return { kit: decision.kitName, outcome: decision.outcome, proposal: decision.proposal };
+}
+
+/** Tells the creator on stderr what the kit did (stdout stays the JSON result). */
+function reportDevAssignment(decision: DevAssignmentDecision): void {
+	for (const issue of decision.issues) {
+		process.stderr.write(`Warning: ${issue}\n`);
+	}
+	const proposal = decision.proposal;
+	if (decision.outcome !== "shadow" || !proposal) {
+		return;
+	}
+	const model = proposal.agentSettings?.modelId ? ` on ${proposal.agentSettings.modelId}` : "";
+	process.stderr.write(`Kit ${decision.kitName} (shadow) would assign ${proposal.agentId}${model}; not applied.\n`);
+}
+
+export async function createTask(input: {
 	cwd: string;
 	title?: string;
 	prompt: string;
@@ -487,7 +505,8 @@ async function createTask(input: {
 	startInPlanMode?: boolean;
 	autoReviewEnabled?: boolean;
 	autoReviewMode?: "commit" | "pr";
-	agentId?: RuntimeAgentId;
+	/** null = explicitly the selected agent (`--agent-id default`); the kit's devAssignment is then not applied. */
+	agentId?: RuntimeAgentId | null;
 	agentSettings?: RuntimeTaskAgentSettings;
 }): Promise<JsonRecord> {
 	const workspaceRepoPath = await resolveWorkspaceRepoPath(input.projectPath, input.cwd);
@@ -496,6 +515,14 @@ async function createTask(input: {
 	if (shouldWarnOnExplicitAgentId(input.agentId)) {
 		warnOnAgentSettingsMechanismGaps(input.agentId, input.agentSettings);
 	}
+	const devAssignment = await resolveDevAssignment({
+		workspaceId,
+		title: input.title ?? "",
+		prompt: input.prompt,
+		agentId: input.agentId,
+		agentSettings: input.agentSettings,
+	});
+	reportDevAssignment(devAssignment);
 	const created = await updateRuntimeWorkspaceState(runtimeClient, workspaceRepoPath, (state) => {
 		const resolvedBaseRef = (input.baseRef ?? "").trim() || resolveTaskBaseRef(state);
 		if (!resolvedBaseRef) {
@@ -510,8 +537,8 @@ async function createTask(input: {
 				startInPlanMode: input.startInPlanMode,
 				autoReviewEnabled: input.autoReviewEnabled,
 				autoReviewMode: input.autoReviewMode,
-				agentId: input.agentId,
-				agentSettings: input.agentSettings,
+				agentId: devAssignment.agentId,
+				agentSettings: devAssignment.agentSettings,
 				baseRef: resolvedBaseRef,
 			},
 			() => globalThis.crypto.randomUUID(),
@@ -522,8 +549,13 @@ async function createTask(input: {
 		};
 	});
 
+	await recordDevAssignment(devAssignment, created).catch((error: unknown) => {
+		process.stderr.write(`Warning: could not log the kit's agent proposal: ${toErrorMessage(error)}\n`);
+	});
+
 	return {
 		ok: true,
+		...(devAssignment.outcome === "none" ? {} : { devAssignment: formatDevAssignment(devAssignment) }),
 		task: {
 			id: created.id,
 			column: "backlog",
@@ -1111,7 +1143,7 @@ export function registerTaskCommand(program: Command): void {
 		.option("--auto-review-mode <mode>", "Auto-review mode: commit | pr.", parseAutoReviewMode)
 		.option(
 			"--agent-id <id>",
-			"Agent override: cline | claude | codex | copilot | droid | gemini | opencode | kiro | default.",
+			'Agent override: cline | claude | codex | copilot | droid | gemini | opencode | kiro | default. Without --agent-id, --provider or --model, the project\'s routing kit may choose the agent and model; "default" keeps the selected agent.',
 		)
 		.option("--provider <id>", "Provider override for the task's agent. Valid values depend on the agent.")
 		.option("--model <id>", "Model override for the task's agent. Valid values depend on the agent.")
@@ -1147,7 +1179,7 @@ export function registerTaskCommand(program: Command): void {
 							startInPlanMode: parseOptionalBooleanOption(options.startInPlanMode, "--start-in-plan-mode"),
 							autoReviewEnabled: parseOptionalBooleanOption(options.autoReviewEnabled, "--auto-review-enabled"),
 							autoReviewMode: options.autoReviewMode,
-							agentId: parseAgentId(options.agentId) ?? undefined,
+							agentId: parseAgentId(options.agentId),
 							agentSettings: buildTaskAgentSettingsForCreate({
 								providerId:
 									parseOptionalStringOrDefault(

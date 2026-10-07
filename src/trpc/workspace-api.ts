@@ -1,5 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import type {
+	RuntimeDevAssignmentResponse,
 	RuntimeGitCheckoutResponse,
 	RuntimeGitDiscardResponse,
 	RuntimeGitSummaryResponse,
@@ -17,6 +18,7 @@ import {
 	parseWorktreeDeleteRequest,
 	parseWorktreeEnsureRequest,
 } from "../core/api-validation";
+import { resolveDevAssignment } from "../kits/dev-assignment";
 import type { PreparedWorktreeReap } from "../server/process-reaper";
 import { saveWorkspaceState, WorkspaceStateConflictError } from "../state/workspace-state";
 import type { TerminalSessionManager } from "../terminal/session-manager";
@@ -339,6 +341,19 @@ export function createWorkspaceApi(deps: CreateWorkspaceApiDependencies): Runtim
 				taskId: normalizedInput.taskId,
 				baseRef: normalizedInput.baseRef,
 			});
+		},
+		loadDevAssignment: async (workspaceScope, input) => {
+			// The browser's create dialog preselects an `applied` proposal; the creator can still change it.
+			const decision = await resolveDevAssignment({
+				workspaceId: workspaceScope.workspaceId,
+				title: input?.title ?? "",
+				prompt: input?.prompt ?? "",
+			});
+			return {
+				kitName: decision.kitName,
+				outcome: decision.outcome,
+				proposal: decision.proposal,
+			} satisfies RuntimeDevAssignmentResponse;
 		},
 		searchFiles: async (workspaceScope, input) => {
 			const query = input.query.trim();

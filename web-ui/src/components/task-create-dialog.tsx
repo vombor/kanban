@@ -22,11 +22,12 @@ import { useHotkeys } from "react-hotkeys-hook";
 import type { BranchSelectOption } from "@/components/branch-select-dropdown";
 import { BranchSelectDropdown } from "@/components/branch-select-dropdown";
 import { TaskAgentModelPicker, useTaskAgentModelPicker } from "@/components/task-agent-model-picker";
+import { TaskKitAssignmentHint } from "@/components/task-kit-assignment-hint";
 import { TaskPromptComposer } from "@/components/task-prompt-composer";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogBody, DialogFooter, DialogHeader } from "@/components/ui/dialog";
 import { NativeSelect } from "@/components/ui/native-select";
-import type { RuntimeAgentId, RuntimeTaskAgentSettings } from "@/runtime/types";
+import type { RuntimeAgentId, RuntimeDevAssignmentResponse, RuntimeTaskAgentSettings } from "@/runtime/types";
 import { LocalStorageKey } from "@/storage/local-storage-store";
 import type { TaskAutoReviewMode, TaskImage } from "@/types";
 import { isMacPlatform, pasteShortcutLabel } from "@/utils/platform";
@@ -123,6 +124,7 @@ export function TaskCreateDialog({
 	agentSettings,
 	onAgentSettingsChange,
 	defaultAgentId,
+	kitDevAssignment = null,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
@@ -152,6 +154,8 @@ export function TaskCreateDialog({
 	onAgentSettingsChange?: (value: RuntimeTaskAgentSettings | undefined) => void;
 	/** Default agent ID from runtimeConfig.selectedAgentId, used to show "Default (AgentName)" in picker */
 	defaultAgentId?: RuntimeAgentId | null;
+	/** The project kit's proposal, for the "from kit `team`" hint under the picker. */
+	kitDevAssignment?: RuntimeDevAssignmentResponse | null;
 }): ReactElement {
 	const [mode, setMode] = useState<"single" | "multi">("single");
 	const [createMore, setCreateMore] = useState(false);
@@ -562,6 +566,11 @@ export function TaskCreateDialog({
 							defaultAgentId={defaultAgentId}
 						/>
 					) : null}
+					<TaskKitAssignmentHint
+						devAssignment={kitDevAssignment}
+						agentId={agentId}
+						agentSettings={agentSettings}
+					/>
 				</div>
 			</DialogBody>
 			<DialogFooter>

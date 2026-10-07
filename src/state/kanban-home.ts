@@ -294,6 +294,11 @@ export function getKanbanModelsDataPath(homePath = getKanbanHomePath()): string 
 	return join(getKanbanDataPath(homePath), MODELS_DATA_DIR);
 }
 
+/** Per-workspace pipeline data that people and agents read (`<home>/data/<workspaceId>`, plan §6.2). */
+export function getKanbanWorkspaceDataPath(workspaceId: string, homePath = getKanbanHomePath()): string {
+	return join(getKanbanDataPath(homePath), workspaceId);
+}
+
 export function getKanbanWorkspacesRootPath(homePath = getKanbanHomePath()): string {
 	return join(homePath, KANBAN_HOME_WORKSPACES_DIR);
 }

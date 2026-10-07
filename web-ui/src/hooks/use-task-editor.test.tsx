@@ -3,8 +3,34 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useTaskEditor } from "@/hooks/use-task-editor";
-import type { RuntimeAgentId, RuntimeTaskAgentSettings } from "@/runtime/types";
+import type * as TrpcClientModule from "@/runtime/trpc-client";
+import type { RuntimeAgentId, RuntimeDevAssignmentResponse, RuntimeTaskAgentSettings } from "@/runtime/types";
 import type { BoardCard, BoardData, TaskAutoReviewMode, TaskImage } from "@/types";
+
+// The routing kit's proposal (workspace.getDevAssignment). Null = the runtime answers with an error (no proposal).
+const kitHarness = vi.hoisted(() => ({ response: null as RuntimeDevAssignmentResponse | null }));
+
+vi.mock("@/runtime/trpc-client", async (importOriginal) => ({
+	...(await importOriginal<typeof TrpcClientModule>()),
+	getRuntimeTrpcClient: () => ({
+		workspace: {
+			getDevAssignment: {
+				query: async () => {
+					if (!kitHarness.response) {
+						throw new Error("no kit answer");
+					}
+					return kitHarness.response;
+				},
+			},
+		},
+	}),
+}));
+
+const TEAM_PROPOSAL = {
+	agentId: "cline",
+	agentSettings: { providerId: "bedrock", modelId: "us.openai.gpt-6.1-sol" },
+	tier: "tier3",
+} satisfies NonNullable<RuntimeDevAssignmentResponse["proposal"]>;
 
 function createTask(taskId: string, prompt: string, createdAt: number, overrides: Partial<BoardCard> = {}): BoardCard {
 	return {
@@ -150,6 +176,7 @@ describe("useTaskEditor", () => {
 	let previousActEnvironment: boolean | undefined;
 
 	beforeEach(() => {
+		kitHarness.response = null;
 		localStorage.clear();
 		previousActEnvironment = (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
 			.IS_REACT_ACT_ENVIRONMENT;
@@ -473,5 +500,81 @@ describe("useTaskEditor", () => {
 				reasoningEffort: "medium",
 			});
 		}
+	});
+
+	describe("routing kit proposal", () => {
+		async function renderAndOpen(): Promise<() => HookSnapshot> {
+			let latestSnapshot: HookSnapshot | null = null;
+			await act(async () => {
+				root.render(
+					<HookHarness
+						initialBoard={createBoard()}
+						onSnapshot={(snapshot) => {
+							latestSnapshot = snapshot;
+						}}
+					/>,
+				);
+			});
+			await act(async () => {
+				requireSnapshot(latestSnapshot).handleOpenCreateTask();
+			});
+			await act(async () => {});
+			return () => requireSnapshot(latestSnapshot);
+		}
+
+		it("preselects the team kit's agent and model, and again after each create", async () => {
+			kitHarness.response = { kitName: "team", outcome: "applied", proposal: TEAM_PROPOSAL };
+			const snapshot = await renderAndOpen();
+			expect(snapshot().newTaskAgentId).toBe("cline");
+			expect(snapshot().newTaskAgentSettings).toEqual(TEAM_PROPOSAL.agentSettings);
+
+			await act(async () => {
+				snapshot().setNewTaskPrompt("Add coupons");
+			});
+			await act(async () => {
+				snapshot().handleCreateTask({ keepDialogOpen: true });
+			});
+			expect(snapshot().board.columns[0]?.cards[0]).toMatchObject({
+				agentId: "cline",
+				agentSettings: TEAM_PROPOSAL.agentSettings,
+			});
+			expect(snapshot().newTaskAgentId).toBe("cline");
+			expect(snapshot().newTaskAgentSettings).toEqual(TEAM_PROPOSAL.agentSettings);
+		});
+
+		it("keeps the user's own choice, Default included", async () => {
+			kitHarness.response = { kitName: "team", outcome: "applied", proposal: TEAM_PROPOSAL };
+			const snapshot = await renderAndOpen();
+			await act(async () => {
+				snapshot().setNewTaskAgentId(undefined);
+				snapshot().setNewTaskAgentSettings(undefined);
+			});
+			await act(async () => {});
+			expect(snapshot().newTaskAgentId).toBeUndefined();
+
+			await act(async () => {
+				snapshot().setNewTaskPrompt("Add coupons");
+			});
+			await act(async () => {
+				snapshot().handleCreateTask();
+			});
+			const [card] = snapshot().board.columns[0]?.cards ?? [];
+			expect(card?.agentId).toBeUndefined();
+			expect(card?.agentSettings).toBeUndefined();
+		});
+
+		it("preselects nothing for a shadow proposal", async () => {
+			kitHarness.response = { kitName: "team", outcome: "shadow", proposal: TEAM_PROPOSAL };
+			const snapshot = await renderAndOpen();
+			expect(snapshot().newTaskAgentId).toBeUndefined();
+			expect(snapshot().newTaskAgentSettings).toBeUndefined();
+		});
+
+		it("preselects nothing on the default kit", async () => {
+			kitHarness.response = { kitName: "default", outcome: "none", proposal: null };
+			const snapshot = await renderAndOpen();
+			expect(snapshot().newTaskAgentId).toBeUndefined();
+			expect(snapshot().newTaskAgentSettings).toBeUndefined();
+		});
 	});
 });

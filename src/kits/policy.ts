@@ -2,8 +2,8 @@
 // resolved kit data. Pure: no I/O, no clock. Nothing is a plugin: a kit is data, and the team kit's features
 // (src/kits/team/, later) only add behaviour on events, they don't answer these questions.
 //
-// Only `kanban kit show` calls the evaluator so far. The pipeline asks it from P4-1 on, and card creation asks
-// `devAssignment` from P3-5 on.
+// Callers so far: `kanban kit show`, and card creation for `devAssignment` (src/kits/dev-assignment.ts). The
+// pipeline asks the other questions from P4-1 on.
 import type { RuntimeAgentId, RuntimeBoardCard } from "../core/api-contract";
 import type { EffectiveModel } from "../core/effective-agent";
 import type { CardRole, KitDocument } from "./kit-schema";

@@ -9,6 +9,8 @@ import type {
 	RuntimeConfigResponse,
 	RuntimeConfigSaveRequest,
 	RuntimeDebugResetAllStateResponse,
+	RuntimeDevAssignmentRequest,
+	RuntimeDevAssignmentResponse,
 	RuntimeDirectoryListRequest,
 	RuntimeDirectoryListResponse,
 	RuntimeGitCheckoutRequest,
@@ -65,6 +67,8 @@ import {
 	runtimeConfigResponseSchema,
 	runtimeConfigSaveRequestSchema,
 	runtimeDebugResetAllStateResponseSchema,
+	runtimeDevAssignmentRequestSchema,
+	runtimeDevAssignmentResponseSchema,
 	runtimeDirectoryListRequestSchema,
 	runtimeDirectoryListResponseSchema,
 	runtimeGitCheckoutRequestSchema,
@@ -196,6 +200,10 @@ export interface RuntimeTrpcContext {
 			scope: RuntimeTrpcWorkspaceScope,
 			input: RuntimeTaskWorkspaceInfoRequest,
 		) => Promise<RuntimeTaskWorkspaceInfoResponse>;
+		loadDevAssignment: (
+			scope: RuntimeTrpcWorkspaceScope,
+			input: RuntimeDevAssignmentRequest | undefined,
+		) => Promise<RuntimeDevAssignmentResponse>;
 		searchFiles: (
 			scope: RuntimeTrpcWorkspaceScope,
 			input: RuntimeWorkspaceFileSearchRequest,
@@ -411,6 +419,12 @@ export const runtimeAppRouter = t.router({
 			.output(runtimeTaskWorkspaceInfoResponseSchema)
 			.query(async ({ ctx, input }) => {
 				return await ctx.workspaceApi.loadTaskContext(ctx.workspaceScope, input);
+			}),
+		getDevAssignment: workspaceProcedure
+			.input(runtimeDevAssignmentRequestSchema.optional())
+			.output(runtimeDevAssignmentResponseSchema)
+			.query(async ({ ctx, input }) => {
+				return await ctx.workspaceApi.loadDevAssignment(ctx.workspaceScope, input);
 			}),
 		searchFiles: workspaceProcedure
 			.input(runtimeWorkspaceFileSearchRequestSchema)

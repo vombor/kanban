@@ -595,6 +595,27 @@ export const runtimeTaskTrashResponseSchema = z.object({
 });
 export type RuntimeTaskTrashResponse = z.infer<typeof runtimeTaskTrashResponseSchema>;
 
+// The routing kit's agent/model for a new card the creator set nothing on (src/kits/dev-assignment.ts).
+export const runtimeDevAssignmentRequestSchema = z.object({
+	title: z.string().optional(),
+	prompt: z.string().optional(),
+});
+export type RuntimeDevAssignmentRequest = z.infer<typeof runtimeDevAssignmentRequestSchema>;
+
+export const runtimeDevAssignmentResponseSchema = z.object({
+	kitName: z.string(),
+	/** `applied`: preselect the proposal. `shadow`: show it, don't apply it. `none`: the kit has no answer. */
+	outcome: z.enum(["none", "explicit", "shadow", "applied"]),
+	proposal: z
+		.object({
+			agentId: runtimeAgentIdEnumSchema,
+			agentSettings: runtimeAgentSettingsSchema.optional(),
+			tier: z.string().nullable(),
+		})
+		.nullable(),
+});
+export type RuntimeDevAssignmentResponse = z.infer<typeof runtimeDevAssignmentResponseSchema>;
+
 export const runtimeTaskWorkspaceInfoRequestSchema = z.object({
 	taskId: z.string(),
 	baseRef: z.string(),

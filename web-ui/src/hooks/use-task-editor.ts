@@ -1,6 +1,6 @@
 import { deriveTaskTitleFromPrompt } from "@runtime-task-title";
 import type { Dispatch, SetStateAction } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
 	normalizeStoredTaskAutoReviewMode,
@@ -8,7 +8,8 @@ import {
 	TASK_AUTO_REVIEW_MODE_STORAGE_KEY,
 	TASK_START_IN_PLAN_MODE_STORAGE_KEY,
 } from "@/hooks/app-utils";
-import type { RuntimeAgentId, RuntimeTaskAgentSettings } from "@/runtime/types";
+import { getPreselectedKitProposal, useKitDevAssignment } from "@/hooks/use-kit-dev-assignment";
+import type { RuntimeAgentId, RuntimeDevAssignmentResponse, RuntimeTaskAgentSettings } from "@/runtime/types";
 import { addTaskToColumnWithResult, findCardSelection, updateTask, updateTaskTitle } from "@/state/board-state";
 import type { BoardCard, BoardData, TaskAutoReviewMode, TaskImage } from "@/types";
 import { resolveTaskAutoReviewMode } from "@/types";
@@ -51,6 +52,8 @@ export interface UseTaskEditorResult {
 	setNewTaskAgentId: Dispatch<SetStateAction<RuntimeAgentId | undefined>>;
 	newTaskAgentSettings: RuntimeTaskAgentSettings | undefined;
 	setNewTaskAgentSettings: Dispatch<SetStateAction<RuntimeTaskAgentSettings | undefined>>;
+	/** The project kit's agent/model proposal for new cards; preselected when `applied`, shown when `shadow`. */
+	kitDevAssignment: RuntimeDevAssignmentResponse | null;
 	editingTaskId: string | null;
 	editTaskPrompt: string;
 	setEditTaskPrompt: Dispatch<SetStateAction<string>>;
@@ -120,6 +123,27 @@ export function useTaskEditor({
 
 	const [newTaskAgentId, setNewTaskAgentId] = useState<RuntimeAgentId | undefined>(undefined);
 	const [newTaskAgentSettings, setNewTaskAgentSettings] = useState<RuntimeTaskAgentSettings | undefined>(undefined);
+	// The kit's proposal fills the agent/model of a fresh create form (on open, when it arrives, after each create)
+	// until the user picks something themselves; their choice, "Default" included, always wins.
+	const kitDevAssignment = useKitDevAssignment(currentProjectId, isInlineTaskCreateOpen);
+	const kitProposal = getPreselectedKitProposal(kitDevAssignment);
+	const isNewTaskAgentChosenRef = useRef(false);
+	const resetNewTaskAgentToKit = useCallback(() => {
+		isNewTaskAgentChosenRef.current = false;
+		setNewTaskAgentId(kitProposal?.agentId);
+		setNewTaskAgentSettings(kitProposal?.agentSettings ? { ...kitProposal.agentSettings } : undefined);
+	}, [kitProposal]);
+	const chooseNewTaskAgentId = useCallback<Dispatch<SetStateAction<RuntimeAgentId | undefined>>>((value) => {
+		isNewTaskAgentChosenRef.current = true;
+		setNewTaskAgentId(value);
+	}, []);
+	const chooseNewTaskAgentSettings = useCallback<Dispatch<SetStateAction<RuntimeTaskAgentSettings | undefined>>>(
+		(value) => {
+			isNewTaskAgentChosenRef.current = true;
+			setNewTaskAgentSettings(value);
+		},
+		[],
+	);
 	const [editTaskAgentId, setEditTaskAgentId] = useState<RuntimeAgentId | undefined>(undefined);
 	const [editTaskAgentSettings, setEditTaskAgentSettings] = useState<RuntimeTaskAgentSettings | undefined>(undefined);
 
@@ -199,15 +223,20 @@ export function useTaskEditor({
 		}
 	}, [board, editingTaskId]);
 
+	useEffect(() => {
+		if (isInlineTaskCreateOpen && !isNewTaskAgentChosenRef.current) {
+			resetNewTaskAgentToKit();
+		}
+	}, [isInlineTaskCreateOpen, resetNewTaskAgentToKit]);
+
 	const handleOpenCreateTask = useCallback(() => {
 		setEditingTaskId(null);
 		setEditTaskPrompt("");
 		setEditTaskImages([]);
 
-		setNewTaskAgentId(undefined);
-		setNewTaskAgentSettings(undefined);
+		resetNewTaskAgentToKit();
 		setIsInlineTaskCreateOpen(true);
-	}, []);
+	}, [resetNewTaskAgentToKit]);
 
 	const handleCancelCreateTask = useCallback(() => {
 		setIsInlineTaskCreateOpen(false);
@@ -362,8 +391,7 @@ export function useTaskEditor({
 			setNewTaskPrompt("");
 			setNewTaskImages([]);
 			setNewTaskBranchRef(baseRef);
-			setNewTaskAgentId(undefined);
-			setNewTaskAgentSettings(undefined);
+			resetNewTaskAgentToKit();
 			if (!options?.keepDialogOpen) {
 				setIsInlineTaskCreateOpen(false);
 			}
@@ -380,10 +408,9 @@ export function useTaskEditor({
 			newTaskImages,
 			newTaskPrompt,
 			newTaskStartInPlanMode,
+			resetNewTaskAgentToKit,
 			resolvedDefaultTaskBranchRef,
 			setBoard,
-			setNewTaskAgentId,
-			setNewTaskAgentSettings,
 		],
 	);
 
@@ -424,8 +451,7 @@ export function useTaskEditor({
 			setNewTaskPrompt("");
 			setNewTaskImages([]);
 			setNewTaskBranchRef(baseRef);
-			setNewTaskAgentId(undefined);
-			setNewTaskAgentSettings(undefined);
+			resetNewTaskAgentToKit();
 			if (!options?.keepDialogOpen) {
 				setIsInlineTaskCreateOpen(false);
 			}
@@ -441,10 +467,9 @@ export function useTaskEditor({
 			newTaskAgentSettings,
 			newTaskImages,
 			newTaskStartInPlanMode,
+			resetNewTaskAgentToKit,
 			resolvedDefaultTaskBranchRef,
 			setBoard,
-			setNewTaskAgentId,
-			setNewTaskAgentSettings,
 		],
 	);
 
@@ -483,9 +508,10 @@ export function useTaskEditor({
 		newTaskBranchRef,
 		setNewTaskBranchRef,
 		newTaskAgentId,
-		setNewTaskAgentId,
+		setNewTaskAgentId: chooseNewTaskAgentId,
 		newTaskAgentSettings,
-		setNewTaskAgentSettings,
+		setNewTaskAgentSettings: chooseNewTaskAgentSettings,
+		kitDevAssignment,
 		editingTaskId,
 		editTaskPrompt,
 		setEditTaskPrompt,

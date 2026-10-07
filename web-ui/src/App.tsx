@@ -290,6 +290,7 @@ export default function App(): ReactElement {
 		setNewTaskAgentId,
 		newTaskAgentSettings,
 		setNewTaskAgentSettings,
+		kitDevAssignment,
 		editingTaskId,
 		editTaskPrompt,
 		setEditTaskPrompt,
@@ -1034,6 +1035,7 @@ export default function App(): ReactElement {
 					agentSettings={newTaskAgentSettings}
 					onAgentSettingsChange={setNewTaskAgentSettings}
 					defaultAgentId={runtimeProjectConfig?.selectedAgentId ?? null}
+					kitDevAssignment={kitDevAssignment}
 				/>
 				<ClearTrashDialog
 					open={isClearTrashDialogOpen}
