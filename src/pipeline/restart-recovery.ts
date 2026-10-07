@@ -78,9 +78,9 @@ export const MANIFEST_FROM_OTHER_HOME_MAX_AGE_MS = 24 * 3_600_000;
 /**
  * A manifest is for the very next server start only: written before `serverStartedAt` by the server that ran just
  * before this one. Normally that server's start (`kanbanStart`) equals `previousServerStartedAt`, from the start
- * record this server replaced. After a home move the writer's start record stayed in the old home (`run/` is not
- * part of the move), so this home has no record (null) or only one older than the writer: no server started on this
- * home after the writer, and the manifest counts if it is recent (MANIFEST_FROM_OTHER_HOME_MAX_AGE_MS; a home move
+ * record this server replaced. `kanban home migrate` copies the start record with `data/`, but a home moved by hand
+ * (or by an older build) left it in the old home, so this home has no record (null) or only one older than the writer:
+ * no server started on this home after the writer, and the manifest counts if it is recent (MANIFEST_FROM_OTHER_HOME_MAX_AGE_MS; a home move
  * happens in a restart window). Anything else is stale (a manifest no start used, from weeks ago, one written without
  * a known server, or one a later server on this home already had) and is never replayed; recovery deletes it.
  */
@@ -146,8 +146,9 @@ export function planRestartRecovery(input: PlanRestartRecoveryInput): RestartRec
 			continue;
 		}
 		if (!session) {
-			// Summaries reach sessions.json only with a board save that carries them (the browser's), so an In Progress
-			// card can have none on disk (277f8, 10/07). In Progress without a process is an agent stopped mid-work.
+			// The server persists summaries now (session-summary-persister.ts), but a home written by an older build kept
+			// them only with a browser save, so an In Progress card can have none on disk (277f8, 10/07). In Progress
+			// without a process is an agent stopped mid-work.
 			if (column === "in_progress") {
 				orphan("In Progress with no session summary and no process now");
 			} else {

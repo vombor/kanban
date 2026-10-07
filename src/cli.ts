@@ -346,9 +346,10 @@ async function startServer(): Promise<{
 		{ createRuntimeServer },
 		{ createRuntimeStateHub },
 		{ createSessionColumnSync },
+		{ createSessionSummaryPersister },
 		{ resolveInteractiveShellCommand },
 		{ shutdownRuntimeServer },
-		{ loadWorkspaceStateById, mutateWorkspaceState },
+		{ loadWorkspaceStateById, mutateWorkspaceState, persistWorkspaceSessionSummaries },
 		{ collectProjectWorktreeTaskIdsForRemoval, createWorkspaceRegistry },
 		{ clearPendingUpdateNotification, getPendingUpdateNotification },
 	] = await Promise.all([
@@ -362,6 +363,7 @@ async function startServer(): Promise<{
 		import("./server/runtime-server.js"),
 		import("./server/runtime-state-hub.js"),
 		import("./server/session-column-sync.js"),
+		import("./server/session-summary-persister.js"),
 		import("./server/shell.js"),
 		import("./server/shutdown-coordinator.js"),
 		import("./state/workspace-state.js"),
@@ -377,6 +379,13 @@ async function startServer(): Promise<{
 	if (sessionSyncSetting.warning) {
 		console.warn(`[kanban] ${sessionSyncSetting.warning}`);
 	}
+	// The server writes session summaries itself (debounced), so restart recovery finds them with no browser open.
+	const sessionSummaryPersister = createSessionSummaryPersister({
+		persist: persistWorkspaceSessionSummaries,
+		warn: (message) => {
+			console.warn(`[kanban] ${message}`);
+		},
+	});
 	const workspaceRegistry = await createWorkspaceRegistry({
 		cwd: process.cwd(),
 		loadGlobalRuntimeConfig,
@@ -389,6 +398,7 @@ async function startServer(): Promise<{
 		},
 		onTerminalManagerReady: (workspaceId, manager) => {
 			runtimeStateHub?.trackTerminalManager(workspaceId, manager);
+			sessionSummaryPersister.trackWorkspace(workspaceId, manager);
 			sessionColumnSync?.trackWorkspace(workspaceId, manager);
 			autoReviewReconciler?.trackWorkspace(workspaceId);
 		},
@@ -399,6 +409,7 @@ async function startServer(): Promise<{
 	const runtimeHub = runtimeStateHub;
 	for (const { workspaceId, terminalManager } of workspaceRegistry.listManagedWorkspaces()) {
 		runtimeHub.trackTerminalManager(workspaceId, terminalManager);
+		sessionSummaryPersister.trackWorkspace(workspaceId, terminalManager);
 	}
 	const disposeTrackedWorkspace = (
 		workspaceId: string,
@@ -411,6 +422,7 @@ async function startServer(): Promise<{
 		});
 		runtimeHub.disposeWorkspace(workspaceId);
 		sessionColumnSync?.untrackWorkspace(workspaceId);
+		sessionSummaryPersister.untrackWorkspace(workspaceId);
 		autoReviewReconciler?.untrackWorkspace(workspaceId);
 		pipelineWorkerHost?.forgetWorkspace(workspaceId);
 		return disposed;
@@ -626,16 +638,19 @@ async function startServer(): Promise<{
 		autoReviewReconciler?.close();
 		unsubscribePipelineActivity();
 		await pipelineWorkerHost?.close();
+		await sessionSummaryPersister.close();
 		await runtimeServer.close();
 	};
 
 	const shutdown = async (options?: { skipSessionCleanup?: boolean }) => {
 		// Stop auto-review before session cleanup so it cannot arm or trigger git
 		// actions while shutdown is interrupting sessions and sweeping the board. Session sync stops too: shutdown
-		// writes the board itself.
+		// writes the board itself. The summary persister writes what it has queued and stops, so the summaries on disk
+		// are the ones from before shutdown stopped the sessions (restart recovery reads them).
 		sessionColumnSync?.close();
 		autoReviewReconciler?.close();
 		await pipelineWorkerHost?.close();
+		await sessionSummaryPersister.close();
 		await shutdownRuntimeServer({
 			workspaceRegistry,
 			warn: (message) => {

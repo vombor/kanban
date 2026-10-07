@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { readFile, realpath, rm } from "node:fs/promises";
+import { readFile, realpath, rm, rmdir } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { z } from "zod";
 
@@ -21,6 +21,7 @@ import { updateTaskDependencies } from "../core/task-board-mutations";
 import { type LockRequest, lockedFileSystem } from "../fs/locked-file-system";
 import { boardBackups } from "./board-backups";
 import { getKanbanHomePath, getKanbanWorkspacesRootPath, getTaskWorktreesRootPath } from "./kanban-home";
+import { mergeSessionSummaries, pruneSessionSummariesByBoard } from "./session-summary-merge";
 
 const INDEX_FILENAME = "index.json";
 const BOARD_FILENAME = "board.json";
@@ -306,6 +307,15 @@ async function readWorkspaceSessions(workspaceId: string): Promise<Record<string
 	const sessionsPath = getWorkspaceSessionsPath(workspaceId);
 	const rawSessions = await readJsonFile(sessionsPath);
 	return parsePersistedStateFile(sessionsPath, SESSIONS_FILENAME, rawSessions, workspaceSessionsSchema, {});
+}
+
+/** The stored summaries a write merges into; an unreadable sessions.json counts as none, as it did before the merge. */
+async function readStoredSessionsForMerge(workspaceId: string): Promise<Record<string, RuntimeTaskSessionSummary>> {
+	try {
+		return await readWorkspaceSessions(workspaceId);
+	} catch {
+		return {};
+	}
 }
 
 async function readWorkspaceMeta(workspaceId: string): Promise<WorkspaceStateMeta> {
@@ -713,7 +723,12 @@ async function writeWorkspaceStateSave(
 			throw new WorkspaceStateConflictError(expectedRevision, currentMeta.revision);
 		}
 		const board = parsedPayload.board;
-		const sessions = parsedPayload.sessions;
+		// The server persists summaries itself, so the save's summaries can be older than the stored ones.
+		const sessions = mergeSessionSummaries(
+			await readStoredSessionsForMerge(context.workspaceId),
+			parsedPayload.sessions,
+			board,
+		);
 		const storedCardIds = reportAddedCards ? await readStoredCardIds(context.workspaceId) : null;
 		const addedCards = storedCardIds
 			? board.columns.flatMap((column) => column.cards.filter((card) => !storedCardIds.has(card.id)))
@@ -773,7 +788,8 @@ export async function mutateWorkspaceState<T>(
 		}
 
 		const nextBoard = mutation.board;
-		const nextSessions = mutation.sessions ?? currentSessions;
+		// Pruned by the board it stores: `task delete` and prune-done drop their cards' summaries.
+		const nextSessions = pruneSessionSummariesByBoard(mutation.sessions ?? currentSessions, nextBoard);
 		const nextRevision = currentMeta.revision + 1;
 		const nextMeta: WorkspaceStateMeta = {
 			revision: nextRevision,
@@ -797,4 +813,36 @@ export async function mutateWorkspaceState<T>(
 			saved: true,
 		};
 	});
+}
+
+/**
+ * The server's own write of session summaries (src/server/session-summary-persister.ts): merges `summaries` into
+ * sessions.json under the workspace lock, newer summary per task wins. Touches neither the board nor the revision,
+ * so a browser save in flight doesn't conflict with it; pruned by the stored board read under the same lock, so a
+ * deleted card's summary isn't written back. Writes nothing (returns false) for a workspace that is no longer
+ * registered. Project removal drops the index entry, then deletes the state directory under this lock, so the entry
+ * is checked before the lock (taking it creates the directory) and again under it; a write that lost that race
+ * removes the empty directory its lock created.
+ */
+export async function persistWorkspaceSessionSummaries(
+	workspaceId: string,
+	summaries: Record<string, RuntimeTaskSessionSummary>,
+): Promise<boolean> {
+	const isRegistered = async () => Boolean((await readWorkspaceIndex()).entries[workspaceId]);
+	if (!(await isRegistered())) {
+		return false;
+	}
+	const written = await lockedFileSystem.withLock(getWorkspaceDirectoryLockRequest(workspaceId), async () => {
+		if (!(await isRegistered())) {
+			return false;
+		}
+		const board = await readWorkspaceBoard(workspaceId).catch(() => null);
+		const sessions = mergeSessionSummaries(await readStoredSessionsForMerge(workspaceId), summaries, board);
+		await lockedFileSystem.writeJsonFileAtomic(getWorkspaceSessionsPath(workspaceId), sessions, { lock: null });
+		return true;
+	});
+	if (!written) {
+		await rmdir(getWorkspaceDirectoryPath(workspaceId)).catch(() => {});
+	}
+	return written;
 }

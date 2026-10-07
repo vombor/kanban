@@ -139,13 +139,17 @@ asks the worker to check now. Never restart the pod yourself: that is the user's
   in mode `on`). Every other agent, Cline included, gets a new session with the card prompt (+ a WIP note).
 - A card that still shows "running" after a restart has no process. `kanban task resume <id>` brings it back.
 - Restart recovery finds every In Progress card without a process, with or without a manifest entry or a session
-  summary (`sessions.json` only gets summaries with a browser save, 277f8 on 10/07). The manifest adds the WIP tags
-  and the Review cards whose turn was still running.
+  summary. The server writes every session summary to `sessions.json` itself (at most once a second), so a Review
+  card whose turn was still running is found from its summary too; a home from before that (277f8 on 10/07) may have
+  none. The manifest adds the WIP tags.
 - **Home move** (Kanban stopped, a one-off): `kanban home migrate --from <old home> --to ~/.kanban` (`--from` is
   required; `--from-worktrees <dir>` when the old home's config.json doesn't name its worktrees root). It copies
-  config/workspaces/hooks/patches; copy `data/` yourself, which carries `restart-manifest.json`. `run/` stays behind,
-  so the new home has no start record of the server that wrote the manifest: recovery takes such a manifest when it
-  is at most 24 h old. Rename the old home (`<old home>.migrated-<ts>`) and move it out of `~/.cline` once no rollback
+  config/workspaces/hooks/patches, all of `data/` (pipeline state, decision and QA logs, scoreboard, runoffs, plans,
+  prices, models, `restart-manifest.json`) and `run/server-start.json`, so restart recovery on the new home matches the
+  old server's manifest; no manual data copy. For `data/` and the start record the newer file wins: a differing target
+  file as new or newer is kept and reported as a conflict, an older one is replaced only after it is saved to
+  `<home>/backups/home-migrate-<ts>/`. `--dry-run` lists every file it would copy, keep or replace. The rest of
+  `run/` stays behind (a home moved by hand has no start record: recovery takes a manifest at most 24 h old). Rename the old home (`<old home>.migrated-<ts>`) and move it out of `~/.cline` once no rollback
   needs it. Rollback: stop Kanban and point `KANBAN_HOME` at the renamed old home.
 
 **Stuck card.**

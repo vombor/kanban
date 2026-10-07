@@ -563,3 +563,19 @@ of this repository is the complete record of changes.
 - `src/state/kanban-home.ts`, `test/runtime/state/kanban-home.test.ts`: the debug "Reset all state" no longer deletes Cline's
   data dir (`~/.cline/data`) or any other path in or around Cline's dirs (`~/.cline`, `CLINE_DIR`, `CLINE_DATA_DIR`); it
   deletes only Kanban's home and worktree roots.
+- `src/server/session-summary-persister.ts`, `src/state/session-summary-merge.ts` (new), `src/state/workspace-state.ts`,
+  `src/cli.ts`, `src/pipeline/restart-recovery.ts`, `AGENTS.md`, `docs/team/RUNBOOK.md`, tests (the server persists
+  session summaries, 2026-10-07): the server writes every session summary change to the workspace's `sessions.json`
+  itself, at most once a second per workspace, atomically under the workspace lock, without touching the board or its
+  revision. Every `sessions.json` write (browser saves included) merges per task and keeps the newer summary
+  (`updatedAt`, then `stateChangedAt`) and summaries only on disk, so a browser save can't roll a server summary back,
+  then keeps only the summaries of cards on the board it stores (plus their detail terminals and the home-agent sidebar
+  sessions), so deleted cards' summaries don't pile up.
+  Shutdown writes the queued summaries and stops the persister before it stops sessions. Before this, summaries reached
+  disk only with a browser save, `sessions.json` sat at `{}` for hours, and restart recovery missed card 277f8.
+- `src/state/kanban-home-migrate.ts`, `src/commands/home.ts`, `docs/team/RUNBOOK.md`, tests: `kanban home migrate` also
+  copies `data/` (pipeline state, decision and QA logs, scoreboard, runoffs, plans, prices, models, restart manifests)
+  and `run/server-start.json`, so restart recovery on the new home matches the old server's restart manifest. For these
+  files the newer one wins: a differing target file as new or newer is kept and reported as a conflict, an older one is
+  replaced only after it is saved to `<home>/backups/home-migrate-<ts>/`. `--dry-run` lists every file. `.pid` files are
+  skipped as transient.

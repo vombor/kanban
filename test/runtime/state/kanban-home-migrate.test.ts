@@ -9,14 +9,27 @@ import {
 	readlinkSync,
 	statSync,
 	symlinkSync,
+	utimesSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { isManifestForStart } from "../../../src/pipeline/restart-recovery";
 import {
+	getCalibrationPaths,
+	getKanbanBackupsPath,
+	getKanbanModelsDataPath,
+	getKanbanRunPath,
+	getKanbanWorkspaceDataPath,
 	getKanbanWorkspacesRootPath,
+	getPipelineDecisionLogPath,
+	getPipelineStatePath,
+	getPricesDataPaths,
+	getRestartManifestPath,
+	getServerStartRecordPath,
+	getWatchdogWorkspacePaths,
 	resetKanbanHomeForTests,
 	resolveKanbanHome,
 } from "../../../src/state/kanban-home";
@@ -491,5 +504,176 @@ describe("kanban home migrate", () => {
 			});
 			expect(nested.blockers[0]).toContain("must not contain each other");
 		});
+	});
+});
+
+/** The old home's data/ (pipeline, watchdog, team kit, restart manifest) and its server start record. */
+function seedLegacyData(userHomePath: string): void {
+	const { legacyHome } = getHomes(userHomePath);
+	writeJson(getPipelineStatePath("foo", legacyHome), { version: 1, cards: { abc12: { qaflow: {} } } });
+	writeFileSync(getPipelineDecisionLogPath("foo", legacyHome), '{"kind":"qa_gate"}\n', "utf8");
+	writeJson(getWatchdogWorkspacePaths("foo", legacyHome).runoffs, { groups: [] });
+	writeFileSync(getWatchdogWorkspacePaths("foo", legacyHome).orchestratorPlan, "# plan\n", "utf8");
+	writeFileSync(join(getKanbanWorkspaceDataPath("foo", legacyHome), "scoreboard.jsonl"), "{}\n", "utf8");
+	writeJson(getPricesDataPaths(legacyHome).pricesJson, { models: {} });
+	writeJson(join(getKanbanModelsDataPath(legacyHome), "lemonade.json"), { models: [] });
+	writeJson(getRestartManifestPath("foo", legacyHome), {
+		at: "2026-10-07T10:00:00.000Z",
+		kanbanStart: "2026-10-07T09:00:00.000Z",
+		cards: [],
+	});
+	writeJson(getServerStartRecordPath(legacyHome), { pid: 2, startedAt: Date.parse("2026-10-07T09:00:00.000Z") });
+	// A calibration runner's pid lock belongs to that runner.
+	const calibration = getCalibrationPaths("foo", "c1", legacyHome);
+	writeJson(calibration.state, { finishedAt: null });
+	writeFileSync(calibration.lock, "123", "utf8");
+}
+
+function setMtime(path: string, iso: string): void {
+	const at = new Date(iso);
+	utimesSync(path, at, at);
+}
+
+describe("kanban home migrate: data/ and the server start record", () => {
+	it("copies data/ and run/server-start.json; other run/ files and pid locks stay behind", async () => {
+		await withTemporaryKanbanHome(
+			async ({ userHomePath }) => {
+				const { legacyHome, targetHome } = getHomes(userHomePath);
+				const dry = await runKanbanHomeMigration({
+					...fromHome(userHomePath),
+					toPath: targetHome,
+					dryRun: true,
+					probeRuntimeServer: noServer,
+				});
+				const copied = dry.plan.files.filter((file) => file.action === "copy").map((file) => file.path);
+				const relativeTo = (path: string) => relative(legacyHome, path);
+				const expected = [
+					relativeTo(getPipelineStatePath("foo", legacyHome)),
+					relativeTo(getPipelineDecisionLogPath("foo", legacyHome)),
+					relativeTo(getWatchdogWorkspacePaths("foo", legacyHome).runoffs),
+					relativeTo(getWatchdogWorkspacePaths("foo", legacyHome).orchestratorPlan),
+					relativeTo(join(getKanbanWorkspaceDataPath("foo", legacyHome), "scoreboard.jsonl")),
+					relativeTo(getPricesDataPaths(legacyHome).pricesJson),
+					relativeTo(join(getKanbanModelsDataPath(legacyHome), "lemonade.json")),
+					relativeTo(getRestartManifestPath("foo", legacyHome)),
+					relativeTo(getServerStartRecordPath(legacyHome)),
+					relativeTo(getCalibrationPaths("foo", "c1", legacyHome).state),
+				];
+				expect(copied).toEqual(expect.arrayContaining(expected));
+				expect(copied).not.toContain(relativeTo(getCalibrationPaths("foo", "c1", legacyHome).lock));
+				expect(copied).not.toContain(relativeTo(join(getKanbanRunPath(legacyHome), "pid-pressure")));
+				expect(existsSync(targetHome)).toBe(false);
+
+				const result = await runKanbanHomeMigration({
+					...fromHome(userHomePath),
+					toPath: targetHome,
+					probeRuntimeServer: noServer,
+				});
+				expect(result.executed).toBe(true);
+				for (const path of expected) {
+					expect(readFileSync(join(targetHome, path), "utf8")).toBe(readFileSync(join(legacyHome, path), "utf8"));
+				}
+				expect(existsSync(join(getKanbanRunPath(targetHome), "pid-pressure"))).toBe(false);
+				expect(existsSync(getCalibrationPaths("foo", "c1", targetHome).lock)).toBe(false);
+
+				// Restart recovery on the new home matches the old server's manifest through the copied start record.
+				const record = readJson(getServerStartRecordPath(targetHome)) as { startedAt: number };
+				const manifest = readJson(getRestartManifestPath("foo", targetHome)) as Parameters<
+					typeof isManifestForStart
+				>[0];
+				expect(isManifestForStart(manifest, Date.parse("2026-10-07T10:05:00.000Z"), record.startedAt)).toBe(true);
+
+				const again = await planKanbanHomeMigration({
+					...fromHome(userHomePath),
+					toPath: targetHome,
+					probeRuntimeServer: noServer,
+				});
+				expect(again.upToDate).toBe(true);
+			},
+			{
+				prepare: (userHomePath) => {
+					seedLegacyHome(userHomePath);
+					seedLegacyData(userHomePath);
+					writeFileSync(join(getKanbanRunPath(getHomes(userHomePath).legacyHome), "pid-pressure"), "", "utf8");
+				},
+			},
+		);
+	});
+
+	it("keeps a newer target file (a conflict), replaces an older one and saves the target's version to backups", async () => {
+		await withTemporaryKanbanHome(
+			async ({ userHomePath }) => {
+				const { legacyHome, targetHome } = getHomes(userHomePath);
+				const statePath = relative(legacyHome, getPipelineStatePath("foo", legacyHome));
+				const logPath = relative(legacyHome, getPipelineDecisionLogPath("foo", legacyHome));
+				const startPath = relative(legacyHome, getServerStartRecordPath(legacyHome));
+				// The target's pipeline state was written after the source's: it wins.
+				writeJson(join(targetHome, statePath), { version: 1, cards: { newer: {} } });
+				setMtime(join(legacyHome, statePath), "2026-10-07T09:00:00Z");
+				setMtime(join(targetHome, statePath), "2026-10-07T11:00:00Z");
+				// The target's decision log and start record are older than the source's: replaced.
+				writeFileSync(join(targetHome, logPath), '{"kind":"old"}\n', "utf8");
+				setMtime(join(targetHome, logPath), "2026-10-06T09:00:00Z");
+				setMtime(join(legacyHome, logPath), "2026-10-07T09:00:00Z");
+				writeJson(join(targetHome, startPath), { pid: 7, startedAt: 1 });
+				setMtime(join(targetHome, startPath), "2026-10-06T09:00:00Z");
+				setMtime(join(legacyHome, startPath), "2026-10-07T09:00:00Z");
+				// Board files keep the old rule: the target's is never overwritten, even when older.
+				writeJson(join(targetHome, "workspaces", "foo", "board.json"), {
+					columns: [{ id: "x" }],
+					dependencies: [],
+				});
+				setMtime(join(targetHome, "workspaces", "foo", "board.json"), "2020-01-01T00:00:00Z");
+
+				const dry = await planKanbanHomeMigration({
+					...fromHome(userHomePath),
+					toPath: targetHome,
+					probeRuntimeServer: noServer,
+					now: () => new Date("2026-10-07T12:00:00Z"),
+				});
+				const actionOf = (path: string) => dry.files.find((file) => file.path === path)?.action;
+				expect(actionOf(statePath)).toBe("keep-target");
+				expect(actionOf(logPath)).toBe("replace");
+				expect(actionOf(startPath)).toBe("replace");
+				expect(actionOf("workspaces/foo/board.json")).toBe("keep-target");
+
+				const result = await runKanbanHomeMigration({
+					...fromHome(userHomePath),
+					toPath: targetHome,
+					probeRuntimeServer: noServer,
+					now: () => new Date("2026-10-07T12:00:00Z"),
+				});
+				expect(result.executed).toBe(true);
+				expect(readJson(join(targetHome, statePath))).toEqual({ version: 1, cards: { newer: {} } });
+				expect(readFileSync(join(targetHome, logPath), "utf8")).toBe('{"kind":"qa_gate"}\n');
+				expect(readJson(join(targetHome, startPath))).toEqual(readJson(join(legacyHome, startPath)));
+				expect(readJson(join(targetHome, "workspaces", "foo", "board.json"))).toEqual({
+					columns: [{ id: "x" }],
+					dependencies: [],
+				});
+				const replacedDir = join(getKanbanBackupsPath(targetHome), "home-migrate-2026-10-07T12-00-00Z");
+				expect(result.plan.replacedBackupPath).toBe(replacedDir);
+				expect(readFileSync(join(replacedDir, logPath), "utf8")).toBe('{"kind":"old"}\n');
+				expect(readJson(join(replacedDir, startPath))).toEqual({ pid: 7, startedAt: 1 });
+				expect(existsSync(join(replacedDir, statePath))).toBe(false);
+				// The source is never modified.
+				expect(readFileSync(join(legacyHome, logPath), "utf8")).toBe('{"kind":"qa_gate"}\n');
+
+				// Copies keep the source's mtime, so a re-run sees the replaced files as unchanged.
+				const again = await planKanbanHomeMigration({
+					...fromHome(userHomePath),
+					toPath: targetHome,
+					probeRuntimeServer: noServer,
+				});
+				expect(again.files.find((file) => file.path === statePath)?.action).toBe("keep-target");
+				expect(again.upToDate).toBe(true);
+			},
+			{
+				prepare: (userHomePath) => {
+					seedLegacyHome(userHomePath);
+					seedLegacyData(userHomePath);
+				},
+			},
+		);
 	});
 });

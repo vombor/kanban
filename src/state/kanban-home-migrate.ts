@@ -12,6 +12,11 @@
 //   config.json are renamed into place last. A leftover staging dir (interrupted run) is rebuilt on re-run.
 // - Worktrees stay where they are (found through legacyWorktreeRoots) unless `--worktrees` is given, and
 //   even then only worktrees of idle cards (Backlog/Done, no running session, not `git worktree lock`ed) move.
+// - data/ (pipeline state, decision logs, scoreboard, runoffs, plans, prices, models, restart manifests) and
+//   run/server-start.json (restart recovery matches the old server's restart manifest by it) are copied too. For
+//   these the newer file wins: a target file that differs is kept when it is as new as the source's or newer (a
+//   conflict, reported), and replaced only by a strictly newer source file, after the target's version is saved to
+//   <target>/backups/home-migrate-<ts>/. Every other target file is never overwritten.
 import { spawnSync } from "node:child_process";
 import {
 	chmodSync,
@@ -27,6 +32,7 @@ import {
 	rmSync,
 	statSync,
 	symlinkSync,
+	utimesSync,
 	writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, parse, relative, resolve, sep } from "node:path";
@@ -42,7 +48,9 @@ import {
 } from "../workspace/task-worktree-path";
 import {
 	getKanbanBackupsPath,
+	getKanbanDataPath,
 	getKanbanWorkspacesRootPath,
+	getServerStartRecordPath,
 	KANBAN_HOME_MARKER_VERSION,
 	KANBAN_HOME_WORKSPACES_DIR,
 	resolveKanbanHomeLayout,
@@ -57,14 +65,20 @@ const STAGING_DIR = ".migrate-staging";
 // Agent hook configs; agent-session-adapters.ts writes them to <home>/hooks/<agent>.
 const HOOKS_DIR = "hooks";
 // Directories that are home state. Every top-level file is home state too (config.json is merged, not
-// copied); other top-level directories (run/, backups/, ...) are runtime output and are not copied.
+// copied), and so is data/ (getDataDirName); other top-level directories (run/, backups/, ...) are runtime output
+// and are not copied, except the server start record (getServerStartRecordRelativePath).
 const MIGRATED_DIRS = [KANBAN_HOME_WORKSPACES_DIR, HOOKS_DIR, KANBAN_TRASHED_TASK_PATCHES_DIR_NAME];
-// Lock files and half-written temp files belong to the process that made them.
-const TRANSIENT_ENTRY_PATTERN = /\.(?:lock|tmp)$/u;
+// Lock files, pid files (a calibration runner's lock) and half-written temp files belong to the process that made them.
+const TRANSIENT_ENTRY_PATTERN = /\.(?:lock|tmp|pid)$/u;
 // Cards in these columns are not running and will not be resumed on restart.
 const IDLE_COLUMN_IDS: ReadonlySet<string> = new Set(["backlog", "trash", "done"]);
 
-export type HomeMigrateFileAction = "copy" | "unchanged" | "keep-target";
+/**
+ * `keep-target`: the target's file differs and is kept (for data/ and the server start record a conflict: the
+ * target's is as new or newer). `replace`: data/ and the server start record only, the source's is strictly newer;
+ * the target's version is saved to the run's backup dir first.
+ */
+export type HomeMigrateFileAction = "copy" | "unchanged" | "keep-target" | "replace";
 
 export interface HomeMigrateFileStep {
 	/** Path relative to both homes. */
@@ -110,6 +124,8 @@ export interface HomeMigratePlan {
 	probedOrigin: string;
 	/** Path of the backup tarball the run writes (nothing is written when there is nothing to do). */
 	backupPath: string;
+	/** Where the run saves the target's version of every `replace` file, at its path relative to the home. */
+	replacedBackupPath: string;
 	/** True when there is nothing left to write. */
 	upToDate: boolean;
 }
@@ -236,18 +252,38 @@ function listEntriesRecursive(root: string, relativeDir: string): SourceEntry[] 
 	return entries;
 }
 
+/** `data/`, relative to a home: the pipeline's, the watchdog's and the team kit's files, restart manifests. */
+function getDataDirName(homePath: string): string {
+	return relative(homePath, getKanbanDataPath(homePath));
+}
+
+/** `run/server-start.json`, relative to a home: restart recovery matches the old server's restart manifest by it. */
+function getServerStartRecordRelativePath(homePath: string): string {
+	return relative(homePath, getServerStartRecordPath(homePath));
+}
+
+/** The files the newer copy wins for: everything under data/ and the server start record. */
+function isNewerWinsPath(homePath: string, path: string): boolean {
+	return path.startsWith(`${getDataDirName(homePath)}${sep}`) || path === getServerStartRecordRelativePath(homePath);
+}
+
 function listSourceEntries(fromPath: string): { entries: SourceEntry[]; ignoredEntries: string[] } {
 	if (!isDirectory(fromPath)) {
 		return { entries: [], ignoredEntries: [] };
 	}
 	const entries: SourceEntry[] = [];
 	const ignoredEntries: string[] = [];
+	const migratedDirs = [...MIGRATED_DIRS, getDataDirName(fromPath)];
+	const serverStartRecord = getServerStartRecordRelativePath(fromPath);
+	if (lstatSync(join(fromPath, serverStartRecord), { throwIfNoEntry: false })?.isFile()) {
+		entries.push({ path: serverStartRecord, kind: "file" });
+	}
 	for (const entry of readdirSync(fromPath, { withFileTypes: true })) {
 		if (entry.name === CONFIG_FILENAME || entry.name === STAGING_DIR || TRANSIENT_ENTRY_PATTERN.test(entry.name)) {
 			continue;
 		}
 		if (entry.isDirectory()) {
-			if (MIGRATED_DIRS.includes(entry.name)) {
+			if (migratedDirs.includes(entry.name)) {
 				entries.push(...listEntriesRecursive(fromPath, entry.name));
 			} else {
 				ignoredEntries.push(`${entry.name}/`);
@@ -374,11 +410,25 @@ function planFiles(fromPath: string, toPath: string, config: PlannedConfig): Hom
 				))
 		) {
 			action = "unchanged";
+		} else if (isNewerWinsPath(fromPath, path) && isStrictlyNewer(sourcePath, targetPath)) {
+			action = "replace";
 		} else {
 			action = "keep-target";
 		}
 		return { path, kind, action };
 	});
+}
+
+function isStrictlyNewer(sourcePath: string, targetPath: string): boolean {
+	try {
+		return lstatSync(sourcePath).mtimeMs > lstatSync(targetPath).mtimeMs;
+	} catch {
+		return false;
+	}
+}
+
+function isWrittenByRun(file: HomeMigrateFileStep): boolean {
+	return file.action === "copy" || file.action === "replace";
 }
 
 /** Paths the run creates directories along must not be files: a copy would fail half-way (ENOTDIR). */
@@ -566,9 +616,10 @@ export async function planKanbanHomeMigration(options: HomeMigrateOptions): Prom
 	const worktrees = options.moveWorktrees ? await planWorktrees(fromPath, toPath, config) : [];
 	const timestamp = formatBackupTimestamp((options.now ?? (() => new Date()))());
 	const backupPath = join(getKanbanBackupsPath(toPath), `home-migrate-${timestamp}.tgz`);
+	const replacedBackupPath = join(getKanbanBackupsPath(toPath), `home-migrate-${timestamp}`);
 	blockers.push(
 		...findPathConflicts(toPath, [
-			...files.filter((file) => file.action === "copy").map((file) => file.path),
+			...files.filter(isWrittenByRun).map((file) => file.path),
 			...worktrees.filter((step) => step.action === "move").map((step) => relative(toPath, step.to)),
 			join(STAGING_DIR, CONFIG_FILENAME),
 			relative(toPath, backupPath),
@@ -586,9 +637,10 @@ export async function planKanbanHomeMigration(options: HomeMigrateOptions): Prom
 		worktrees,
 		probedOrigin: getKanbanRuntimeOrigin(),
 		backupPath,
+		replacedBackupPath,
 		upToDate:
 			config.step.action === "unchanged" &&
-			files.every((file) => file.action !== "copy") &&
+			!files.some(isWrittenByRun) &&
 			worktrees.every((worktree) => worktree.action === "skip"),
 	};
 }
@@ -598,6 +650,8 @@ function writeBackupTarball(plan: HomeMigratePlan): void {
 	const topLevel = [
 		CONFIG_FILENAME,
 		...MIGRATED_DIRS,
+		getDataDirName(plan.toPath),
+		getServerStartRecordRelativePath(plan.toPath),
 		...plan.files.filter((file) => !file.path.includes(sep)).map((file) => file.path),
 	];
 	const sources = [...new Set(topLevel)]
@@ -624,7 +678,17 @@ function copyEntry(sourcePath: string, targetPath: string, kind: SourceEntry["ki
 		return;
 	}
 	copyFileSync(sourcePath, targetPath);
-	chmodSync(targetPath, statSync(sourcePath).mode & 0o7777);
+	const source = statSync(sourcePath);
+	chmodSync(targetPath, source.mode & 0o7777);
+	// The newer-wins rule compares mtimes, so a copy keeps the source's.
+	utimesSync(targetPath, source.atime, source.mtime);
+}
+
+/** Saves the target's version of every file the run replaces, at its path under the run's backup dir. */
+function backupReplacedFiles(plan: HomeMigratePlan): void {
+	for (const file of plan.files.filter((step) => step.action === "replace")) {
+		copyEntry(join(plan.toPath, file.path), join(plan.replacedBackupPath, file.path), file.kind);
+	}
 }
 
 /** Copies everything the run writes into the staging dir. Nothing outside it is touched. */
@@ -632,7 +696,7 @@ function stage(plan: HomeMigratePlan, stagingPath: string): void {
 	rmSync(stagingPath, { recursive: true, force: true });
 	mkdirSync(stagingPath, { recursive: true });
 	for (const file of plan.files) {
-		if (file.action === "copy") {
+		if (isWrittenByRun(file)) {
 			copyEntry(join(plan.fromPath, file.path), join(stagingPath, file.path), file.kind);
 		}
 	}
@@ -647,7 +711,7 @@ function stage(plan: HomeMigratePlan, stagingPath: string): void {
  */
 function commitStaged(plan: HomeMigratePlan, stagingPath: string): void {
 	const workspacesPrefix = `${KANBAN_HOME_WORKSPACES_DIR}${sep}`;
-	const staged = plan.files.filter((file) => file.action === "copy");
+	const staged = plan.files.filter(isWrittenByRun);
 	const renameIntoPlace = (relativePath: string) => {
 		const targetPath = join(plan.toPath, relativePath);
 		mkdirSync(dirname(targetPath), { recursive: true });
@@ -726,6 +790,7 @@ export async function runKanbanHomeMigration(options: HomeMigrateOptions): Promi
 		return { plan, executed: false, backupPath: null, worktrees: [] };
 	}
 	writeBackupTarball(plan);
+	backupReplacedFiles(plan);
 	const stagingPath = join(plan.toPath, STAGING_DIR);
 	try {
 		stage(plan, stagingPath);

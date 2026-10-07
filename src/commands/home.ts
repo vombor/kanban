@@ -1,3 +1,5 @@
+import { join } from "node:path";
+
 import type { Command } from "commander";
 
 import { setKanbanRuntimePort } from "../core/runtime-endpoint";
@@ -38,11 +40,21 @@ function countBy<T extends string>(values: T[]): string {
 	return [...counts].map(([value, count]) => `${count} ${value}`).join(", ") || "none";
 }
 
-function formatPlan(plan: HomeMigratePlan): string[] {
+function formatPlan(plan: HomeMigratePlan, dryRun: boolean): string[] {
 	const lines = [`From: ${plan.fromPath}`, `To:   ${plan.toPath}`];
 	lines.push(`Files: ${countBy(plan.files.map((file) => file.action))}`);
+	if (dryRun) {
+		for (const file of plan.files.filter((step) => step.action === "copy")) {
+			lines.push(`  copy ${file.path}`);
+		}
+	}
 	for (const file of plan.files.filter((step) => step.action === "keep-target")) {
-		lines.push(`  keep-target ${file.path} (differs; the target's copy is kept)`);
+		lines.push(`  keep-target ${file.path} (conflict: differs, the target's copy is kept)`);
+	}
+	for (const file of plan.files.filter((step) => step.action === "replace")) {
+		lines.push(
+			`  replace ${file.path} (conflict: the source's copy is newer; the target's is saved to ${join(plan.replacedBackupPath, file.path)})`,
+		);
 	}
 	lines.push(`config.json: ${plan.config.action} ("home": ${String(plan.config.config.home)})`);
 	for (const key of plan.config.keptTargetKeys) {
@@ -68,7 +80,7 @@ function formatPlan(plan: HomeMigratePlan): string[] {
 
 function formatResult(result: HomeMigrateResult, dryRun: boolean): string[] {
 	const { plan } = result;
-	const lines = formatPlan(plan);
+	const lines = formatPlan(plan, dryRun);
 	if (plan.blockers.length > 0) {
 		lines.push("", "Refusing to migrate:", ...plan.blockers.map((blocker) => `  - ${blocker}`));
 		return lines;
@@ -97,7 +109,7 @@ export function registerHomeCommand(program: Command): void {
 	home
 		.command("migrate")
 		.description(
-			"Copy board state from an old home into the Kanban home and mark it (a one-off move). Refuses while a Kanban server runs.",
+			"Copy board state, data/ (pipeline state, logs, scoreboard, ...) and the server start record from an old home into the Kanban home and mark it (a one-off move). Refuses while a Kanban server runs.",
 		)
 		.requiredOption("--from <dir>", "Source home (required; there is no default).")
 		.option(
@@ -105,7 +117,7 @@ export function registerHomeCommand(program: Command): void {
 			"Where the source home's task worktrees are, if its config.json has no worktreesRoot (default: <from>/worktrees).",
 		)
 		.option("--to <dir>", "Target home (default: --home or KANBAN_HOME, else the fresh-install home).")
-		.option("--dry-run", "Print the plan only.")
+		.option("--dry-run", "Print the plan only: every file it would copy, keep or replace.")
 		.option("--worktrees", "Also move worktrees of idle (Backlog/Done) cards into the target's worktrees root.")
 		.option("--json", "Print the result as JSON.")
 		.addHelpText(
