@@ -11,6 +11,7 @@ import {
 	type RecoveryCardInput,
 	type RecoveryDecision,
 	readRecoveryFlow,
+	recoveryRedoReason,
 	sinceBudget,
 } from "../../../src/pipeline/recovery";
 import type { ClineSessionDetail, ClineSessionDetailMessage } from "../../../src/terminal/cline-session-files";
@@ -400,6 +401,23 @@ describe("decideRecovery: In Progress cards (hung requests, 0261b20)", () => {
 });
 
 describe("recovery state", () => {
+	it("holds a turn recovery resent until the session shows activity after it or nudgeCheckSec passes", () => {
+		const sentAt = NOW - MIN;
+		const entry = { qaflow: { recoverySentAt: new Date(sentAt).toISOString() } };
+		const checkMs = settings.nudgeCheckSec * 1000;
+		const review = (stateChangedAt: number) => ({ state: "awaiting_review" as const, stateChangedAt });
+
+		expect(recoveryRedoReason(entry, review(sentAt - MIN), NOW, checkMs)).toContain("recovery resent the turn");
+		// A summary without the settle clock, or none at all, is held by time alone.
+		expect(recoveryRedoReason(entry, { state: "awaiting_review" }, NOW, checkMs)).not.toBeNull();
+		expect(recoveryRedoReason(entry, null, NOW, checkMs)).not.toBeNull();
+		// The redone turn ended after the send: its Review is new work.
+		expect(recoveryRedoReason(entry, review(sentAt + 1000), NOW, checkMs)).toBeNull();
+		// After nudgeCheckSec recovery decides on the card again.
+		expect(recoveryRedoReason(entry, review(sentAt - MIN), sentAt + checkMs, checkMs)).toBeNull();
+		expect(recoveryRedoReason({}, review(sentAt - MIN), NOW, checkMs)).toBeNull();
+	});
+
 	it("counts budgets from the newest verdict, handback or fresh restart", () => {
 		const state = flow({
 			resetAt: "2026-10-07T11:00:00.000Z",

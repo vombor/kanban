@@ -500,6 +500,8 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 			const hasWip = worktree ? await deps.hasTrackedChanges(worktree) : false;
 			const agentId = context.effective.effective.agentId;
 			const launch = buildRestartResumeLaunch(agentId, context.card.prompt, hasWip);
+			// Before the resume, so the resumed session's activity is newer (recoveryRedoReason).
+			const sentAt = new Date(deps.now()).toISOString();
 			const result = await deps.act(workspaceId, {
 				kind: "resume",
 				taskId: orphan.taskId,
@@ -521,7 +523,8 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 			}
 			await deps.updateCards(
 				workspaceId,
-				new Map([[orphan.taskId, { orphan: null, liveHold: null, retryAt: null }]]),
+				// recoverySentAt: a QA card queued for the interrupted turn is superseded (qa-gate.ts).
+				new Map([[orphan.taskId, { orphan: null, liveHold: null, retryAt: null, recoverySentAt: sentAt }]]),
 			);
 			await deps.appendRecords([
 				record(

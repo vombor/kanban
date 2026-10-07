@@ -28,6 +28,10 @@
 // - wait `verdictGraceSec` for verdict.json before nudging (8495ed2: c1e30 reached Review 0.55 s before its
 //   verdict); nudges quote why the file is unusable (b9dd99b); `maxNudges`, then STALLED;
 // - a PASS with visual QA blocked is STALLED (QA v4); scratch servers stopped after ingest (66797d9);
+// - a QA card queued or running for a turn recovery has since resent (the dev card's `recoverySentAt` is newer than
+//   the QA card) is superseded: never started, or stopped, and moved to Done unlanded with no verdict; the dev card's
+//   next settled Review gets a new snapshot and a new QA card (foo 27549, 2026-10-07: QA started on the snapshot of
+//   the turn recovery had redone);
 // - no QA card is created or started while the snapshot says `pidPressure` (pumpQa's pid-pressure hold: zombies
 //   filling pids.max wiped a board, 10/05), logged once per hold; ingest and PASS landing go on.
 import { randomUUID } from "node:crypto";
@@ -74,6 +78,7 @@ import {
 	type QaVerdict,
 	type QaVerdictRead,
 } from "./qa-verdict";
+import { readRecoveryFlow } from "./recovery";
 import { getSnapshotRef, readTaskSnapshot } from "./snapshots";
 import type { PipelineFinishTaskRequest } from "./worker-protocol";
 
@@ -93,7 +98,8 @@ export const qaGateEntrySchema = z.object({
 	devAgentId: z.string(),
 	devModel: effectiveModelSchema,
 	route: z.string().nullable(),
-	status: z.enum(["queued", "running", "ingested"]),
+	/** `superseded`: recovery resent the dev card's turn after this QA card was made; it is dropped, never ingested. */
+	status: z.enum(["queued", "running", "ingested", "superseded"]),
 	createdAt: z.number(),
 	startedAt: z.number().nullable().default(null),
 	/** When the gate first saw the card in Review in this attempt (the verdict grace runs from here). */
@@ -103,6 +109,7 @@ export const qaGateEntrySchema = z.object({
 	ingestedAt: z.number().nullable().default(null),
 	verdict: z.string().nullable().default(null),
 	trashed: z.boolean().default(false),
+	supersededAt: z.number().nullable().default(null),
 });
 export type QaGateEntry = z.infer<typeof qaGateEntrySchema>;
 
@@ -396,6 +403,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			ingestedAt: null,
 			verdict: null,
 			trashed: false,
+			supersededAt: null,
 		};
 		await deps.store.update(workspaceId, (current) => ({
 			...current,
@@ -681,11 +689,69 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		return records;
 	};
 
+	/**
+	 * QA cards made before recovery resent their dev card's turn (a nudge, a provider-error retry, /clear + the
+	 * prompt, a restart resume: `recoverySentAt`) review a snapshot the redone turn replaces. Each one is marked
+	 * `superseded` (so it is never started, ingested or counted for a slot) and goes to Done unlanded, which also
+	 * stops it if it runs; the dev card's `qaCreated` goes, so its next settled Review gets a QA card of its own even
+	 * when the redone turn left the same tree. A Done that fails is retried on the next tick.
+	 */
+	const supersedeResentTurns = async (context: QaGateContext): Promise<PipelineDecisionRecord[]> => {
+		const workspaceId = context.snapshot.workspaceId;
+		const state = await deps.store.load(workspaceId);
+		const records: PipelineDecisionRecord[] = [];
+		for (const [qaTaskId, rawEntry] of Object.entries(state.cards)) {
+			const entry = readQaGateEntry(rawEntry);
+			if (!entry || entry.trashed || entry.status === "ingested") {
+				continue;
+			}
+			if (entry.status === "superseded") {
+				records.push(
+					record(context, qaTaskId, "qa_start", `superseded QA card: ${await trashQaCard(context, qaTaskId)}`),
+				);
+				continue;
+			}
+			const sentAt = readRecoveryFlow(state.cards[entry.reviewsTaskId]).recoverySentAt;
+			const sent = sentAt ? Date.parse(sentAt) : Number.NaN;
+			if (!Number.isFinite(sent) || sent <= entry.createdAt) {
+				continue;
+			}
+			await updateQaEntry(workspaceId, qaTaskId, { status: "superseded", supersededAt: context.now });
+			await updateCard(workspaceId, entry.reviewsTaskId, (dev) => {
+				if (dev.qaCard !== qaTaskId) {
+					return dev;
+				}
+				const { qaCreated: _created, qaCard: _card, ...rest } = dev;
+				return rest;
+			});
+			const stopped =
+				entry.status === "running"
+					? await deps
+							.stopScratchProcesses([entry.scratchDir, `${entry.scratchDir}-${entry.baseRef}`])
+							.catch(() => 0)
+					: 0;
+			const was =
+				entry.status === "running"
+					? `running; stopped${stopped > 0 ? `, with ${stopped} scratch process(es)` : ""}`
+					: "queued; not started";
+			records.push(
+				record(
+					context,
+					qaTaskId,
+					"qa_start",
+					`superseded: recovery resent ${entry.reviewsTaskId}'s turn at ${sentAt}, after this QA card of round ${entry.round} for snapshot ${entry.snapshot.slice(0, 8)} (${was}); the next settled Review gets a new snapshot and QA card; ${await trashQaCard(context, qaTaskId)}`,
+				),
+			);
+		}
+		return records;
+	};
+
 	const tick: QaGate["tick"] = async (context) => {
 		const { snapshot, qa } = context;
 		const workspaceId = snapshot.workspaceId;
 		const records: PipelineDecisionRecord[] = [];
 		const sessions = new Map(snapshot.sessions.map((session) => [session.taskId, session]));
+		records.push(...(await supersedeResentTurns(context)));
 		let state = await deps.store.load(workspaceId);
 
 		// Ingest: our QA cards whose turn has ended.

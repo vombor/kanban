@@ -25,7 +25,7 @@ import type { EffectiveModel } from "../core/effective-agent";
 import type { AgentRecoveryProfile } from "../terminal/agent-session-adapters";
 import type { ClineSessionDetail } from "../terminal/cline-session-files";
 import { getClineFinalReplyText, parseClineStatusLine } from "../terminal/cline-turn-outcome";
-import { isReviewSettled } from "../terminal/review-settle";
+import { getReviewActivityAt, isReviewSettled, type ReviewSettleSession } from "../terminal/review-settle";
 import type { PipelineSessionView } from "./engine";
 import type { ProviderCapacityHold } from "./provider-capacity";
 import {
@@ -654,6 +654,31 @@ export function recoveryHoldReason(entry: Record<string, unknown> | undefined): 
 		return `provider-error retry due at ${flow.retryAt}`;
 	}
 	return flow.liveHold ? `session ${flow.liveHold} is still running` : null;
+}
+
+/**
+ * Why a Review card's turn is one recovery is redoing, or null: recovery typed into it (a nudge, a provider-error
+ * retry, /clear + the card prompt; `recoverySentAt`) or resumed it after a restart less than `nudgeCheckMs` ago,
+ * and the session has shown no activity since. That Review is the turn recovery just resent, so the submission stage
+ * and the QA gate skip it (foo 27549, 2026-10-07: QA was queued on the snapshot of a turn recovery resent in the same
+ * evaluation, then started on that snapshot once the redone turn ended). After `nudgeCheckMs` recovery decides on
+ * the card again.
+ */
+export function recoveryRedoReason(
+	entry: Record<string, unknown> | undefined,
+	session: ReviewSettleSession | null,
+	now: number,
+	nudgeCheckMs: number,
+): string | null {
+	const sentAt = readRecoveryFlow(entry).recoverySentAt;
+	const sent = sentAt ? Date.parse(sentAt) : Number.NaN;
+	if (!Number.isFinite(sent) || now - sent >= nudgeCheckMs) {
+		return null;
+	}
+	const activityAt = getReviewActivityAt(session);
+	return activityAt !== null && activityAt > sent
+		? null
+		: `recovery resent the turn at ${sentAt}; waiting for the redone turn`;
 }
 
 /** State left behind when a card leaves In Progress / Review by hand: its retry, holds and orphan mark end. */

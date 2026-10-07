@@ -504,6 +504,19 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 
 		const policy = createRoutingPolicy(resolution.kit);
 		const agentDefaultModels = await loadAgentDefaultModels(parsed);
+		const shadow = settings.pipeline.shadow;
+		const recoveryDecisions = await recovery.evaluate({
+			snapshot,
+			settings,
+			config: parsed.config,
+			kitName: resolution.kitName,
+			state,
+			agentDefaultModels,
+		});
+		// Recovery runs first and may have marked cards (an orphan, a hold, a turn it resent) that the submission stage
+		// and the QA gate must skip in this same evaluation, so the gate reads the state as recovery left it, on a
+		// clock taken after recovery acted.
+		const gateState = recoveryScope.act ? await store.load(workspaceId) : state;
 		const gateContext = {
 			snapshot,
 			settings,
@@ -515,18 +528,6 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			agentDefaultModels,
 			now: now(),
 		};
-		const shadow = settings.pipeline.shadow;
-		const recoveryDecisions = await recovery.evaluate({
-			snapshot,
-			settings,
-			config: parsed.config,
-			kitName: resolution.kitName,
-			state,
-			agentDefaultModels,
-		});
-		// Recovery runs first and may have marked cards (an orphan, a hold) that the submission stage and the QA gate
-		// must skip in this same evaluation, so the gate reads the state as recovery left it.
-		const gateState = recoveryScope.act ? await store.load(workspaceId) : state;
 		// A workspace watched only for recovery (landing off/commit/pr) gets no QA-gate decisions.
 		const gateDecisions = !pipelineOn
 			? []
@@ -537,6 +538,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 					policy,
 					state: gateState,
 					limits: { maxFailRounds: parsed.config.pipeline.rework.maxFailRounds },
+					recoveryNudgeCheckMs: parsed.config.pipeline.recovery.nudgeCheckSec * 1000,
 					agentDefaultModels,
 					inspectSubmission: async (input) =>
 						await inspectSubmission(

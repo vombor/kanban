@@ -69,6 +69,7 @@ async function askStubPolicy(input: {
 		policy,
 		state: { version: 1, since: "2026-10-07T00:00:00.000Z", importedFrom: null, cards: {} },
 		limits: { maxFailRounds: 3 },
+		recoveryNudgeCheckMs: 120_000,
 		inspectSubmission: async () => ({ hasWork: true, records: [] }),
 		now: Date.parse("2026-10-07T10:00:00.000Z"),
 	});

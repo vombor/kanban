@@ -33,7 +33,7 @@ import type { CardHistory, EffectiveCard, QaPolicyAnswer, RoutingPolicy } from "
 import { isReviewSettled } from "../terminal/review-settle";
 import type { PipelineDecisionOutcome, PipelineDecisionRecord } from "./decision-log";
 import type { PipelineCardState, PipelineWorkspaceState } from "./pipeline-state";
-import { recoveryHoldReason } from "./recovery";
+import { recoveryHoldReason, recoveryRedoReason } from "./recovery";
 import type { SubmissionCardInput, SubmissionInspection } from "./submission-stage";
 
 export type PipelineSessionView = Pick<RuntimeTaskSessionSummary, "taskId" | "agentId" | "modelId" | "state"> &
@@ -86,6 +86,8 @@ export interface PipelineEvaluationInput {
 	policy: RoutingPolicy;
 	state: PipelineWorkspaceState;
 	limits: { maxFailRounds: number };
+	/** `pipeline.recovery.nudgeCheckSec` in ms: how long a turn recovery resent is held back (recoveryRedoReason). */
+	recoveryNudgeCheckMs: number;
 	agentDefaultModels?: EffectiveModelConfig["agentDefaultModels"];
 	/** The submission stage for one Review card (snapshot, checks, has it work). Only called on a `qa` workspace. */
 	inspectSubmission: (input: SubmissionCardInput) => Promise<SubmissionInspection>;
@@ -230,11 +232,17 @@ export async function evaluatePipelineWorkspace(input: PipelineEvaluationInput):
 	const at = new Date(input.now).toISOString();
 	const decisions: PipelineDecisionRecord[] = [];
 	for (const card of review) {
-		// Recovery logs its own decision for a card it holds (recovery-stage.ts).
-		if (!isPipelineCandidate(card) || recoveryHoldReason(input.state.cards[card.id])) {
+		const session = sessions.get(card.id) ?? null;
+		// Recovery logs its own decision for a card it holds or whose turn it just resent (recovery-stage.ts). It runs
+		// before this in the same evaluation, so a turn it decided to redo is never snapshotted or QA'd.
+		const entry = input.state.cards[card.id];
+		if (
+			!isPipelineCandidate(card) ||
+			recoveryHoldReason(entry) ||
+			recoveryRedoReason(entry, session, input.now, input.recoveryNudgeCheckMs)
+		) {
 			continue;
 		}
-		const session = sessions.get(card.id) ?? null;
 		const { effective, agentSource } = toEffectiveCard({
 			card,
 			session,

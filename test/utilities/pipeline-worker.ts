@@ -57,6 +57,8 @@ export interface PipelineWorkerHarnessOptions {
 	actionResult?: (action: QaGateHarnessAction) => PipelineActionResult;
 	/** Epoch ms; mutable through `setNow`. */
 	now?: number;
+	/** Replaces `now`/`setNow` as the clock of the worker and its state store (e.g. `() => Date.now()` with fake timers). */
+	clock?: () => number;
 	/** Replaces the recovery stage (which otherwise reads Cline session files under the test's HOME). */
 	createRecovery?: PipelineWorkerDependencies["createRecovery"];
 	/** The rework stage's view of a card's worktree. Default: none (no QA notes staged, no stale base). */
@@ -83,6 +85,7 @@ export interface PipelineWorkerHarnessOptions {
 export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOptions = {}) {
 	const temp = createTempDir("kanban-pipeline-");
 	let now = options.now ?? Date.parse("2026-10-07T10:00:00.000Z");
+	const clock = options.clock ?? (() => now);
 	const actions: QaGateHarnessAction[] = [];
 	const answer = (action: QaGateHarnessAction): PipelineActionResult => {
 		actions.push(action);
@@ -105,7 +108,7 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 	const legacyDir = join(temp.path, "legacy");
 	const bus = createPipelineEventBus();
 	const store = createPipelineStateStore({
-		now: () => now,
+		now: clock,
 		getStatePath: statePath,
 		getLegacyChecksStatePaths: (workspaceId) => [join(legacyDir, workspaceId, "checks-state.json")],
 	});
@@ -209,7 +212,7 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 		createRecovery: options.createRecovery,
 		reworkStage,
 		features,
-		now: () => now,
+		now: clock,
 	});
 
 	const readDecisions = (workspaceId: string): PipelineDecisionRecord[] => {
@@ -271,7 +274,7 @@ export function createSnapshot(input: {
 	workspaceId: string;
 	board: RuntimeBoardData;
 	selectedAgentId: RuntimeAgentId;
-	sessions?: Array<Partial<RuntimeTaskSessionSummary> & { taskId: string }>;
+	sessions?: Array<Partial<RuntimeTaskSessionSummary> & Pick<PipelineSessionView, "live"> & { taskId: string }>;
 }): PipelineWorkspaceSnapshot {
 	return {
 		workspaceId: input.workspaceId,
@@ -287,6 +290,8 @@ export function createSnapshot(input: {
 				...(session.lastHookAt !== undefined ? { lastHookAt: session.lastHookAt } : {}),
 				...(session.startedAt !== undefined ? { startedAt: session.startedAt } : {}),
 				...(session.stateChangedAt !== undefined ? { stateChangedAt: session.stateChangedAt } : {}),
+				...(session.workspacePath !== undefined ? { workspacePath: session.workspacePath } : {}),
+				...(session.live !== undefined ? { live: session.live } : {}),
 			}),
 		),
 	};
