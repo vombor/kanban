@@ -5,7 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createTask } from "../../../src/commands/task";
 import { readPipelineConfig } from "../../../src/config/pipeline-config";
-import type { RuntimeBoardCard } from "../../../src/core/api-contract";
+import type {
+	RuntimeBoardCard,
+	RuntimeBoardData,
+	RuntimeWorkspaceStateSaveRequest,
+} from "../../../src/core/api-contract";
+import { recordBrowserDevAssignments } from "../../../src/kits/browser-dev-assignment-log";
 import {
 	DEV_ASSIGNMENT_LOG_FILENAME,
 	type DevAssignmentRequest,
@@ -23,6 +28,7 @@ import { createWorkspaceApi } from "../../../src/trpc/workspace-api";
 import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
 import {
 	createBoard,
+	createCard,
 	createWorkspaceStateStore,
 	type WorkspaceStateStore,
 } from "../../utilities/workspace-state-store";
@@ -51,6 +57,21 @@ vi.mock("../../../src/state/workspace-state", async (importOriginal) => {
 				throw new Error("workspace state harness is not set up.");
 			}
 			return harness.store.mutateWorkspaceState(cwd, mutate);
+		}),
+		// The browser's save path: the board is replaced, and the cards the stored board didn't have are reported.
+		saveWorkspaceStateReportingAddedCards: vi.fn(async (_cwd: string, payload: RuntimeWorkspaceStateSaveRequest) => {
+			const store = harness.store;
+			if (!store) {
+				throw new Error("workspace state harness is not set up.");
+			}
+			const storedIds = new Set(store.stored.board.columns.flatMap((column) => column.cards.map((card) => card.id)));
+			const addedCards = payload.board.columns.flatMap((column) =>
+				column.cards.filter((card) => !storedIds.has(card.id)),
+			);
+			store.stored.board = structuredClone(payload.board);
+			store.stored.revision += 1;
+			const state = await store.getWorkspaceState();
+			return { state: { ...state, git: { ...state.git, branches: ["main"] } }, addedCards };
 		}),
 	};
 });
@@ -369,6 +390,191 @@ describe("workspace.getDevAssignment (the create dialog's preselection)", () => 
 				outcome: "applied",
 				proposal: { agentId: "cline", agentSettings: TEAM_TIER3, tier: "tier3" },
 			});
+		});
+	});
+});
+
+// P5-1 follow-up: the browser builds new cards itself and saves the whole board, so the server logs them on save.
+describe("browser-created cards (workspace.saveState)", () => {
+	beforeEach(() => {
+		harness.store = createWorkspaceStateStore({ board: createBoard({}), sessions: {}, revision: 1 });
+	});
+
+	afterEach(() => {
+		harness.store = null;
+	});
+
+	function createCaller() {
+		const context = {
+			requestedWorkspaceId: WORKSPACE_ID,
+			workspaceScope: { workspaceId: WORKSPACE_ID, workspacePath: "/repo" },
+			workspaceApi: createWorkspaceApi({
+				ensureTerminalManagerForWorkspace: vi.fn(async () => ({ listSummaries: () => [] }) as never),
+				broadcastRuntimeWorkspaceStateUpdated: vi.fn(),
+				broadcastRuntimeProjectsUpdated: vi.fn(),
+				buildWorkspaceStateSnapshot: vi.fn(),
+				trashTask: vi.fn(),
+			}),
+		} as unknown as RuntimeTrpcContext;
+		return runtimeAppRouter.createCaller(context);
+	}
+
+	function storedBoard(): RuntimeBoardData {
+		if (!harness.store) {
+			throw new Error("workspace state harness is not set up.");
+		}
+		return structuredClone(harness.store.stored.board);
+	}
+
+	function withBacklogCard(board: RuntimeBoardData, card: RuntimeBoardCard): RuntimeBoardData {
+		return {
+			...board,
+			columns: board.columns.map((column) =>
+				column.id === "backlog" ? { ...column, cards: [card, ...column.cards] } : column,
+			),
+		};
+	}
+
+	/** A browser save, then waits for the server's (unawaited) log write: an empty call queues behind it. */
+	async function browserSave(board: RuntimeBoardData): Promise<void> {
+		await createCaller().workspace.saveState({ board, sessions: {} });
+		await recordBrowserDevAssignments(WORKSPACE_ID, []);
+	}
+
+	const kitCard = (id: string, overrides: Partial<RuntimeBoardCard> = {}) =>
+		createCard({ id, title: `Card ${id}`, agentId: "cline", agentSettings: TEAM_TIER3, ...overrides });
+
+	it("logs a new dev card once, with the CLI's entry shape and source browser", async () => {
+		await withTemporaryKanbanHome(async () => {
+			writeConfig(teamWorkspace());
+			await browserSave(withBacklogCard(storedBoard(), kitCard("b1")));
+			const [entry] = readLog();
+			expect(readLog()).toHaveLength(1);
+			expect(entry).toEqual({
+				at: expect.any(String),
+				workspaceId: WORKSPACE_ID,
+				taskId: "b1",
+				title: "Card b1",
+				kit: "team",
+				outcome: "applied",
+				proposal: { agentId: "cline", agentSettings: TEAM_TIER3, tier: "tier3" },
+				created: { agentId: "cline", agentSettings: TEAM_TIER3 },
+				source: "browser",
+			});
+
+			// Re-saves (an edit, a move) don't log it again.
+			const board = storedBoard();
+			const [card] = board.columns[0]?.cards ?? [];
+			if (card) {
+				card.prompt = "Edited";
+			}
+			await browserSave(board);
+			await browserSave(storedBoard());
+			expect(readLog()).toHaveLength(1);
+			// Even a card the stored board lost (and a stale save re-adds) is logged once per task id.
+			await recordBrowserDevAssignments(WORKSPACE_ID, [kitCard("b1")]);
+			expect(readLog()).toHaveLength(1);
+		});
+	});
+
+	it("logs the user's own pick as explicit, and a Default card on the selected agent", async () => {
+		await withTemporaryKanbanHome(async () => {
+			writeConfig({ ...teamWorkspace(), selectedAgentId: "claude" });
+			let board = withBacklogCard(storedBoard(), kitCard("picked", { agentId: "codex", agentSettings: undefined }));
+			board = withBacklogCard(board, kitCard("default", { agentId: undefined, agentSettings: undefined }));
+			await browserSave(board);
+			const byId = new Map(readLog().map((entry) => [entry.taskId, entry]));
+			expect(byId.get("picked")).toMatchObject({
+				outcome: "explicit",
+				created: { agentId: "codex", agentSettings: null },
+				source: "browser",
+			});
+			expect(byId.get("default")).toMatchObject({
+				outcome: "explicit",
+				created: { agentId: "claude", agentSettings: null },
+			});
+		});
+	});
+
+	it("shadow: logs the card as created, next to the proposal it wasn't given", async () => {
+		await withTemporaryKanbanHome(async () => {
+			writeConfig(teamWorkspace({ pipeline: { shadow: true } }));
+			await browserSave(
+				withBacklogCard(storedBoard(), kitCard("s1", { agentId: "claude", agentSettings: undefined })),
+			);
+			expect(readLog()).toEqual([
+				expect.objectContaining({
+					taskId: "s1",
+					outcome: "shadow",
+					proposal: expect.objectContaining({ agentId: "cline" }),
+					created: { agentId: "claude", agentSettings: null },
+					source: "browser",
+				}),
+			]);
+		});
+	});
+
+	it("never logs CLI- or pipeline-created cards as browser cards", async () => {
+		await withTemporaryKanbanHome(async () => {
+			writeConfig(teamWorkspace());
+			await createTask({ cwd: "/repo", title: "From CLI", prompt: "From CLI" });
+			// A pipeline sibling (a dev card) and a QA card, both written in-process like pipeline-actions does.
+			await harness.store?.mutateWorkspaceState("/repo", (state) => ({
+				board: withBacklogCard(
+					withBacklogCard(state.board, kitCard("sibling")),
+					kitCard("qa-1", { role: "qa", title: "QA1 abcde: check" }),
+				),
+				value: null,
+			}));
+			// The browser then saves the board it got from the server, with all of them on it.
+			await browserSave(storedBoard());
+			expect(readLog().map((entry) => [entry.title, entry.source])).toEqual([["From CLI", "cli"]]);
+		});
+	});
+
+	it("skips non-dev cards a browser save adds", async () => {
+		await withTemporaryKanbanHome(async () => {
+			writeConfig(teamWorkspace());
+			await browserSave(withBacklogCard(storedBoard(), kitCard("t1", { role: "triage" })));
+			await browserSave(withBacklogCard(storedBoard(), kitCard("q1", { title: "QA2 abcde: legacy QA card" })));
+			expect(readLog()).toEqual([]);
+		});
+	});
+
+	it("default kit: a browser-created card logs nothing", async () => {
+		await withTemporaryKanbanHome(async () => {
+			await browserSave(withBacklogCard(storedBoard(), kitCard("d1")));
+			expect(existsSync(getKanbanWorkspaceDataPath(WORKSPACE_ID))).toBe(false);
+		});
+	});
+
+	it("the shadow diff reads a browser entry like a CLI one", async () => {
+		await withTemporaryKanbanHome(async () => {
+			writeConfig(teamWorkspace({ landing: { mode: "qa" }, pipeline: { shadow: true } }));
+			const startedAt = Date.now();
+			await browserSave(withBacklogCard(storedBoard(), kitCard("w1", { title: "Wishlist" })));
+			await browserSave(
+				withBacklogCard(
+					storedBoard(),
+					kitCard("w2", { title: "Docs", agentId: "claude", agentSettings: undefined }),
+				),
+			);
+			const { config } = await readPipelineConfig();
+			const input = await loadShadowDiffInput({
+				workspaceId: WORKSPACE_ID,
+				config,
+				catalog: await loadKitCatalog(),
+				legacy: parseLegacyAutolandLog(""),
+				since: startedAt - 60_000,
+				until: Date.now() + 60_000,
+				windowMs: 10 * 60_000,
+				selectedAgentId: "codex",
+			});
+			const items = computeShadowDiff(input).items.filter((item) => item.category === "dev_assignment");
+			expect(items.map((item) => [item.taskId, item.status, item.legacy])).toEqual([
+				["w1", "same", "created on cline with us.openai.gpt-6.1-sol"],
+				["w2", "different", "created on claude with its default model"],
+			]);
 		});
 	});
 });

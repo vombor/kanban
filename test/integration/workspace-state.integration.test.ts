@@ -12,8 +12,10 @@ import {
 	loadWorkspaceContext,
 	loadWorkspaceContextById,
 	loadWorkspaceState,
+	mutateWorkspaceState,
 	removeWorkspaceIndexEntry,
 	saveWorkspaceState,
+	saveWorkspaceStateReportingAddedCards,
 } from "../../src/state/workspace-state";
 import { createGitTestEnv } from "../utilities/git-env";
 import { createTempDir } from "../utilities/temp-dir";
@@ -139,6 +141,44 @@ describe.sequential("workspace-state integration", () => {
 				const loadedAfterConflict = await loadWorkspaceState(workspacePath);
 				expect(loadedAfterConflict.revision).toBe(2);
 				expect(loadedAfterConflict.board.columns[0]?.cards[0]?.prompt).toBe("Task Two");
+			} finally {
+				cleanup();
+			}
+		});
+	});
+
+	it("reports the cards a browser save adds, never ones another writer stored first", async () => {
+		await withTemporaryHome(async () => {
+			const { path: sandboxRoot, cleanup } = createTempDir("kanban-workspace-");
+			try {
+				const workspacePath = join(sandboxRoot, "project-a");
+				mkdirSync(workspacePath, { recursive: true });
+				initGitRepository(workspacePath);
+
+				const initial = await loadWorkspaceState(workspacePath);
+				const first = await saveWorkspaceStateReportingAddedCards(workspacePath, {
+					board: createBoard("Task One"),
+					sessions: {},
+					expectedRevision: initial.revision,
+				});
+				expect(first.addedCards.map((card) => card.id)).toEqual(["task-1"]);
+
+				// A CLI/pipeline write (mutateWorkspaceState) adds task-2; the browser's next save carries both.
+				const mutated = await mutateWorkspaceState(workspacePath, (state) => {
+					const board = structuredClone(state.board);
+					const [card] = board.columns[0]?.cards ?? [];
+					if (card) {
+						board.columns[0]?.cards.push({ ...card, id: "task-2" });
+					}
+					return { board, value: null };
+				});
+				const resave = await saveWorkspaceStateReportingAddedCards(workspacePath, {
+					board: mutated.state.board,
+					sessions: {},
+					expectedRevision: mutated.state.revision,
+				});
+				expect(resave.addedCards).toEqual([]);
+				expect(resave.state.revision).toBe(mutated.state.revision + 1);
 			} finally {
 				cleanup();
 			}

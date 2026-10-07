@@ -2,18 +2,13 @@
 // the pipeline's decision log (and its rotated `.1`), the kit's dev-assignment log, the workspace's board, and the
 // workspace's resolved kit. Every path comes from src/state/kanban-home.ts.
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { getWorkspacePipelineSettings, type PipelineConfig } from "../../config/pipeline-config";
 import { loadGlobalRuntimeConfig } from "../../config/runtime-config";
 import type { RuntimeAgentId, RuntimeBoardData } from "../../core/api-contract";
-import { DEV_ASSIGNMENT_LOG_FILENAME, type DevAssignmentLogEntry } from "../../kits/dev-assignment";
+import { type DevAssignmentLogEntry, getDevAssignmentLogPath } from "../../kits/dev-assignment";
 import { createRoutingPolicy } from "../../kits/policy";
 import { type KitCatalog, resolveWorkspaceKit } from "../../kits/resolve-kit";
-import {
-	getKanbanWorkspaceDataPath,
-	getLegacyKitChecksStatePaths,
-	getPipelineDecisionLogPath,
-} from "../../state/kanban-home";
+import { getLegacyKitChecksStatePaths, getPipelineDecisionLogPath } from "../../state/kanban-home";
 import { loadWorkspaceBoardById } from "../../state/workspace-state";
 import type { PipelineDecisionRecord } from "../decision-log";
 import type { LegacyAutolandLog } from "./legacy-autoland-log";
@@ -52,9 +47,7 @@ export async function readPipelineDecisions(workspaceId: string): Promise<Pipeli
 }
 
 export async function readDevAssignments(workspaceId: string): Promise<DevAssignmentLogEntry[]> {
-	return parseJsonLines<DevAssignmentLogEntry>(
-		await readTextIfExists(join(getKanbanWorkspaceDataPath(workspaceId), DEV_ASSIGNMENT_LOG_FILENAME)),
-	);
+	return parseJsonLines<DevAssignmentLogEntry>(await readTextIfExists(getDevAssignmentLogPath(workspaceId)));
 }
 
 /** `qaflow.resetAt` per card from the legacy kit's checks-state.json (the first copy found; read-only). */

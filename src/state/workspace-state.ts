@@ -5,6 +5,7 @@ import { basename, join, resolve } from "node:path";
 import { z } from "zod";
 
 import {
+	type RuntimeBoardCard,
 	type RuntimeBoardColumnId,
 	type RuntimeBoardData,
 	type RuntimeGitRepositoryInfo,
@@ -662,6 +663,41 @@ export async function saveWorkspaceState(
 	cwd: string,
 	payload: RuntimeWorkspaceStateSaveRequest,
 ): Promise<RuntimeWorkspaceStateResponse> {
+	return (await writeWorkspaceStateSave(cwd, payload, false)).state;
+}
+
+export interface WorkspaceStateSaveResult {
+	state: RuntimeWorkspaceStateResponse;
+	/**
+	 * Cards in the saved board that the stored board didn't have, compared under the board lock. Cards the other
+	 * writers add (`mutateWorkspaceState`: the CLI, the pipeline, calibration) are stored already, so they never show
+	 * up here. Empty when the stored board can't be read.
+	 */
+	addedCards: RuntimeBoardCard[];
+}
+
+/** `saveWorkspaceState` for the browser's board saves (tRPC `workspace.saveState`): also reports the added cards. */
+export async function saveWorkspaceStateReportingAddedCards(
+	cwd: string,
+	payload: RuntimeWorkspaceStateSaveRequest,
+): Promise<WorkspaceStateSaveResult> {
+	return await writeWorkspaceStateSave(cwd, payload, true);
+}
+
+async function readStoredCardIds(workspaceId: string): Promise<Set<string> | null> {
+	try {
+		const board = await readWorkspaceBoard(workspaceId);
+		return new Set(board.columns.flatMap((column) => column.cards.map((card) => card.id)));
+	} catch {
+		return null;
+	}
+}
+
+async function writeWorkspaceStateSave(
+	cwd: string,
+	payload: RuntimeWorkspaceStateSaveRequest,
+	reportAddedCards: boolean,
+): Promise<WorkspaceStateSaveResult> {
 	const parsedPayload = parseWorkspaceStateSavePayload(payload);
 	const context = await loadWorkspaceContext(cwd);
 	return await lockedFileSystem.withLock(getWorkspaceDirectoryLockRequest(context.workspaceId), async () => {
@@ -678,6 +714,10 @@ export async function saveWorkspaceState(
 		}
 		const board = parsedPayload.board;
 		const sessions = parsedPayload.sessions;
+		const storedCardIds = reportAddedCards ? await readStoredCardIds(context.workspaceId) : null;
+		const addedCards = storedCardIds
+			? board.columns.flatMap((column) => column.cards.filter((card) => !storedCardIds.has(card.id)))
+			: [];
 		const nextRevision = currentMeta.revision + 1;
 		const nextMeta: WorkspaceStateMeta = {
 			revision: nextRevision,
@@ -695,7 +735,7 @@ export async function saveWorkspaceState(
 		});
 		await boardBackups.backup(context.workspaceId, board);
 
-		return toWorkspaceStateResponse(context, board, sessions, nextRevision);
+		return { state: toWorkspaceStateResponse(context, board, sessions, nextRevision), addedCards };
 	});
 }
 

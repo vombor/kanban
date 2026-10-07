@@ -500,3 +500,11 @@ of this repository is the complete record of changes.
   without orphans as SAME while the pipeline worker was watching (the pipeline logs only starts with orphans).
   Tests: the shadow-diff unit tests, the CLI create → `dev-assignment.jsonl` → shadow-diff path, and a second
   `kanban --port` launch leaving `run/server-start.json` alone.
+- `src/kits/browser-dev-assignment-log.ts` (new), `src/kits/dev-assignment.ts` (`source`, `getDevAssignmentLogPath`),
+  `src/state/workspace-state.ts` (`saveWorkspaceStateReportingAddedCards`), `src/trpc/workspace-api.ts`,
+  `src/pipeline/shadow-diff/load-shadow-diff-inputs.ts`, `docs/team/RUNBOOK.md`, tests (P5-1 shadow day follow-up): cards
+  made in the browser are now logged to `dev-assignment.jsonl` too. `workspace.saveState` reports the cards a save
+  added (compared with the stored board under the board lock) and the server logs each new dev card once per task id,
+  with the CLI's entry shape plus `source: "browser"` (the CLI's lines now say `source: "cli"`), so the shadow diff
+  compares them unchanged. Cards the CLI, pipeline, calibration or runoffs write are already stored and never logged
+  as browser cards; non-dev roles and `default`-kit workspaces log nothing.

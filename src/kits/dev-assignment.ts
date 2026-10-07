@@ -11,7 +11,9 @@
 //     the agent catalog's capabilities.
 //
 // Proposals are logged to `data/<workspace>/dev-assignment.jsonl` whenever the kit has one (applied, shadow or
-// overridden by the creator), so a shadow day can compare them with the orchestrator's own choices (P5-1).
+// overridden by the creator), so a shadow day can compare them with the orchestrator's own choices (P5-1). The CLI
+// logs its cards itself; browser-created cards are logged by the server on board save
+// (`browser-dev-assignment-log.ts`), with the same entry shape and `source: "browser"`.
 import { appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -175,6 +177,9 @@ export async function resolveDevAssignment(
 	}
 }
 
+/** Who created the card: `kanban task create`, or the browser's create dialog (logged by the server on save). */
+export type DevAssignmentLogSource = "cli" | "browser";
+
 export interface DevAssignmentLogEntry {
 	at: string;
 	workspaceId: string;
@@ -185,6 +190,12 @@ export interface DevAssignmentLogEntry {
 	proposal: DevAssignmentProposal;
 	/** What the card was created with. */
 	created: { agentId: RuntimeAgentId | null; agentSettings: RuntimeTaskAgentSettings | null };
+	/** Missing on entries written before browser cards were logged (all of those came from the CLI). */
+	source?: DevAssignmentLogSource;
+}
+
+export function getDevAssignmentLogPath(workspaceId: string): string {
+	return join(getKanbanWorkspaceDataPath(workspaceId), DEV_ASSIGNMENT_LOG_FILENAME);
 }
 
 /**
@@ -194,7 +205,7 @@ export interface DevAssignmentLogEntry {
 export async function recordDevAssignment(
 	decision: DevAssignmentDecision,
 	task: { id: string; title: string },
-	options: { now?: Date; dataDir?: string } = {},
+	options: { now?: Date; dataDir?: string; source?: DevAssignmentLogSource } = {},
 ): Promise<DevAssignmentLogEntry | null> {
 	if (!decision.proposal || decision.outcome === "none") {
 		return null;
@@ -208,6 +219,7 @@ export async function recordDevAssignment(
 		outcome: decision.outcome,
 		proposal: decision.proposal,
 		created: { agentId: decision.agentId ?? null, agentSettings: decision.agentSettings ?? null },
+		source: options.source ?? "cli",
 	};
 	const dataDir = options.dataDir ?? getKanbanWorkspaceDataPath(decision.workspaceId);
 	await mkdir(dataDir, { recursive: true });

@@ -18,9 +18,10 @@ import {
 	parseWorktreeDeleteRequest,
 	parseWorktreeEnsureRequest,
 } from "../core/api-validation";
+import { recordBrowserDevAssignments } from "../kits/browser-dev-assignment-log";
 import { resolveDevAssignment } from "../kits/dev-assignment";
 import type { PreparedWorktreeReap } from "../server/process-reaper";
-import { saveWorkspaceState, WorkspaceStateConflictError } from "../state/workspace-state";
+import { saveWorkspaceStateReportingAddedCards, WorkspaceStateConflictError } from "../state/workspace-state";
 import type { TerminalSessionManager } from "../terminal/session-manager";
 import {
 	createEmptyWorkspaceChangesResponse,
@@ -383,7 +384,12 @@ export function createWorkspaceApi(deps: CreateWorkspaceApiDependencies): Runtim
 				for (const summary of terminalManager.listSummaries()) {
 					input.sessions[summary.taskId] = summary;
 				}
-				const response = await saveWorkspaceState(workspaceScope.workspacePath, input);
+				const { state: response, addedCards } = await saveWorkspaceStateReportingAddedCards(
+					workspaceScope.workspacePath,
+					input,
+				);
+				// The browser builds new cards itself, so the server logs their dev assignment (the CLI logs its own).
+				void recordBrowserDevAssignments(workspaceScope.workspaceId, addedCards);
 				void deps.broadcastRuntimeWorkspaceStateUpdated(workspaceScope.workspaceId, workspaceScope.workspacePath);
 				void deps.broadcastRuntimeProjectsUpdated(workspaceScope.workspaceId);
 				return response;

@@ -198,6 +198,15 @@ What it compares, per category:
 | Restart recovery | the orphans found for each Kanban start (times within 10 s are one start) | the `restart` records for the same start; a start without orphans isn't logged, so a legacy start with none counts as SAME when the worker logged `watching` (recovery not off) soon after it |
 | Dev assignment | what each new card was created with | what the kit proposed (`dev-assignment.jsonl`) |
 
+`dev-assignment.jsonl` gets one line per new dev card, from both creators: `kanban task create` writes its own
+(`source: "cli"`), and the server logs a card made in the browser's create dialog when the board save that adds it
+arrives (`source: "browser"`). The browser line has the same shape: a fresh kit proposal, and as "created" the card's
+agent (else the agent selected at that moment) and model. `applied` means the card kept the dialog's preselection,
+`explicit` that the user picked something else, `shadow` that nothing was preselected. Each task id is logged once,
+so re-saves don't add lines, and cards the pipeline, QA gate, calibration or runoffs create aren't logged at all.
+Only workspaces whose kit has a `devAssignment` (`team`) log anything. Lines written before this change have no
+`source` and all came from the CLI.
+
 How to read the report:
 
 - `SAME` items are only counted (`--verbose` lists them).
