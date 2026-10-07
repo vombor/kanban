@@ -950,6 +950,7 @@ Each card is one agent's work, leaves the pod working (new behaviour off or in s
 |---|---|---|
 | P2-1 | `session-column-sync.ts` (server moves `in_progress ↔ review`, `updatedAt` guard, no interrupted→trash); the browser stops moving columns; setting `sessionSync` default on for this fork. Cutover: disable kit column-sync | P1-4 |
 | P2-2 ∥ | cline-cli turn-end detector in the adapter (idle final reply, STATUS line, QA final line, no-images, quiet-after-bounce; from column-sync + bc84c) | – |
+| P2-2b | session sync asks the Cline turn-end check (`requireStatus: false`) before it moves a running Cline CLI card out of Review (an idle open TUI bounced it); honours `agents.cline.turnDetector.mode` | P2-1, P2-2 |
 | P2-3 ∥ | `/api/model-lists/lemonade` route + config; Cline `modelsSourceUrl` updated by `kanban setup`; retire the model-lists service | – |
 
 **Phase 3: core settings, kit schema, CLI (release fork.5 or fork.6)**

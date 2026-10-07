@@ -342,6 +342,7 @@ async function startServer(): Promise<{
 		lightweight path and only load the server stack when we actually start Kanban.
 	*/
 	const [
+		{ createClineTurnDetectorSettingsLoader },
 		{ readSessionSyncSetting },
 		{ resolveProjectInputPath },
 		{ pickDirectoryPathFromSystemDialog },
@@ -356,6 +357,7 @@ async function startServer(): Promise<{
 		{ collectProjectWorktreeTaskIdsForRemoval, createWorkspaceRegistry },
 		{ clearPendingUpdateNotification, getPendingUpdateNotification },
 	] = await Promise.all([
+		import("./config/cline-turn-detector-config.js"),
 		import("./config/session-sync-config.js"),
 		import("./projects/project-path.js"),
 		import("./server/directory-picker.js"),
@@ -478,6 +480,18 @@ async function startServer(): Promise<{
 		const sync = createSessionColumnSync({
 			listWorkspaces: () => workspaceRegistry.listManagedWorkspaces(),
 			mutateWorkspaceState,
+			// Keeps an idle Cline TUI's card in Review. The turn monitor (runtime-server.ts) reads the same
+			// settings and already logs config.json problems, so this loader stays quiet about them.
+			clineTurnCheck: {
+				loadSettings: createClineTurnDetectorSettingsLoader(() => {}),
+				getSelectedAgentId: async (workspaceId, workspacePath) => {
+					const config = await workspaceRegistry.loadScopedRuntimeConfig({ workspaceId, workspacePath });
+					return config.selectedAgentId;
+				},
+				log: (message) => {
+					console.warn(message);
+				},
+			},
 			onBoardMutated: (workspaceId, workspacePath) =>
 				void runtimeHub.broadcastRuntimeWorkspaceStateUpdated(workspaceId, workspacePath),
 			warn: (message) => {

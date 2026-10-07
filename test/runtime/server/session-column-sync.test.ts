@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ClineTurnDetectorMode } from "../../../src/config/cline-turn-detector-config";
 import type {
 	RuntimeBoardData,
 	RuntimeTaskSessionState,
@@ -13,6 +14,8 @@ import {
 	type SessionColumnSyncSessions,
 } from "../../../src/server/session-column-sync";
 import { createTaskTrashWorkflow, type MutateWorkspaceState } from "../../../src/server/task-trash-workflow";
+import type { ClineSessionFileReader } from "../../../src/terminal/cline-session-files";
+import type { ClineSessionSnapshot } from "../../../src/terminal/cline-turn-outcome";
 import type { DeliverTaskInputResult } from "../../../src/terminal/deliver-task-input";
 import type { TerminalSessionManager } from "../../../src/terminal/session-manager";
 import {
@@ -55,7 +58,7 @@ function createSummary(
 }
 
 /** Stands in for a TerminalSessionManager: holds summaries and emits them like `emitSummary`. */
-function createFakeSessions(initial: RuntimeTaskSessionSummary[] = []) {
+function createFakeSessions(initial: RuntimeTaskSessionSummary[] = [], stateEnteredAt: Map<string, number> = new Map()) {
 	const summaries = new Map(initial.map((summary) => [summary.taskId, summary]));
 	const listeners = new Set<(summary: RuntimeTaskSessionSummary) => void>();
 	const sessions: SessionColumnSyncSessions = {
@@ -66,6 +69,7 @@ function createFakeSessions(initial: RuntimeTaskSessionSummary[] = []) {
 			};
 		},
 		listSummaries: () => [...summaries.values()].map((summary) => ({ ...summary })),
+		getStateEnteredAt: (taskId) => stateEnteredAt.get(taskId) ?? null,
 	};
 	const emit = (summary: RuntimeTaskSessionSummary) => {
 		summaries.set(summary.taskId, summary);
@@ -484,5 +488,212 @@ describe("session column sync with the auto-review reconciler", () => {
 		} finally {
 			harness.close();
 		}
+	});
+});
+
+// The P2-2b guard: an open, idle Cline CLI TUI can leave its summary "running" with no turn in progress. Session
+// sync asks Cline's session files (evaluateClineTurnEnd, requireStatus false) before it moves such a Review card
+// back to In Progress. Fakes only: no real session files, no Cline process.
+describe("session column sync with the Cline CLI idle-TUI check", () => {
+	const NOW = 1_800_000_000_000;
+	const RUNNING_SINCE = NOW - 600_000;
+
+	// A final reply without a STATUS line, written a minute ago: over with requireStatus false.
+	const IDLE_FINAL_REPLY: ClineSessionSnapshot = {
+		sessionId: "1_a",
+		status: "idle",
+		startedAt: RUNNING_SINCE,
+		messagesWrittenAt: NOW - 60_000,
+		lastMessage: { role: "assistant", content: [{ type: "text", text: "Here is what I changed." }] },
+	};
+	// The model is calling a tool: the turn is running.
+	const WORKING: ClineSessionSnapshot = {
+		...IDLE_FINAL_REPLY,
+		status: "running",
+		messagesWrittenAt: NOW - 1_000,
+		lastMessage: { role: "assistant", content: [{ type: "tool_use" }] },
+	};
+
+	function clineSummary(taskId: string, overrides: Partial<RuntimeTaskSessionSummary> = {}) {
+		return createSummary(taskId, "running", NOW - 30_000, {
+			agentId: "cline",
+			pid: 4321,
+			workspacePath: `/wt/${taskId}/repo`,
+			...overrides,
+		});
+	}
+
+	function createClineHarness(input: {
+		cards: ReturnType<typeof createCard>[];
+		summaries: RuntimeTaskSessionSummary[];
+		mode?: ClineTurnDetectorMode;
+		session?: ClineSessionSnapshot | null;
+		selectedAgentId?: "cline" | "claude";
+	}) {
+		const store = createWorkspaceStateStore({
+			board: createBoard({ review: input.cards }),
+			sessions: {},
+			revision: 1,
+		});
+		const readLatestSession = vi.fn<ClineSessionFileReader["readLatestSession"]>(
+			async () => input.session ?? IDLE_FINAL_REPLY,
+		);
+		const getSelectedAgentId = vi.fn(async () => input.selectedAgentId ?? "claude");
+		const log = vi.fn();
+		const moves: SessionColumnMove[] = [];
+		const sync = createSessionColumnSync({
+			listWorkspaces: () => [{ workspaceId: WORKSPACE_ID, workspacePath: WORKSPACE_PATH }],
+			mutateWorkspaceState: store.mutateWorkspaceState,
+			onMoved: (_workspaceId, applied) => moves.push(...applied),
+			clineTurnCheck: {
+				loadSettings: async () => ({ mode: input.mode ?? "on", intervalSec: 15, dataDir: "/cline-data" }),
+				getSelectedAgentId,
+				log,
+				reader: { readLatestSession },
+			},
+			now: () => NOW,
+		});
+		const fake = createFakeSessions(
+			input.summaries,
+			new Map(input.summaries.map((summary) => [summary.taskId, RUNNING_SINCE])),
+		);
+		sync.trackWorkspace(WORKSPACE_ID, fake.sessions);
+		return {
+			store,
+			sync,
+			moves,
+			log,
+			readLatestSession,
+			getSelectedAgentId,
+			columnOf: (taskId: string) => findCardInBoard(store.stored.board, taskId)?.columnId ?? null,
+			syncOnce: async () => {
+				await sync.syncWorkspace(WORKSPACE_ID);
+			},
+		};
+	}
+
+	it("keeps an idle Cline TUI's card in Review although its session says running, and logs it once", async () => {
+		const harness = createClineHarness({
+			cards: [createCard({ id: "task-1", updatedAt: 100, agentId: "cline" })],
+			summaries: [clineSummary("task-1")],
+		});
+		await harness.syncOnce();
+		await harness.syncOnce();
+
+		expect(harness.columnOf("task-1")).toBe("review");
+		expect(harness.store.stored.revision).toBe(1);
+		expect(harness.moves).toEqual([]);
+		expect(harness.readLatestSession).toHaveBeenCalledWith("/cline-data/sessions", "/wt/task-1/repo");
+		expect(harness.log).toHaveBeenCalledTimes(1);
+		expect(harness.log.mock.calls[0]?.[0]).toContain("kept task-1 in Review");
+		expect(harness.log.mock.calls[0]?.[0]).toContain("final_reply");
+	});
+
+	it("moves a Cline card back to In Progress when its turn really is running", async () => {
+		const harness = createClineHarness({
+			cards: [createCard({ id: "task-1", updatedAt: 100, agentId: "cline" })],
+			summaries: [clineSummary("task-1")],
+			session: WORKING,
+		});
+		await harness.syncOnce();
+
+		expect(harness.columnOf("task-1")).toBe("in_progress");
+		expect(harness.moves).toEqual([
+			{ taskId: "task-1", from: "review", to: "in_progress", sessionState: "running" },
+		]);
+		expect(harness.log).not.toHaveBeenCalled();
+	});
+
+	it("moves a non-Cline running card back as before, without reading session files", async () => {
+		const harness = createClineHarness({
+			cards: [createCard({ id: "task-1", updatedAt: 100, agentId: "cline" })],
+			// The session's agent is the effective agent, whatever the card says.
+			summaries: [clineSummary("task-1", { agentId: "claude" })],
+		});
+		await harness.syncOnce();
+
+		expect(harness.columnOf("task-1")).toBe("in_progress");
+		expect(harness.readLatestSession).not.toHaveBeenCalled();
+		expect(harness.getSelectedAgentId).not.toHaveBeenCalled();
+	});
+
+	it("decides on the effective agent: a card naming no agent runs on the selected one", async () => {
+		const onCline = createClineHarness({
+			cards: [createCard({ id: "task-1", updatedAt: 100 })],
+			summaries: [clineSummary("task-1", { agentId: null })],
+			selectedAgentId: "cline",
+		});
+		await onCline.syncOnce();
+		expect(onCline.columnOf("task-1")).toBe("review");
+		expect(onCline.getSelectedAgentId).toHaveBeenCalledWith(WORKSPACE_ID, WORKSPACE_PATH);
+
+		const onClaude = createClineHarness({
+			cards: [createCard({ id: "task-1", updatedAt: 100 })],
+			summaries: [clineSummary("task-1", { agentId: null })],
+			selectedAgentId: "claude",
+		});
+		await onClaude.syncOnce();
+		expect(onClaude.columnOf("task-1")).toBe("in_progress");
+		expect(onClaude.readLatestSession).not.toHaveBeenCalled();
+	});
+
+	it("only logs in mode report, once per reply, and moves the card as before", async () => {
+		const harness = createClineHarness({
+			cards: [
+				createCard({ id: "task-1", updatedAt: 100, agentId: "cline" }),
+				createCard({ id: "task-2", updatedAt: 100, agentId: "cline" }),
+			],
+			summaries: [clineSummary("task-1"), clineSummary("task-2")],
+			mode: "report",
+		});
+		await harness.syncOnce();
+
+		expect(harness.columnOf("task-1")).toBe("in_progress");
+		expect(harness.columnOf("task-2")).toBe("in_progress");
+		expect(harness.log).toHaveBeenCalledTimes(2);
+		expect(harness.log.mock.calls[0]?.[0]).toContain("report only: would keep task-1 in Review");
+	});
+
+	it("reads no session files in mode off and moves the card as before", async () => {
+		const harness = createClineHarness({
+			cards: [createCard({ id: "task-1", updatedAt: 100, agentId: "cline" })],
+			summaries: [clineSummary("task-1")],
+			mode: "off",
+		});
+		await harness.syncOnce();
+
+		expect(harness.columnOf("task-1")).toBe("in_progress");
+		expect(harness.readLatestSession).not.toHaveBeenCalled();
+		expect(harness.log).not.toHaveBeenCalled();
+	});
+
+	it("keeps the updatedAt and auto-review guards ahead of the check (no file read, no move)", async () => {
+		const pendingGitAction = { action: "commit" as const, requestedAt: 100, headCommitAtRequest: "c1", attempt: 0 };
+		const harness = createClineHarness({
+			cards: [
+				// Moved by hand after the session last changed: the summary is stale.
+				createCard({ id: "stale", updatedAt: NOW, agentId: "cline" }),
+				createCard({ id: "armed", updatedAt: 100, agentId: "cline", autoReviewEnabled: true, pendingGitAction }),
+			],
+			summaries: [clineSummary("stale"), clineSummary("armed")],
+			session: WORKING,
+		});
+		await harness.syncOnce();
+
+		expect(harness.columnOf("stale")).toBe("review");
+		expect(harness.columnOf("armed")).toBe("review");
+		expect(harness.store.stored.revision).toBe(1);
+		expect(harness.readLatestSession).not.toHaveBeenCalled();
+	});
+
+	it("moves a Cline card whose session has no live process without reading files", async () => {
+		const harness = createClineHarness({
+			cards: [createCard({ id: "task-1", updatedAt: 100, agentId: "cline" })],
+			summaries: [clineSummary("task-1", { pid: null })],
+		});
+		await harness.syncOnce();
+
+		expect(harness.columnOf("task-1")).toBe("in_progress");
+		expect(harness.readLatestSession).not.toHaveBeenCalled();
 	});
 });

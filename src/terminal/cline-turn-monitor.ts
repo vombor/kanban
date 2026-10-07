@@ -14,22 +14,25 @@ import {
 	getDefaultClineTurnDetectorSettings,
 } from "../config/cline-turn-detector-config";
 import type { RuntimeTaskSessionSummary } from "../core/api-contract";
-import { isHomeAgentSessionId } from "../core/home-agent-session";
 import { getAgentTurnEndSource } from "./agent-session-adapters";
-import { type ClineSessionFileReader, createClineSessionFileReader, getClineSessionsPath } from "./cline-session-files";
-import { type ClineTurnEndDecision, evaluateClineTurnEnd } from "./cline-turn-outcome";
+import { type ClineSessionFileReader, createClineSessionFileReader } from "./cline-session-files";
+import {
+	type ClineTurnCheckSessions,
+	describeClineTurnEnd,
+	type EndedClineTurn,
+	isLiveRunningCardSession,
+	type LiveCardSessionSummary,
+	readClineTurnEnd,
+} from "./cline-turn-check";
 
-export interface ClineTurnMonitorSessions {
+export interface ClineTurnMonitorSessions extends ClineTurnCheckSessions {
 	listSummaries: () => RuntimeTaskSessionSummary[];
-	getStateEnteredAt: (taskId: string) => number | null;
 }
 
 export interface ClineTurnMonitorWorkspace {
 	workspaceId: string;
 	sessions: ClineTurnMonitorSessions;
 }
-
-export type EndedClineTurn = Extract<ClineTurnEndDecision, { ended: true }>;
 
 export interface ClineTurnEndRequest {
 	workspaceId: string;
@@ -59,21 +62,8 @@ export interface ClineTurnMonitor {
 
 const DEFAULT_INTERVAL_SEC = getDefaultClineTurnDetectorSettings().intervalSec;
 
-function isWatchedSession(summary: RuntimeTaskSessionSummary): summary is RuntimeTaskSessionSummary & {
-	workspacePath: string;
-} {
-	return (
-		summary.state === "running" &&
-		summary.pid !== null &&
-		summary.workspacePath !== null &&
-		!isHomeAgentSessionId(summary.taskId) &&
-		getAgentTurnEndSource(summary.agentId) === "cline-session-files"
-	);
-}
-
-function describe(decision: EndedClineTurn): string {
-	const status = decision.statusLine ? ` STATUS: ${decision.statusLine.kind}` : "";
-	return `${decision.reason}${status}${decision.afterBounce ? " after a bounce to running" : ""}`;
+function isWatchedSession(summary: RuntimeTaskSessionSummary): summary is LiveCardSessionSummary {
+	return isLiveRunningCardSession(summary) && getAgentTurnEndSource(summary.agentId) === "cline-session-files";
 }
 
 export function createClineTurnMonitor(deps: ClineTurnMonitorDependencies): ClineTurnMonitor {
@@ -91,7 +81,6 @@ export function createClineTurnMonitor(deps: ClineTurnMonitorDependencies): Clin
 			reported.clear();
 			return actions;
 		}
-		const sessionsPath = getClineSessionsPath(settings.dataDir);
 		const watched = new Set<string>();
 		for (const workspace of deps.listWorkspaces()) {
 			for (const summary of workspace.sessions.listSummaries()) {
@@ -100,9 +89,11 @@ export function createClineTurnMonitor(deps: ClineTurnMonitorDependencies): Clin
 				}
 				const key = `${workspace.workspaceId}:${summary.taskId}`;
 				watched.add(key);
-				const decision = evaluateClineTurnEnd({
-					session: await reader.readLatestSession(sessionsPath, summary.workspacePath),
-					runningSince: workspace.sessions.getStateEnteredAt(summary.taskId),
+				const decision = await readClineTurnEnd({
+					reader,
+					settings,
+					sessions: workspace.sessions,
+					summary,
 					now: now(),
 				});
 				if (!decision.ended) {
@@ -114,7 +105,7 @@ export function createClineTurnMonitor(deps: ClineTurnMonitorDependencies): Clin
 					if (reported.get(key) !== replyKey) {
 						reported.set(key, replyKey);
 						deps.log(
-							`[cline-turn-detector] report only: would end ${summary.taskId}'s turn (${describe(decision)}) in workspace ${workspace.workspaceId}`,
+							`[cline-turn-detector] report only: would end ${summary.taskId}'s turn (${describeClineTurnEnd(decision)}) in workspace ${workspace.workspaceId}`,
 						);
 					}
 					actions.push({ ...request, outcome: "reported" });
@@ -125,7 +116,7 @@ export function createClineTurnMonitor(deps: ClineTurnMonitorDependencies): Clin
 					error: error instanceof Error ? error.message : String(error),
 				}));
 				if (result.ok) {
-					deps.log(`[cline-turn-detector] ended ${summary.taskId}'s turn (${describe(decision)})`);
+					deps.log(`[cline-turn-detector] ended ${summary.taskId}'s turn (${describeClineTurnEnd(decision)})`);
 				} else {
 					deps.log(
 						`[cline-turn-detector] could not end ${summary.taskId}'s turn: ${result.error ?? "unknown error"}`,

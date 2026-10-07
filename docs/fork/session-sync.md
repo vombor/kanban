@@ -13,6 +13,30 @@ A card moves only when the session summary is newer than the card (`updatedAt` g
 hand stays where they put it until the session changes again. Moves happen on every session state change and on
 a 10 s sweep, with or without a browser open.
 
+## Cline CLI cards: an idle TUI doesn't bounce the card (P2-2b)
+
+An open, idle Cline CLI TUI can leave a card's summary "running" with no turn in progress. Without a check, the
+"running → back to In Progress" rule would move that card out of Review. So when a Review card's **effective
+agent** (`resolveEffectiveAgent()`: the session's agent, else the card's, else the workspace's selected agent) is
+the Cline CLI, session sync first reads Cline's own session file for it (the newest cline 3.x session whose cwd is
+the summary's `workspacePath`, the same lookup the turn detector uses, `src/terminal/cline-turn-check.ts`) and asks
+`evaluateClineTurnEnd({ requireStatus: false })`: any idle final reply with nothing written for 20 s counts as a
+finished turn, a STATUS line is not needed. A reply older than the moment the Kanban session last turned "running"
+counts only after 5 quiet minutes (the detector's bounce rule), so a session that really started a new turn moves
+the card right away. The `updatedAt` and auto-review guards come first; cards on other
+agents, and Cline cards with no live process, move as before without any file read.
+
+`agents.cline.turnDetector.mode` in config.json (the turn detector's setting, read on every check) decides what
+happens when the turn is over:
+
+| Mode | Idle Cline TUI card in Review, summary "running" |
+|---|---|
+| `off` | No session files are read; the card moves to In Progress as before P2-2b. |
+| `report` (default) | The card moves to In Progress as before, and the server log gets one `[session-sync] report only: would keep <task> in Review …` line per final reply. The legacy kit's column-sync still handles this while it runs. |
+| `on` | The card stays in Review (one `[session-sync] kept <task> in Review …` line per final reply). It moves once the session files show the turn running again (a tool call, a new message). |
+
+So switch to `on` together with the turn detector, when the kit's column-sync is turned off.
+
 ## Setting
 
 `sessionSync.enabled` in the Kanban home's `config.json` (the global config path in Settings; on the pod today that

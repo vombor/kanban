@@ -179,3 +179,10 @@ of this repository is the complete record of changes.
   against the legacy column-sync. `src/models/cline-providers.ts` and `src/commands/models.ts`: the provider settings
   paths (`getProviderSettingsPaths`) are shared with `doctor --deep`, which reports P3-3's deprecated-provider scan.
   `docs/fork/session-sync.md`: the new key form. Nothing runs on its own: every command is explicit.
+- `src/server/session-column-sync.ts`, `src/terminal/cline-turn-check.ts` (new, shared with
+  `src/terminal/cline-turn-monitor.ts`), `src/cli.ts`, tests, `docs/fork/session-sync.md`: session sync no longer
+  bounces an idle Cline CLI TUI's card out of Review (plan step P2-2b). Before it moves a Review card whose session
+  says "running" back to In Progress, it reads Cline's session file when the card's effective agent is the Cline CLI
+  and keeps the card in Review if `evaluateClineTurnEnd({ requireStatus: false })` says the turn is over.
+  `agents.cline.turnDetector.mode`: `off` (no check), `report` (default: move as before, log what it would keep),
+  `on` (keep in Review). Other agents unchanged.

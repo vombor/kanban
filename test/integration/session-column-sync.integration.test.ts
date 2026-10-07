@@ -78,6 +78,7 @@ function createSync(workspacePath: string, summaries: Map<string, RuntimeTaskSes
 			return () => listeners.delete(listener);
 		},
 		listSummaries: () => [...summaries.values()],
+		getStateEnteredAt: () => null,
 	});
 	return sync;
 }
