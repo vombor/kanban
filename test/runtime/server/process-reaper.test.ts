@@ -358,6 +358,38 @@ describe("process reaper", () => {
 		expect(table.signals).toEqual([{ pid: 1818353, signal: "SIGTERM" }]);
 	});
 
+	it("never signals the image entrypoint (PID 2, parent of the server at PID 3), even in the worktree", async () => {
+		const table = createFakeProcessTable([
+			createProcessEntry({
+				pid: 1,
+				ppid: 0,
+				command: "/run/podman-init -- /usr/local/bin/kanban-entrypoint",
+				cwd: "/",
+			}),
+			// A server started from a worktree (or an Exec= `cd`) would put the entrypoint there too.
+			createProcessEntry({
+				pid: 2,
+				ppid: 1,
+				command: "/bin/sh /usr/local/bin/kanban-entrypoint kanban",
+				cwd: WORKTREE,
+			}),
+			createProcessEntry({ pid: 3, ppid: 2, command: "node /usr/local/bin/kanban --port 3485", cwd: WORKTREE }),
+			createProcessEntry({ pid: 40, ppid: 3, command: "claude", cwd: WORKTREE }),
+		]);
+		const reaper = createProcessReaper({ reader: table.reader, signal: table.signal, serverPid: 3, pollMs: 100 });
+
+		expect([...(await reaper.snapshot()).protectedPids].sort((a, b) => a - b)).toEqual([0, 1, 2, 3]);
+		const prepared = await reaper.prepareWorktreeReap({
+			taskId: "abc12",
+			worktreePaths: [WORKTREE],
+			sessionPids: [2],
+		});
+		const outcomes = await prepared.reap();
+
+		expect(outcomes.map((outcome) => outcome.entry.pid)).toEqual([40]);
+		expect(table.signals).toEqual([{ pid: 40, signal: "SIGTERM" }]);
+	});
+
 	it("is a no-op without a process table (not Linux)", async () => {
 		const reaper = createProcessReaper({ reader: null });
 

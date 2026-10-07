@@ -75,3 +75,10 @@ of this repository is the complete record of changes.
 - `web-ui/src/components/process-sweep-panel.tsx`, `web-ui/src/runtime/use-process-sweep.ts` (new),
   `web-ui/src/components/debug-dialog.tsx`, `web-ui/src/runtime/runtime-config-query.ts`: the debug dialog shows the
   last process sweep (processes and RSS per card, reaped orphans, zombies) with a "Sweep now" button.
+- `deploy/kanban-entrypoint.sh` (new), `deploy/Containerfile`, `docs/fork/container-lifecycle.md` (new),
+  `test/integration/kanban-entrypoint.integration.test.ts` (new): the image's ENTRYPOINT runs Kanban as its child,
+  starts `/root/.kanban/bin/kit boot` detached at every container start, and on every stop runs `kit prepare-restart`
+  (bounded, 45 s default) before passing SIGTERM/SIGINT on; replaces node's `docker-entrypoint.sh`. The image adds
+  `STOPSIGNAL SIGTERM` and `LABEL io.containers.autoupdate=registry`; the quadlet needs `StopTimeout=90`.
+  `src/state/kanban-server-lock.ts` (comment), `test/runtime/server/process-reaper.test.ts`: the server is no longer
+  PID 2 in the container; the reaper protects the entrypoint as the server's parent.

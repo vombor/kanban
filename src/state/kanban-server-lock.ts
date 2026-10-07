@@ -2,7 +2,8 @@
 // not run beside a server for a given home (`kanban home migrate`) read it.
 //
 // A record outlives its server after a crash, SIGKILL or forced exit, and pids get reused. In a container
-// the server is usually pid 2 every time, so the next `podman run ... kanban <command>` can be pid 2 too.
+// the server gets about the same low pid every time (2, or a little more behind the image's kanban-entrypoint),
+// so the next `podman run ... kanban <command>` can get that pid too.
 // So a record only counts as live when its pid is not this process, the process exists, and it is the
 // same process: same start time (Linux /proc/<pid>/stat), or, for records without one, a command line
 // that mentions kanban.
