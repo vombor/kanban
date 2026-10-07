@@ -53,6 +53,7 @@ function createHostHarness(
 	options: {
 		handleWatchdogRequest?: (request: WatchdogActionRequest) => Promise<unknown>;
 		reviewSettleMs?: number;
+		readPidPressure?: () => Promise<{ pressure: boolean; brownout: boolean }>;
 	} = {},
 ) {
 	let rawConfig = initialConfig;
@@ -79,6 +80,7 @@ function createHostHarness(
 		restartDelaysMs: [1_000, 5_000],
 		handleWatchdogRequest: options.handleWatchdogRequest,
 		reviewSettleMs: options.reviewSettleMs,
+		readPidPressure: options.readPidPressure ?? (async () => ({ pressure: false, brownout: false })),
 		log,
 	});
 	const snapshotsSent = (child: FakeChild | undefined) =>
@@ -162,6 +164,23 @@ describe("pipeline worker host", () => {
 		harness.host.notifyActivity({ workspaceId: "foo", summary: summary("dev-1", "awaiting_review") });
 		await vi.advanceTimersByTimeAsync(2_000);
 		expect(harness.snapshotsSent(child).length).toBe(initial + 2);
+		await harness.host.close();
+	});
+
+	it("sends the PID pressure flag in every snapshot, so the next sweep tells the worker it cleared", async () => {
+		let pressure = true;
+		const harness = createHostHarness(QA_FOO, {
+			readPidPressure: async () => ({ pressure, brownout: false }),
+		});
+		await harness.startReady();
+		const child = harness.children[0];
+		const pressureSent = () =>
+			(child?.sent ?? []).flatMap((message) => (message.type === "snapshot" ? [message.snapshot.pidPressure] : []));
+		expect(pressureSent()).toEqual([true]);
+
+		pressure = false;
+		await vi.advanceTimersByTimeAsync(30_000);
+		expect(pressureSent()).toEqual([true, false]);
 		await harness.host.close();
 	});
 

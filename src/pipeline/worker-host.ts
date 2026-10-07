@@ -24,6 +24,8 @@
 //   (restart recovery runs on landing-off workspaces too, plan §12; the rework stage only runs on `qa` ones) and every
 //   other `request` (a watchdog action, `handleWatchdogRequest`) are
 //   accepted for any workspace the worker has.
+// - Every snapshot carries `pidPressure` (src/state/pid-pressure-flags.ts), read here when it is sent: the QA gate
+//   and restart recovery hold new work on it, and the sweep's snapshot tells them within 30 s that it cleared.
 import { type ChildProcess, fork } from "node:child_process";
 
 import { getWorkspacePipelineSettings, type ParsedPipelineConfig, readPipelineConfig } from "../config/pipeline-config";
@@ -32,6 +34,7 @@ import type {
 	RuntimeTaskSessionSummary,
 	RuntimeTaskTrashResponse,
 } from "../core/api-contract";
+import { type PidPressureFlags, readPidPressureFlags } from "../state/pid-pressure-flags";
 import { DEFAULT_REVIEW_SETTLE_MS } from "../terminal/review-settle";
 import type { PipelineActionRequest, PipelineActionResult } from "./actions";
 import { getRecoveryScope, isPipelineWorkspace, type PipelineWorkspaceSnapshot } from "./engine";
@@ -80,6 +83,8 @@ export interface CreatePipelineWorkerHostDependencies {
 	runAction?: (request: PipelineActionRequest) => Promise<PipelineActionResult>;
 	/** `sessionSync.reviewSettleSec` in ms, as the server read it at start; also sent in every snapshot. */
 	reviewSettleMs?: number;
+	/** The PID pressure flags (default readPidPressureFlags()); sent as `pidPressure` in every snapshot. */
+	readPidPressure?: () => Promise<PidPressureFlags>;
 	sweepIntervalMs?: number;
 	coalesceMs?: number;
 	restartDelaysMs?: number[];
@@ -157,6 +162,7 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 	const restartDelays = deps.restartDelaysMs ?? DEFAULT_RESTART_DELAYS_MS;
 	const coalesceMs = deps.coalesceMs ?? DEFAULT_COALESCE_MS;
 	const reviewSettleMs = deps.reviewSettleMs ?? DEFAULT_REVIEW_SETTLE_MS;
+	const readPidPressure = deps.readPidPressure ?? (async () => await readPidPressureFlags());
 	const now = deps.now ?? Date.now;
 
 	let child: PipelineWorkerChild | null = null;
@@ -197,9 +203,16 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 			return;
 		}
 		try {
-			const snapshot = await deps.buildSnapshot(workspaceId, workspacePath);
+			const [snapshot, pidPressure] = await Promise.all([
+				deps.buildSnapshot(workspaceId, workspacePath),
+				// An unreadable flag is no pressure, as the legacy kit's existsSync was.
+				readPidPressure().then(
+					(flags) => flags.pressure,
+					() => false,
+				),
+			]);
 			if (snapshot && child && pipelineWorkspaces.has(workspaceId)) {
-				child.send({ type: "snapshot", snapshot: { reviewSettleMs, ...snapshot } });
+				child.send({ type: "snapshot", snapshot: { reviewSettleMs, pidPressure, ...snapshot } });
 			}
 		} catch (error) {
 			deps.log(

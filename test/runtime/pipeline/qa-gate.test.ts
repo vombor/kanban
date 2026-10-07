@@ -61,16 +61,21 @@ describe("QA gate", () => {
 	const send = async (
 		harness: ReturnType<typeof createPipelineWorkerHarness>,
 		columns: Columns,
-		options: { workspaceId?: string; sessions?: Parameters<typeof createSnapshot>[0]["sessions"] } = {},
+		options: {
+			workspaceId?: string;
+			sessions?: Parameters<typeof createSnapshot>[0]["sessions"];
+			pidPressure?: boolean;
+		} = {},
 	) => {
-		await harness.send(
-			createSnapshot({
+		await harness.send({
+			...createSnapshot({
 				workspaceId: options.workspaceId ?? "foo",
 				board: createBoard(columns),
 				selectedAgentId: "claude",
 				sessions: options.sessions,
 			}),
-		);
+			...(options.pidPressure ? { pidPressure: true } : {}),
+		});
 	};
 
 	it("creates one QA card per snapshot with role qa, reviewsTaskId and the kit's QA agent and model", async () => {
@@ -248,6 +253,41 @@ describe("QA gate", () => {
 			status: "running",
 			startedAt: T0,
 		});
+	});
+
+	it("creates and starts no QA card under PID pressure, logs each hold once, and goes on when it clears", async () => {
+		const harness = createHarness({ config: { workspaces: { foo: QA_WORKSPACE } } });
+		const dev = createCard({ id: "d1111" });
+
+		await send(harness, { review: [dev] }, { pidPressure: true });
+		await send(harness, { review: [dev] }, { pidPressure: true });
+		expect(createdTasks(harness.actions)).toEqual([]);
+		expect(harness.readCardDecisions("foo").map((record) => [record.outcome, record.note])).toEqual([
+			["none", expect.stringContaining("PID pressure: no QA card for snapshot snap-d11 until it clears")],
+		]);
+
+		await send(harness, { review: [dev] });
+		expect(kinds(harness.actions)).toEqual(["createTask:qa001"]);
+		expect(harness.readCardDecisions("foo").at(-1)).toMatchObject({ taskId: "d1111", outcome: "acted" });
+
+		// The queued QA card waits in Backlog while pressure lasts: one record for the hold, no start.
+		harness.actions.length = 0;
+		const qa = createCard({ id: "qa001", role: "qa", reviewsTaskId: "d1111" });
+		await send(harness, { backlog: [qa], review: [dev] }, { pidPressure: true });
+		await send(harness, { backlog: [qa], review: [dev] }, { pidPressure: true });
+		expect(harness.actions).toEqual([]);
+		const holds = () =>
+			harness
+				.readDecisions("foo")
+				.filter((record) => record.stage === "qa_start")
+				.map((record) => [record.taskId, record.outcome, record.note]);
+		expect(holds()).toEqual([[null, "none", "PID pressure: holding 1 queued QA card(s) (qa001) until it clears"]]);
+		expect(readQaGateEntry((await harness.store.load("foo")).cards.qa001)).toMatchObject({ status: "queued" });
+
+		await send(harness, { backlog: [qa], review: [dev] });
+		expect(kinds(harness.actions)).toEqual(["startTask:qa001"]);
+		expect(holds()).toHaveLength(2);
+		expect(holds()[1]).toEqual(["qa001", "acted", expect.stringContaining("started QA of d1111 round 1")]);
 	});
 
 	it("frees the slot of a QA card that runs past timeoutMin", async () => {

@@ -37,9 +37,9 @@ import {
 	getCalibrationLogPath,
 	getCalibrationPaths,
 	getKanbanHomeDisplayPath,
-	getPidPressureFlagPaths,
 	getWatchdogWorkspacePaths,
 } from "../state/kanban-home";
+import { readPidPressureFlags } from "../state/pid-pressure-flags";
 import { createAgentRunSignals } from "../terminal/agent-run-signals";
 import { runGit } from "../workspace/git-utils";
 import { getTaskWorktreeCandidatePaths } from "../workspace/task-worktree";
@@ -202,7 +202,6 @@ function createDependencies(target: CalibrationTarget, log: (message: string) =>
 	const runtimeClient = createRuntimeTrpcClient(workspaceId);
 	const selectedAgentId = loadGlobalRuntimeConfig().then((config) => config.selectedAgentId);
 	const pipelineConfig = readPipelineConfig().then(({ config }) => config);
-	const pidFlags = getPidPressureFlagPaths();
 	return {
 		board: {
 			read: async () => await runtimeClient.workspace.getState.query(),
@@ -263,10 +262,7 @@ function createDependencies(target: CalibrationTarget, log: (message: string) =>
 			};
 		},
 		stopScratchProcesses: async (dirs) => await stopScratchProcesses(dirs, log),
-		readPidPressure: async () => ({
-			pressure: await exists(pidFlags.pressure),
-			brownout: await exists(pidFlags.brownout),
-		}),
+		readPidPressure: async () => await readPidPressureFlags(),
 		findWorktreePath: async (taskId) => {
 			for (const path of getTaskWorktreeCandidatePaths(repoPath, taskId)) {
 				if (await exists(path)) {

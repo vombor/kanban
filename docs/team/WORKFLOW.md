@@ -194,9 +194,8 @@ The watchdog (`src/pipeline/watchdog/`, in the pipeline worker) is LLM-free and 
   root is pre-trusted to prevent it.
 - **Escalations and stops**, an idle pipeline (a new Backlog card gets 10 min of grace), and open orchestrator-plan
   steps.
-- **PID pressure:** at 75% of `pids.max` it raises a flag that holds new calibration waves, and runs the orphan
-  process sweep. At 90% (brownout), running agents get one Esc. (The legacy kit also held new QA cards; the QA gate
-  doesn't read the flag yet.)
+- **PID pressure:** at 75% of `pids.max` it raises a flag that holds new QA cards, restart resumes and calibration
+  waves, and runs the orphan process sweep. At 90% (brownout), running agents get one Esc.
 - **Housekeeping:** hourly prune of Done cards older than 3 days (after a backup; undecided runoffs and running
   calibrations are kept), and the team features' daily jobs (the price check).
 

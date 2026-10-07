@@ -381,6 +381,35 @@ describe("recovery stage", () => {
 		expect((harness.getCards().dev1?.qaflow as Record<string, unknown>).orphan).toBeNull();
 	});
 
+	it("waits out PID pressure before a restart resume, logged once, and resumes once it clears", async () => {
+		const sleeps: number[] = [];
+		const pressured = { ...orphanSnapshot([dead("dev1")]), pidPressure: true };
+		let harness: ReturnType<typeof createHarness> | null = null;
+		harness = createHarness({
+			sleep: async (ms) => {
+				sleeps.push(ms);
+				expect(harness?.actions.filter((action) => action.kind === "resume")).toEqual([]);
+				// The next snapshot says the pressure cleared.
+				if (sleeps.length === 3 && harness) {
+					await harness.stage.evaluate(harness.inputFor({ ...pressured, pidPressure: false }));
+				}
+			},
+		});
+		const records = await harness.evaluate(pressured);
+		expect(sleeps).toEqual([30_000, 30_000, 30_000]);
+		const restart = records
+			.filter((record) => record.stage === "restart" && record.taskId === "dev1")
+			.map((record) => [record.outcome, record.note]);
+		expect(restart).toEqual([
+			["acted", expect.stringContaining("orphaned (in_progress)")],
+			["none", "PID pressure; waiting before resuming"],
+			["acted", expect.stringContaining("resumed on")],
+		]);
+		expect(harness.actions.filter((action) => action.kind === "resume").map((action) => action.taskId)).toEqual([
+			"dev1",
+		]);
+	});
+
 	it("does not resume a card that went live between the plan and its turn", async () => {
 		const sessions = [dead("dev1"), dead("dev2")];
 		const harness = createHarness({

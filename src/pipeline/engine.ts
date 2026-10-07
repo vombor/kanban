@@ -72,6 +72,11 @@ export interface PipelineWorkspaceSnapshot {
 	previousServerStartedAt?: number | null;
 	/** `sessionSync.reviewSettleSec` in ms, as the server read it at start (isReviewSettled, src/terminal/review-settle.ts). */
 	reviewSettleMs?: number;
+	/**
+	 * A PID pressure flag is set (src/state/pid-pressure-flags.ts, read by the server when it sends the snapshot): the
+	 * QA gate creates and starts no QA cards and restart recovery resumes no cards until it clears.
+	 */
+	pidPressure?: boolean;
 }
 
 export interface PipelineEvaluationInput {

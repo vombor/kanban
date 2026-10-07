@@ -63,6 +63,8 @@ export interface RecoveryActionResult {
 
 /** How long a capacity-held resume waits before it looks again. */
 const CAPACITY_RECHECK_MS = 30_000;
+/** How long a resume held for PID pressure waits before it looks again (the legacy kit's 30 s). */
+const PRESSURE_RECHECK_MS = 30_000;
 /** How many capacity re-checks a resume makes before it gives up for this restart (about 30 min). */
 const CAPACITY_MAX_CHECKS = 60;
 /** Between /clear and the text that follows it, so the TUI has started the new conversation. */
@@ -414,6 +416,26 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 				await deps.sleep(settings.resumeGapSec * 1000);
 			}
 			let current = latest.get(workspaceId) ?? input;
+			// PID pressure holds new sessions (the legacy recoverOrphans): wait, for as long as it lasts, logged once.
+			for (let held = false; !closed && current.snapshot.pidPressure; held = true) {
+				if (!held) {
+					deps.log(`pipeline ${workspaceId}: restart ${orphan.taskId}: PID pressure; waiting before resuming`);
+					await deps.appendRecords([
+						{
+							...baseRecord(current, null, "restart"),
+							taskId: orphan.taskId,
+							answer: { kind: "resume" },
+							outcome: "none",
+							note: "PID pressure; waiting before resuming",
+						},
+					]);
+				}
+				await deps.sleep(PRESSURE_RECHECK_MS);
+				current = latest.get(workspaceId) ?? current;
+			}
+			if (closed) {
+				return;
+			}
 			let context = contextsOf(current).find((entry) => entry.card.id === orphan.taskId);
 			let heldBy: string | null = null;
 			for (let check = 0; context && !closed && check < CAPACITY_MAX_CHECKS; check += 1) {

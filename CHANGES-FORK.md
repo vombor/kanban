@@ -478,3 +478,8 @@ of this repository is the complete record of changes.
   inside the quadlet's StopTimeout=90) and pointed at the command's `--port`/`--host`/`--home`/`--https`. A failing,
   hung or missing command, or a Kanban already down, logs one line and never holds up the stop. It no longer has to
   be run by hand before a planned container restart.
+- `src/state/pid-pressure-flags.ts` (new), `src/pipeline/worker-host.ts`, `engine.ts` (`pidPressure` in the snapshot),
+  `qa-gate.ts`, `recovery-stage.ts`, `src/commands/bench-calibrate.ts`, `docs/team/RUNBOOK.md`, `WORKFLOW.md`, tests: the
+  legacy autoland's PID pressure hold. While a PID pressure flag is up (the watchdog's, or the legacy kit's review-watch's
+  while its config exists), the QA gate creates and starts no QA cards and restart recovery waits before each resume,
+  each hold logged once; both go on when it clears. One reader serves the worker host (every snapshot) and calibration.

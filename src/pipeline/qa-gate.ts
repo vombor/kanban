@@ -27,7 +27,9 @@
 //   instead of starting on the old snapshot (afea137, bfb20); a QA card running past `timeoutMin` frees its slot;
 // - wait `verdictGraceSec` for verdict.json before nudging (8495ed2: c1e30 reached Review 0.55 s before its
 //   verdict); nudges quote why the file is unusable (b9dd99b); `maxNudges`, then STALLED;
-// - a PASS with visual QA blocked is STALLED (QA v4); scratch servers stopped after ingest (66797d9).
+// - a PASS with visual QA blocked is STALLED (QA v4); scratch servers stopped after ingest (66797d9);
+// - no QA card is created or started while the snapshot says `pidPressure` (pumpQa's pid-pressure hold: zombies
+//   filling pids.max wiped a board, 10/05), logged once per hold; ingest and PASS landing go on.
 import { randomUUID } from "node:crypto";
 import { cp, mkdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -253,10 +255,12 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 	const kanbanHomeOf = deps.getKanbanHome ?? (() => getKanbanHomeDisplayPath());
 	/** workspaceId → QA cards running there, for the machine-wide slot count. */
 	const runningByWorkspace = new Map<string, number>();
+	/** Workspaces whose queued QA cards are held for PID pressure (already logged). */
+	const pressureHolds = new Set<string>();
 
 	const record = (
 		context: QaGateContext,
-		taskId: string,
+		taskId: string | null,
 		stage: "qa_start" | "qa_ingest" | "qa_pass",
 		note: string,
 	): PipelineDecisionRecord => ({
@@ -326,6 +330,10 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		}
 		if (readQaVerdictRecords(devEntry).some((verdict) => verdict.snapshot === qaSnapshot.commit)) {
 			return { outcome: "none", note: `snapshot ${short} already has a QA verdict` };
+		}
+		// The same note on every evaluation of the hold, so the decision log has it once; the creation follows it.
+		if (snapshot.pidPressure) {
+			return { outcome: "none", note: `PID pressure: no QA card for snapshot ${short} until it clears` };
 		}
 
 		const qaLog = await readQaLog(qaLogPathOf(workspaceId));
@@ -728,12 +736,29 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		}
 		runningByWorkspace.set(workspaceId, running);
 
-		// Pump: oldest queued first, machine-wide slots.
+		// Pump: oldest queued first, machine-wide slots. None start under PID pressure (one record per hold).
 		const queued = entries
 			.filter(({ entry }) => entry.status === "queued")
 			.sort((left, right) => left.entry.createdAt - right.entry.createdAt);
 		const preview = context.kit.qa?.preview ?? null;
-		for (const { qaTaskId, entry } of queued) {
+		const waiting = queued.filter(({ qaTaskId }) => findColumn(snapshot, qaTaskId) === "backlog");
+		const pressureHeld = Boolean(snapshot.pidPressure) && waiting.length > 0;
+		if (!pressureHeld) {
+			pressureHolds.delete(workspaceId);
+		} else if (!pressureHolds.has(workspaceId)) {
+			pressureHolds.add(workspaceId);
+			deps.log(`qa ${workspaceId}: PID pressure; holding ${waiting.length} QA card(s) until it clears`);
+			records.push({
+				...record(
+					context,
+					null,
+					"qa_start",
+					`PID pressure: holding ${waiting.length} queued QA card(s) (${waiting.map(({ qaTaskId }) => qaTaskId).join(", ")}) until it clears`,
+				),
+				outcome: "none",
+			});
+		}
+		for (const { qaTaskId, entry } of pressureHeld ? [] : queued) {
 			const totalRunning = [...runningByWorkspace.values()].reduce((sum, count) => sum + count, 0);
 			if (totalRunning >= qa.slots) {
 				break;
@@ -792,6 +817,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		tick,
 		forget: (workspaceId) => {
 			runningByWorkspace.delete(workspaceId);
+			pressureHolds.delete(workspaceId);
 		},
 	};
 }

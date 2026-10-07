@@ -157,9 +157,10 @@ the Kanban server whose command line has "Kanban Sidebar"), then resume it in th
 throttled viewer (a background browser tab) paused the PTY. Don't leave Kanban open in hidden tabs.
 
 **PID pressure.** At 75% of `pids.max` the watchdog raises `<home>/run/pid-pressure` and runs the orphan-process
-sweep (Done cards' leftovers go first). Calibration starts no new wave while the flag is up. At 90% it raises
-`pid-brownout` and sends one Esc to each running agent. The legacy kit also held new QA cards under pressure, but
-the pipeline's QA gate doesn't read the flag yet. Only a container restart with an init as PID 1 clears zombies.
+sweep (Done cards' leftovers go first). While the flag is up (or the legacy kit's own `pid-pressure` flag), the QA gate
+creates and starts no QA cards, restart recovery resumes no cards and calibration starts no new wave; each hold is
+logged once in the decision log and ends by itself when the flag goes. At 90% it raises `pid-brownout` and sends one
+Esc to each running agent. Only a container restart with an init as PID 1 clears zombies.
 
 ## Shadow day (cutover step P5-1)
 
