@@ -47,6 +47,9 @@ const PIPELINE_DECISIONS_FILENAME = "pipeline-decisions.jsonl";
 const QA_LOG_FILENAME = "qa-log.md";
 const QA_ARTIFACTS_DIR = "qa-artifacts";
 const BOARD_BACKUPS_DIR = "boards";
+const RESTART_MANIFEST_FILENAME = "restart-manifest.json";
+const RESTART_RECOVER_REQUEST_FILENAME = "restart-recover.now";
+const SERVER_START_RECORD_FILENAME = "server-start.json";
 /** The legacy kit's per-card pipeline state (`checks-state.json` in its per-project data dir). */
 const LEGACY_KIT_CHECKS_STATE_FILENAME = "checks-state.json";
 const PROJECT_CONFIG_PARENT_DIR = ".cline";
@@ -594,6 +597,24 @@ export function getLegacyKitLatestBoardBackupPath(workspaceId: string): string {
 		workspaceId,
 		LEGACY_KIT_BOARD_LATEST_FILENAME,
 	);
+}
+
+/**
+ * What `kanban restart prepare` recorded before a restart (`<home>/data/<workspaceId>/restart-manifest.json`, the
+ * legacy kit's name and format).
+ */
+export function getRestartManifestPath(workspaceId: string, homePath = getKanbanHomePath()): string {
+	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), RESTART_MANIFEST_FILENAME);
+}
+
+/** The running server's pid and start time (`<home>/run/server-start.json`), for `kanban restart prepare`. */
+export function getServerStartRecordPath(homePath = getKanbanHomePath()): string {
+	return join(getKanbanRunPath(homePath), SERVER_START_RECORD_FILENAME);
+}
+
+/** `kanban restart recover` asks the pipeline worker to check a workspace now (`<home>/run/restart-recover.now`). */
+export function getRestartRecoverRequestPath(homePath = getKanbanHomePath()): string {
+	return join(getKanbanRunPath(homePath), RESTART_RECOVER_REQUEST_FILENAME);
 }
 
 /**

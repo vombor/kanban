@@ -19,6 +19,7 @@ import { registerOrchestratorCommand } from "./commands/orchestrator";
 import { registerPipelineCommand } from "./commands/pipeline";
 import { registerProjectCommand } from "./commands/project";
 import { registerQaCommand } from "./commands/qa";
+import { registerRestartCommand } from "./commands/restart";
 import { registerSetupCommand } from "./commands/setup";
 import { registerTaskCommand } from "./commands/task";
 import { loadGlobalRuntimeConfig, loadRuntimeConfig } from "./config/runtime-config";
@@ -352,6 +353,7 @@ async function startServer(): Promise<{
 		{ pickDirectoryPathFromSystemDialog },
 		{ createAutoReviewReconciler },
 		{ createPipelineWorkerHost },
+		{ readServerStartRecord, writeServerStartRecord },
 		{ createRuntimeServer },
 		{ createRuntimeStateHub },
 		{ createSessionColumnSync },
@@ -367,6 +369,7 @@ async function startServer(): Promise<{
 		import("./server/directory-picker.js"),
 		import("./server/auto-review-reconciler.js"),
 		import("./pipeline/worker-host.js"),
+		import("./pipeline/restart-recovery.js"),
 		import("./server/runtime-server.js"),
 		import("./server/runtime-state-hub.js"),
 		import("./server/session-column-sync.js"),
@@ -549,6 +552,16 @@ async function startServer(): Promise<{
 	// The pipeline worker (src/pipeline/worker-host.ts): a supervised child process that runs only while some
 	// workspace has landing mode qa or the watchdog is on. Like auto-review, only the process that bound the server
 	// starts it. The worker's watchdog acts through the server (handleWatchdogRequest).
+	// Sessions that started before this process did lost their PTY with the old server (restart recovery).
+	const serverStartedAt = Math.round(Date.now() - process.uptime() * 1000);
+	// `kanban restart prepare` puts it in the restart manifest. The previous server's record is read first: only a
+	// manifest written under that server is used, so an old one is never replayed.
+	const previousServerStartedAt = (await readServerStartRecord().catch(() => null))?.startedAt ?? null;
+	await writeServerStartRecord({ pid: process.pid, startedAt: serverStartedAt }).catch((error: unknown) => {
+		console.warn(
+			`[kanban] could not record the server start: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	});
 	const workerHost = createPipelineWorkerHost({
 		listWorkspaces: () => workspaceRegistry.listManagedWorkspaces(),
 		handleWatchdogRequest: runtimeServer.handleWatchdogRequest,
@@ -557,7 +570,8 @@ async function startServer(): Promise<{
 			if (!state) {
 				return null;
 			}
-			const liveSummaries = workspaceRegistry.getTerminalManagerForWorkspace(workspaceId)?.listSummaries();
+			const terminalManager = workspaceRegistry.getTerminalManagerForWorkspace(workspaceId);
+			const liveSummaries = terminalManager?.listSummaries();
 			const config = await workspaceRegistry.loadScopedRuntimeConfig({ workspaceId, workspacePath });
 			return {
 				workspaceId,
@@ -579,8 +593,11 @@ async function startServer(): Promise<{
 					warningMessage: summary.warningMessage,
 					workspacePath: summary.workspacePath,
 					exitCode: summary.exitCode,
+					live: terminalManager?.hasLiveProcess(summary.taskId) ?? false,
 				})),
 				selectedAgentId: config.selectedAgentId,
+				serverStartedAt,
+				previousServerStartedAt,
 			};
 		},
 		finishTask: async (request) => {
@@ -845,6 +862,7 @@ function createProgram(invocationArgs: string[]): Command {
 	registerModelsCommand(program);
 	registerBenchCommand(program);
 	registerPipelineCommand(program);
+	registerRestartCommand(program);
 	registerOrchestratorCommand(program);
 	registerBoardCommand(program);
 	registerProjectCommand(program);

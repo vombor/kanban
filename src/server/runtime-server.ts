@@ -330,6 +330,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 				baseRef: input.baseRef,
 			}),
 		startTaskSession: async (scope, input) => await runtimeApi.startTaskSession(scope, input),
+		hasLiveProcess: async (scope, taskId) => (await getScopedTerminalManager(scope)).hasLiveProcess(taskId),
 		onBoardMutated: async (scope) =>
 			await deps.runtimeStateHub.broadcastRuntimeWorkspaceStateUpdated(scope.workspaceId, scope.workspacePath),
 	});

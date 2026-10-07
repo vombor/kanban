@@ -2,32 +2,25 @@
 // Ported from the legacy kit's `kit probe-models` (probes/bedrock-converse-probe.mjs, probes/mantle-probe.mjs for
 // `--list`) and `kit providers` (bin/providers.mjs). Both only read unless `--apply` is given.
 // `kanban models prices sync` (the team kit's price table) lives in model-prices.ts.
-import { join } from "node:path";
 import type { Command } from "commander";
 
 import { type PipelineConfig, readPipelineConfig } from "../config/pipeline-config";
-import {
-	type BedrockProbeResult,
-	isNeverProbedModel,
-	loadBedrockInferenceProfiles,
-	resolveBedrockApiKey,
-} from "../models/bedrock-probe";
+import { type BedrockProbeResult, isNeverProbedModel } from "../models/bedrock-probe";
 import { applyCardProviderMigrations, planCardProviderMigrations } from "../models/card-provider-migration";
 import {
 	cleanupDeprecatedProviders,
 	findDeprecatedProviderEntries,
 	getProviderSettingsPaths,
 	providerForModel,
-	readClineProvidersFile,
 } from "../models/cline-providers";
 import { LEMONADE_PROVIDER_ID, type ModelProbeOutcome, probeModel } from "../models/model-probe";
-import { getKanbanBackupsPath, getKanbanModelsDataPath } from "../state/kanban-home";
+import { getBedrockProfilesCachePath, loadModelProbeDependencies } from "../models/model-probe-setup";
+import { getKanbanBackupsPath } from "../state/kanban-home";
 import { listWorkspaceIndexEntries, loadWorkspaceBoardById, mutateWorkspaceState } from "../state/workspace-state";
 import { registerModelPricesCommand } from "./model-prices";
 import { createRuntimeTrpcClient, notifyRuntimeWorkspaceStateUpdated } from "./runtime-trpc-client";
 import { resolveWorkspaceTarget } from "./workspace-target";
 
-const BEDROCK_PROFILES_CACHE_FILE = "bedrock-profiles.json";
 const US_PROFILE_PREFIX = "us.";
 
 function toErrorMessage(error: unknown): string {
@@ -53,13 +46,6 @@ async function readModelsConfig(): Promise<PipelineConfig> {
 		process.stderr.write(`config.json: ${issue} (using the defaults)\n`);
 	}
 	return config;
-}
-
-function readStringSetting(providersJson: unknown, providerId: string, key: string): string | null {
-	const providers = (providersJson as { providers?: Record<string, { settings?: Record<string, unknown> }> } | null)
-		?.providers;
-	const value = providers?.[providerId]?.settings?.[key];
-	return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 interface ProbeCommandOptions {
@@ -90,22 +76,25 @@ function formatProbeOutcome(requested: string, outcome: ModelProbeOutcome): stri
 
 async function runProbe(modelIds: string[], options: ProbeCommandOptions): Promise<number> {
 	const config = await readModelsConfig();
-	const providersJson = await readClineProvidersFile(getProviderSettingsPaths(config).providersPath);
-	const region = options.region?.trim() || config.models.bedrockRegion;
-	const apiKey = resolveBedrockApiKey(providersJson);
-	const cachePath = join(getKanbanModelsDataPath(), BEDROCK_PROFILES_CACHE_FILE);
-	const needsBedrock = options.list || options.provider !== LEMONADE_PROVIDER_ID;
-	if (needsBedrock && !apiKey) {
+	const needsBedrock = options.list === true || options.provider !== LEMONADE_PROVIDER_ID;
+	const loaded = await loadModelProbeDependencies(config, {
+		region: options.region,
+		needsBedrock,
+		refreshProfiles: options.refresh === true,
+	});
+	const { region } = loaded;
+	const cachePath = getBedrockProfilesCachePath();
+	if (needsBedrock && !loaded.hasBedrockKey) {
 		process.stderr.write("No Bedrock API key: set BEDROCK_API_KEY or add Cline's bedrock provider.\n");
 		return 1;
 	}
-	const profiles =
-		needsBedrock && apiKey
-			? await loadBedrockInferenceProfiles({ region, apiKey }, { cachePath, refresh: options.refresh === true })
-			: { profiles: [], source: "none" as const, warning: null };
-	if (profiles.warning) {
-		process.stderr.write(`warning: ${profiles.warning}\n`);
+	if (loaded.warning) {
+		process.stderr.write(`warning: ${loaded.warning}\n`);
 	}
+	const profiles: { profiles: readonly string[]; source: string } = {
+		profiles: loaded.deps.bedrock?.profiles ?? [],
+		source: loaded.profilesSource,
+	};
 
 	if (options.list) {
 		const usProfiles = profiles.profiles.filter((id) => id.startsWith(US_PROFILE_PREFIX)).sort();
@@ -128,16 +117,10 @@ async function runProbe(modelIds: string[], options: ProbeCommandOptions): Promi
 		process.stderr.write(`skipped ${id}: xAI models are never used\n`);
 		return false;
 	});
-	const lemonadeBaseUrl =
-		readStringSetting(providersJson, LEMONADE_PROVIDER_ID, "baseUrl") ??
-		`${config.models.lists.lemonade.url.replace(/\/+$/u, "")}/api/v1`;
 	const outcomes = await Promise.all(
 		probed.map(async (model) => ({
 			model,
-			outcome: await probeModel(
-				{ provider: options.provider, model },
-				{ bedrock: apiKey ? { region, apiKey, profiles: profiles.profiles } : null, lemonadeBaseUrl },
-			),
+			outcome: await probeModel({ provider: options.provider, model }, loaded.deps),
 		})),
 	);
 	if (options.json) {

@@ -1,0 +1,67 @@
+// The texts recovery types into a card's agent. Kept word for word from the legacy kit where the wording carried a
+// lesson (the "no images" and output-cap notes, the overflow search hint, the restart WIP note).
+//
+// Ported from archive/devteam-kit:services/kanban-autoland.mjs@6da71597 (nudgeIfErrored, sendDueRetry) and
+// archive/devteam-kit:lib/resume.mjs@6da71597 (WIP_NOTE).
+import { OUTPUT_CAP_TOKENS, type PrematureStop } from "./recovery-detect";
+
+export const CONTINUE_PROMPT =
+	"Continue: do that now (call the tool). Keep going until the whole task is done; only stop when you're finished.";
+
+// 219fc1b: only when the worktree has changes. A note on a clean worktree made the agent search other worktrees.
+export const RESTART_WIP_NOTE =
+	"NOTE (Kanban): Kanban restarted while you were working on this card, so your previous session was lost. Your work in progress is still in this worktree: run git status and git diff first, review what is there, and continue from it. Do not start over or discard it.";
+
+const WORK_IS_HERE = "Your work so far is in this worktree (git status / git diff): continue the task from there.";
+
+/** The card prompt resent after /clear for a premature stop that poisoned the history. */
+export function buildClearedPrematurePrompt(
+	cardPrompt: string,
+	stop: Exclude<PrematureStop, { kind: "announcement" }>,
+): string {
+	if (stop.kind === "no_images") {
+		return `${cardPrompt}\n\nYour previous conversation was cleared: you opened an image file, your model doesn't accept images, and every later request failed. ${WORK_IS_HERE} Never read image files (.png/.jpg/.gif/.webp); check screenshots through the screenshot tool's text report (status, console, outline) instead.`;
+	}
+	const cap = stop.outputCap
+		? ` That reply hit the ${OUTPUT_CAP_TOKENS}-token output limit and was lost: keep every tool call under about 200 lines, and write big files in parts (create, then add with edits).`
+		: "";
+	return `${cardPrompt}\n\nYour previous conversation ended on an empty model reply and was cleared. ${WORK_IS_HERE}${cap}`;
+}
+
+export interface OverflowNote {
+	culprit: { size: number; query: string | null } | null;
+	cleanedDirs: string[];
+}
+
+function describeOverflow(note: OverflowNote): string {
+	let text = "";
+	if (note.culprit) {
+		const query = note.culprit.query ? ` (\`${note.culprit.query}\`)` : "";
+		text += ` The cause: one tool call returned ${Math.round(note.culprit.size / 1024)} KB${query}. Don't repeat it.`;
+	}
+	if (note.cleanedDirs.length > 0) {
+		text += ` Generated reports (${note.cleanedDirs.join(", ")}) were deleted from the worktree; they are gitignored and huge.`;
+	}
+	return `${text} Search with \`git grep -n <pattern> -- src server e2e\` (it skips ignored files) and pipe long output through | head -100.`;
+}
+
+/** After a fatal API error that poisoned the history: the card prompt, resent after /clear. */
+export function buildPoisonedHistoryPrompt(cardPrompt: string, error: string, overflow: OverflowNote | null): string {
+	const note = overflow ? describeOverflow(overflow) : "";
+	return `${cardPrompt}\n\nYour previous conversation hit a fatal API error (${error.slice(0, 200)}) and was cleared.${note} ${WORK_IS_HERE}`;
+}
+
+/** A crash nudge for a turn that stopped on an error that did not poison the history. */
+export function buildCrashNudgePrompt(reason: string, error: string): string {
+	return `Your previous turn stopped (${reason}${error ? `: ${error.slice(0, 200)}` : ""}). Continue the task; your work so far is in this worktree.`;
+}
+
+/** The continue sent once a provider-error backoff (or an outage hold) is over. */
+export function buildProviderRetryPrompt(error: string): string {
+	return `Your previous turn stopped on a provider error (${error.slice(0, 200)}). The service should be back now: continue the task; your work so far is in this worktree.`;
+}
+
+/** The prompt a resumed card starts with: its own prompt, plus the WIP note only when the worktree has changes. */
+export function buildResumePrompt(cardPrompt: string, hasWorkInProgress: boolean): string {
+	return hasWorkInProgress ? `${cardPrompt}\n\n${RESTART_WIP_NOTE}` : cardPrompt;
+}

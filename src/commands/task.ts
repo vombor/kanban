@@ -39,6 +39,7 @@ import {
 	notifyRuntimeWorkspaceStateUpdated,
 	type RuntimeTrpcClient,
 } from "./runtime-trpc-client";
+import { restartTaskFresh, resumeTasks, sendTaskMessage } from "./task-recovery";
 
 const LIST_TASK_COLUMNS = ["backlog", "in_progress", "review", "trash"] as const;
 type ListTaskColumn = (typeof LIST_TASK_COLUMNS)[number];
@@ -1525,4 +1526,92 @@ export function registerTaskCommand(program: Command): void {
 					}),
 			);
 		});
+
+	task
+		.command("send")
+		.description(
+			"Type a message into a task's agent and confirm it was picked up (text, or @file for a file's contents).",
+		)
+		.argument("<taskId>", "Task ID.")
+		.argument("<text>", "The message, or @path to send a file's contents.")
+		.option("--no-enter", "Type the text without pressing Enter.")
+		.option("--project-path <path>", "Workspace path. Defaults to current directory workspace.")
+		.action(async (taskId: string, text: string, options: { enter: boolean; projectPath?: string }) => {
+			await runTaskCommand(
+				async () =>
+					await sendTaskMessage({
+						cwd: process.cwd(),
+						taskId,
+						text,
+						enter: options.enter,
+						projectPath: options.projectPath,
+					}),
+			);
+		});
+
+	task
+		.command("resume")
+		.description(
+			"Restart tasks whose session died (a Kanban or container restart): WIP tag, a new session with the card prompt (+ a WIP note when the worktree has changes), In Progress. Same agent and model.",
+		)
+		.argument("<taskIds...>", "Task IDs.")
+		.option("--dry-run", "Print what would happen; tag and start nothing.")
+		.option("--project-path <path>", "Workspace path. Defaults to current directory workspace.")
+		.action(async (taskIds: string[], options: { dryRun?: boolean; projectPath?: string }) => {
+			await runTaskCommand(
+				async () =>
+					await resumeTasks({
+						cwd: process.cwd(),
+						taskIds,
+						dryRun: options.dryRun === true,
+						projectPath: options.projectPath,
+					}),
+			);
+		});
+
+	task
+		.command("restart-fresh")
+		.description(
+			"Start a task over, possibly on another model: preserve the worktree as preserve/<id>-<label>, stop the session, reset the worktree to the base, drop REWORK sections and the BLOCKED prefix, set the model, reset its pipeline history, start it.",
+		)
+		.argument("<taskId>", "Task ID.")
+		.requiredOption("--model <id>", "Model for the restarted card.")
+		.requiredOption("--label <suffix>", "Tag suffix: the work so far is kept as preserve/<id>-<label>.")
+		.option("--provider <id>", "Provider for the model (kept from the card when omitted).")
+		.option("--hold", "Leave it in Backlog instead of starting it.")
+		.option("--after <taskId>", "Link it to wait on this task (implies --hold).")
+		.option("--note <text>", "Note stored with the pipeline history reset.")
+		.option("--dry-run", "Print the steps; change nothing.")
+		.option("--project-path <path>", "Workspace path. Defaults to current directory workspace.")
+		.action(
+			async (
+				taskId: string,
+				options: {
+					model: string;
+					label: string;
+					provider?: string;
+					hold?: boolean;
+					after?: string;
+					note?: string;
+					dryRun?: boolean;
+					projectPath?: string;
+				},
+			) => {
+				await runTaskCommand(
+					async () =>
+						await restartTaskFresh({
+							cwd: process.cwd(),
+							taskId,
+							model: options.model,
+							label: options.label,
+							provider: options.provider,
+							hold: options.hold === true,
+							after: options.after,
+							note: options.note,
+							dryRun: options.dryRun === true,
+							projectPath: options.projectPath,
+						}),
+				);
+			},
+		);
 }

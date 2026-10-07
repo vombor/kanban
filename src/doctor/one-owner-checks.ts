@@ -3,8 +3,9 @@
 // switches the kit's service or toggle off. This reports a responsibility both own (FAIL), and where the two
 // configs disagree about who owns it. Rows exist only for runtime features that exist: landing (vs autoland),
 // column moves (session sync vs column-sync), ending Cline CLI turns (the turn detector vs column-sync) and the
-// Lemonade model list. Kanban's landing step (P4-4) is in the landing rows, and the watchdog (P4-7) has its row vs
-// review-watch. The rest of the pipeline (P4-x) adds theirs when it lands.
+// Lemonade model list. Kanban's landing step (P4-4) is in the landing rows, the watchdog (P4-7) has its row vs
+// review-watch, and recovery (P4-6: nudges, provider retries, restart resumes) its row vs autoland. The rest of the
+// pipeline (P4-x) adds theirs when it lands.
 
 import {
 	findImplicitLegacyToggleWarnings,
@@ -16,6 +17,7 @@ import {
 } from "../config/legacy-kit-config";
 import { getWorkspacePipelineSettings, type PipelineConfig } from "../config/pipeline-config";
 import type { RuntimeBoardData } from "../core/api-contract";
+import { getRecoveryScope } from "../pipeline/engine";
 import { isLegacyModelListsServiceUrl, isManagedModelsSourceUrl } from "../setup/cline-models-source";
 import type { RuntimeWorkspaceIndexEntry } from "../state/workspace-state";
 import type { DoctorFinding } from "./doctor-report";
@@ -56,6 +58,7 @@ export async function checkOneOwner(context: OneOwnerContext): Promise<DoctorFin
 			{ level: "pass", area: "owner", message: `no legacy kit (${legacyKit.path} absent): Kanban owns everything` },
 			...checkColumnMoveOwners(context.config, { columnSyncOwns: false, kitInstalled: false, runPath: null }),
 			...checkWatchdogOwner(context.config, { reviewWatchOwns: false, runPath: null }),
+			...checkRecoveryOwners(context.config, context.entries, { autolandOwns: false, projects: [], runPath: null }),
 		];
 	}
 	const columnSyncOwns = legacyKitServiceOwns(
@@ -74,6 +77,14 @@ export async function checkOneOwner(context: OneOwnerContext): Promise<DoctorFin
 				context.services.find((entry) => entry.name === "review-watch"),
 				true,
 			),
+			runPath: getLegacyKitRunPath(legacyKit.raw),
+		}),
+		...checkRecoveryOwners(context.config, context.entries, {
+			autolandOwns: legacyKitServiceOwns(
+				context.services.find((entry) => entry.name === "autoland"),
+				true,
+			),
+			projects: listLegacyKitProjects(legacyKit.raw).map((project) => project.workspaceId),
 			runPath: getLegacyKitRunPath(legacyKit.raw),
 		}),
 	];
@@ -199,6 +210,63 @@ export function checkColumnMoveOwners(
 		});
 	}
 	return findings;
+}
+
+/**
+ * Recovery: crash nudges, premature-stop continues, provider retries and outage holds, hung-request cancels, and
+ * resuming cards a restart orphaned. The legacy kit's autoland does all of it for every project it watches
+ * (archive/devteam-kit:services/kanban-autoland.mjs@6da71597 nudgeIfErrored, checkRestart). In Kanban it is the
+ * pipeline's recovery stage (`pipeline.recovery.mode`, "report" by default: decide and log only), which acts on a
+ * workspace with mode "on", `workspaces.<id>.recovery.enabled` and no `pipeline.shadow`. Both acting would send
+ * every nudge twice and start two sessions per orphan.
+ */
+export function checkRecoveryOwners(
+	config: PipelineConfig,
+	entries: RuntimeWorkspaceIndexEntry[],
+	kit: { autolandOwns: boolean; projects: string[]; runPath: string | null },
+): DoctorFinding[] {
+	const mode = config.pipeline.recovery.mode;
+	const kitProjects = new Set(kit.projects);
+	const acting = entries
+		.map((entry) => entry.workspaceId)
+		.filter((workspaceId) => getRecoveryScope(config, getWorkspacePipelineSettings(config, workspaceId)).act);
+	const both = kit.autolandOwns ? acting.filter((workspaceId) => kitProjects.has(workspaceId)) : [];
+	if (both.length > 0) {
+		return [
+			{
+				level: "fail",
+				area: "owner",
+				message: `two owners for recovery (nudges, provider retries, restart resumes) on ${both.join(", ")}: Kanban (pipeline.recovery.mode on) and the legacy kit's autoland`,
+				hint: `set pipeline.recovery.mode to "report" (or workspaces.<id>.recovery.enabled false) until autoland is retired${kit.runPath ? ` (touch ${kit.runPath}/autoland.disabled && kit stop autoland)` : ""}`,
+			},
+		];
+	}
+	if (acting.length > 0) {
+		return [
+			{
+				level: "pass",
+				area: "owner",
+				message: `Kanban recovers crashed and orphaned cards on ${acting.join(", ")} (pipeline.recovery.mode on)`,
+			},
+		];
+	}
+	if (kit.autolandOwns) {
+		return [
+			{
+				level: "info",
+				area: "owner",
+				message: `the legacy kit's autoland recovers crashed and orphaned cards; Kanban's recovery is ${mode === "off" ? "off" : `${mode} (decides and logs only)`}`,
+			},
+		];
+	}
+	return [
+		{
+			level: kit.projects.length > 0 ? "warn" : "info",
+			area: "owner",
+			message: `nothing nudges crashed cards or resumes cards a restart orphaned: pipeline.recovery.mode is ${mode}${kit.projects.length > 0 ? " and the legacy kit's autoland is not running" : ""}`,
+			hint: 'set pipeline.recovery.mode to "on" in config.json',
+		},
+	];
 }
 
 async function checkLegacyKitOwners(

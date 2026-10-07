@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { parsePipelineConfig } from "../../../src/config/pipeline-config";
 import type { ChecksResult } from "../../../src/pipeline/checks";
 import type { WatchdogActions } from "../../../src/pipeline/watchdog/actions";
@@ -303,6 +303,144 @@ describe("pipeline worker", () => {
 		expect(harness.readCardDecisions("foo", "checks")).toMatchObject([
 			{ taskId: "dev-1", kit: "team", outcome: "acted", note: "checks FAIL on 01234567: install=ok test=fail" },
 		]);
+	});
+
+	it("leaves a Review card recovery holds out of the snapshot and QA gate (autoland's onDevReview order)", async () => {
+		const inspected: string[] = [];
+		const harness = createHarness({
+			config: { workspaces: { foo: QA_WORKSPACE } },
+			inspectSubmission: async (_context, { card }) => {
+				inspected.push(card.id);
+				return { hasWork: true, records: [] };
+			},
+			createRecovery: () => ({ evaluate: async () => [], forget: () => {}, idle: async () => {}, close: () => {} }),
+		});
+		const legacyPath = `${harness.legacyDir}/foo/checks-state.json`;
+		mkdirSync(dirname(legacyPath), { recursive: true });
+		writeFileSync(
+			legacyPath,
+			JSON.stringify({
+				"dev-retry": { qaflow: { retryAt: "2026-10-07T10:05:00.000Z" } },
+				"dev-orphan": { qaflow: { orphan: { at: "x", kanbanStart: "y", kind: "dev" } } },
+			}),
+		);
+		await harness.send(
+			createSnapshot({
+				workspaceId: "foo",
+				board: createBoard({
+					review: [
+						createCard({ id: "dev-retry" }),
+						createCard({ id: "dev-orphan" }),
+						createCard({ id: "dev-ok" }),
+					],
+				}),
+				selectedAgentId: "claude",
+			}),
+		);
+		expect(inspected).toEqual(["dev-ok"]);
+		expect(harness.readCardDecisions("foo").map((record) => record.taskId)).toEqual(["dev-ok"]);
+	});
+
+	it("runs recovery before the QA gate, so a card it marks in this evaluation is not QA'd", async () => {
+		const inspected: string[] = [];
+		let statePath = "";
+		const harness = createHarness({
+			config: { workspaces: { foo: QA_WORKSPACE }, pipeline: { recovery: { mode: "on" } } },
+			inspectSubmission: async (_context, { card }) => {
+				inspected.push(card.id);
+				return { hasWork: true, records: [] };
+			},
+			// Stands in for restart recovery marking an interrupted orphan in Review.
+			createRecovery: () => ({
+				evaluate: async () => {
+					const state = JSON.parse(readFileSync(statePath, "utf8"));
+					state.cards["dev-orphan"] = { qaflow: { orphan: { at: "x", kanbanStart: "y", kind: "dev" } } };
+					writeFileSync(statePath, JSON.stringify(state));
+					return [];
+				},
+				forget: () => {},
+				idle: async () => {},
+				close: () => {},
+			}),
+		});
+		statePath = harness.statePath("foo");
+		await harness.send(
+			createSnapshot({
+				workspaceId: "foo",
+				board: createBoard({ review: [createCard({ id: "dev-orphan" }), createCard({ id: "dev-ok" })] }),
+				selectedAgentId: "claude",
+			}),
+		);
+		expect(inspected).toEqual(["dev-ok"]);
+	});
+
+	it("sends recovery's actions as watchdog and card-action requests and resumes with the answers", async () => {
+		const results: unknown[] = [];
+		const harness = createHarness({
+			config: { pipeline: { recovery: { mode: "on" } } },
+			createRecovery: (act) => ({
+				evaluate: async (input) => {
+					const workspaceId = input.snapshot.workspaceId;
+					results.push(await act(workspaceId, { kind: "input", taskId: "dev-1", data: "\u001b" }));
+					results.push(
+						await act(workspaceId, { kind: "resume", taskId: "dev-1", prompt: "Go on.", agentId: "cline" }),
+					);
+					return [];
+				},
+				forget: () => {},
+				idle: async () => {},
+				close: () => {},
+			}),
+		});
+		const snapshot = createSnapshot({
+			workspaceId: "kanban-2uge",
+			board: createBoard({}),
+			selectedAgentId: "claude",
+		});
+		const handled = harness.worker.handle({ type: "snapshot", snapshot });
+		const answer = async (index: number, result: unknown) => {
+			await vi.waitFor(() =>
+				expect(harness.messages.filter((message) => message.type === "request").length).toBeGreaterThan(index),
+			);
+			const request = harness.messages.filter((message) => message.type === "request")[index];
+			await harness.worker.handle({
+				type: "response",
+				id: request?.type === "request" ? request.id : -1,
+				ok: true,
+				result,
+			});
+			return request?.type === "request" ? request.request : null;
+		};
+		expect(await answer(0, { ok: true })).toEqual({ kind: "interrupt", workspaceId: "kanban-2uge", taskId: "dev-1" });
+		expect(await answer(1, { ok: true })).toEqual({
+			kind: "resumeTask",
+			workspaceId: "kanban-2uge",
+			workspacePath: "/repos/kanban-2uge",
+			taskId: "dev-1",
+			prompt: "Go on.",
+			agentId: "cline",
+		});
+		await handled;
+		expect(results).toEqual([
+			{ ok: true, status: "sent" },
+			{ ok: true, status: "started" },
+		]);
+		// Recovery on reaches a landing-off workspace: it is watched, with no QA-gate decisions.
+		expect(harness.readDecisions("kanban-2uge").map((record) => record.stage)).toEqual(["worker"]);
+		expect(harness.readDecisions("kanban-2uge")[0]?.note).toContain("recovery on");
+	});
+
+	it("never evaluates a landing-off workspace while recovery is report-only (the default)", async () => {
+		const evaluate = vi.fn(async () => []);
+		const harness = createHarness({
+			config: {},
+			createRecovery: () => ({ evaluate, forget: () => {}, idle: async () => {}, close: () => {} }),
+		});
+		await harness.send(
+			createSnapshot({ workspaceId: "kanban-2uge", board: createBoard({}), selectedAgentId: "claude" }),
+		);
+		expect(evaluate).not.toHaveBeenCalled();
+		expect(harness.readDecisions("kanban-2uge")).toEqual([]);
 	});
 });
 

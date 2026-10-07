@@ -88,6 +88,20 @@ const DEFAULT_INPUT_DELIVERY_PROFILE: AgentInputDeliveryProfile = {
 	focusInBeforeInput: false,
 };
 
+/**
+ * What recovery (src/pipeline/recovery-stage.ts) may type into an agent's TUI. `clearContextCommand` starts a new
+ * conversation in the same TUI (poisoned history: an empty reply or an image the model rejects stays in the history
+ * and fails every later request); `cancelTurnInput` cancels a model request in flight (a hung request). Null: the
+ * agent can't, so recovery escalates instead.
+ */
+export interface AgentRecoveryProfile {
+	clearContextCommand: string | null;
+	cancelTurnInput: string | null;
+}
+
+const DEFAULT_RECOVERY_PROFILE: AgentRecoveryProfile = { clearContextCommand: null, cancelTurnInput: null };
+const ESCAPE = "\u001b";
+
 /** Where a turn end that the agent's hooks missed can be read from (see cline-turn-monitor.ts). */
 export type AgentTurnEndSource = "cline-session-files";
 
@@ -95,6 +109,7 @@ interface AgentSessionAdapter {
 	prepare(input: AgentAdapterLaunchInput): Promise<PreparedAgentLaunch>;
 	inputDelivery?: AgentInputDeliveryProfile;
 	turnEndSource?: AgentTurnEndSource;
+	recovery?: AgentRecoveryProfile;
 }
 
 function escapeForTemplateLiteral(value: string): string {
@@ -688,6 +703,7 @@ function logWorkspacePreTrustError(agentId: "claude" | "codex", result: AgentWor
 }
 
 const claudeAdapter: AgentSessionAdapter = {
+	recovery: { clearContextCommand: "/clear", cancelTurnInput: ESCAPE },
 	async prepare(input) {
 		// Pre-trust the main repo so Claude Code skips its folder trust dialog (best effort; the
 		// session manager still answers the dialog if it shows).
@@ -826,6 +842,7 @@ function shouldInspectCodexOutputForTransition(summary: RuntimeTaskSessionSummar
 }
 
 const codexAdapter: AgentSessionAdapter = {
+	recovery: { clearContextCommand: "/new", cancelTurnInput: ESCAPE },
 	async prepare(input) {
 		logWorkspacePreTrustError("codex", await ensureCodexWorkspaceTrusted(input.cwd));
 		const codexArgs = [...input.args];
@@ -1510,6 +1527,8 @@ const kiroAdapter: AgentSessionAdapter = {
 const clineCliAdapter: AgentSessionAdapter = {
 	// Some providers end a turn without Cline's TaskComplete hook; the session files show it (cline-turn-outcome.ts).
 	turnEndSource: "cline-session-files",
+	// The TUI shows "esc to cancel" while a request runs (archive/devteam-kit:services/kanban-autoland.mjs@0261b20).
+	recovery: { clearContextCommand: "/clear", cancelTurnInput: ESCAPE },
 	async prepare(input) {
 		// --worktree/--zen/--kanban/--update would detach, recurse, or exit
 		// instead of running the task session Kanban launched.
@@ -2034,6 +2053,10 @@ const ADAPTERS: Record<RuntimeAgentId, AgentSessionAdapter> = {
 
 export function getAgentInputDeliveryProfile(agentId: RuntimeAgentId | null): AgentInputDeliveryProfile {
 	return (agentId ? ADAPTERS[agentId].inputDelivery : undefined) ?? DEFAULT_INPUT_DELIVERY_PROFILE;
+}
+
+export function getAgentRecoveryProfile(agentId: RuntimeAgentId | null): AgentRecoveryProfile {
+	return (agentId ? ADAPTERS[agentId].recovery : undefined) ?? DEFAULT_RECOVERY_PROFILE;
 }
 
 export function getAgentTurnEndSource(agentId: RuntimeAgentId | null): AgentTurnEndSource | null {

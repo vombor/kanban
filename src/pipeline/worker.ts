@@ -13,8 +13,10 @@
 // shadow the QA gate (qa-gate.ts) acts on the kit's answers: it creates, starts and nudges QA cards through `action`
 // requests (actions.ts), finishes them and lands a PASS through `finishTask`; the worker never writes the board.
 //
-// A workspace is evaluated only with landing mode `qa`. Everything else (`off`, `commit`, `pr`, no entry = `off`
-// on the `default` kit) is forgotten: no state file, no log, no kit question.
+// A workspace is evaluated only with landing mode `qa`, or by recovery alone with `pipeline.recovery.mode: "on"` and
+// recovery enabled (recovery-stage.ts). Everything else (`off`, `commit`, `pr`, no entry = `off` on the `default`
+// kit, recovery in its default `report` mode) is forgotten: no state file, no log, no kit question. Recovery acts
+// through the same requests: the watchdog's `deliverInput` / `interrupt` and the card action `resumeTask`.
 //
 // The watchdog (src/pipeline/watchdog/) runs here too, on its own tick, over every snapshot the server sends (the
 // server sends every workspace while `watchdog.mode` is not "off"). It acts through requests to the server
@@ -30,7 +32,12 @@ import { getClineProvidersSettingsPath } from "../state/kanban-home";
 import type { PipelineActions } from "./actions";
 import { CHECKS_VERSION, type ChecksResult, type ChecksRunner, createChecksRunner, formatChecksReport } from "./checks";
 import { createPipelineDecisionLog, type PipelineDecisionLog, type PipelineDecisionRecord } from "./decision-log";
-import { evaluatePipelineWorkspace, isPipelineWorkspace, type PipelineWorkspaceSnapshot } from "./engine";
+import {
+	evaluatePipelineWorkspace,
+	getRecoveryScope,
+	isPipelineWorkspace,
+	type PipelineWorkspaceSnapshot,
+} from "./engine";
 import { createPipelineEventBus, type PipelineEventBus } from "./events";
 import { createPipelineFeatureRegistry, type PipelineFeatureActions, type PipelineFeatureRegistry } from "./features";
 import { preserveTaskWork, releaseHold } from "./hold";
@@ -39,6 +46,8 @@ import { createQaGate, type QaGate } from "./qa-gate";
 import { type AppendQaLog, createQaLogAppender } from "./qa-log";
 import { createQaPreviewController } from "./qa-preview";
 import { readQaVerdictFile } from "./qa-verdict";
+import { createWorkerRecoveryStage } from "./recovery-runtime";
+import type { RecoveryStage, RecoveryStageDependencies } from "./recovery-stage";
 import { stopScratchProcesses } from "./scratch-processes";
 import { createSubmissionStage, type SubmissionInspector } from "./submission-stage";
 import type { WatchdogActionRequest, WatchdogActionResult, WatchdogActions } from "./watchdog/actions";
@@ -82,6 +91,8 @@ export interface PipelineWorkerDependencies {
 	/** The QA gate's card actions. Default: `request`s to the server over IPC. */
 	qaActions?: PipelineActions;
 	qaGate?: QaGate;
+	/** The recovery stage, given the worker's request-backed actions. Default: the real one (recovery-runtime.ts). */
+	createRecovery?: (act: RecoveryStageDependencies["act"]) => RecoveryStage;
 	now?: () => number;
 }
 
@@ -300,6 +311,47 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			stopScratchProcesses: async (dirs) => await stopScratchProcesses(dirs, log),
 			log,
 		});
+	// Recovery's actions over the same request channel; resuming needs the workspace path of the newest snapshot.
+	const recoveryAct: RecoveryStageDependencies["act"] = async (workspaceId, action) => {
+		try {
+			if (action.kind === "deliver") {
+				const delivered = await watchdogActions.request({
+					kind: "deliverInput",
+					workspaceId,
+					taskId: action.taskId,
+					text: action.text,
+				});
+				return {
+					ok: delivered.ok,
+					status: delivered.status,
+					evidence: delivered.evidence,
+					...(delivered.error ? { error: delivered.error } : {}),
+				};
+			}
+			if (action.kind === "input") {
+				const sent = await watchdogActions.request({ kind: "interrupt", workspaceId, taskId: action.taskId });
+				return { ok: sent.ok, status: sent.ok ? "sent" : "failed", ...(sent.error ? { error: sent.error } : {}) };
+			}
+			const workspacePath = workspacePaths.get(workspaceId);
+			if (!workspacePath) {
+				return { ok: false, error: `workspace ${workspaceId} is not watched by the pipeline` };
+			}
+			const resumed = await gateActions.run({
+				kind: "resumeTask",
+				workspaceId,
+				workspacePath,
+				taskId: action.taskId,
+				prompt: action.prompt,
+				agentId: action.agentId,
+			});
+			return resumed.ok ? { ok: true, status: "started" } : { ok: false, error: resumed.error };
+		} catch (error) {
+			return { ok: false, error: error instanceof Error ? error.message : String(error) };
+		}
+	};
+	const recovery =
+		deps.createRecovery?.(recoveryAct) ??
+		createWorkerRecoveryStage({ store, decisionLog, act: recoveryAct, log, now });
 	const watchdog = (deps.createWatchdog ?? createWatchdog)({
 		actions: watchdogActions,
 		readConfig,
@@ -339,6 +391,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 		submissionStage.forgetWorkspace(workspaceId);
 		workspacePaths.delete(workspaceId);
 		qaGate.forget(workspaceId);
+		recovery.forget(workspaceId);
 		if (lastWatchKeys.delete(workspaceId)) {
 			log(`pipeline ${workspaceId}: not watched any more`);
 		}
@@ -363,7 +416,9 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			reportOnce(`config:${issue}`, `pipeline config: ${issue}`);
 		}
 		const settings = getWorkspacePipelineSettings(parsed.config, workspaceId);
-		if (parsed.config.pipeline.paused || !isPipelineWorkspace(settings)) {
+		const pipelineOn = isPipelineWorkspace(settings);
+		const recoveryScope = getRecoveryScope(parsed.config, settings);
+		if (parsed.config.pipeline.paused || (!pipelineOn && !recoveryScope.evaluate)) {
 			forget(workspaceId);
 			deps.send({ type: "evaluated", workspaceId, decisions: 0, logged: 0 });
 			return;
@@ -381,7 +436,13 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 		const state = await store.load(workspaceId);
 
 		const records: PipelineDecisionRecord[] = [];
-		const watchKey = JSON.stringify([settings.landing.mode, settings.pipeline.shadow, resolution.kitName]);
+		const recoveryMode = recoveryScope.evaluate ? parsed.config.pipeline.recovery.mode : "off";
+		const watchKey = JSON.stringify([
+			settings.landing.mode,
+			settings.pipeline.shadow,
+			resolution.kitName,
+			recoveryMode,
+		]);
 		if (lastWatchKeys.get(workspaceId) !== watchKey) {
 			lastWatchKeys.set(workspaceId, watchKey);
 			records.push({
@@ -397,7 +458,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 				role: null,
 				answer: null,
 				outcome: "none",
-				note: `watching: landing ${settings.landing.mode}, kit ${resolution.kitName}${settings.pipeline.shadow ? ", shadow" : ""}; acting on verdicts since ${state.since}`,
+				note: `watching: landing ${settings.landing.mode}, kit ${resolution.kitName}${settings.pipeline.shadow ? ", shadow" : ""}, recovery ${recoveryMode}${recoveryScope.evaluate && !recoveryScope.act ? " (report only)" : ""}; acting on verdicts since ${state.since}`,
 			});
 		}
 
@@ -414,28 +475,43 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			now: now(),
 		};
 		const shadow = settings.pipeline.shadow;
-		const decisions = await evaluatePipelineWorkspace({
+		const recoveryDecisions = await recovery.evaluate({
 			snapshot,
 			settings,
+			config: parsed.config,
 			kitName: resolution.kitName,
-			policy,
 			state,
-			limits: { maxFailRounds: parsed.config.pipeline.rework.maxFailRounds },
 			agentDefaultModels,
-			inspectSubmission: async (input) =>
-				await inspectSubmission(
-					{
-						workspaceId,
-						workspacePath: snapshot.workspacePath,
-						settings,
-						kitName: resolution.kitName,
-						state,
-					},
-					input,
-				),
-			submitQa: shadow ? undefined : async (input) => await qaGate.submit({ context: gateContext, ...input }),
-			now: gateContext.now,
 		});
+		// Recovery runs first and may have marked cards (an orphan, a hold) that the submission stage and the QA gate
+		// must skip in this same evaluation, so the gate reads the state as recovery left it.
+		const gateState = recoveryScope.act ? await store.load(workspaceId) : state;
+		// A workspace watched only for recovery (landing off/commit/pr) gets no QA-gate decisions.
+		const gateDecisions = !pipelineOn
+			? []
+			: await evaluatePipelineWorkspace({
+					snapshot,
+					settings,
+					kitName: resolution.kitName,
+					policy,
+					state: gateState,
+					limits: { maxFailRounds: parsed.config.pipeline.rework.maxFailRounds },
+					agentDefaultModels,
+					inspectSubmission: async (input) =>
+						await inspectSubmission(
+							{
+								workspaceId,
+								workspacePath: snapshot.workspacePath,
+								settings,
+								kitName: resolution.kitName,
+								state: gateState,
+							},
+							input,
+						),
+					submitQa: shadow ? undefined : async (input) => await qaGate.submit({ context: gateContext, ...input }),
+					now: gateContext.now,
+				});
+		const decisions = [...gateDecisions, ...recoveryDecisions];
 		const seen = new Set<string>();
 		for (const decision of decisions) {
 			const cardKey = `${workspaceId}:${decision.taskId}:${decision.stage}`;
@@ -453,7 +529,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			}
 		}
 		// QA card starts and ingests are events, logged each time. A shadow workspace acts on nothing.
-		if (!shadow) {
+		if (!shadow && pipelineOn) {
 			records.push(...(await qaGate.tick({ ...gateContext, now: now() })));
 		}
 		if (records.length > 0) {
@@ -523,6 +599,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 		idle: async () => {
 			await Promise.all([...queues.values()].map(async (queue) => await queue.running));
 			await watchdogRunning;
+			await recovery.idle();
 		},
 		tickWatchdog,
 		startWatchdog: () => {
@@ -544,6 +621,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 		close: () => {
 			closed = true;
 			checks.close();
+			recovery.close();
 			for (const pending of pendingFinishes.values()) {
 				pending.reject(new Error("the pipeline worker is shutting down"));
 			}

@@ -308,3 +308,24 @@ of this repository is the complete record of changes.
   (`--force`), and never writes the scoreboard. Per-agent run facts (Cline session messages, Copilot login and
   events) live in `src/terminal/agent-run-signals.ts`. prune-done now treats a calibration as finished by its
   state's `finishedAt` (legacy states: `results.md`, as before). Nothing runs unless someone starts it.
+- `src/pipeline/recovery.ts`, `recovery-detect.ts`, `recovery-prompts.ts`, `recovery-stage.ts`, `recovery-runtime.ts`,
+  `restart-recovery.ts`, `provider-capacity.ts`, `wip-tag.ts` (new), `src/pipeline/engine.ts`, `worker.ts`,
+  `worker-host.ts`, `worker-protocol.ts`, `actions.ts`, `decision-log.ts`, `src/server/pipeline-actions.ts`, `src/cli.ts`, `src/commands/restart.ts`, `src/commands/task-recovery.ts` (new),
+  `src/commands/task.ts`, `src/commands/models.ts`, `src/models/model-probe-setup.ts` (new),
+  `src/terminal/agent-session-adapters.ts`, `src/terminal/cline-session-files.ts`, `src/terminal/session-manager.ts`,
+  `src/config/pipeline-config.ts`, `src/state/kanban-home.ts`, `src/doctor/one-owner-checks.ts`, tests: pipeline
+  recovery (plan step P4-6), ported from the legacy kit's autoland. Crash nudges, premature-stop continues (empty
+  reply, output cap, "no images", announcement), poisoned-history `/clear` + resend (with the overflow culprit and a
+  cleanup of gitignored reports), provider-error backoff retries, the outage hold with model probes, hung-request
+  cancel (Esc), provider capacity (`models.providerCapacity.<id>.maxLoadedModels`), and restart recovery (orphans
+  after a Kanban restart are resumed one at a time with a WIP tag; the restart manifest). New core key
+  `pipeline.recovery.mode` (`off` | `report` | `on`, default `report`: decide and log on landing-`qa` workspaces,
+  act on nothing) plus `resumeGapSec` and `nudgeCheckSec`; with `on` it acts on every workspace with
+  `workspaces.<id>.recovery.enabled` and no `pipeline.shadow`, through the worker's requests (the watchdog's
+  `deliverInput` / `interrupt`, and a new card action `resumeTask`, which the host accepts for any workspace the worker
+  has while `createTask`/`startTask` stay landing-`qa` only, and which never starts over a live session). Recovery runs
+  before the QA gate, and the engine skips the snapshot and QA gate for a Review card recovery holds. Premature-stop
+  continues run only on landing-`qa` workspaces. Budgets restart at the QA gate's newest verdict. The server records
+  its start in `<home>/run/server-start.json` (reading the previous record first), and a restart manifest is used
+  only when the server that wrote it is the one right before this start; any other is dropped, never replayed. Agents declare `/clear` and the cancel key in their adapter (`recovery`). New commands `kanban restart prepare|recover [--workspace] [--dry-run]` and
+  `kanban task send|resume|restart-fresh`. `kanban doctor`'s one-owner check gets a recovery row (Kanban vs autoland).

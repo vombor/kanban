@@ -16,7 +16,7 @@
 // recovery) are later cards; a decision without a stage to act on it is logged as `not_implemented` (or `shadow`
 // on a shadow workspace).
 
-import type { WorkspacePipelineSettings } from "../config/pipeline-config";
+import type { PipelineConfig, WorkspacePipelineSettings } from "../config/pipeline-config";
 import type {
 	RuntimeAgentId,
 	RuntimeBoardCard,
@@ -32,6 +32,7 @@ import {
 import type { CardHistory, EffectiveCard, QaPolicyAnswer, RoutingPolicy } from "../kits/policy";
 import type { PipelineDecisionOutcome, PipelineDecisionRecord } from "./decision-log";
 import type { PipelineCardState, PipelineWorkspaceState } from "./pipeline-state";
+import { recoveryHoldReason } from "./recovery";
 import type { SubmissionCardInput, SubmissionInspection } from "./submission-stage";
 
 export type PipelineSessionView = Pick<RuntimeTaskSessionSummary, "taskId" | "agentId" | "modelId" | "state"> &
@@ -50,7 +51,10 @@ export type PipelineSessionView = Pick<RuntimeTaskSessionSummary, "taskId" | "ag
 			| "workspacePath"
 			| "exitCode"
 		>
-	>;
+	> & {
+		/** The session has a process (a TUI to type into). False for a summary hydrated after a restart. */
+		live?: boolean;
+	};
 
 /** What the server sends the worker about one workspace. */
 export interface PipelineWorkspaceSnapshot {
@@ -60,6 +64,10 @@ export interface PipelineWorkspaceSnapshot {
 	sessions: PipelineSessionView[];
 	/** The agent selected in Kanban settings for this workspace (the effective agent of a card with none). */
 	selectedAgentId: RuntimeAgentId;
+	/** When this Kanban server started (epoch ms): sessions started before it lost their process (restart recovery). */
+	serverStartedAt?: number;
+	/** The start of the server that ran before this one (its start record), or null: a restart manifest it wrote is the only one used. */
+	previousServerStartedAt?: number | null;
 }
 
 export interface PipelineEvaluationInput {
@@ -85,6 +93,22 @@ export interface PipelineEvaluationInput {
 /** The pipeline runs for a workspace only with landing mode `qa` (shadow or not). */
 export function isPipelineWorkspace(settings: WorkspacePipelineSettings): boolean {
 	return settings.landing.mode === "qa";
+}
+
+/** Whether recovery evaluates a workspace at all, and whether it acts there. */
+export function getRecoveryScope(
+	config: PipelineConfig,
+	settings: WorkspacePipelineSettings,
+): { evaluate: boolean; act: boolean } {
+	const mode = config.pipeline.recovery.mode;
+	if (mode === "off" || !settings.recovery.enabled) {
+		return { evaluate: false, act: false };
+	}
+	// "report" stays on pipeline workspaces (landing qa), so a workspace on landing off is never touched by it.
+	if (mode === "report") {
+		return { evaluate: settings.landing.mode === "qa", act: false };
+	}
+	return { evaluate: true, act: !settings.pipeline.shadow };
 }
 
 /**
@@ -176,7 +200,8 @@ export async function evaluatePipelineWorkspace(input: PipelineEvaluationInput):
 	const at = new Date(input.now).toISOString();
 	const decisions: PipelineDecisionRecord[] = [];
 	for (const card of review) {
-		if (!isPipelineCandidate(card)) {
+		// Recovery logs its own decision for a card it holds (recovery-stage.ts).
+		if (!isPipelineCandidate(card) || recoveryHoldReason(input.state.cards[card.id])) {
 			continue;
 		}
 		const session = sessions.get(card.id) ?? null;

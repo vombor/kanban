@@ -94,6 +94,57 @@ describe("pipeline actions on the server", () => {
 		});
 		expect(fakes.startTaskSession).not.toHaveBeenCalled();
 	});
+
+	it("resumes an orphaned card with recovery's prompt and agent, from Review to In Progress", async () => {
+		const dev = createCard({ id: "dev01", agentSettings: { providerId: "lemonade", modelId: "glm" } });
+		const { store, fakes, run, onBoardMutated } = createRunner({ review: [dev] });
+
+		expect(
+			await run({ ...SCOPE, kind: "resumeTask", taskId: "dev01", prompt: "Do it.\n\nNOTE", agentId: "cline" }),
+		).toEqual({ ok: true, detail: "started, moved to In Progress" });
+		expect(fakes.ensureTaskWorktree).toHaveBeenCalled();
+		expect(fakes.startTaskSession).toHaveBeenCalledWith(
+			expect.objectContaining(SCOPE),
+			expect.objectContaining({
+				taskId: "dev01",
+				prompt: "Do it.\n\nNOTE",
+				agentId: "cline",
+				agentSettings: { providerId: "lemonade", modelId: "glm" },
+			}),
+		);
+		expect(findCardInBoard(store.stored.board, "dev01")?.columnId).toBe("in_progress");
+		expect(onBoardMutated).toHaveBeenCalled();
+	});
+
+	it("resumes only In Progress and Review cards", async () => {
+		const { fakes, run } = createRunner({ backlog: [createCard({ id: "dev01" })] });
+		expect(await run({ ...SCOPE, kind: "resumeTask", taskId: "dev01", prompt: "x", agentId: "cline" })).toEqual({
+			ok: false,
+			error: "task dev01 is not In Progress or in Review",
+		});
+		expect(fakes.startTaskSession).not.toHaveBeenCalled();
+	});
+
+	it("never resumes over a live session (restarted by hand since recovery planned it)", async () => {
+		const store = createWorkspaceStateStore({
+			board: createBoard({ review: [createCard({ id: "dev01" })] }),
+			sessions: {},
+			revision: 1,
+		});
+		const fakes = createFakeTaskTrashWorkflowDependencies(store);
+		const run = createPipelineActionRunner({
+			mutateWorkspaceState: store.mutateWorkspaceState,
+			ensureTaskWorktree: fakes.ensureTaskWorktree,
+			startTaskSession: fakes.startTaskSession,
+			hasLiveProcess: (_scope, taskId) => taskId === "dev01",
+		});
+		expect(await run({ ...SCOPE, kind: "resumeTask", taskId: "dev01", prompt: "x", agentId: "cline" })).toEqual({
+			ok: false,
+			error: "task dev01 has a live session; not resumed",
+		});
+		expect(fakes.startTaskSession).not.toHaveBeenCalled();
+		expect(findCardInBoard(store.stored.board, "dev01")?.columnId).toBe("review");
+	});
 });
 
 describe("QA gate card actions over the worker's request channel", () => {
@@ -249,6 +300,30 @@ describe("QA gate card actions over the worker's request channel", () => {
 		});
 		expect(runAction).toHaveBeenCalledTimes(1);
 		expect(runAction).toHaveBeenCalledWith(startRequest);
+		await host.close();
+	});
+
+	it("accepts restart recovery's resumeTask on a recovery-only (landing off) workspace, never createTask/startTask", async () => {
+		const runAction = vi.fn(async (): Promise<PipelineActionResult> => ({ ok: true }));
+		const { host, child } = await createHost(runAction, { pipeline: { recovery: { mode: "on" } } });
+		const offScope = { workspaceId: "kanban-2uge", workspacePath: "/repos/kanban-2uge" };
+		const resume: PipelineActionRequest = {
+			...offScope,
+			kind: "resumeTask",
+			taskId: "dev01",
+			prompt: "x",
+			agentId: "cline",
+		};
+		child.emit({ type: "request", id: 21, request: resume });
+		child.emit({ type: "request", id: 22, request: { ...startRequest, ...offScope } });
+
+		expect(await waitForResponse(child, 21)).toEqual({ type: "response", id: 21, ok: true, result: { ok: true } });
+		expect(await waitForResponse(child, 22)).toMatchObject({
+			ok: false,
+			error: "workspace kanban-2uge does not run the pipeline",
+		});
+		expect(runAction).toHaveBeenCalledTimes(1);
+		expect(runAction).toHaveBeenCalledWith(resume);
 		await host.close();
 	});
 });

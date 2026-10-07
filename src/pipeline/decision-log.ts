@@ -18,7 +18,7 @@ const DECISION_LOG_MAX_BYTES = 5 * 1024 * 1024;
 
 /**
  * `land`: the Done workflow's landing step (src/server/task-landing-gate.ts), written by the server. `qa_gate`: the
- * kit's QA answer for a dev card; `qa_start` / `qa_ingest` / `qa_pass`: the QA gate starting and ingesting QA cards and acting on a PASS.
+ * kit's QA answer for a dev card; `qa_start` / `qa_ingest` / `qa_pass`: the QA gate starting and ingesting QA cards and acting on a PASS; `recovery` / `restart`: recovery-stage.ts.
  */
 export type PipelineStage =
 	| "worker"
@@ -28,13 +28,17 @@ export type PipelineStage =
 	| "qa_start"
 	| "qa_ingest"
 	| "qa_pass"
-	| "land";
+	| "land"
+	| "recovery"
+	| "restart";
 
 /**
  * What the pipeline did with a decision. `none`: nothing to do. `shadow`: it would act, but the workspace is in
- * shadow. `not_implemented`: it would act, but that stage isn't built yet (the pipeline skeleton only decides).
+ * shadow. `report`: it would act, but the stage is report-only (`pipeline.recovery.mode: "report"`).
+ * `not_implemented`: it would act, but that stage isn't built yet. `acted`: done. `failed`: it tried and the
+ * action failed (the note says why).
  */
-export type PipelineDecisionOutcome = "none" | "shadow" | "not_implemented" | "acted";
+export type PipelineDecisionOutcome = "none" | "shadow" | "report" | "not_implemented" | "acted" | "failed";
 
 export interface PipelineDecisionRecord {
 	at: string;

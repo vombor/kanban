@@ -20,7 +20,7 @@ import { type AppendQaLog, createQaLogAppender } from "../../src/pipeline/qa-log
 import type { QaPreviewController } from "../../src/pipeline/qa-preview";
 import type { QaVerdictRead } from "../../src/pipeline/qa-verdict";
 import type { SubmissionInspector } from "../../src/pipeline/submission-stage";
-import { createPipelineWorker } from "../../src/pipeline/worker";
+import { createPipelineWorker, type PipelineWorkerDependencies } from "../../src/pipeline/worker";
 import type { PipelineFinishTaskRequest, PipelineWorkerMessage } from "../../src/pipeline/worker-protocol";
 import { createTempDir } from "./temp-dir";
 
@@ -47,6 +47,8 @@ export interface PipelineWorkerHarnessOptions {
 	actionResult?: (action: QaGateHarnessAction) => PipelineActionResult;
 	/** Epoch ms; mutable through `setNow`. */
 	now?: number;
+	/** Replaces the recovery stage (which otherwise reads Cline session files under the test's HOME). */
+	createRecovery?: PipelineWorkerDependencies["createRecovery"];
 }
 
 /**
@@ -144,6 +146,7 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 		appendQaLog,
 		loadAgentDefaultModels: async () => ({}),
 		qaGate,
+		createRecovery: options.createRecovery,
 		now: () => now,
 	});
 

@@ -58,7 +58,7 @@ export function isPipelineWorkerMessage(value: unknown): value is PipelineWorker
 	return hasType(value) && typeof value.type === "string" && WORKER_MESSAGE_TYPES.has(value.type);
 }
 
-/** Whether a `request` is one of the QA gate's card actions (the rest are watchdog actions). */
+/** Whether a `request` is one of the pipeline's card actions (the rest are watchdog actions). */
 export function isPipelineActionRequest(request: PipelineServerRequest): request is PipelineActionRequest {
-	return request.kind === "createTask" || request.kind === "startTask";
+	return request.kind === "createTask" || request.kind === "startTask" || request.kind === "resumeTask";
 }

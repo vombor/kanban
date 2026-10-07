@@ -17,6 +17,15 @@ import { clineTurnDetectorModeSchema, getDefaultClineTurnDetectorSettings } from
 import { DEFAULT_LEMONADE_MODEL_LIST_SETTINGS } from "./model-lists-config";
 
 export const landingModeSchema = runtimeLandingModeSchema;
+
+/**
+ * Recovery (src/pipeline/recovery-stage.ts). `off`: nothing is evaluated. `report`: decide and log on pipeline
+ * workspaces (landing `qa`), act on nothing. `on`: act (except on shadow workspaces), and also on workspaces with
+ * landing `off`/`commit`/`pr` whose `workspaces.<id>.recovery.enabled` is true. `report` until the cutover
+ * switches the legacy kit's autoland off: both would nudge and resume the same cards (plan §8.3).
+ */
+export const recoveryModeSchema = z.enum(["off", "report", "on"]);
+export type RecoveryMode = z.infer<typeof recoveryModeSchema>;
 export type LandingMode = RuntimeLandingMode;
 
 /** The kit a workspace uses. Overrides are dotted kit keys (`"qa.blurb"`) → value (§3.4). */
@@ -118,11 +127,16 @@ const pipelineSectionSchema = z
 			.default({ maxFailRounds: 3, clearAfterTurns: 100, clearAfterTokens: 150_000 }),
 		recovery: z
 			.object({
+				mode: recoveryModeSchema.default("report"),
 				maxNudges: z.number().int().nonnegative().default(2),
 				maxContinues: z.number().int().nonnegative().default(8),
 				retryBackoffMin: z.array(z.number().positive()).default([1, 2, 4, 8]),
 				hungMin: z.number().positive().default(15),
 				hungFirstMin: z.number().positive().default(30),
+				// Restart recovery resumes orphaned cards one at a time, this far apart.
+				resumeGapSec: z.number().nonnegative().default(20),
+				// After a nudge, how long the agent gets to pick it up before the card is decided on again.
+				nudgeCheckSec: z.number().positive().default(120),
 				outage: z
 					.object({
 						probeEveryMin: z.number().positive().default(5),
@@ -134,11 +148,14 @@ const pipelineSectionSchema = z
 			})
 			.strict()
 			.default({
+				mode: "report",
 				maxNudges: 2,
 				maxContinues: 8,
 				retryBackoffMin: [1, 2, 4, 8],
 				hungMin: 15,
 				hungFirstMin: 30,
+				resumeGapSec: 20,
+				nudgeCheckSec: 120,
 				outage: { probeEveryMin: 5, upsToResume: 2, maxMin: 360 },
 			}),
 	})

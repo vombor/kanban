@@ -3,7 +3,9 @@
 //
 // - The worker runs only while some registered workspace has landing mode `qa` and `pipeline.paused` is off, or
 //   while `watchdog.mode` is not "off" (then every registered workspace is sent: the watchdog's stuck-prompt check
-//   covers all of them). A pod where every workspace is on landing `off` and the watchdog is off never starts it.
+//   covers all of them), or for a workspace recovery acts on (`pipeline.recovery.mode: "on"` with
+//   `workspaces.<id>.recovery.enabled`, src/pipeline/recovery-stage.ts). A pod where every workspace is on landing
+//   `off`, the watchdog is off and recovery is in its default `report` mode never starts it.
 // - The worker's watchdog asks the server to act with `request` messages; `handleWatchdogRequest` answers them.
 // - Every `sweepIntervalMs` the host re-reads config.json, so a landing-mode change starts or stops the worker
 //   with no Kanban restart, and sends a snapshot of each pipeline workspace (a backstop for missed events).
@@ -16,8 +18,9 @@
 //   another build's CLI (the dev pod's "fix it live" loop): the host runs `<workerEntry> pipeline worker`.
 // - A worker `request` for a QA gate card action (create or start a QA card, src/pipeline/actions.ts) runs through
 //   `runAction`, only for a workspace on landing mode `qa` (pipeline not paused) as of the last sweep; anything else
-//   is refused, also while the watchdog has every workspace. Every other `request` is a watchdog action
-//   (`handleWatchdogRequest`), for any workspace the worker has.
+//   is refused, also while the watchdog has every workspace. Restart recovery's `resumeTask` (recovery runs on
+//   landing-off workspaces too, plan §12) and every other `request` (a watchdog action, `handleWatchdogRequest`) are
+//   accepted for any workspace the worker has.
 import { type ChildProcess, fork } from "node:child_process";
 
 import { getWorkspacePipelineSettings, type ParsedPipelineConfig, readPipelineConfig } from "../config/pipeline-config";
@@ -27,7 +30,7 @@ import type {
 	RuntimeTaskTrashResponse,
 } from "../core/api-contract";
 import type { PipelineActionRequest, PipelineActionResult } from "./actions";
-import { isPipelineWorkspace, type PipelineWorkspaceSnapshot } from "./engine";
+import { getRecoveryScope, isPipelineWorkspace, type PipelineWorkspaceSnapshot } from "./engine";
 import type { PipelineEventMap } from "./events";
 import type { WatchdogActionRequest } from "./watchdog/actions";
 import {
@@ -166,7 +169,8 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 	const lastSessionStates = new Map<string, RuntimeTaskSessionState>();
 
 	const runAction = async (request: PipelineActionRequest): Promise<PipelineActionResult> => {
-		if (cardActionWorkspaces.get(request.workspaceId) !== request.workspacePath) {
+		const allowed = request.kind === "resumeTask" ? pipelineWorkspaces : cardActionWorkspaces;
+		if (allowed.get(request.workspaceId) !== request.workspacePath) {
 			return { ok: false, error: `workspace ${request.workspaceId} does not run the pipeline` };
 		}
 		if (!deps.runAction) {
@@ -330,12 +334,13 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 		const nextCardActions = new Map<string, string>();
 		const watchdogOn = config.watchdog.mode !== "off";
 		for (const workspace of deps.listWorkspaces()) {
-			const pipeline =
-				!config.pipeline.paused && isPipelineWorkspace(getWorkspacePipelineSettings(config, workspace.workspaceId));
-			if (workspace.workspacePath && (pipeline || watchdogOn)) {
+			const settings = getWorkspacePipelineSettings(config, workspace.workspaceId);
+			const qa = !config.pipeline.paused && isPipelineWorkspace(settings);
+			const recovery = !config.pipeline.paused && getRecoveryScope(config, settings).evaluate;
+			if (workspace.workspacePath && (qa || recovery || watchdogOn)) {
 				next.set(workspace.workspaceId, workspace.workspacePath);
 			}
-			if (workspace.workspacePath && pipeline) {
+			if (workspace.workspacePath && qa) {
 				nextCardActions.set(workspace.workspaceId, workspace.workspacePath);
 			}
 		}
@@ -344,7 +349,9 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 		cardActionWorkspaces = nextCardActions;
 		if (next.size === 0) {
 			if (child) {
-				deps.log("pipeline worker stopped: no workspace has landing mode qa and the watchdog is off");
+				deps.log(
+					"pipeline worker stopped: no workspace has landing mode qa or recovery on, and the watchdog is off",
+				);
 			}
 			stopChild();
 			return;

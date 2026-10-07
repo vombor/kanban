@@ -78,7 +78,8 @@ describe("one-owner check", () => {
 				kanbanConfig: { agents: { cline: { turnDetector: { mode: "on" } } }, watchdog: { mode: "on" } },
 			}),
 		);
-		expect(findings.map((finding) => finding.level)).toEqual(["pass", "pass", "pass", "pass"]);
+		// Recovery is report-only by default: an info row, not a failure.
+		expect(findings.map((finding) => finding.level)).toEqual(["pass", "pass", "pass", "pass", "info"]);
 	});
 
 	it("fails when Kanban's watchdog is on while review-watch runs; report mode is the designed overlap", async () => {
@@ -103,6 +104,40 @@ describe("one-owner check", () => {
 			"pass",
 			"Kanban's watchdog watches the boards and wakes the orchestrator",
 		]);
+	});
+
+	it("fails when Kanban's recovery and the kit's autoland both recover a project", async () => {
+		const recoveryOn = { pipeline: { recovery: { mode: "on" } } };
+		const both = await checkOneOwner(context({ kanbanConfig: recoveryOn }));
+		expect(both.find((finding) => finding.message.includes("recovery"))).toMatchObject({
+			level: "fail",
+			message: expect.stringContaining("two owners for recovery (nudges, provider retries, restart resumes) on foo"),
+			hint: expect.stringContaining("touch /kit/run/autoland.disabled && kit stop autoland"),
+		});
+		// A shadow workspace or recovery switched off for it only logs: no second owner.
+		for (const workspace of [{ pipeline: { shadow: true } }, { recovery: { enabled: false } }]) {
+			const logged = await checkOneOwner(
+				context({ kanbanConfig: { ...recoveryOn, workspaces: { foo: workspace } } }),
+			);
+			expect(logged.filter((finding) => finding.level === "fail")).toEqual([]);
+		}
+		// The default ("report") leaves recovery to autoland.
+		expect(levels(await checkOneOwner(context()))).toContainEqual([
+			"info",
+			"the legacy kit's autoland recovers crashed and orphaned cards; Kanban's recovery is report (decides and logs only)",
+		]);
+		// autoland retired and recovery on: Kanban owns it.
+		const retired = services({ autoland: { pid: null, disabled: true } });
+		expect(levels(await checkOneOwner(context({ services: retired, kanbanConfig: recoveryOn })))).toContainEqual([
+			"pass",
+			"Kanban recovers crashed and orphaned cards on foo (pipeline.recovery.mode on)",
+		]);
+		// autoland retired and recovery still report-only: nothing recovers the kit's projects.
+		expect(
+			(await checkOneOwner(context({ services: retired }))).find((finding) =>
+				finding.message.startsWith("nothing nudges crashed cards"),
+			)?.level,
+		).toBe("warn");
 	});
 
 	it("fails when Kanban's session sync and the kit's column-sync both move cards", async () => {

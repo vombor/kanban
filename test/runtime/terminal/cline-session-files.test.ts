@@ -116,6 +116,41 @@ describe("cline session file reader", () => {
 			lastMessage: null,
 		});
 	});
+
+	it("reads the whole session for recovery: tool results by size, output tokens, the dir's last write", async () => {
+		const sessionsPath = createSessionsDir([
+			{
+				id: "1791335760135_38ara",
+				meta: { status: "running", started_at: "2026-10-07T01:00:00.000Z", workspace_root: WORKTREE },
+				messages: {
+					messages: [
+						{ role: "user", content: "go" },
+						{ role: "assistant", content: [{ type: "tool_use", name: "search" }], ts: 1791335770000 },
+						{
+							role: "user",
+							content: [{ type: "tool_result", content: [{ query: "ls -R", text: "x".repeat(500) }] }],
+						},
+						{ role: "assistant", content: [{ type: "text", text: "" }], metrics: { outputTokens: 4096 } },
+					],
+				},
+				messagesMtimeMs: Date.parse("2026-10-07T02:00:00.000Z"),
+			},
+		]);
+		const detail = await createClineSessionFileReader().readLatestSessionDetail(sessionsPath, WORKTREE);
+		expect(detail?.snapshot).toMatchObject({ sessionId: "1791335760135_38ara", status: "running" });
+		expect(detail?.messages.map((message) => [message.role, message.content.map((block) => block.type)])).toEqual([
+			["user", ["text"]],
+			["assistant", ["tool_use"]],
+			["user", ["tool_result"]],
+			["assistant", ["text"]],
+		]);
+		expect(detail?.messages[1]?.ts).toBe(1791335770000);
+		expect(detail?.messages[2]?.content[0]).toMatchObject({ type: "tool_result", query: "ls -R" });
+		expect(detail?.messages[2]?.content[0]?.size).toBeGreaterThan(500);
+		expect(detail?.messages[3]?.outputTokens).toBe(4096);
+		expect(detail?.lastWriteAt).toBeGreaterThan(0);
+		expect(await createClineSessionFileReader().readLatestSessionDetail(sessionsPath, "/elsewhere")).toBeNull();
+	});
 });
 
 describe("cline session messages", () => {

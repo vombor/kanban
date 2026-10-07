@@ -325,6 +325,11 @@ export class TerminalSessionManager implements TerminalSessionService {
 		return Math.max(changedAt, startedAt);
 	}
 
+	/** Whether the task's session has a process now (false for a summary hydrated after a restart). */
+	hasLiveProcess(taskId: string): boolean {
+		return Boolean(this.entries.get(taskId)?.active);
+	}
+
 	listSummaries(): RuntimeTaskSessionSummary[] {
 		return Array.from(this.entries.values()).map((entry) => cloneSummary(entry.summary));
 	}

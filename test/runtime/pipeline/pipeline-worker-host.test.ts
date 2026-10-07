@@ -204,6 +204,22 @@ describe("pipeline worker host", () => {
 		await harness.host.close();
 	});
 
+	it("runs for every recovery workspace with pipeline.recovery.mode on, never for report", async () => {
+		const report = createHostHarness({ pipeline: { recovery: { mode: "report" } } });
+		report.host.start();
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(report.spawnWorker).not.toHaveBeenCalled();
+		await report.host.close();
+
+		const on = createHostHarness({
+			pipeline: { recovery: { mode: "on" } },
+			workspaces: { "kanban-2uge": { recovery: { enabled: false } } },
+		});
+		await on.startReady();
+		expect(on.host.getStatus().workspaceIds).toEqual(["foo"]);
+		await on.host.close();
+	});
+
 	it("restarts the worker on another build when pipeline.workerEntry changes", async () => {
 		const harness = createHostHarness(QA_FOO);
 		await harness.startReady();

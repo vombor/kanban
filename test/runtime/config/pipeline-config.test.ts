@@ -18,11 +18,20 @@ describe("pipeline config", () => {
 		expect(config.pipeline.qa.slots).toBe(2);
 		expect(config.pipeline.rework.maxFailRounds).toBe(3);
 		expect(config.pipeline.recovery.retryBackoffMin).toEqual([1, 2, 4, 8]);
+		// Report-only until the cutover retires the legacy kit's autoland (two owners would nudge twice).
+		expect(config.pipeline.recovery).toMatchObject({ mode: "report", resumeGapSec: 20, nudgeCheckSec: 120 });
 		expect(config.watchdog.stall.reviewMin).toBe(10);
 		expect(config.orchestrator.wake.mode).toBe("headless");
 		expect(config.models.providers.default).toBe("bedrock");
 		expect(config.models.providerCapacity).toEqual({ lemonade: { maxLoadedModels: 1 } });
 		expect(config.workspaces).toEqual({});
+	});
+
+	it("falls back to report-only recovery for an unknown mode", () => {
+		expect(parsePipelineConfig({ pipeline: { recovery: { mode: "on" } } }).config.pipeline.recovery.mode).toBe("on");
+		const { config, issues } = parsePipelineConfig({ pipeline: { recovery: { mode: "loud" } } });
+		expect(config.pipeline.recovery.mode).toBe("report");
+		expect(issues[0]).toContain("pipeline: recovery.mode");
 	});
 
 	it("accepts the Cline turn detector settings under agents.cline", () => {

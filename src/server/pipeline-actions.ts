@@ -1,6 +1,6 @@
 // The server side of the pipeline worker's action requests (src/pipeline/actions.ts). Each one runs through the
 // code the CLI and the browser use, so a pipeline-made card is an ordinary card: board mutations under the
-// workspace lock and the normal worktree + session start. (Finishing a card is the worker's `finishTask` request,
+// workspace lock and the normal worktree + session start. `resumeTask` restarts a card restart recovery found orphaned. (Finishing a card is the worker's `finishTask` request,
 // the Done workflow; typing into one is the watchdog's `deliverInput`.)
 import { randomUUID } from "node:crypto";
 
@@ -23,6 +23,8 @@ export interface PipelineActionRunnerDependencies {
 		scope: TaskTrashWorkspaceScope,
 		input: RuntimeTaskSessionStartRequest,
 	) => Promise<RuntimeTaskSessionStartResponse>;
+	/** Whether the task's session has a process; `resumeTask` never starts a second session over a live one. */
+	hasLiveProcess?: (scope: TaskTrashWorkspaceScope, taskId: string) => Promise<boolean> | boolean;
 	onBoardMutated?: (scope: TaskTrashWorkspaceScope) => Promise<void> | void;
 	randomUuid?: () => string;
 }
@@ -107,6 +109,54 @@ export function createPipelineActionRunner(
 		return { ok: true };
 	};
 
+	// Restart recovery: the card keeps its column until the session is up, then goes to In Progress (as resume-card did).
+	const resumeTask = async (
+		request: Extract<PipelineActionRequest, { kind: "resumeTask" }>,
+	): Promise<PipelineActionResult> => {
+		const { value: card } = await deps.mutateWorkspaceState(request.workspacePath, (state) => {
+			const columnId = getTaskColumnId(state.board, request.taskId);
+			const found =
+				columnId === "in_progress" || columnId === "review"
+					? (state.board.columns
+							.find((column) => column.id === columnId)
+							?.cards.find((candidate) => candidate.id === request.taskId) ?? null)
+					: null;
+			return { board: state.board, value: found, save: false };
+		});
+		if (!card) {
+			return { ok: false, error: `task ${request.taskId} is not In Progress or in Review` };
+		}
+		// Restarted by hand since recovery planned it: startTaskSession would stop that live (if interrupted or
+		// failed) session and start another.
+		if (await deps.hasLiveProcess?.(request, card.id)) {
+			return { ok: false, error: `task ${request.taskId} has a live session; not resumed` };
+		}
+		const ensured = await deps.ensureTaskWorktree(request, { taskId: card.id, baseRef: card.baseRef });
+		if (!ensured.ok) {
+			return { ok: false, error: ensured.error ?? "could not set up the task worktree" };
+		}
+		const started = await deps.startTaskSession(request, {
+			taskId: card.id,
+			prompt: request.prompt,
+			taskTitle: card.title,
+			startInPlanMode: false,
+			baseRef: card.baseRef,
+			agentId: request.agentId,
+			agentSettings: card.agentSettings,
+		});
+		if (!started.ok || !started.summary) {
+			return { ok: false, error: started.error ?? "could not start the task session" };
+		}
+		const { value: moved } = await deps.mutateWorkspaceState(request.workspacePath, (state) => {
+			const movement = moveTaskToColumn(state.board, card.id, "in_progress");
+			return { board: movement.board, value: movement.moved, save: movement.moved };
+		});
+		if (moved) {
+			await broadcast(request);
+		}
+		return { ok: true, detail: moved ? "started, moved to In Progress" : "started" };
+	};
+
 	return async (request) => {
 		try {
 			switch (request.kind) {
@@ -114,6 +164,8 @@ export function createPipelineActionRunner(
 					return await createTask(request);
 				case "startTask":
 					return await startTask(request);
+				case "resumeTask":
+					return await resumeTask(request);
 			}
 		} catch (error) {
 			return { ok: false, error: toErrorMessage(error) };

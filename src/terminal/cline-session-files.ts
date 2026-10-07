@@ -77,6 +77,33 @@ function toMessage(value: unknown): ClineSessionMessage | null {
 	};
 }
 
+/** One content block as recovery needs it: tool results only by size (and the query or command that made them). */
+export interface ClineSessionDetailBlock {
+	type: string;
+	text?: string;
+	/** JSON length of a tool_result's content. */
+	size?: number;
+	/** A tool_result's `query` / `command` (the tool call that produced it), cut to 160 characters. */
+	query?: string;
+}
+
+export interface ClineSessionDetailMessage {
+	role: string;
+	content: ClineSessionDetailBlock[];
+	/** `metrics.outputTokens` of an assistant message, when Cline recorded it. */
+	outputTokens: number | null;
+	/** `ts` of the message (epoch ms), when Cline recorded it. */
+	ts: number | null;
+}
+
+/** Everything recovery reads from a card's newest session (premature stops, hung requests, overflow culprits). */
+export interface ClineSessionDetail {
+	snapshot: ClineSessionSnapshot;
+	messages: ClineSessionDetailMessage[];
+	/** The newest mtime of any file in the session dir. */
+	lastWriteAt: number | null;
+}
+
 export interface ClineSessionFileReader {
 	/** The newest cline 3.x session in `sessionsPath` whose cwd or workspace root is `workspacePath`, or null. */
 	readLatestSession: (sessionsPath: string, workspacePath: string) => Promise<ClineSessionSnapshot | null>;
@@ -89,11 +116,82 @@ function readMessagesArray(parsed: unknown): unknown[] {
 	return Array.isArray(messages) ? messages : [];
 }
 
+export interface ClineSessionDetailReader {
+	/** The same session as readLatestSession, with all its messages and the dir's last write, or null. */
+	readLatestSessionDetail: (sessionsPath: string, workspacePath: string) => Promise<ClineSessionDetail | null>;
+}
+
+const QUERY_MAX_LENGTH = 160;
+
+function toDetailBlock(block: Record<string, unknown>): ClineSessionDetailBlock {
+	const type = typeof block.type === "string" ? block.type : "";
+	if (type === "tool_result") {
+		const content = block.content ?? "";
+		const first = Array.isArray(content) ? (content[0] as Record<string, unknown> | undefined) : undefined;
+		const query = first?.query ?? first?.command;
+		return {
+			type,
+			size: JSON.stringify(content).length,
+			...(typeof query === "string" ? { query: query.slice(0, QUERY_MAX_LENGTH) } : {}),
+		};
+	}
+	return { type, ...(typeof block.text === "string" ? { text: block.text } : {}) };
+}
+
+function toDetailMessage(value: unknown): ClineSessionDetailMessage | null {
+	if (!value || typeof value !== "object") {
+		return null;
+	}
+	const { role, content, metrics, ts } = value as {
+		role?: unknown;
+		content?: unknown;
+		metrics?: unknown;
+		ts?: unknown;
+	};
+	if (typeof role !== "string") {
+		return null;
+	}
+	const outputTokens =
+		metrics && typeof metrics === "object" ? (metrics as { outputTokens?: unknown }).outputTokens : null;
+	const blocks =
+		typeof content === "string"
+			? [{ type: "text", text: content }]
+			: Array.isArray(content)
+				? content
+						.filter((block): block is Record<string, unknown> => Boolean(block) && typeof block === "object")
+						.map(toDetailBlock)
+				: [];
+	const time = typeof ts === "number" ? ts : typeof ts === "string" ? Number(ts) : Number.NaN;
+	return {
+		role,
+		content: blocks,
+		outputTokens: typeof outputTokens === "number" ? outputTokens : null,
+		ts: Number.isFinite(time) ? time : null,
+	};
+}
+
+async function readNewestWrite(dir: string): Promise<number | null> {
+	try {
+		const times = await Promise.all(
+			(await readdir(dir)).map(
+				async (name) =>
+					await stat(join(dir, name)).then(
+						(entry) => entry.mtimeMs,
+						() => 0,
+					),
+			),
+		);
+		return times.length > 0 ? Math.max(...times) : null;
+	} catch {
+		return null;
+	}
+}
+
 /**
  * A session's cwd and start time never change, so they are cached per session dir (only once its `<id>.json`
  * could be read). A tick then reads one `<id>.json` and one messages file per watched card.
  */
-export function createClineSessionFileReader(): ClineSessionFileReader {
+export function createClineSessionFileReader(): ClineSessionFileReader & ClineSessionDetailReader {
 	const metaCache = new Map<string, SessionMeta>();
 
 	const readMeta = async (sessionsPath: string, sessionId: string): Promise<SessionMeta | null> => {
@@ -136,30 +234,51 @@ export function createClineSessionFileReader(): ClineSessionFileReader {
 		return best?.sessionId ?? null;
 	};
 
+	const readSession = async (
+		sessionsPath: string,
+		sessionId: string,
+	): Promise<{ snapshot: ClineSessionSnapshot; messages: unknown[] }> => {
+		const dir = join(sessionsPath, sessionId);
+		const file = await readJsonObject(join(dir, `${sessionId}.json`));
+		const messagesPath = join(dir, `${sessionId}.messages.json`);
+		let messagesWrittenAt: number | null = null;
+		let messages: unknown[] = [];
+		try {
+			messagesWrittenAt = (await stat(messagesPath)).mtimeMs;
+			messages = readMessagesArray(JSON.parse(await readFile(messagesPath, "utf8")));
+		} catch {
+			// No messages yet, or a half-written file: nothing to decide on this tick.
+		}
+		const startedAt = (await readMeta(sessionsPath, sessionId))?.startedAt ?? null;
+		return {
+			snapshot: {
+				sessionId,
+				status: typeof file?.status === "string" ? file.status : null,
+				startedAt: startedAt || null,
+				messagesWrittenAt,
+				lastMessage: toMessage(messages.at(-1)),
+			},
+			messages,
+		};
+	};
+
 	return {
 		readLatestSession: async (sessionsPath, workspacePath) => {
+			const sessionId = await findLatestSessionId(sessionsPath, workspacePath);
+			return sessionId ? (await readSession(sessionsPath, sessionId)).snapshot : null;
+		},
+		readLatestSessionDetail: async (sessionsPath, workspacePath) => {
 			const sessionId = await findLatestSessionId(sessionsPath, workspacePath);
 			if (!sessionId) {
 				return null;
 			}
-			const dir = join(sessionsPath, sessionId);
-			const file = await readJsonObject(join(dir, `${sessionId}.json`));
-			const messagesPath = join(dir, `${sessionId}.messages.json`);
-			let messagesWrittenAt: number | null = null;
-			let lastMessage: ClineSessionMessage | null = null;
-			try {
-				messagesWrittenAt = (await stat(messagesPath)).mtimeMs;
-				const parsed: unknown = JSON.parse(await readFile(messagesPath, "utf8"));
-				lastMessage = toMessage(readMessagesArray(parsed).at(-1));
-			} catch {
-				// No messages yet, or a half-written file: nothing to decide on this tick.
-			}
+			const { snapshot, messages } = await readSession(sessionsPath, sessionId);
 			return {
-				sessionId,
-				status: typeof file?.status === "string" ? file.status : null,
-				startedAt: (await readMeta(sessionsPath, sessionId))?.startedAt || null,
-				messagesWrittenAt,
-				lastMessage,
+				snapshot,
+				messages: messages
+					.map(toDetailMessage)
+					.filter((message): message is ClineSessionDetailMessage => message !== null),
+				lastWriteAt: await readNewestWrite(join(sessionsPath, sessionId)),
 			};
 		},
 		readLatestSessionMessages: async (sessionsPath, workspacePath) => {
