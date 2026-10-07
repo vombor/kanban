@@ -29,12 +29,13 @@ by hand.
 | `qaPolicy` | the QA gate | a dev card is submitted (settled in Review with work) on a landing-`qa` project | `none` |
 | `onFail` | the rework loop | a FAIL or STALLED verdict, a merge conflict at land, or a rework that came back unchanged | `stop` |
 | `onPass` | the QA gate | a PASS for the card's current snapshot | `land` |
+| `planAssignment` | plan card creation (`kanban task create --role plan`), never the pipeline (`answerPlanAssignment()`) | a plan card is created | `disabled`: no plan cards |
 
 The core keeps these guarantees whatever the kit says:
 
 - **An explicit choice wins.** An agent or model set by the card's creator is never replaced by `devAssignment`.
   The create dialog only preselects the kit's proposal and shows "from kit `team`".
-- **Only dev cards are asked about.** QA, TRIAGE and calibration cards (`role`, or the legacy kit's title and
+- **Only dev cards are asked about.** QA, TRIAGE, calibration and plan cards (`role`, or the legacy kit's title and
   prompt markers through `resolveCardRole()`) are never QA'd, reworked or landed.
 - **Nothing lands without a verdict or a human.** With landing `qa` and the answer `none`, the card waits in
   Review for Approve & land.
@@ -88,7 +89,7 @@ user kit file), never a silent no-op. A missing key means "no answer", so the `d
 | `dev.agent` | agent id | `devAssignment` | none (→ `null`) | `cline` |
 | `dev.model` | `{ tier }` or `{ provider?, model }` (needs `dev.agent`) | `devAssignment` | none | `{ tier: "tier3" }` |
 | `qa.enabled` | boolean | `qaPolicy`: does a dev card get QA at all | `false` | `true` |
-| `qa.skip.roles` | roles | `qaPolicy`: roles that never get QA | `qa`, `triage`, `calibration` | same |
+| `qa.skip.roles` | roles | `qaPolicy`: roles that never get QA | `qa`, `triage`, `calibration`, `plan` | same |
 | `qa.skip.effectiveAgents` | agent ids | `qaPolicy`: effective agents whose cards never get QA | `[]` | `[]` |
 | `qa.default` | `{ agent, model?, provider? }` | `qaPolicy`: the QA agent when no route matches. No `model` = the agent's own default (Codex: `~/.codex/config.toml`) | none | `{ agent: "codex" }` |
 | `qa.routes[]` | `{ devModel, agent, model?, provider?, rules?, why? }` | `qaPolicy`: `devModel` is a regex on the dev card's effective model; first match wins | `[]` | OpenAI-built → `cline` + Haiku 4.5, rules `["drive"]` |
@@ -98,6 +99,13 @@ user kit file), never a silent no-op. A missing key means "no answer", so the `d
 | `qa.promptNotes.{screenshotFallback,knownBaseIssues,dbSetup}` | text | project sentences in the QA prompt | `""` | `""` (foo overrides `dbSetup`) |
 | `qa.serversScript` | path or null | the script QA uses to start the project's servers in its scratch copy | `null` | `null` |
 | `qa.preview` | `{ pidFile, start, stop }` or null | the preview QA screenshots go through. Started before a QA card when down, stopped after `pipeline.qa.previewIdleMin` idle minutes, only if the pid is still the one the QA gate started | `null` | `null` |
+| `plan.enabled` | boolean | `planAssignment`: does the project make plan cards at all | `false` | `true` |
+| `plan.agent` | agent id | the planner's agent; none = the selected agent | none | `claude` |
+| `plan.model` | `{ tier }` or `{ provider?, model }` (needs `plan.agent`) | the planner's model; none = the agent's own default | none | none (the Claude CLI default) |
+| `plan.startInPlanMode` | boolean | the plan card starts in the agent's plan mode | `false` | `true` |
+| `plan.rules.<name>` | text | project rules added to the plan prompt, in key order | `{}` | `{}` |
+| `plan.candidates[]` | `{ agent, model?, note? }` | agents and models a later runoff or calibration compares; never read for routing | `[]` | `claude` |
+| `plan.note` | text | | | why there is no model pin |
 | `onFail.rework` | `none` \| `same-model` | `onFail`: hand a FAIL back to the same card and model | `none` | `same-model` |
 | `onFail.reworkRounds` | integer | `onFail`: FAIL rounds before `then` (capped by `pipeline.rework.maxFailRounds`) | `0` | `3` |
 | `onFail.conflict` | `stop` \| `rework` | `onFail`: a merge conflict at land | `stop` | `rework` |
@@ -118,7 +126,7 @@ Checks across keys run on the resolved kit:
 - a `{ tier }` reference must name a tier with at least one model that isn't dropped;
 - at most one entry per tier has `default: true`;
 - a route's `rules` must exist in `qa.rules`;
-- `dev.model` needs `dev.agent`.
+- `dev.model` needs `dev.agent`, `plan.model` needs `plan.agent`.
 
 A tier lookup returns the tier's `default` entry, else its first usable one, and skips `dropped` models
 (`src/kits/tier-lookup.ts`).
@@ -156,6 +164,12 @@ puts them into its QA prompt skeleton (`src/pipeline/qa-prompt.ts`).
 `onFail.then: "escalate"` answers with `escalate.to` and `escalate.requireApproval`, and `"stop"` answers `stop`.
 A stopped card stays in Review: one ATTENTION.md line, and the orchestrator is woken.
 
+**`planAssignment`.** `plan.enabled` not `true` → `disabled`, and `kanban task create --role plan` is refused (the
+dev agent plans its own work). Otherwise `plan.agent` (or the selected agent), `plan.model` resolved like
+`dev.model` (none = the agent's own default), `plan.startInPlanMode` and the `plan.rules` texts. An agent, model
+or `--start-in-plan-mode` the creator sets wins. `pipeline.shadow` doesn't hold it back: there is no legacy
+planner to compare with. The flow around plan cards is [WORKFLOW.md](WORKFLOW.md) §13.
+
 **`onPass`.** Always `land`. A feature may answer first: the team `runoffs` feature holds the PASS of a card in an
 open runoff (`hold`). A feature that fails to answer leaves the PASS for the next evaluation and never lands it.
 
@@ -165,6 +179,7 @@ open runoff (`hold`). A feature that fails to answer leaves the PASS for the nex
 
 - cards run on the agent selected in Kanban settings, with that agent's model;
 - no QA, no rework automation, and a FAIL (there are none without QA) stops;
+- no plan cards (`plan.enabled: false`): the agent plans its own work;
 - no features.
 
 With landing `off` (the default), the orchestrator or the user lands. With landing `qa` on `default`, every
@@ -177,6 +192,9 @@ parity against the legacy kit's live config (`test/runtime/kits/team-parity.test
 `team-qa-routing.test.ts`, `team-qa-prompt.test.ts`).
 
 - **Dev:** Cline on the `tier3` default (`us.openai.gpt-6.1-sol` on bedrock).
+- **Plan:** plan cards on Claude with the Claude CLI's default model (no pin), starting in plan mode (user
+  2026-10-07). `plan.candidates` lists only Claude for now; benchmarking other models and auditioning Copilot and
+  Codex come later and need no schema change.
 - **QA:** every dev card. OpenAI-built cards (`(^|\.)openai\.|^gpt-`) get Cline on Haiku 4.5 plus the `drive` rule
   ("log in and drive the changed path, screenshot it"). Everything else gets Codex with its own model. The QA
   vendor must differ from the dev vendor.

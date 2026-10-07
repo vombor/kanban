@@ -101,11 +101,12 @@ export const runtimeTaskGitActionSchema = z.preprocess(
 );
 export type RuntimeTaskGitAction = z.infer<typeof runtimeTaskGitActionEnum>;
 /**
- * What a card is for. A card without a role is a `dev` card (the work). QA, TRIAGE and calibration cards are never
- * QA'd, reworked or auto-reviewed; the pipeline decides on the role, never on titles or prompts (the one exception,
- * role-less cards the legacy kit created, is `src/core/card-role.ts`).
+ * What a card is for. A card without a role is a `dev` card (the work). QA, TRIAGE, calibration and plan cards are
+ * never QA'd, reworked or auto-reviewed; the pipeline decides on the role, never on titles or prompts (the one
+ * exception, role-less cards the legacy kit created, is `src/core/card-role.ts`). A plan card's planner writes a spec
+ * and a card breakdown (`src/plans/`); `kanban plan expand` turns an approved breakdown into dev cards.
  */
-export const runtimeTaskRoleSchema = z.enum(["dev", "qa", "triage", "calibration"]);
+export const runtimeTaskRoleSchema = z.enum(["dev", "qa", "triage", "calibration", "plan"]);
 export type RuntimeTaskRole = z.infer<typeof runtimeTaskRoleSchema>;
 // Opaque per-task agent settings. Kanban stores and carries these values verbatim; it never
 // validates model IDs or reasoning-effort vocabularies because those change per agent and over

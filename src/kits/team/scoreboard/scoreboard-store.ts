@@ -33,8 +33,9 @@ import {
 import { renderScoreboardMarkdown } from "./scoreboard-markdown";
 
 // A QA or TRIAGE card is the reviewer, not the scored work. Calibration cards are scored (their QA lines carry a
-// benchmark). Cards the legacy kit made have no `role`; resolveCardRole() recognises them by its exact markers.
-const UNSCORED_ROLES: ReadonlySet<RuntimeTaskRole> = new Set(["qa", "triage"]);
+// benchmark). A plan card is never QA'd; its metrics go to the plan index (src/plans/plan-metrics.ts). Cards the
+// legacy kit made have no `role`; resolveCardRole() recognises them by its exact markers.
+const UNSCORED_ROLES: ReadonlySet<RuntimeTaskRole> = new Set(["qa", "triage", "plan"]);
 
 /** The card's role when it is one the scoreboard doesn't score (qa, triage), else null. */
 export function getUnscoredCardRole(card: CardRoleInput): RuntimeTaskRole | null {

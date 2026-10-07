@@ -129,6 +129,20 @@ describe("detectStalls", () => {
 		expect(result.continues).toEqual([]);
 	});
 
+	it("never flags a plan card: it waits on its planner, or in Review for the user's approval", () => {
+		const board = createBoard({
+			in_progress: [old("pln01", { role: "plan" })],
+			review: [old("pln02", { role: "plan" })],
+		});
+		const sessions = new Map([
+			["pln01", session("pln01")],
+			["pln02", session("pln02", { state: "awaiting_review" })],
+		]);
+		const result = detectStalls(input(board, { sessions }));
+		expect(result.items).toEqual([]);
+		expect(result.continues).toEqual([]);
+	});
+
 	it("legacy QA cards without a role are not dev cards (no continue, no review stall)", () => {
 		const legacyQa = old("qa001", { prompt: "You are the QA reviewer (round 3) for Kanban dev card d0009." });
 		const board = createBoard({ in_progress: [legacyQa] });

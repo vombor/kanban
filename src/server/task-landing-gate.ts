@@ -2,8 +2,11 @@
 // landing mode `qa`, Kanban squash-lands a dev card's work onto its base (src/workspace/land.ts) before the card
 // goes to Done, so a conflict keeps the card where it is (plan §4.2, decision 2: land first, then Done).
 //
+// A plan card's spec files land the same way (src/core/card-role.ts), only ever on a human's land: the pipeline never
+// QAs a plan card, so no PASS lands one.
+//
 // Every other workspace (landing `off`, `commit`, `pr`, or no config entry) and every card that is not a pipeline
-// dev card (QA/TRIAGE/calibration roles, legacy kit QA cards by their markers, `commit`/`pr` auto-review cards)
+// dev or plan card (QA/TRIAGE/calibration roles, legacy kit QA cards by their markers, `commit`/`pr` auto-review cards)
 // passes straight through, exactly as before this gate existed.
 //
 // Two legacy kit accidents shaped the choice rule (archive/devteam-kit:services/kanban-autoland.mjs@6da71597,
@@ -18,7 +21,7 @@
 // legacy kit (which lands after Done) keeps working during the shadow day.
 import { getWorkspacePipelineSettings, type ParsedPipelineConfig, readPipelineConfig } from "../config/pipeline-config";
 import type { RuntimeBoardCard, RuntimeTaskLandingOutcome, RuntimeTaskTrashTrigger } from "../core/api-contract";
-import { isKanbanLandedCard } from "../core/card-role";
+import { isKanbanLandedCard, resolveCardRole } from "../core/card-role";
 import { type KitCatalog, loadKitCatalog, resolveWorkspaceKit } from "../kits/resolve-kit";
 import {
 	createPipelineDecisionLog,
@@ -116,7 +119,7 @@ export function createTaskLandingGate(deps: TaskLandingGateDependencies = {}): T
 			shadow: context.shadow,
 			effectiveAgent: null,
 			model: null,
-			role: "dev",
+			role: resolveCardRole(input.card),
 			answer: { trigger: input.trigger, landing: input.landing ?? null, ...landing },
 			outcome,
 			note,
@@ -217,14 +220,17 @@ export function createTaskLandingGate(deps: TaskLandingGateDependencies = {}): T
 				`land ${card.id}: ${baseRef} -> ${result.commit.slice(0, 8)}${result.checkout ? ` in ${result.checkout}` : ""}`,
 			);
 			await record(input, context, "acted", landing, `${approved}landed onto ${baseRef} as ${result.commit}`);
-			deps.onLanded?.({
-				workspaceId: input.workspaceId,
-				taskId: card.id,
-				at: now(),
-				baseRef,
-				commit: result.commit,
-				via,
-			});
+			// Kit features (the scoreboard's HUMAN_APPROVED line) score dev work; a plan card's spec is not one.
+			if (resolveCardRole(card) === "dev") {
+				deps.onLanded?.({
+					workspaceId: input.workspaceId,
+					taskId: card.id,
+					at: now(),
+					baseRef,
+					commit: result.commit,
+					via,
+				});
+			}
 			return { proceed: true, landing };
 		}
 		if (result.status === "noop") {

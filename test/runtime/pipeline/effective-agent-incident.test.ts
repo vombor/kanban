@@ -251,6 +251,7 @@ describe("effective-agent incident (2026-10-06)", () => {
 		const coreRoots = [
 			"src/pipeline",
 			"src/kits",
+			"src/plans",
 			"src/core/effective-agent.ts",
 			"src/server/auto-review-reconciler.ts",
 			"src/server/session-column-sync.ts",

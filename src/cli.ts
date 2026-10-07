@@ -16,6 +16,7 @@ import { registerKitCommand } from "./commands/kit";
 import { registerModelsCommand } from "./commands/models";
 import { registerOrchestratorCommand } from "./commands/orchestrator";
 import { registerPipelineCommand } from "./commands/pipeline";
+import { registerPlanCommand } from "./commands/plan";
 import { registerProjectCommand } from "./commands/project";
 import { registerQaCommand } from "./commands/qa";
 import { registerRestartCommand } from "./commands/restart";
@@ -874,6 +875,7 @@ function createProgram(invocationArgs: string[]): Command {
 	registerModelsCommand(program);
 	registerBenchCommand(program);
 	registerPipelineCommand(program);
+	registerPlanCommand(program);
 	registerRestartCommand(program);
 	registerOrchestratorCommand(program);
 	registerBoardCommand(program);

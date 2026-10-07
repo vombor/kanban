@@ -5,7 +5,7 @@
 	"qa": {
 		"enabled": false,
 		"requireDifferentVendor": false,
-		"skip": { "roles": ["qa", "triage", "calibration"], "effectiveAgents": [] },
+		"skip": { "roles": ["qa", "triage", "calibration", "plan"], "effectiveAgents": [] },
 		"routes": [],
 		"rules": {},
 		"blurb": "",
@@ -13,6 +13,7 @@
 		"serversScript": null,
 		"preview": null
 	},
+	"plan": { "enabled": false, "startInPlanMode": false, "rules": {}, "candidates": [] },
 	"onFail": { "rework": "none", "reworkRounds": 0, "conflict": "stop", "then": "stop", "runoff": null },
 	"escalate": { "to": "orchestrator", "requireApproval": false },
 	"land": { "postLand": [] },

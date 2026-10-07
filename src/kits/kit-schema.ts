@@ -1,7 +1,8 @@
 // The routing-kit schema (plan §3.2). A kit is a declarative JSON document that answers the core's routing
 // questions (src/kits/policy.ts) for one project: which agent and model a new dev card gets, whether a card gets
 // QA and from whom, and what happens after a FAIL. It never holds mechanics (landing mode, limits, timings):
-// those are core settings (src/config/pipeline-config.ts).
+// those are core settings (src/config/pipeline-config.ts). The `plan` section answers the same kind of question for
+// plan cards (`planAssignment`): which agent and model a planner runs on, and whether it starts in plan mode.
 //
 // The schema is versioned (`"kit": 1`) and strict: an unknown key is an error, not a silent no-op. A missing key
 // means "no answer"; the resolver (resolve-kit.ts) then takes the `default` kit's value.
@@ -17,7 +18,7 @@ export const kitNameSchema = z
 	.string()
 	.regex(/^[a-z0-9][a-z0-9_-]*$/u, "must be lowercase letters, digits, '-' or '_' (it is a file name)");
 
-/** A card's role. `dev` cards are the work; QA, TRIAGE and calibration cards are never QA'd or reworked. */
+/** A card's role. `dev` cards are the work; QA, TRIAGE, calibration and plan cards are never QA'd or reworked. */
 export const cardRoleSchema = runtimeTaskRoleSchema;
 export type CardRole = z.infer<typeof cardRoleSchema>;
 
@@ -105,6 +106,19 @@ export const kitQaPreviewSchema = z
 	.strict();
 export type KitQaPreview = z.infer<typeof kitQaPreviewSchema>;
 
+/**
+ * An agent and model a plan card could run on. `plan.agent`/`plan.model` are the one in use; `plan.candidates` lists
+ * the others a later runoff or calibration compares (Claude, Codex, Copilot), so that needs no schema change.
+ */
+export const kitPlanCandidateSchema = z
+	.object({
+		agent: runtimeAgentIdSchema,
+		model: kitModelRefSchema.optional(),
+		note: z.string().optional(),
+	})
+	.strict();
+export type KitPlanCandidate = z.infer<typeof kitPlanCandidateSchema>;
+
 const escalateTargetSchema = z.union([
 	z.literal("orchestrator"),
 	tierRefSchema,
@@ -155,6 +169,23 @@ export const kitDocumentObjectSchema = z
 				promptNotes: kitQaPromptNotesSchema.optional(),
 				serversScript: z.string().nullable().optional(),
 				preview: kitQaPreviewSchema.nullable().optional(),
+			})
+			.strict()
+			.optional(),
+		plan: z
+			.object({
+				/** Whether `kanban task create --role plan` makes plan cards on this project. */
+				enabled: z.boolean().optional(),
+				/** The planner's agent; none = the agent selected in Kanban settings. */
+				agent: runtimeAgentIdSchema.optional(),
+				/** None = the agent's own default model (the Claude CLI's for `claude`). Needs `plan.agent`. */
+				model: kitModelRefSchema.optional(),
+				startInPlanMode: z.boolean().optional(),
+				/** Project rules added to the plan prompt, in key order. */
+				rules: z.record(z.string(), z.string()).optional(),
+				/** Agents and models a later runoff or calibration compares; never read for routing. */
+				candidates: z.array(kitPlanCandidateSchema).optional(),
+				note: z.string().optional(),
 			})
 			.strict()
 			.optional(),
@@ -232,6 +263,17 @@ export function findKitCrossKeyIssues(kit: KitDocument): KitIssue[] {
 	if (kit.dev?.model && !kit.dev.agent) {
 		issues.push({ path: "dev.model", message: "dev.model needs dev.agent" });
 	}
+	if (kit.plan?.model && "tier" in kit.plan.model) {
+		checkTierRef("plan.model.tier", kit.plan.model.tier);
+	}
+	if (kit.plan?.model && !kit.plan.agent) {
+		issues.push({ path: "plan.model", message: "plan.model needs plan.agent" });
+	}
+	(kit.plan?.candidates ?? []).forEach((candidate, index) => {
+		if (candidate.model && "tier" in candidate.model) {
+			checkTierRef(`plan.candidates.${index}.model.tier`, candidate.model.tier);
+		}
+	});
 	const escalateTo = kit.escalate?.to;
 	if (escalateTo && typeof escalateTo === "object" && "tier" in escalateTo) {
 		checkTierRef("escalate.to.tier", escalateTo.tier);

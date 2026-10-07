@@ -48,7 +48,8 @@ recovery stays `report`, the watchdog stays `off`, and foo is not on landing `qa
 |---|---|---|
 | Dev cards | whatever the project's kit assigns at creation (`team`: Cline on the tier-3 model), else the selected agent | cheap, and comparable across models when every round is scored |
 | QA cards | the kit's `qaPolicy`: `team` picks by the dev card's model vendor (OpenAI-built cards → Cline on Haiku 4.5 plus a "drive the changed path" step, everything else → Codex). The QA vendor must differ from the dev vendor (user rule 2026-10-06) | an independent reviewer from another vendor. Haiku won calibration for OpenAI-built cards but once missed a defect on a path it never exercised, hence the drive step |
-| Orchestrator | the agent selected in Kanban settings, in the sidebar (`__home_agent__:<ws>:<agent>`), never a hard-coded id | judgment work: escalations, plans, tooling |
+| Plan cards | the kit's `plan` section (`team`: Claude on its CLI's default model, starting in plan mode; `default`: none) | the architect: turns a requirement into a reviewed spec and a card breakdown (§13). Separate from the orchestrator (user 2026-10-07), so planners can be benchmarked later |
+| Orchestrator | the agent selected in Kanban settings, in the sidebar (`__home_agent__:<ws>:<agent>`), never a hard-coded id | the scrum master: escalations, starting cards, expanding approved plans, tooling |
 | Moving cards, landing, rework, nudges | the server and the pipeline worker, no LLM | deterministic, free and always on |
 
 - No agent polls the board. Agents start only when there is work: a QA card per submitted snapshot, and an
@@ -259,3 +260,43 @@ The worker never writes the board and never touches a PTY. It asks the server th
 start, resume, update or block a card, deliver input, finish a card through the Done workflow). The server refuses
 card actions for a workspace that isn't on landing `qa`, except `resumeTask`, which restart recovery also uses on
 landing-`off` boards.
+
+## 13. Plans: requirement → plan card → approval → dev cards
+
+A big requirement is planned before it is built, by a **plan card** (`role: "plan"`), not by the orchestrator.
+Planning is the architect's job and orchestration the scrum master's (user decision 2026-10-07): the planner reads
+the code and writes the plan, and the orchestrator turns the approved plan into cards and runs them.
+
+1. **Requirement → plan card.** `kanban task create --role plan --title "Coupons" --prompt "<the requirement>"`.
+   The kit's `plan` section picks the planner's agent, model and plan mode (`team`: Claude, no model pin, plan
+   mode on). The card's prompt is the plan template (`src/kits/plan-prompt.ts`) around the requirement. The plan is
+   recorded in `data/<ws>/plans.json` with its slug. On a kit with `plan.enabled` off (`default`) this is
+   refused: the one agent plans its own work, as before.
+2. **The planner** reads the codebase, then writes `docs/specs/<slug>.md` (problem, goals, non-goals,
+   user-visible behaviour, design citing the real files, risks, test plan, rollout/flags, open questions) and
+   `docs/specs/<slug>.cards.json` (cards with title, prompt, `dependsOn` by local id, `parallelGroup` and
+   acceptance criteria, each sized for one agent session). It checks the file with `kanban plan check`, creates no
+   card, and ends with a STATUS line. Schema: `src/plans/plan-breakdown.ts`.
+3. **Review and approval.** `kanban plan show <id>` prints the spec and the breakdown. Only the **user** approves:
+   `kanban plan approve <id>` (the plan card in Review), or `kanban plan expand <id> --approved-by-user`, which asks
+   the user to type the plan's id on a terminal. The approval is pinned to the breakdown's sha256, so an edited
+   breakdown needs a new one.
+4. **Expand.** `kanban plan expand <id> [--dry-run]` validates the breakdown, creates the cards in Backlog through
+   the normal create path (so the kit's `devAssignment` picks their agent and model), appends each card's acceptance
+   criteria to its prompt (before a FINAL STEP, so the QA prompt's requirements include them), links them by
+   `dependsOn`, and records plan → cards in `plans.json`. The task ids are written before the first card, so an
+   expand that stopped half way resumes with the same ids. It **never starts** a card and never links one to the
+   plan card (a link would start the first wave when the plan card goes Done). The orchestrator starts them.
+5. **The spec lands like docs.** The plan card's spec files land the project's normal way: on landing `qa` a
+   human's Approve & land or Done with "land" (no QA: the pipeline never QAs a plan card, so no PASS lands one), on
+   other modes Commit / Open PR or by hand. The spec then sits in the repo next to the code it describes.
+
+**Threshold.** A one-card, non-cross-cutting request (one module, one session) skips the planner: the orchestrator
+creates the dev card directly. Plan when a request needs several cards, touches several modules or teams, or needs a
+design decision the user should see first.
+
+The pipeline leaves plan cards alone, as calibration cards: no snapshot, checks, QA, rework, recovery nudge,
+auto-review, restart resume (resume one by hand with `kanban task resume`) or watchdog stall. `kanban plan metrics`
+lists per plan the planner's agent and model, duration and cost (card metrics, at expand), the number of cards, the
+approval and the reworks of its cards, for a later benchmark of planners (Claude, Codex, Copilot: `plan.candidates`
+in the kit). No runoff or calibration of planners exists yet.

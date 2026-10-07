@@ -53,6 +53,22 @@ export interface QaPromptParts {
 
 export type DevAssignmentAnswer = { agentId: RuntimeAgentId; model?: EffectiveModel; tier?: string } | null;
 
+/**
+ * A plan card's routing (`plan` section). `disabled` = the kit makes no plan cards: its dev agent does its own
+ * planning. `agentId` null = the agent selected in Kanban settings; no `model` = that agent's own default.
+ */
+export type PlanAssignmentAnswer =
+	| { kind: "disabled"; reason: string }
+	| {
+			kind: "plan";
+			agentId: RuntimeAgentId | null;
+			model?: EffectiveModel;
+			tier?: string;
+			startInPlanMode: boolean;
+			/** `plan.rules` texts, in key order, added to the plan prompt. */
+			rules: string[];
+	  };
+
 export type QaPolicyAnswer =
 	| { kind: "none"; reason: string }
 	| {
@@ -136,6 +152,32 @@ export function getPromptParts(kit: KitDocument, ruleNames: string[]): QaPromptP
 		},
 		serversScript: kit.qa?.serversScript ?? null,
 	};
+}
+
+/**
+ * The plan question, asked only at plan card creation (`kanban task create --role plan`, src/kits/plan-assignment.ts),
+ * never by the pipeline: plan cards are never QA'd, reworked or landed on a PASS.
+ */
+export function answerPlanAssignment(kit: KitDocument): PlanAssignmentAnswer {
+	const plan = kit.plan;
+	if (plan?.enabled !== true) {
+		return { kind: "disabled", reason: `kit "${kit.name}" has plan.enabled off` };
+	}
+	const base = {
+		kind: "plan" as const,
+		agentId: plan.agent ?? null,
+		startInPlanMode: plan.startInPlanMode ?? false,
+		rules: Object.values(plan.rules ?? {}),
+	};
+	if (!plan.model) {
+		return base;
+	}
+	const resolved = resolveKitModelRef(kit, plan.model);
+	// The resolver refuses a kit whose tier has no usable model, so this is only a guard.
+	if (!resolved.ok) {
+		return base;
+	}
+	return { ...base, model: resolved.choice, ...(resolved.tier ? { tier: resolved.tier } : {}) };
 }
 
 /** The evaluator for one resolved kit. `kit` must already be resolved (override > kit > default) and validated. */

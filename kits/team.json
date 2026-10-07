@@ -15,7 +15,8 @@
 			"roles": [
 				"qa",
 				"triage",
-				"calibration"
+				"calibration",
+				"plan"
 			],
 			"effectiveAgents": []
 		},
@@ -37,6 +38,19 @@
 		"rules": {
 			"drive": "DRIVE THE CHANGED PATH (required): log in as needed (a seeded user; the seed script has the credentials), then actually use every user path this card adds or changes in the browser with npm run browse (click and fill through it to the end, not just load the page), and screenshot each step's result into {outbox}. Rendering a page is not exercising it: a UI card whose changed path you did not drive can not PASS."
 		}
+	},
+	"plan": {
+		"enabled": true,
+		"agent": "claude",
+		"startInPlanMode": true,
+		"rules": {},
+		"candidates": [
+			{
+				"agent": "claude",
+				"note": "in use: the Claude CLI's own default model (user 2026-10-07: planning is its own role, Claude plans for now)"
+			}
+		],
+		"note": "No model pin: the Claude CLI default. candidates is where a later runoff or calibration lists the agents and models it compares (Claude, Codex, Copilot); routing reads only agent/model, so adding candidates changes nothing until one is picked."
 	},
 	"onFail": {
 		"rework": "same-model",

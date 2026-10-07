@@ -64,7 +64,7 @@ export function getTaskAutoReviewModeOptions(options: {
 
 export type TaskRole = RuntimeTaskRole;
 
-const TASK_ROLES: readonly TaskRole[] = ["dev", "qa", "triage", "calibration"];
+const TASK_ROLES: readonly TaskRole[] = ["dev", "qa", "triage", "calibration", "plan"];
 
 /** A card role from untyped data; a missing or unknown role is a dev card (no role). */
 export function normalizeTaskRole(value: unknown): TaskRole | undefined {
@@ -83,6 +83,9 @@ export function getTaskRoleBadgeLabel(role: TaskRole | null | undefined): string
 	}
 	if (role === "calibration") {
 		return "Calibration";
+	}
+	if (role === "plan") {
+		return "Plan";
 	}
 	return null;
 }

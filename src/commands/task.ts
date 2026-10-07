@@ -38,6 +38,8 @@ import { handBackTask } from "../pipeline/handback";
 import { clearHold, preserveTaskWork, readPipelineHold } from "../pipeline/hold";
 import { createPipelineStateStore } from "../pipeline/pipeline-state";
 import { createQaLogAppender } from "../pipeline/qa-log";
+import { type PreparedPlanCard, preparePlanCard, recordPlanCard } from "../plans/plan-card";
+import { createPlanIndexStore } from "../plans/plan-index";
 import { resolveProjectInputPath } from "../projects/project-path";
 import { getWatchdogWorkspacePaths } from "../state/kanban-home";
 import { loadWorkspaceContext, mutateWorkspaceState } from "../state/workspace-state";
@@ -541,6 +543,8 @@ export async function createTask(input: {
 	/** null = explicitly the selected agent (`--agent-id default`); the kit's devAssignment is then not applied. */
 	agentId?: RuntimeAgentId | null;
 	agentSettings?: RuntimeTaskAgentSettings;
+	/** A plan card's spec slug (`docs/specs/<slug>.md`); default from the title. */
+	planSlug?: string;
 }): Promise<JsonRecord> {
 	const workspaceRepoPath = await resolveWorkspaceRepoPath(input.projectPath, input.cwd);
 	const workspaceId = await ensureRuntimeWorkspace(workspaceRepoPath);
@@ -548,7 +552,26 @@ export async function createTask(input: {
 	if (shouldWarnOnExplicitAgentId(input.agentId)) {
 		warnOnAgentSettingsMechanismGaps(input.agentId, input.agentSettings);
 	}
-	// devAssignment answers for dev cards only: a QA, TRIAGE or calibration card is created as its creator set it.
+	// A plan card gets the kit's plan routing and the plan prompt around the requirement (src/plans/plan-card.ts).
+	const planIndex = input.role === "plan" ? createPlanIndexStore() : null;
+	const planCard: PreparedPlanCard | null = planIndex
+		? await preparePlanCard(
+				{
+					workspaceId,
+					title: input.title,
+					requirement: input.prompt,
+					slug: input.planSlug,
+					agentId: input.agentId,
+					agentSettings: input.agentSettings,
+					startInPlanMode: input.startInPlanMode,
+				},
+				{ index: planIndex },
+			)
+		: null;
+	if (!planCard && input.planSlug !== undefined) {
+		throw new Error("--plan-slug is only for --role plan.");
+	}
+	// devAssignment answers for dev cards only: a QA, TRIAGE, calibration or plan card is created as its creator set it.
 	const devAssignment =
 		(input.role ?? "dev") === "dev"
 			? await resolveDevAssignment({
@@ -572,14 +595,18 @@ export async function createTask(input: {
 			"backlog",
 			{
 				...(input.taskId ? { taskId: input.taskId } : {}),
-				title: input.title,
-				prompt: input.prompt,
-				startInPlanMode: input.startInPlanMode,
+				title: planCard ? planCard.title : input.title,
+				prompt: planCard ? planCard.prompt : input.prompt,
+				startInPlanMode: planCard ? planCard.startInPlanMode : input.startInPlanMode,
 				autoReviewEnabled: input.autoReviewEnabled,
 				autoReviewMode: input.autoReviewMode,
 				role: input.role,
-				agentId: devAssignment ? devAssignment.agentId : (input.agentId ?? undefined),
-				agentSettings: devAssignment ? devAssignment.agentSettings : input.agentSettings,
+				agentId: planCard ? planCard.agentId : devAssignment ? devAssignment.agentId : (input.agentId ?? undefined),
+				agentSettings: planCard
+					? planCard.agentSettings
+					: devAssignment
+						? devAssignment.agentSettings
+						: input.agentSettings,
 				baseRef: resolvedBaseRef,
 			},
 			() => globalThis.crypto.randomUUID(),
@@ -596,11 +623,26 @@ export async function createTask(input: {
 		});
 	}
 
+	if (planCard && planIndex) {
+		await recordPlanCard(planIndex, workspaceId, planCard, { id: created.id, title: created.title });
+	}
+
 	return {
 		ok: true,
 		...(!devAssignment || devAssignment.outcome === "none"
 			? {}
 			: { devAssignment: formatDevAssignment(devAssignment) }),
+		...(planCard
+			? {
+					plan: {
+						kit: planCard.kitName,
+						outcome: planCard.outcome,
+						slug: planCard.slug,
+						spec: `docs/specs/${planCard.slug}.md`,
+						breakdown: `docs/specs/${planCard.slug}.cards.json`,
+					},
+				}
+			: {}),
 		task: {
 			id: created.id,
 			column: "backlog",
@@ -729,6 +771,40 @@ async function linkTasks(input: {
 		workspacePath: workspaceRepoPath,
 		dependency,
 	};
+}
+
+/**
+ * Links many card pairs in one board save (`kanban plan expand`): `waitingTaskId` waits on `prerequisiteTaskId`, as
+ * `task link --task-id <waiting> --linked-task-id <prerequisite>` for two Backlog cards. A pair that is already linked
+ * is skipped, so a resumed expand doesn't fail on the links an earlier run added.
+ */
+export async function linkTaskPairs(input: {
+	cwd: string;
+	projectPath?: string;
+	pairs: ReadonlyArray<{ waitingTaskId: string; prerequisiteTaskId: string }>;
+}): Promise<{ added: RuntimeBoardDependency[]; skipped: number }> {
+	const workspaceRepoPath = await resolveWorkspaceRepoPath(input.projectPath, input.cwd);
+	const workspaceId = await ensureRuntimeWorkspace(workspaceRepoPath);
+	const runtimeClient = createRuntimeTrpcClient(workspaceId);
+	return await updateRuntimeWorkspaceState(runtimeClient, workspaceRepoPath, (state) => {
+		let board = state.board;
+		const added: RuntimeBoardDependency[] = [];
+		let skipped = 0;
+		for (const pair of input.pairs) {
+			const linked = addTaskDependency(board, pair.waitingTaskId, pair.prerequisiteTaskId);
+			if (linked.added && linked.dependency) {
+				board = linked.board;
+				added.push(linked.dependency);
+			} else if (linked.reason === "duplicate") {
+				skipped += 1;
+			} else {
+				throw new Error(
+					`Could not link ${pair.waitingTaskId} to ${pair.prerequisiteTaskId}: ${getLinkFailureMessage(linked.reason)}`,
+				);
+			}
+		}
+		return { board, value: { added, skipped } };
+	});
 }
 
 async function unlinkTasks(input: { cwd: string; dependencyId: string; projectPath?: string }): Promise<JsonRecord> {
@@ -1372,8 +1448,12 @@ export function registerTaskCommand(program: Command): void {
 		)
 		.option(
 			"--role <role>",
-			"Card role: dev (default) | qa | triage | calibration. Only dev cards are QA'd or reworked.",
+			"Card role: dev (default) | qa | triage | calibration | plan. Only dev cards are QA'd or reworked. plan: --prompt is the business requirement; the project's kit picks the planner (agent, model, plan mode) and the card gets the plan prompt (spec + card breakdown, see kanban plan).",
 			parseTaskRole,
+		)
+		.option(
+			"--plan-slug <slug>",
+			"For --role plan: the spec's file name, docs/specs/<slug>.md (default from the title).",
 		)
 		.option(
 			"--agent-id <id>",
@@ -1402,11 +1482,13 @@ export function registerTaskCommand(program: Command): void {
 				clineProvider?: string;
 				clineModel?: string;
 				clineReasoningEffort?: string;
+				planSlug?: string;
 			}) => {
 				await runTaskCommand(
 					async () =>
 						await createTask({
 							cwd: process.cwd(),
+							planSlug: options.planSlug,
 							title: options.title,
 							prompt: options.prompt,
 							projectPath: options.projectPath,

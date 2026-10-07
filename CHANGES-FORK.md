@@ -579,3 +579,25 @@ of this repository is the complete record of changes.
   files the newer one wins: a differing target file as new or newer is kept and reported as a conflict, an older one is
   replaced only after it is saved to `<home>/backups/home-migrate-<ts>/`. `--dry-run` lists every file. `.pid` files are
   skipped as transient.
+- `src/plans/` (new: `plan-breakdown.ts`, `plan-index.ts`, `plan-expand.ts`, `plan-card.ts`, `plan-metrics.ts`),
+  `src/kits/plan-assignment.ts`, `src/kits/plan-prompt.ts`, `src/commands/plan.ts` (new), `src/commands/task.ts`,
+  `src/cli.ts`, `src/core/api-contract.ts`, `src/core/card-role.ts`, `src/kits/kit-schema.ts`, `src/kits/policy.ts`,
+  `src/kits/kit-report.ts`, `kits/default.json`, `kits/team.json`, `src/server/task-landing-gate.ts`,
+  `src/pipeline/restart-recovery.ts`, `src/pipeline/watchdog/stalls.ts`, `src/commands/restart.ts`,
+  `src/kits/team/scoreboard/scoreboard-store.ts`, `src/state/kanban-home.ts`, `web-ui/src/types/board.ts`,
+  `docs/team/WORKFLOW.md`, `docs/team/KITS.md`, `AGENTS.md`, tests (plan cards, user decision 2026-10-07: planning
+  is a role of its own, like an architect next to the orchestrator's scrum master): a `plan` card role and a kit
+  `plan` section (`enabled`, `agent`, `model`, `startInPlanMode`, `rules`, `candidates` for a later runoff or
+  calibration, `note`). `team` plans on Claude (no model pin) in plan mode; `default` has plan off and refuses
+  plan cards. `kanban task create --role plan [--plan-slug]` applies the kit's plan routing and wraps the
+  requirement in the plan prompt (read the codebase; write `docs/specs/<slug>.md` with fixed sections and
+  `docs/specs/<slug>.cards.json`, validated by a zod schema with dependency, cycle and parallel-group checks; one
+  session per card; a STATUS line). `kanban plan show|check|approve|expand|metrics`: expand refuses unless the plan
+  card is in Review and the user approved this exact breakdown (`plan approve`, or `--approved-by-user` with a
+  terminal confirmation), creates Backlog cards through `createTask` (the kit's devAssignment applies) with their
+  acceptance criteria in the prompt (so QA's requirements include them), links them by their dependencies, records
+  plan → cards and the plan card's metrics in `data/<ws>/plans.json`, resumes a half-done expand with the same ids,
+  and never starts a card; `--dry-run` writes nothing. The pipeline, QA gate, rework, recovery, restart recovery,
+  auto-review, the watchdog's stall checks and the scoreboard leave plan cards alone. On landing `qa` a plan card's
+  spec lands through the Done gate like dev work (only on a human's land, with no `landed` event for kit
+  features). The board shows a "Plan" badge and keeps the role through browser saves.

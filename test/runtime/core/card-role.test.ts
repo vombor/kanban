@@ -63,6 +63,13 @@ describe("isKanbanLandedCard", () => {
 			expect(isKanbanLandedCard(dev, mode)).toBe(false);
 		}
 	});
+
+	it("a plan card's spec lands like dev work on a landing-mode-qa board (a human's land, never a PASS)", () => {
+		const plan = createCard({ id: "p", role: "plan" });
+		expect(resolveCardRoleWithSource(plan)).toEqual({ role: "plan", source: "card" });
+		expect(isKanbanLandedCard(plan, "qa")).toBe(true);
+		expect(isKanbanLandedCard(plan, "off")).toBe(false);
+	});
 });
 
 describe("Done request schema", () => {

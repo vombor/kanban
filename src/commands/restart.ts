@@ -82,8 +82,10 @@ async function prepareWorkspace(
 				print(`${card.id} (${role}, ${column.id}): session ${session?.state ?? "none"}, not running; not listed`);
 				continue;
 			}
-			if (role === "calibration" || role === "triage") {
-				print(`${card.id} (${role}, ${column.id}): left to its own runner; not listed`);
+			if (role === "calibration" || role === "triage" || role === "plan") {
+				print(
+					`${card.id} (${role}, ${column.id}): ${role === "plan" ? "a plan card is resumed by hand (kanban task resume)" : "left to its own runner"}; not listed`,
+				);
 				continue;
 			}
 			let wipTag: string | null = null;

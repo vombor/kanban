@@ -175,7 +175,8 @@ export function detectStalls(input: StallInput): StallResult {
 
 	for (const { column, card } of cards) {
 		const role = input.roles.get(card.id)?.role ?? "dev";
-		if (role === "calibration") {
+		// A calibration run is calibrate's; a plan card waits on its planner or for the user's approval.
+		if (role === "calibration" || role === "plan") {
 			continue;
 		}
 		const session = input.sessions.get(card.id);

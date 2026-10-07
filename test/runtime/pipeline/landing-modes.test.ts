@@ -382,6 +382,30 @@ describe("landing modes", () => {
 			expect(harness.readDecisions()).toEqual([]);
 		});
 
+		it("lands a plan card's spec files like docs on a human's land, and gives kit features no landed event", async () => {
+			const repo1 = createLandRepo();
+			repo = repo1;
+			const worktree = repo1.addWorktree("pln01");
+			repo1.write(worktree, "docs/specs/coupons.md", "# Coupons\n");
+			repo1.write(worktree, "docs/specs/coupons.cards.json", "{}\n");
+			const before = repo1.tip();
+			const harness = createHarness({
+				repo: repo1,
+				config: landingConfig("qa"),
+				cards: { review: [createCard({ id: "pln01", role: "plan" })] },
+				worktrees: { pln01: worktree },
+			});
+
+			expect(await harness.done("pln01")).toMatchObject({ status: "blocked", landing: { decision: "required" } });
+			expect(repo1.tip()).toBe(before);
+
+			const landed = await harness.done("pln01", { landing: "land", trigger: "approve" });
+			expect(landed).toMatchObject({ ok: true, landing: { decision: "landed" } });
+			expect(repo1.tip()).not.toBe(before);
+			expect(harness.landed).toEqual([]);
+			expect(harness.readDecisions().at(-1)).toMatchObject({ taskId: "pln01", role: "plan", outcome: "acted" });
+		});
+
 		it("leaves commit/pr auto-review cards to the reconciler", async () => {
 			const setup = repoWithWork();
 			repo = setup.repo;

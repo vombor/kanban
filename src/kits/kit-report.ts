@@ -7,12 +7,14 @@ import type { RuntimeAgentId, RuntimeBoardCard } from "../core/api-contract";
 import type { EffectiveModel } from "../core/effective-agent";
 import { getUsableTierEntries, type KitDocument } from "./kit-schema";
 import {
+	answerPlanAssignment,
 	type CardHistory,
 	createRoutingPolicy,
 	type DevAssignmentAnswer,
 	type EffectiveCard,
 	type OnFailAnswer,
 	type OnPassAnswer,
+	type PlanAssignmentAnswer,
 	type QaPolicyAnswer,
 } from "./policy";
 import { type ResolvedKit, readKitValue } from "./resolve-kit";
@@ -28,6 +30,7 @@ export interface KitReport {
 	description: string | null;
 	values: KitValueRow[];
 	devAssignment: DevAssignmentAnswer;
+	planAssignment: PlanAssignmentAnswer;
 	qa: Array<{ devAgentId: RuntimeAgentId; devModel: EffectiveModel | null; answer: QaPolicyAnswer }>;
 	onFail: Array<{ case: string; answer: OnFailAnswer }>;
 	onPass: OnPassAnswer;
@@ -126,6 +129,7 @@ export function buildKitReport(input: {
 		description: kit.description ?? null,
 		values: listKitValues(input.resolved),
 		devAssignment,
+		planAssignment: answerPlanAssignment(kit),
 		qa,
 		onFail,
 		onPass: policy.onPass({ dev: sample, verdict: { verdict: "PASS", round: 1 } }),
@@ -158,6 +162,13 @@ export function formatKitReport(report: KitReport): string[] {
 		report.devAssignment
 			? `  ${report.devAssignment.agentId} on ${formatModel(report.devAssignment.model)}${report.devAssignment.tier ? ` (tier ${report.devAssignment.tier})` : ""}`
 			: "  no answer: the card runs on the agent selected in Kanban settings",
+	);
+	const plan = report.planAssignment;
+	lines.push("Plan cards (kanban task create --role plan):");
+	lines.push(
+		plan.kind === "disabled"
+			? `  none (${plan.reason}): the dev agent plans its own work`
+			: `  ${plan.agentId ?? "the agent selected in Kanban settings"} on ${formatModel(plan.model)}${plan.tier ? ` (tier ${plan.tier})` : ""}${plan.startInPlanMode ? ", starting in plan mode" : ""}${plan.rules.length > 0 ? `, ${plan.rules.length} prompt rule(s)` : ""}`,
 	);
 	lines.push("QA for a submitted dev card (landing mode qa):");
 	for (const { devAgentId, devModel, answer } of report.qa) {

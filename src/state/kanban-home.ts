@@ -457,6 +457,11 @@ export function getPipelineStatePath(workspaceId: string, homePath = getKanbanHo
 	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), PIPELINE_STATE_FILENAME);
 }
 
+/** Plan cards, their approval, the cards they expanded to and their metrics (`<home>/data/<workspaceId>/plans.json`). */
+export function getPlanIndexPath(workspaceId: string, homePath = getKanbanHomePath()): string {
+	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), "plans.json");
+}
+
 /** The pipeline's decision log, one JSON line per decision (`<home>/data/<workspaceId>/pipeline-decisions.jsonl`). */
 export function getPipelineDecisionLogPath(workspaceId: string, homePath = getKanbanHomePath()): string {
 	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), PIPELINE_DECISIONS_FILENAME);

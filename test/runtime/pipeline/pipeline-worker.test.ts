@@ -248,6 +248,30 @@ describe("pipeline worker", () => {
 		]);
 	});
 
+	it("never snapshots, QAs or reworks a plan card: no QA card, only a dev card next to it gets one", async () => {
+		const harness = createHarness({ config: { workspaces: { foo: QA_WORKSPACE } } });
+		const snapshot = createSnapshot({
+			workspaceId: "foo",
+			board: createBoard({
+				review: [
+					createCard({ id: "plan1", role: "plan", startInPlanMode: true, agentId: "claude" }),
+					createCard({ id: "dev-1" }),
+				],
+			}),
+			selectedAgentId: "claude",
+		});
+
+		await harness.send(snapshot);
+
+		expect(harness.readCardDecisions("foo")).toMatchObject([
+			{ taskId: "plan1", role: "plan", answer: { kind: "none", reason: "plan cards are never QA'd" } },
+			{ taskId: "dev-1", role: "dev", answer: { kind: "qa" } },
+		]);
+		const created = harness.actions.filter((action) => action.kind === "createTask");
+		expect(created).toHaveLength(1);
+		expect(created[0]).toMatchObject({ task: { role: "qa", reviewsTaskId: "dev-1" } });
+	});
+
 	it("records a checks result in the card's state, the QA log and the decision log", async () => {
 		const recorders: Array<(result: ChecksResult) => Promise<void>> = [];
 		const harness = createHarness({

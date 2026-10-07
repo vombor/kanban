@@ -48,7 +48,9 @@ describe("card roles", () => {
 		expect(normalizeTaskRole("dev")).toBeUndefined();
 		expect(normalizeTaskRole("judge")).toBeUndefined();
 		expect(normalizeTaskRole(3)).toBeUndefined();
+		expect(normalizeTaskRole("plan")).toBe("plan");
 		expect(getTaskRoleBadgeLabel("triage")).toBe("Triage");
+		expect(getTaskRoleBadgeLabel("plan")).toBe("Plan");
 		expect(getTaskRoleBadgeLabel(undefined)).toBeNull();
 	});
 });

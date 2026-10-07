@@ -58,9 +58,14 @@ export function resolveCardRole(card: CardRoleInput): RuntimeTaskRole {
 	return resolveCardRoleWithSource(card).role;
 }
 
+// A plan card's spec files are docs that belong in the repo next to the code, so on a landing-mode-`qa` workspace
+// they land the way the project's dev work lands: a human's Approve & land, or Done with "land". Only the trigger
+// differs: the pipeline never QAs a plan card, so nothing lands one on a PASS.
+const KANBAN_LANDED_ROLES: ReadonlySet<RuntimeTaskRole> = new Set(["dev", "plan"]);
+
 /**
- * Whether Kanban itself lands this card (the `qa` landing step, src/server/task-landing-gate.ts): a dev card on a
- * landing-mode-`qa` workspace that the auto-review reconciler doesn't own (auto-review on with `commit`/`pr`).
+ * Whether Kanban itself lands this card (the `qa` landing step, src/server/task-landing-gate.ts): a dev or plan card
+ * on a landing-mode-`qa` workspace that the auto-review reconciler doesn't own (auto-review on with `commit`/`pr`).
  * Its Commit / Open PR buttons become Approve & land, and its Done asks "land or discard?".
  */
 export function isKanbanLandedCard(
@@ -69,7 +74,7 @@ export function isKanbanLandedCard(
 ): boolean {
 	return (
 		landingMode === "qa" &&
-		resolveCardRole(card) === "dev" &&
+		KANBAN_LANDED_ROLES.has(resolveCardRole(card)) &&
 		!(card.autoReviewEnabled === true && card.autoReviewMode !== "qa")
 	);
 }

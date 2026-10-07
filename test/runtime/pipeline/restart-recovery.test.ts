@@ -55,6 +55,7 @@ describe("planRestartRecovery", () => {
 				column: "in_progress",
 			},
 			{ card: card("cal", { title: "QA-CAL glm run 3" }), column: "in_progress" },
+			{ card: card("plan", { role: "plan" }), column: "in_progress" },
 		];
 		const sessions = new Map(
 			[
@@ -68,6 +69,7 @@ describe("planRestartRecovery", () => {
 				session("backlog"),
 				session("qa1"),
 				session("cal"),
+				session("plan"),
 			].map((entry) => [entry.taskId, entry]),
 		);
 		const plan = planRestartRecovery({
@@ -89,6 +91,7 @@ describe("planRestartRecovery", () => {
 			"idle-reply": "its turn had ended before the restart: finished work",
 			blocked: "BLOCKED (escalated)",
 			cal: "role calibration: left to its own runner",
+			plan: "role plan: resumed by hand (kanban task resume)",
 		});
 	});
 

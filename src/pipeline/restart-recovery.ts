@@ -128,6 +128,11 @@ export function planRestartRecovery(input: PlanRestartRecoveryInput): RestartRec
 			plan.skipped.push({ taskId: card.id, why: "BLOCKED (escalated)" });
 			continue;
 		}
+		if (role === "plan") {
+			// The pipeline leaves plan cards alone, as calibration runs: their planner is resumed by hand.
+			plan.skipped.push({ taskId: card.id, why: "role plan: resumed by hand (kanban task resume)" });
+			continue;
+		}
 		if (role === "calibration" || role === "triage") {
 			plan.skipped.push({ taskId: card.id, why: `role ${role}: left to its own runner` });
 			continue;
