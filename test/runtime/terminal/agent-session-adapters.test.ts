@@ -1307,11 +1307,17 @@ describe("prepareAgentLaunch copilot", () => {
 		expect(launch.args).not.toContain("--allow-all-tools");
 	});
 
-	it("allows tools and paths only in autonomous mode, never in plan mode", async () => {
+	it("allows tools and paths and starts autopilot only in autonomous mode, never in plan mode", async () => {
 		setupTempHome();
 		const autonomous = await prepareAgentLaunch(copilotInput({ autonomousModeEnabled: true }));
-		expect(autonomous.args).toEqual(expect.arrayContaining(["--allow-all-tools", "--allow-all-paths"]));
-		expect(autonomous.args).not.toContain("--autopilot");
+		expect(autonomous.args).toEqual(
+			expect.arrayContaining(["--allow-all-tools", "--allow-all-paths", "--allow-all-urls", "--autopilot"]),
+		);
+		expect(autonomous.args).not.toContain("--max-autopilot-continues");
+
+		const allowAll = await prepareAgentLaunch(copilotInput({ autonomousModeEnabled: true, args: ["--allow-all"] }));
+		expect(allowAll.args).toContain("--autopilot");
+		expect(allowAll.args).not.toContain("--allow-all-urls");
 
 		const plan = await prepareAgentLaunch(
 			copilotInput({ autonomousModeEnabled: true, startInPlanMode: true, args: ["--allow-all"] }),
@@ -1319,6 +1325,31 @@ describe("prepareAgentLaunch copilot", () => {
 		expect(plan.args).toContain("--plan");
 		expect(plan.args).not.toContain("--allow-all");
 		expect(plan.args).not.toContain("--allow-all-tools");
+		expect(plan.args).not.toContain("--autopilot");
+
+		const interactive = await prepareAgentLaunch(copilotInput());
+		expect(interactive.args).not.toContain("--autopilot");
+	});
+
+	it("leaves a user-supplied --mode, --autopilot or --max-autopilot-continues alone in autonomous mode", async () => {
+		setupTempHome();
+		const withMode = await prepareAgentLaunch(
+			copilotInput({ autonomousModeEnabled: true, args: ["--mode", "interactive"] }),
+		);
+		expect(withMode.args).not.toContain("--autopilot");
+		expect(withMode.args[withMode.args.indexOf("--mode") + 1]).toBe("interactive");
+
+		const withModeEquals = await prepareAgentLaunch(
+			copilotInput({ autonomousModeEnabled: true, args: ["--mode=plan"] }),
+		);
+		expect(withModeEquals.args).not.toContain("--autopilot");
+
+		const withAutopilot = await prepareAgentLaunch(
+			copilotInput({ autonomousModeEnabled: true, args: ["--autopilot", "--max-autopilot-continues", "2"] }),
+		);
+		expect(withAutopilot.args.filter((arg) => arg === "--autopilot")).toHaveLength(1);
+		expect(withAutopilot.args.filter((arg) => arg === "--max-autopilot-continues")).toHaveLength(1);
+		expect(withAutopilot.args[withAutopilot.args.indexOf("--max-autopilot-continues") + 1]).toBe("2");
 	});
 
 	it("uses the Copilot subscription for provider 'github' and keeps BYOK env empty", async () => {

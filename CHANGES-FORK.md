@@ -361,3 +361,7 @@ of this repository is the complete record of changes.
   again; with extra rounds the card goes to Review and its last FAIL is reworked once, except after a STALLED QA
   round, which it says it won't rework). Nothing changes for workspaces on landing
   `off`/`commit`/`pr`, in shadow, or on the `default` kit (no QA, so no verdicts).
+- `src/terminal/agent-session-adapters.ts`, `test/runtime/terminal/agent-session-adapters.test.ts`: Copilot cards in
+  autonomous mode start in autopilot (`--autopilot`, plus `--allow-all-urls`, without which Copilot 1.0.92 blocks the
+  launch on an "Enable autopilot mode" permission dialog), as a trial at the user's request (2026-10-07). A user's
+  `--autopilot` / `--mode` / `--max-autopilot-continues` is kept; plan mode is unchanged.

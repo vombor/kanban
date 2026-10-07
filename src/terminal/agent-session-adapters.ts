@@ -1942,10 +1942,19 @@ const copilotAdapter: AgentSessionAdapter = {
 				args.push("--plan");
 			}
 		} else if (input.autonomousModeEnabled) {
-			// Autonomous: allow tools and paths, but not --autopilot, so the agent still stops for questions.
+			// Autonomous: allow tools and paths, and start in autopilot (a trial at the user's request,
+			// 2026-10-07, to see whether it causes problems; before that the agent stopped for questions).
+			// Autopilot sends up to --max-autopilot-continues (Copilot's default 5) continuations itself.
+			// Copilot 1.0.92 opens a blocking "Enable autopilot mode" dialog unless all permissions are granted,
+			// so autopilot also needs --allow-all-urls.
+			const startsAutopilot = !hasCliOption(args, "--autopilot") && !hasCliOption(args, "--mode");
 			if (!hasCliOption(args, "--allow-all") && !hasCliOption(args, "--yolo")) {
 				if (!hasCliOption(args, "--allow-all-tools")) args.push("--allow-all-tools");
 				if (!hasCliOption(args, "--allow-all-paths")) args.push("--allow-all-paths");
+				if (startsAutopilot && !hasCliOption(args, "--allow-all-urls")) args.push("--allow-all-urls");
+			}
+			if (startsAutopilot) {
+				args.push("--autopilot");
 			}
 		}
 
