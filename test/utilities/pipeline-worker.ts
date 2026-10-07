@@ -9,16 +9,26 @@ import type {
 	RuntimeTaskSessionSummary,
 } from "../../src/core/api-contract";
 import { loadKitCatalog } from "../../src/kits/resolve-kit";
+import type { PipelineActionRequest, PipelineActionResult } from "../../src/pipeline/actions";
 import type { ChecksResult, ChecksRunner } from "../../src/pipeline/checks";
 import { createPipelineDecisionLog, type PipelineDecisionRecord } from "../../src/pipeline/decision-log";
 import type { PipelineSessionView, PipelineWorkspaceSnapshot } from "../../src/pipeline/engine";
 import { createPipelineEventBus, type PipelineEventMap, type PipelineEventName } from "../../src/pipeline/events";
 import { createPipelineStateStore } from "../../src/pipeline/pipeline-state";
+import { createQaGate } from "../../src/pipeline/qa-gate";
 import { type AppendQaLog, createQaLogAppender } from "../../src/pipeline/qa-log";
+import type { QaPreviewController } from "../../src/pipeline/qa-preview";
+import type { QaVerdictRead } from "../../src/pipeline/qa-verdict";
 import type { SubmissionInspector } from "../../src/pipeline/submission-stage";
 import { createPipelineWorker } from "../../src/pipeline/worker";
-import type { PipelineWorkerMessage } from "../../src/pipeline/worker-protocol";
+import type { PipelineFinishTaskRequest, PipelineWorkerMessage } from "../../src/pipeline/worker-protocol";
 import { createTempDir } from "./temp-dir";
+
+/** What the QA gate asked the server for, in order. */
+export type QaGateHarnessAction =
+	| PipelineActionRequest
+	| ({ kind: "finishTask" } & PipelineFinishTaskRequest)
+	| { kind: "deliverInput"; workspaceId: string; taskId: string; text: string };
 
 export interface PipelineWorkerHarnessOptions {
 	/** The raw config.json content; mutable through `setConfig`. */
@@ -31,6 +41,12 @@ export interface PipelineWorkerHarnessOptions {
 	appendQaLog?: AppendQaLog;
 	/** Legacy checks-state.json per workspace id, for the import. */
 	legacyChecksState?: Record<string, unknown>;
+	/** The QA gate's snapshot commit of a card. Default: every card has the snapshot `snap-<id>`. */
+	snapshot?: (taskId: string) => string | null;
+	/** The server's answer to a QA gate action, a Done request or a nudge. Default: ok. */
+	actionResult?: (action: QaGateHarnessAction) => PipelineActionResult;
+	/** Epoch ms; mutable through `setNow`. */
+	now?: number;
 }
 
 /**
@@ -39,6 +55,16 @@ export interface PipelineWorkerHarnessOptions {
  */
 export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOptions = {}) {
 	const temp = createTempDir("kanban-pipeline-");
+	let now = options.now ?? Date.parse("2026-10-07T10:00:00.000Z");
+	const actions: QaGateHarnessAction[] = [];
+	const answer = (action: QaGateHarnessAction): PipelineActionResult => {
+		actions.push(action);
+		return options.actionResult?.(action) ?? { ok: true };
+	};
+	const previewCalls: Array<{ call: "ensure" | "stopIfIdle"; workspaceId: string; qaActive?: boolean }> = [];
+	const verdicts = new Map<string, QaVerdictRead>();
+	const stoppedScratch: string[][] = [];
+	let uuidCount = 0;
 	let rawConfig: unknown = options.config ?? {};
 	const messages: PipelineWorkerMessage[] = [];
 	const events: Array<{ name: PipelineEventName; event: PipelineEventMap[PipelineEventName] }> = [];
@@ -47,6 +73,58 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 	const qaLogPath = (workspaceId: string) => join(temp.path, "data", workspaceId, "qa-log.md");
 	const legacyDir = join(temp.path, "legacy");
 	const bus = createPipelineEventBus();
+	const store = createPipelineStateStore({
+		now: () => now,
+		getStatePath: statePath,
+		getLegacyChecksStatePaths: (workspaceId) => [join(legacyDir, workspaceId, "checks-state.json")],
+	});
+	const appendQaLog = options.appendQaLog ?? createQaLogAppender(qaLogPath);
+	const artifactsPath = (workspaceId: string) => join(temp.path, "data", workspaceId, "qa-artifacts");
+	const preview: QaPreviewController = {
+		ensure: async ({ workspaceId }) => {
+			previewCalls.push({ call: "ensure", workspaceId });
+		},
+		stopIfIdle: async ({ workspaceId, qaActive }) => {
+			previewCalls.push({ call: "stopIfIdle", workspaceId, qaActive });
+		},
+	};
+	const qaGate = createQaGate({
+		actions: { run: async (request) => answer(request) },
+		deliverInput: async (input) => answer({ kind: "deliverInput", ...input }),
+		finishTask: async (request) => {
+			const result = answer({ kind: "finishTask", ...request });
+			return {
+				ok: result.ok,
+				status: result.ok ? "trashed" : "failed",
+				taskId: request.taskId,
+				previousColumnId: "review",
+				readyTaskIds: [],
+				autoStartedTasks: [],
+				worktreeDeleted: result.ok,
+				...(result.ok ? {} : { error: result.error }),
+			};
+		},
+		appendQaLog,
+		store,
+		bus,
+		preview,
+		readSnapshot: async (_repoPath, taskId) => (options.snapshot ? options.snapshot(taskId) : `snap-${taskId}`),
+		readVerdict: async (outboxDir) => verdicts.get(outboxDir) ?? { kind: "missing" },
+		stopScratchProcesses: async (dirs) => {
+			stoppedScratch.push(dirs);
+			return 0;
+		},
+		copyArtifacts: async () => {},
+		getQaLogPath: qaLogPath,
+		getArtifactsPath: artifactsPath,
+		getKanbanHome: () => "~/.kanban",
+		// QA card ids qa001, qa002, …
+		randomUuid: () => {
+			uuidCount += 1;
+			return `qa${String(uuidCount).padStart(3, "0")}00-0000-0000-0000-000000000000`;
+		},
+		log: () => {},
+	});
 	for (const name of ["verdictRecorded", "landed", "reworkSent", "escalated"] as const) {
 		bus.on(name, (event) => {
 			events.push({ name, event });
@@ -56,20 +134,17 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 		send: (message) => messages.push(message),
 		readConfig: async () => parsePipelineConfig(rawConfig),
 		loadCatalog: async () => await loadKitCatalog(join(temp.path, "kits")),
-		store: createPipelineStateStore({
-			now: () => Date.parse("2026-10-07T10:00:00.000Z"),
-			getStatePath: statePath,
-			getLegacyChecksStatePaths: (workspaceId) => [join(legacyDir, workspaceId, "checks-state.json")],
-		}),
+		store,
 		decisionLog: createPipelineDecisionLog({ getLogPath: logPath }),
 		bus,
 		inspectSubmission:
 			options.inspectSubmission ??
 			(async (_context, { card }) => ({ hasWork: options.hasWork?.(card) ?? true, records: [] })),
 		createChecks: options.createChecks,
-		appendQaLog: options.appendQaLog ?? createQaLogAppender(qaLogPath),
+		appendQaLog,
 		loadAgentDefaultModels: async () => ({}),
-		now: () => Date.parse("2026-10-07T10:00:00.000Z"),
+		qaGate,
+		now: () => now,
 	});
 
 	const readDecisions = (workspaceId: string): PipelineDecisionRecord[] => {
@@ -90,6 +165,17 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 		root: temp.path,
 		legacyDir,
 		statePath,
+		store,
+		actions,
+		previewCalls,
+		stoppedScratch,
+		/** What the QA card's outbox (`<outboxRoot>/<qaTaskId>`) holds. */
+		setVerdict: (outboxDir: string, read: QaVerdictRead) => {
+			verdicts.set(outboxDir, read);
+		},
+		setNow: (next: number) => {
+			now = next;
+		},
 		logPath,
 		qaLogPath,
 		setConfig: (next: unknown) => {

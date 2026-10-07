@@ -73,3 +73,23 @@ export function isKanbanLandedCard(
 		!(card.autoReviewEnabled === true && card.autoReviewMode !== "qa")
 	);
 }
+
+// Ported from archive/devteam-kit:services/kanban-autoland.mjs@9828540 (queueQa: the prompt names the dev card
+// reliably; old QA titles can carry a previous dev id, QA 08be2 → c1e30 on 10/05).
+const LEGACY_QA_PROMPT_DEV = /^You are the QA reviewer\b[^\n]*?\bfor Kanban dev card (\w+)/u;
+const LEGACY_QA_TITLE_DEV = /^(?:BENCH )?QA\d* ([0-9a-f]{5}):/u;
+
+/** The dev card a QA card reviews: `reviewsTaskId`, else (a legacy QA card) the id its prompt names, else its title's. */
+export function resolveReviewedTaskId(card: CardRoleInput & { reviewsTaskId?: string }): string | null {
+	if (card.reviewsTaskId) {
+		return card.reviewsTaskId;
+	}
+	if (resolveCardRole(card) !== "qa") {
+		return null;
+	}
+	return (
+		LEGACY_QA_PROMPT_DEV.exec(card.prompt.trimStart())?.[1] ??
+		LEGACY_QA_TITLE_DEV.exec(card.title?.trim() ?? "")?.[1] ??
+		null
+	);
+}

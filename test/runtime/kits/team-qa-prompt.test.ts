@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import { getPreviousQaRounds } from "../../../src/pipeline/qa-log";
+import { buildQaPrompt, buildQaRequirements, getQaShortTitle } from "../../../src/pipeline/qa-prompt";
+import { getSnapshotRef } from "../../../src/pipeline/snapshots";
+
 import { createCardHistory } from "../../utilities/effective-card";
 import {
 	createTeamPolicy,
@@ -12,6 +16,9 @@ import {
 // foo's QA prompt parts from the `team` kit + foo's imported overrides, checked against the legacy kit's own prompts
 // (archive/devteam-kit:qa/qa-card.cjs@9828540 buildPrompt, fixtures in fixtures/legacy-team/qa-prompts.json). The kit
 // owns the parts (rule texts, blurb, notes); the skeleton around them is the core's QA prompt builder.
+
+/** The legacy kit's qaScratchRoot default (lib/config.cjs DEFAULTS); the live file does not set it. */
+const LEGACY_QA_SCRATCH_ROOT = "/tmp/qa-claude";
 describe("team kit QA prompt parts for foo", () => {
 	for (const fixture of readLegacyQaPrompts()) {
 		describe(fixture.name, () => {
@@ -54,8 +61,35 @@ describe("team kit QA prompt parts for foo", () => {
 		});
 	}
 
-	// The full-prompt comparison needs the core skeleton (`buildQaPrompt`, plan step P4-3 "QA gate"), which has not
-	// landed. With it: buildQaPrompt(promptParts, { devId, round, qaId, short, requirements, outbox, previousRounds })
-	// must equal fixture.prompt for every fixture (the legacy outbox root was /tmp/qa-out, LEGACY_QA_OUT_ROOT).
-	it.todo("builds exactly the legacy qa-card.cjs prompt once the QA gate's buildQaPrompt exists (P4-3)");
+	// The whole prompt: the core skeleton (src/pipeline/qa-prompt.ts) around the kit's parts, built the way the QA
+	// gate builds it, equals qa-card.cjs's for every fixture. The legacy roots differ from the fork defaults
+	// (outbox /tmp/qa-out, scratch /tmp/qa-claude), so they are passed explicitly, as is the legacy kit home.
+	for (const fixture of readLegacyQaPrompts()) {
+		it(`builds exactly the legacy qa-card.cjs prompt: ${fixture.name}`, () => {
+			const answer = createTeamPolicy(getFooImportedOverrides()).qaPolicy({
+				dev: toFooEffectiveCard(fixture.card),
+				round: fixture.round,
+				history: createCardHistory(),
+			});
+			if (answer.kind !== "qa") {
+				throw new Error(`expected a QA answer, got: ${answer.reason}`);
+			}
+			const prompt = buildQaPrompt({
+				devTaskId: fixture.card.id,
+				round: fixture.round,
+				devTitle: fixture.card.title || fixture.card.prompt,
+				requirements: buildQaRequirements(fixture.card.prompt, answer.promptParts.blurb),
+				repoPath: "/projects/foo",
+				snapshotRef: getSnapshotRef(fixture.card.id),
+				baseRef: "master",
+				scratchDir: `${LEGACY_QA_SCRATCH_ROOT}/${fixture.card.id}`,
+				outboxDir: `${LEGACY_QA_OUT_ROOT}/${fixture.qaId}`,
+				previousRounds: getPreviousQaRounds(fixture.qaLog, fixture.card.id),
+				parts: answer.promptParts,
+				kanbanHome: "~/.kanban",
+			});
+			expect(getQaShortTitle(fixture.card.title || fixture.card.prompt)).toBe(fixture.short);
+			expect(prompt).toBe(fixture.prompt);
+		});
+	}
 });

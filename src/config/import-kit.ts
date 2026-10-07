@@ -13,7 +13,7 @@
 // only the keys it maps: every other key in config.json stays as it is.
 import { basename } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import type { KitDocument } from "../kits/kit-schema";
+import { type KitDocument, kitQaPreviewSchema } from "../kits/kit-schema";
 import { getBuiltInKits, loadKitCatalog, readKitValue, resolveKitByName } from "../kits/resolve-kit";
 import { getKanbanGlobalConfigPath, getLegacyKitHomePath } from "../state/kanban-home";
 import { isPlainRecord, type LegacyKitRaw, listLegacyKitProjects, readLegacyKitConfig } from "./legacy-kit-config";
@@ -306,10 +306,15 @@ function buildTeamEquivalent(
 			values[`qa.promptNotes.${to}`] = note;
 		}
 	}
-	if (typeof project.qaPreview === "string") {
-		values["qa.preview"] = project.qaPreview;
-	} else if (project.qaPreview !== undefined && project.qaPreview !== null) {
-		notes.push("qaPreview is not a string; not imported (qa.preview names the preview to start)");
+	if (project.qaPreview !== undefined && project.qaPreview !== null) {
+		const preview = kitQaPreviewSchema.safeParse(project.qaPreview);
+		if (preview.success) {
+			values["qa.preview"] = preview.data;
+		} else {
+			notes.push(
+				"qaPreview is not { pidFile, start, stop }; not imported (qa.preview is the preview the QA gate starts)",
+			);
+		}
 	}
 	if (Array.isArray(project.postLand) && project.postLand.length > 0) {
 		values["land.postLand"] = project.postLand;

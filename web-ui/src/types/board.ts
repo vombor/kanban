@@ -98,6 +98,8 @@ export interface BoardCard {
 	autoReviewMode?: TaskAutoReviewMode;
 	/** Absent = a dev card. QA, TRIAGE and calibration cards are never QA'd, reworked or auto-reviewed. */
 	role?: TaskRole;
+	/** On a QA card: the dev card it reviews (written by the pipeline). */
+	reviewsTaskId?: string;
 	images?: TaskImage[];
 	agentId?: RuntimeAgentId;
 	agentSettings?: RuntimeTaskAgentSettings;

@@ -95,6 +95,16 @@ export const kitQaPromptNotesSchema = z
 	})
 	.strict();
 
+/**
+ * The project preview QA screenshots go through (the legacy `qaPreview`): `start` and `stop` run with `sh -c` in the
+ * project, and `start` writes the preview's pid to `pidFile` (relative to the project). The QA gate starts it before
+ * a QA card when it is down and stops it once QA is idle, only if the pid is still the one it started.
+ */
+export const kitQaPreviewSchema = z
+	.object({ pidFile: z.string().min(1), start: z.string().min(1), stop: z.string().min(1) })
+	.strict();
+export type KitQaPreview = z.infer<typeof kitQaPreviewSchema>;
+
 const escalateTargetSchema = z.union([
 	z.literal("orchestrator"),
 	tierRefSchema,
@@ -144,7 +154,7 @@ export const kitDocumentObjectSchema = z
 				blurb: z.string().optional(),
 				promptNotes: kitQaPromptNotesSchema.optional(),
 				serversScript: z.string().nullable().optional(),
-				preview: z.string().nullable().optional(),
+				preview: kitQaPreviewSchema.nullable().optional(),
 			})
 			.strict()
 			.optional(),

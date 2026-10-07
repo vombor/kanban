@@ -97,6 +97,9 @@ describe("effective-agent incident (2026-10-06)", () => {
 
 		expect(harness.readDecisions("kanban-2uge")).toEqual([]);
 		expect(harness.events).toEqual([]);
+		// No QA card created, started or finished, and no preview touched (P4-3).
+		expect(harness.actions).toEqual([]);
+		expect(harness.previewCalls).toEqual([]);
 		// Not even a state file: the pipeline never looked at the workspace.
 		expect(() => statSync(harness.statePath("kanban-2uge"))).toThrow();
 		expect(harness.messages).toContainEqual({
@@ -179,7 +182,9 @@ describe("effective-agent incident (2026-10-06)", () => {
 		);
 
 		// foo is on team: its cards are QA'd (the routing really is there to inherit).
-		expect(harness.readCardDecisions("foo").some((decision) => decision.outcome === "not_implemented")).toBe(true);
+		expect(harness.readCardDecisions("foo").some((decision) => decision.outcome === "acted")).toBe(true);
+		expect(harness.actions.some((action) => action.kind === "createTask" && action.workspaceId === "foo")).toBe(true);
+		expect(harness.actions.filter((action) => action.workspaceId === "kanban-2uge")).toEqual([]);
 		// kanban-2uge inherits nothing from it.
 		expect(harness.readDecisions("kanban-2uge")).toEqual([]);
 		expect(harness.events).toEqual([]);

@@ -49,9 +49,10 @@ describe("pipeline worker", () => {
 			role: "dev",
 			effectiveAgent: { agentId: "claude", source: "selected" },
 			answer: { kind: "qa", agentId: "codex" },
-			// The QA gate itself is a later card: the skeleton decides and records only.
-			outcome: "not_implemented",
+			// The QA gate created the QA card (qa-gate.test.ts covers it).
+			outcome: "acted",
 		});
+		expect(records[1]?.note).toContain("QA card qa001 was created for snapshot snap-dev");
 		expect(harness.messages).toContainEqual({ type: "evaluated", workspaceId: "foo", decisions: 1, logged: 0 });
 		expect(harness.events).toEqual([]);
 	});

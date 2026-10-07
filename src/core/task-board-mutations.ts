@@ -35,6 +35,8 @@ export interface RuntimeCreateTaskInput {
 	autoReviewMode?: RuntimeTaskAutoReviewMode;
 	/** Omitted = a `dev` card. */
 	role?: RuntimeTaskRole;
+	/** On a QA card: the dev card it reviews. */
+	reviewsTaskId?: string;
 	images?: RuntimeTaskImage[];
 	agentId?: RuntimeAgentId;
 	agentSettings?: RuntimeTaskAgentSettings;
@@ -311,6 +313,7 @@ export function addTaskToColumn(
 		autoReviewEnabled: Boolean(input.autoReviewEnabled),
 		autoReviewMode: normalizeTaskAutoReviewMode(input.autoReviewMode),
 		...(input.role && input.role !== "dev" ? { role: input.role } : {}),
+		...(input.reviewsTaskId ? { reviewsTaskId: input.reviewsTaskId } : {}),
 		images: cloneTaskImages(input.images),
 		...(input.agentId ? { agentId: input.agentId } : {}),
 		...(input.agentSettings !== undefined

@@ -18,6 +18,7 @@ import { registerModelsCommand } from "./commands/models";
 import { registerOrchestratorCommand } from "./commands/orchestrator";
 import { registerPipelineCommand } from "./commands/pipeline";
 import { registerProjectCommand } from "./commands/project";
+import { registerQaCommand } from "./commands/qa";
 import { registerSetupCommand } from "./commands/setup";
 import { registerTaskCommand } from "./commands/task";
 import { loadGlobalRuntimeConfig, loadRuntimeConfig } from "./config/runtime-config";
@@ -595,6 +596,7 @@ async function startServer(): Promise<{
 				landing: request.landing,
 			});
 		},
+		runAction: runtimeServer.runPipelineAction,
 		log: (message) => {
 			console.warn(`[kanban] ${message}`);
 		},
@@ -847,6 +849,7 @@ function createProgram(invocationArgs: string[]): Command {
 	registerBoardCommand(program);
 	registerProjectCommand(program);
 	registerDoctorCommand(program, KANBAN_VERSION);
+	registerQaCommand(program);
 
 	program
 		.command("mcp")

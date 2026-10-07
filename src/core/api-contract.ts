@@ -170,6 +170,8 @@ export const runtimeBoardCardSchema = z
 		autoReviewEnabled: z.boolean().optional(),
 		autoReviewMode: runtimeTaskAutoReviewModeSchema.optional(),
 		role: runtimeTaskRoleSchema.optional(),
+		/** On a QA card (`role: "qa"`): the dev card it reviews. */
+		reviewsTaskId: z.string().optional(),
 		images: z.array(runtimeTaskImageSchema).optional(),
 		agentId: runtimeAgentIdSchema.optional(),
 		agentSettings: runtimeAgentSettingsSchema.optional(),

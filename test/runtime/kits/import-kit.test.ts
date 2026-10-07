@@ -71,6 +71,24 @@ function liveLikeKitConfig(): Record<string, unknown> {
 }
 
 describe("mapLegacyKitConfig", () => {
+	it("imports the legacy qaPreview object as qa.preview, and notes one of another shape", () => {
+		const preview = { pidFile: ".preview.pid", start: "npm run preview:start", stop: "npm run preview:stop" };
+		const withPreview = (qaPreview: unknown) => {
+			const raw = liveLikeKitConfig();
+			(raw.projects as Array<Record<string, unknown>>)[0] = {
+				...(raw.projects as Array<Record<string, unknown>>)[0],
+				qaPreview,
+			};
+			return mapLegacyKitConfig(raw, "kit.config.json").workspaces.find(
+				(workspace) => workspace.workspaceId === "foo",
+			);
+		};
+		expect(withPreview(preview)?.overrides["qa.preview"]).toEqual(preview);
+		const odd = withPreview("npm run preview");
+		expect(odd?.overrides["qa.preview"]).toBeUndefined();
+		expect(odd?.notes.join("\n")).toContain("qaPreview is not { pidFile, start, stop }");
+	});
+
 	it("maps foo to team with only its project values as overrides, landing qa, in shadow", () => {
 		const mapping = mapLegacyKitConfig(liveLikeKitConfig(), "kit.config.json");
 		const foo = mapping.workspaces.find((workspace) => workspace.workspaceId === "foo");

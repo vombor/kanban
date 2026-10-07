@@ -21,6 +21,7 @@ import {
 	getKanbanRuntimeTls,
 	isKanbanRemoteHost,
 } from "../core/runtime-endpoint";
+import type { PipelineActionRequest, PipelineActionResult } from "../pipeline/actions";
 import type { PipelineEventMap } from "../pipeline/events";
 import type { WatchdogActionRequest } from "../pipeline/watchdog/actions";
 import {
@@ -59,6 +60,7 @@ import { getWebUiDir, normalizeRequestPath, readAsset } from "./assets";
 import { handleHttpRequest, handleSocketUpgrade } from "./middleware";
 import { createModelListsRequestHandler } from "./model-lists-route";
 import { createOrphanProcessSweeper } from "./orphan-process-sweeper";
+import { createPipelineActionRunner } from "./pipeline-actions";
 import { createProcessReaper, type PreparedWorktreeReap } from "./process-reaper";
 import { createProcProcessTableReader, isProcessTableSupported } from "./process-table";
 import type { RuntimeStateHub } from "./runtime-state-hub";
@@ -102,6 +104,8 @@ export interface RuntimeServer {
 	taskTrashWorkflow: TaskTrashWorkflow;
 	/** Carries out the pipeline worker's watchdog actions (src/server/watchdog-actions.ts). */
 	handleWatchdogRequest: (request: WatchdogActionRequest) => Promise<unknown>;
+	/** Runs the pipeline worker's action requests (pipeline-actions.ts). */
+	runPipelineAction: (request: PipelineActionRequest) => Promise<PipelineActionResult>;
 	url: string;
 	close: () => Promise<void>;
 }
@@ -317,6 +321,18 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		warn: deps.warn,
 	});
 	const handleTrashTaskRequest = createTrashTaskRequestHandler(taskTrashWorkflow);
+	const runPipelineAction = createPipelineActionRunner({
+		mutateWorkspaceState,
+		ensureTaskWorktree: async (scope, input) =>
+			await ensureTaskWorktreeIfDoesntExist({
+				cwd: scope.workspacePath,
+				taskId: input.taskId,
+				baseRef: input.baseRef,
+			}),
+		startTaskSession: async (scope, input) => await runtimeApi.startTaskSession(scope, input),
+		onBoardMutated: async (scope) =>
+			await deps.runtimeStateHub.broadcastRuntimeWorkspaceStateUpdated(scope.workspaceId, scope.workspacePath),
+	});
 
 	const createTrpcContext = async (req: IncomingMessage): Promise<RuntimeTrpcContext> => {
 		const requestUrl = new URL(req.url ?? "/", "http://localhost");
@@ -615,6 +631,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		url,
 		taskTrashWorkflow,
 		handleWatchdogRequest,
+		runPipelineAction,
 		close: async () => {
 			orphanProcessSweeper.close();
 			clineTurnMonitor.close();

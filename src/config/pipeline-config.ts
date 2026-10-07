@@ -74,6 +74,8 @@ const pipelineSectionSchema = z
 				scratchRoot: z.string().default("/tmp/kanban-qa"),
 				outboxRoot: z.string().default("/tmp/kanban-qa-out"),
 				chromiumLibs: z.string().nullable().default(null),
+				// Minutes with no QA card queued or running before the QA gate stops a preview it started.
+				previewIdleMin: z.number().nonnegative().default(5),
 			})
 			.strict()
 			.default({
@@ -84,6 +86,7 @@ const pipelineSectionSchema = z
 				scratchRoot: "/tmp/kanban-qa",
 				outboxRoot: "/tmp/kanban-qa-out",
 				chromiumLibs: null,
+				previewIdleMin: 5,
 			}),
 		// Scripted checks (src/pipeline/checks.ts): one run at a time machine-wide, each step niced and with test
 		// runners capped at `maxWorkers` (a full install + test suite per Review card once pegged the pod).

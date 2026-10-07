@@ -9,7 +9,9 @@
 // pipeline-state entry, the QA log and the decision log.
 //
 // Acting goes through the server: `finishTask()` sends a `finishTask` request (the Done workflow with its landing
-// step) and resolves with the server's answer; features release holds through it (src/pipeline/hold.ts).
+// step) and resolves with the server's answer; features release holds through it (src/pipeline/hold.ts). Outside
+// shadow the QA gate (qa-gate.ts) acts on the kit's answers: it creates, starts and nudges QA cards through `action`
+// requests (actions.ts), finishes them and lands a PASS through `finishTask`; the worker never writes the board.
 //
 // A workspace is evaluated only with landing mode `qa`. Everything else (`off`, `commit`, `pr`, no entry = `off`
 // on the `default` kit) is forgotten: no state file, no log, no kit question.
@@ -25,6 +27,7 @@ import { type KitCatalog, loadKitCatalog, resolveWorkspaceKit } from "../kits/re
 import { registerTeamKitFeatures } from "../kits/team/features";
 import { readClineProvidersFile } from "../models/cline-providers";
 import { getClineProvidersSettingsPath } from "../state/kanban-home";
+import type { PipelineActions } from "./actions";
 import { CHECKS_VERSION, type ChecksResult, type ChecksRunner, createChecksRunner, formatChecksReport } from "./checks";
 import { createPipelineDecisionLog, type PipelineDecisionLog, type PipelineDecisionRecord } from "./decision-log";
 import { evaluatePipelineWorkspace, isPipelineWorkspace, type PipelineWorkspaceSnapshot } from "./engine";
@@ -32,7 +35,11 @@ import { createPipelineEventBus, type PipelineEventBus } from "./events";
 import { createPipelineFeatureRegistry, type PipelineFeatureActions, type PipelineFeatureRegistry } from "./features";
 import { preserveTaskWork, releaseHold } from "./hold";
 import { createPipelineStateStore, type PipelineStateStore } from "./pipeline-state";
+import { createQaGate, type QaGate } from "./qa-gate";
 import { type AppendQaLog, createQaLogAppender } from "./qa-log";
+import { createQaPreviewController } from "./qa-preview";
+import { readQaVerdictFile } from "./qa-verdict";
+import { stopScratchProcesses } from "./scratch-processes";
 import { createSubmissionStage, type SubmissionInspector } from "./submission-stage";
 import type { WatchdogActionRequest, WatchdogActionResult, WatchdogActions } from "./watchdog/actions";
 import { createWatchdog, type Watchdog } from "./watchdog/watchdog";
@@ -40,6 +47,7 @@ import {
 	isPipelineHostMessage,
 	type PipelineFinishTaskRequest,
 	type PipelineHostMessage,
+	type PipelineServerRequest,
 	type PipelineWorkerMessage,
 } from "./worker-protocol";
 
@@ -71,6 +79,9 @@ export interface PipelineWorkerDependencies {
 	}) => Watchdog;
 	/** How long a watchdog request waits for the server's answer. */
 	requestTimeoutMs?: number;
+	/** The QA gate's card actions. Default: `request`s to the server over IPC. */
+	qaActions?: PipelineActions;
+	qaGate?: QaGate;
 	now?: () => number;
 }
 
@@ -232,27 +243,63 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 	const submissionStage = createSubmissionStage({ checks });
 	const inspectSubmission = deps.inspectSubmission ?? submissionStage.inspect;
 	const requestTimeoutMs = deps.requestTimeoutMs ?? 120_000;
-	let nextWatchdogRequestId = 1;
+	let nextServerRequestId = 1;
 	const pendingRequests = new Map<
 		number,
 		{ resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }
 	>();
+	const sendRequest = async (request: PipelineServerRequest): Promise<unknown> => {
+		if (closed) {
+			throw new Error("the pipeline worker is shutting down");
+		}
+		const id = nextServerRequestId++;
+		return await new Promise<unknown>((resolve, reject) => {
+			const timer = setTimeout(() => {
+				pendingRequests.delete(id);
+				reject(new Error(`no answer from the server to ${request.kind} within ${requestTimeoutMs} ms`));
+			}, requestTimeoutMs);
+			timer.unref();
+			pendingRequests.set(id, { resolve, reject, timer });
+			deps.send({ type: "request", id, request });
+		});
+	};
 	const watchdogActions: WatchdogActions = {
-		request: async <Request extends WatchdogActionRequest>(request: Request) => {
-			const id = nextWatchdogRequestId++;
-			const result = await new Promise<unknown>((resolve, reject) => {
-				const timer = setTimeout(() => {
-					pendingRequests.delete(id);
-					reject(new Error(`no answer from the server to ${request.kind} within ${requestTimeoutMs} ms`));
-				}, requestTimeoutMs);
-				timer.unref();
-				pendingRequests.set(id, { resolve, reject, timer });
-				deps.send({ type: "request", id, request });
-			});
+		request: async <Request extends WatchdogActionRequest>(request: Request) =>
 			// The server answers each kind with its WatchdogActionResults entry (src/server/watchdog-actions.ts).
-			return result as WatchdogActionResult<Request["kind"]>;
+			(await sendRequest(request)) as WatchdogActionResult<Request["kind"]>,
+	};
+	// The QA gate's card actions go over the same request channel; the host refuses them for other workspaces.
+	const gateActions: PipelineActions = deps.qaActions ?? {
+		run: async (request) => {
+			try {
+				await sendRequest(request);
+				return { ok: true };
+			} catch (error) {
+				return { ok: false, error: error instanceof Error ? error.message : String(error) };
+			}
 		},
 	};
+	const qaGate =
+		deps.qaGate ??
+		createQaGate({
+			actions: gateActions,
+			deliverInput: async ({ workspaceId, taskId, text }) => {
+				try {
+					const delivered = await watchdogActions.request({ kind: "deliverInput", workspaceId, taskId, text });
+					return delivered.ok ? { ok: true } : { ok: false, error: delivered.error ?? delivered.status };
+				} catch (error) {
+					return { ok: false, error: error instanceof Error ? error.message : String(error) };
+				}
+			},
+			finishTask,
+			appendQaLog,
+			store,
+			bus,
+			preview: createQaPreviewController({ log }),
+			readVerdict: readQaVerdictFile,
+			stopScratchProcesses: async (dirs) => await stopScratchProcesses(dirs, log),
+			log,
+		});
 	const watchdog = (deps.createWatchdog ?? createWatchdog)({
 		actions: watchdogActions,
 		readConfig,
@@ -291,6 +338,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 		features.removeWorkspace(workspaceId);
 		submissionStage.forgetWorkspace(workspaceId);
 		workspacePaths.delete(workspaceId);
+		qaGate.forget(workspaceId);
 		if (lastWatchKeys.delete(workspaceId)) {
 			log(`pipeline ${workspaceId}: not watched any more`);
 		}
@@ -353,14 +401,27 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			});
 		}
 
+		const policy = createRoutingPolicy(resolution.kit);
+		const agentDefaultModels = await loadAgentDefaultModels(parsed);
+		const gateContext = {
+			snapshot,
+			settings,
+			qa: parsed.config.pipeline.qa,
+			kit: resolution.kit,
+			kitName: resolution.kitName,
+			policy,
+			agentDefaultModels,
+			now: now(),
+		};
+		const shadow = settings.pipeline.shadow;
 		const decisions = await evaluatePipelineWorkspace({
 			snapshot,
 			settings,
 			kitName: resolution.kitName,
-			policy: createRoutingPolicy(resolution.kit),
+			policy,
 			state,
 			limits: { maxFailRounds: parsed.config.pipeline.rework.maxFailRounds },
-			agentDefaultModels: await loadAgentDefaultModels(parsed),
+			agentDefaultModels,
 			inspectSubmission: async (input) =>
 				await inspectSubmission(
 					{
@@ -372,7 +433,8 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 					},
 					input,
 				),
-			now: now(),
+			submitQa: shadow ? undefined : async (input) => await qaGate.submit({ context: gateContext, ...input }),
+			now: gateContext.now,
 		});
 		const seen = new Set<string>();
 		for (const decision of decisions) {
@@ -389,6 +451,10 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			if (key.startsWith(`${workspaceId}:`) && !seen.has(key)) {
 				lastDecisionKeys.delete(key);
 			}
+		}
+		// QA card starts and ingests are events, logged each time. A shadow workspace acts on nothing.
+		if (!shadow) {
+			records.push(...(await qaGate.tick({ ...gateContext, now: now() })));
 		}
 		if (records.length > 0) {
 			await decisionLog.append(records);

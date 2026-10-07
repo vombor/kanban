@@ -43,7 +43,9 @@ const LEGACY_KIT_BOARD_BACKUPS_DIR = "board-backups";
 const LEGACY_KIT_BOARD_LATEST_FILENAME = "board-latest.json";
 const PIPELINE_STATE_FILENAME = "pipeline-state.json";
 const PIPELINE_DECISIONS_FILENAME = "pipeline-decisions.jsonl";
+/** Names kept from the legacy kit (plan §1.2): people, prompts and history use them. */
 const QA_LOG_FILENAME = "qa-log.md";
+const QA_ARTIFACTS_DIR = "qa-artifacts";
 const BOARD_BACKUPS_DIR = "boards";
 /** The legacy kit's per-card pipeline state (`checks-state.json` in its per-project data dir). */
 const LEGACY_KIT_CHECKS_STATE_FILENAME = "checks-state.json";
@@ -322,6 +324,15 @@ export function getKanbanHomePath(): string {
 	return resolveKanbanHome().homePath;
 }
 
+/** The Kanban home for text people and agents read: `~/…` when it is inside the user's home directory. */
+export function getKanbanHomeDisplayPath(homePath = getKanbanHomePath()): string {
+	const userHome = homedir();
+	const fromUserHome = relative(userHome, homePath);
+	return fromUserHome && !fromUserHome.startsWith("..") && !isAbsolute(fromUserHome)
+		? `~/${fromUserHome.split("\\").join("/")}`
+		: homePath;
+}
+
 export function getKanbanGlobalConfigPath(): string {
 	return resolveKanbanHome().globalConfigPath;
 }
@@ -473,6 +484,16 @@ export function getPipelineDecisionLogPath(workspaceId: string, homePath = getKa
 /** The workspace's QA log (`<home>/data/<workspaceId>/qa-log.md`): check results, verdicts; people and agents read it. */
 export function getPipelineQaLogPath(workspaceId: string, homePath = getKanbanHomePath()): string {
 	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), QA_LOG_FILENAME);
+}
+
+/** Ingested QA outboxes, `<dir>/<devTaskId>/r<round>/` (`<home>/data/<workspaceId>/qa-artifacts`). */
+export function getQaArtifactsPath(workspaceId: string, homePath = getKanbanHomePath()): string {
+	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), QA_ARTIFACTS_DIR);
+}
+
+/** The pid of the project preview the QA gate started (`<home>/run/qa-preview-<workspaceId>.pid`). */
+export function getQaPreviewMarkPath(workspaceId: string, homePath = getKanbanHomePath()): string {
+	return join(getKanbanRunPath(homePath), `qa-preview-${workspaceId}.pid`);
 }
 
 /**

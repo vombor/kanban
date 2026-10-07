@@ -16,8 +16,19 @@ import { getPipelineDecisionLogPath } from "../state/kanban-home";
 /** Rotated to `<log>.1` past this size, so a long shadow period can't fill the disk. */
 const DECISION_LOG_MAX_BYTES = 5 * 1024 * 1024;
 
-/** `land`: the Done workflow's landing step (src/server/task-landing-gate.ts), written by the server. */
-export type PipelineStage = "worker" | "snapshot" | "checks" | "qa_gate" | "land";
+/**
+ * `land`: the Done workflow's landing step (src/server/task-landing-gate.ts), written by the server. `qa_gate`: the
+ * kit's QA answer for a dev card; `qa_start` / `qa_ingest` / `qa_pass`: the QA gate starting and ingesting QA cards and acting on a PASS.
+ */
+export type PipelineStage =
+	| "worker"
+	| "snapshot"
+	| "checks"
+	| "qa_gate"
+	| "qa_start"
+	| "qa_ingest"
+	| "qa_pass"
+	| "land";
 
 /**
  * What the pipeline did with a decision. `none`: nothing to do. `shadow`: it would act, but the workspace is in

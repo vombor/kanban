@@ -11,9 +11,10 @@
 //   question, no decision. `commit`/`pr` cards stay with the auto-review reconciler.
 //
 // For each Review card it runs the submission stage (submission-stage.ts: snapshot, scripted checks), then asks the
-// QA-gate question (`qaPolicy`) for each submitted card and records the answer. The stages that act on the
-// gate's answers (the QA gate, land, rework, recovery) are later cards; until they exist a decision that would act
-// is logged as `not_implemented` (or `shadow` on a shadow workspace).
+// QA-gate question (`qaPolicy`) for each submitted card and records the answer. A `qa` answer goes to the QA gate
+// (qa-gate.ts, through `submitQa`) unless the workspace is in shadow. The stages that act on later answers (rework,
+// recovery) are later cards; a decision without a stage to act on it is logged as `not_implemented` (or `shadow`
+// on a shadow workspace).
 
 import type { WorkspacePipelineSettings } from "../config/pipeline-config";
 import type {
@@ -29,7 +30,7 @@ import {
 	resolveEffectiveModel,
 } from "../core/effective-agent";
 import type { CardHistory, EffectiveCard, QaPolicyAnswer, RoutingPolicy } from "../kits/policy";
-import type { PipelineDecisionRecord } from "./decision-log";
+import type { PipelineDecisionOutcome, PipelineDecisionRecord } from "./decision-log";
 import type { PipelineCardState, PipelineWorkspaceState } from "./pipeline-state";
 import type { SubmissionCardInput, SubmissionInspection } from "./submission-stage";
 
@@ -71,6 +72,13 @@ export interface PipelineEvaluationInput {
 	agentDefaultModels?: EffectiveModelConfig["agentDefaultModels"];
 	/** The submission stage for one Review card (snapshot, checks, has it work). Only called on a `qa` workspace. */
 	inspectSubmission: (input: SubmissionCardInput) => Promise<SubmissionInspection>;
+	/** The QA gate for a `qa` answer outside shadow. Absent: the decision is logged as `not_implemented`. */
+	submitQa?: (input: {
+		card: RuntimeBoardCard;
+		session: PipelineSessionView | null;
+		dev: EffectiveCard;
+		answer: Extract<QaPolicyAnswer, { kind: "qa" }>;
+	}) => Promise<{ outcome: PipelineDecisionOutcome; note: string }>;
 	now: number;
 }
 
@@ -199,12 +207,19 @@ export async function evaluatePipelineWorkspace(input: PipelineEvaluationInput):
 		}
 		const { history, round } = readCardHistory(input.state.cards[card.id]);
 		const answer = input.policy.qaPolicy({ dev: effective, round, history });
+		let outcome: PipelineDecisionOutcome = answer.kind === "none" ? "none" : shadow ? "shadow" : "not_implemented";
+		let note = `round ${round}: ${describeQaAnswer(answer)}`;
+		if (answer.kind === "qa" && !shadow && input.submitQa) {
+			const gated = await input.submitQa({ card, session, dev: effective, answer });
+			outcome = gated.outcome;
+			note = `${note}; ${gated.note}`;
+		}
 		decisions.push({
 			...common,
 			stage: "qa_gate",
 			answer,
-			outcome: answer.kind === "none" ? "none" : shadow ? "shadow" : "not_implemented",
-			note: `round ${round}: ${describeQaAnswer(answer)}`,
+			outcome,
+			note,
 		});
 	}
 	return decisions;
