@@ -10,9 +10,16 @@ import { resolveProjectRoots } from "../projects/project-roots";
 import { buildLemonadeModelListUrl, planClineModelsSource } from "../setup/cline-models-source";
 import { planMachineSetup } from "../setup/machine-setup";
 import { getAgentTrustConfigPaths } from "../setup/workspace-trust-report";
-import { getClineHomeDirPath, getClineModelsSettingsPath, resolveKanbanHome } from "../state/kanban-home";
+import {
+	getClineGlobalRulesPath,
+	getClineHomeDirPath,
+	getClineModelsSettingsPath,
+	getClineProvidersSettingsPath,
+	resolveKanbanHome,
+} from "../state/kanban-home";
 import { readLiveKanbanServerLock } from "../state/kanban-server-lock";
 import { listWorkspaceIndexEntries, loadWorkspaceBoardById } from "../state/workspace-state";
+import { checkKanbanFilesUnderClineDir } from "./cline-dir-checks";
 import { checkClineLemonadeContextWindows } from "./cline-models-checks";
 import { createDeepCheckDeps, type DeepCheckDeps, runDeepChecks } from "./deep-checks";
 import {
@@ -110,6 +117,12 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
 	);
 	const clineModelsPath = getClineModelsSettingsPath(config.agents.cline.dataDir);
 	findings.push(...(await checkClineLemonadeContextWindows(clineModelsPath)));
+	findings.push(
+		...(await checkKanbanFilesUnderClineDir({
+			rulesDir: getClineGlobalRulesPath(),
+			providersPath: getClineProvidersSettingsPath(config.agents.cline.dataDir),
+		})),
+	);
 
 	const modelsSource = await planClineModelsSource(clineModelsPath, buildLemonadeModelListUrl(options.origin));
 	findings.push(

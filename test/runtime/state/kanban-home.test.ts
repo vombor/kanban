@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 
 import { getRuntimeGlobalConfigPath } from "../../../src/config/runtime-config";
 import {
@@ -152,6 +152,37 @@ describe("kanban home resolution", () => {
 				expect(getDebugResetTargetPaths()).toContain(join(home.userHomePath, "worktrees"));
 			},
 			{ env: { KANBAN_HOME: "~" } },
+		);
+	});
+
+	it("never offers anything under Cline's dirs as a debug reset target (Kanban never deletes Cline's data)", async () => {
+		// withTemporaryKanbanHome restores only its own env keys.
+		const previousClineDir = process.env.CLINE_DIR;
+		process.env.CLINE_DIR = "/srv/cline-dir";
+		onTestFinished(() => {
+			if (previousClineDir === undefined) {
+				delete process.env.CLINE_DIR;
+			} else {
+				process.env.CLINE_DIR = previousClineDir;
+			}
+		});
+		await withTemporaryKanbanHome(
+			(home) => {
+				const targets = getDebugResetTargetPaths();
+				expect(targets).toEqual([
+					join(home.userHomePath, ".kanban"),
+					join(home.userHomePath, ".kanban", "worktrees"),
+				]);
+				expect(targets.some((path) => path.includes(`${join(home.userHomePath, ".cline")}`))).toBe(false);
+				expect(targets).not.toContain("/srv/cline-dir");
+			},
+			{
+				layout: "initialized",
+				prepare: (userHomePath) =>
+					writeJson(join(userHomePath, ".kanban", "config.json"), {
+						legacyWorktreeRoots: ["~/.cline/worktrees", "/srv/cline-dir/worktrees"],
+					}),
+			},
 		);
 	});
 });

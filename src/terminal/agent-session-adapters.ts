@@ -22,6 +22,7 @@ import {
 	type TaskGuardrails,
 } from "../guardrails/task-guardrails";
 import { resolveHomeAgentAppendSystemPrompt } from "../prompts/append-system-prompt";
+import { CLINE_RULE_FILES } from "../prompts/cline-rules";
 import { getClineDataPath } from "../state/kanban-home";
 import { getRuntimeHomePath } from "../state/workspace-state";
 import { getGitStdout } from "../workspace/git-utils";
@@ -433,6 +434,31 @@ async function ensureKanbanManagedHookFile(filePath: string, content: string, ex
 	}
 	await ensureTextFile(filePath, content, executable);
 	return true;
+}
+
+const KANBAN_MANAGED_CLINE_RULE_MARKER = "<!-- kanban-managed: cline rule -->";
+
+/** Cline's env for every launch: no ClinePass/Desktop promo notice over the TUI (cline 3.0.69 reads it per run). */
+const CLINE_LAUNCH_ENV: Readonly<Record<string, string>> = { CLINE_DISABLE_CLINE_PASS_NOTICE: "1" };
+
+/**
+ * Writes Kanban's Cline rules (src/prompts/cline-rules.ts) as workspace rules: cline 3.x loads `<cwd>/.cline/rules/*`
+ * into the task, so they no longer go into Cline's global ~/.cline/rules. Git-excluded so they never ship with the
+ * card's work; a user-owned file of the same name (no marker) is left alone. Returns the names it skipped.
+ */
+async function installClineLaunchRules(cwd: string): Promise<string[]> {
+	const skipped: string[] = [];
+	for (const [name, content] of Object.entries(CLINE_RULE_FILES)) {
+		const rulePath = join(cwd, ".cline", "rules", `kanban-${name}`);
+		const existing = await readFile(rulePath, "utf8").catch(() => null);
+		if (existing !== null && existing.split("\n", 1)[0] !== KANBAN_MANAGED_CLINE_RULE_MARKER) {
+			skipped.push(name);
+			continue;
+		}
+		await ensureTextFile(rulePath, `${KANBAN_MANAGED_CLINE_RULE_MARKER}\n${content}`);
+		await addToWorktreeGitExclude(cwd, `/${relative(cwd, rulePath).split("\\").join("/")}`);
+	}
+	return skipped;
 }
 
 function buildOpenCodePluginContent(
@@ -1767,6 +1793,14 @@ const clineCliAdapter: AgentSessionAdapter = {
 					}),
 				);
 			}
+		}
+
+		// Kanban writes nothing under ~/.cline: its rules are workspace rules and the notices are off per launch.
+		Object.assign(env, CLINE_LAUNCH_ENV);
+		const skippedRules = await installClineLaunchRules(input.cwd);
+		if (skippedRules.length > 0) {
+			const ruleWarning = `Kanban's Cline rules not installed for ${skippedRules.join(", ")}: a user-owned .cline/rules/kanban-* file already exists.`;
+			sessionWarning = sessionWarning ? `${sessionWarning} ${ruleWarning}` : ruleWarning;
 		}
 
 		const appendedSystemPrompt = resolveHomeAgentAppendSystemPrompt(input.taskId);

@@ -185,7 +185,7 @@ export async function runDeepChecks(
 				level: "warn",
 				area: "deep",
 				message: `deprecated provider workarounds left: ${removable.map((entry) => entry.what).join("; ")}`,
-				hint: "kanban models providers --cleanup (then --apply)",
+				hint: "kanban models providers --cleanup (lists the edits to make in Cline's files)",
 			});
 		}
 		for (const entry of deprecated.filter((candidate) => candidate.keep)) {

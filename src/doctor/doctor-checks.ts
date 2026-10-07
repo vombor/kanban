@@ -394,6 +394,7 @@ export function checkSetup(plans: SetupStepPlan[]): DoctorFinding[] {
 		switch (plan.status) {
 			case "change":
 				return { level: "warn", area: "setup", message, hint: "kanban setup" };
+			case "manual":
 			case "error":
 				return { level: "warn", area: "setup", message };
 			case "skipped":

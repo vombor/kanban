@@ -1,5 +1,6 @@
 // The one-provider policy for Cline models (`models.providers` in config.json) and the deprecated provider
-// workarounds left in Cline's and Codex's settings. `kanban models providers` reports and cleans them up;
+// workarounds left in Cline's and Codex's settings. `kanban models providers` reports them (Kanban never edits Cline's
+// files: it writes nothing under ~/.cline, user rule 2026-10-07);
 // card creation (P3-5) asks `providerForModel` which provider a new card's model gets.
 //
 // Ported from archive/devteam-kit:lib/providers.cjs@6b61bfe and bin/providers.mjs@6b61bfe. Since the fork switch
@@ -13,8 +14,8 @@
 //   - a models.json custom provider at a Mantle URL (or named `models.json:<id>` in `deprecated`);
 //   - a Codex `[model_providers.*]` at a Mantle URL: reported only (it goes with the Codex retirement).
 // Custom providers that point anywhere else (e.g. `lemonade`, the local Lemonade server) are normal providers.
-import { chmod, copyFile, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 
 import type { PipelineConfig } from "../config/pipeline-config";
 import { getClineModelsSettingsPath, getClineProvidersSettingsPath } from "../state/kanban-home";
@@ -220,41 +221,22 @@ export interface ProviderCleanupEdit {
 }
 
 export interface ProviderCleanupResult {
+	/** The edits to make by hand: Kanban writes nothing under ~/.cline (user rule, 2026-10-07). */
 	edits: ProviderCleanupEdit[];
-	/** Entries reported but never edited (Codex). */
+	/** Entries reported but never to be edited (Codex). */
 	kept: DeprecatedProviderEntry[];
-	applied: boolean;
-	backupDir: string | null;
-	/** Files that could not be read as JSON; nothing in them is edited. */
+	/** Files that could not be read as JSON. */
 	errors: string[];
 }
 
-function backupTimestamp(now: Date): string {
-	return now.toISOString().replace(/[-:.]/gu, "");
-}
-
-async function writeJsonKeepingMode(path: string, document: JsonObject, fallbackMode: number): Promise<void> {
-	const mode = await stat(path).then(
-		(info) => info.mode & 0o7777,
-		() => fallbackMode,
-	);
-	const tempPath = `${path}.tmp.${process.pid}.${Date.now()}`;
-	await writeFile(tempPath, `${JSON.stringify(document, null, 2)}\n`, { encoding: "utf8", mode });
-	await chmod(tempPath, mode);
-	await rename(tempPath, path);
-}
-
 /**
- * Removes the deprecated Cline providers, points `lastUsedProvider` at the default provider and removes the Mantle
- * custom providers from models.json. Dry run unless `apply`; `apply` copies both files to
- * `<backupsRoot>/cline-settings-<ts>/` first. Codex's config is never edited.
+ * Lists the edits that remove the deprecated Cline providers, point `lastUsedProvider` at the default provider and
+ * remove the Mantle custom providers from models.json. Read-only: the files are Cline's, so the user makes the edits
+ * (or uses `cline auth`); Codex's config is only reported.
  */
-export async function cleanupDeprecatedProviders(options: {
+export async function planDeprecatedProviderCleanup(options: {
 	paths: ProviderSettingsPaths;
 	policy: ProvidersPolicy;
-	apply: boolean;
-	backupsRoot: string;
-	now?: Date;
 }): Promise<ProviderCleanupResult> {
 	const { paths, policy } = options;
 	const providersRead = await readJsonFile(paths.providersPath);
@@ -264,52 +246,28 @@ export async function cleanupDeprecatedProviders(options: {
 		...(modelsRead.error ? [`${paths.modelsPath}: ${modelsRead.error}`] : []),
 	];
 	const edits: ProviderCleanupEdit[] = [];
-	const providersDocument = providersRead.document ? structuredClone(providersRead.document) : null;
-	const modelsDocument = modelsRead.document ? structuredClone(modelsRead.document) : null;
-
-	if (providersDocument) {
-		const providers = providersOf(providersDocument);
-		for (const [id, entry] of Object.entries(providers)) {
+	if (providersRead.document) {
+		for (const [id, entry] of Object.entries(providersOf(providersRead.document))) {
 			if (isDeprecatedClineProvider(id, entry, policy)) {
-				delete providers[id];
 				edits.push({ file: paths.providersPath, description: `delete providers.${id}` });
 			}
 		}
-		const lastUsedProvider = readStringKey(providersDocument, "lastUsedProvider");
+		const lastUsedProvider = readStringKey(providersRead.document, "lastUsedProvider");
 		if (lastUsedProvider && lastUsedProvider !== policy.default) {
-			providersDocument.lastUsedProvider = policy.default;
 			edits.push({
 				file: paths.providersPath,
 				description: `lastUsedProvider: ${lastUsedProvider} -> ${policy.default}`,
 			});
 		}
 	}
-	if (modelsDocument) {
-		const providers = providersOf(modelsDocument);
-		for (const [id, entry] of Object.entries(providers)) {
+	if (modelsRead.document) {
+		for (const [id, entry] of Object.entries(providersOf(modelsRead.document))) {
 			if (isDeprecatedCustomProvider(id, entry, policy)) {
 				const baseUrl = readStringKey(isObject(entry) ? entry.provider : undefined, "baseUrl") ?? "-";
-				delete providers[id];
 				edits.push({ file: paths.modelsPath, description: `delete custom provider ${id} (${baseUrl})` });
 			}
 		}
 	}
 	const kept = (await findDeprecatedProviderEntries(paths, policy)).filter((entry) => entry.keep);
-	if (!options.apply || edits.length === 0) {
-		return { edits, kept, applied: false, backupDir: null, errors };
-	}
-
-	const backupDir = join(options.backupsRoot, `cline-settings-${backupTimestamp(options.now ?? new Date())}`);
-	await mkdir(backupDir, { recursive: true, mode: 0o700 });
-	const touched = new Set(edits.map((edit) => edit.file));
-	for (const file of touched) {
-		await copyFile(file, join(backupDir, basename(file)));
-	}
-	if (providersDocument && touched.has(paths.providersPath)) {
-		await writeJsonKeepingMode(paths.providersPath, providersDocument, 0o600);
-	}
-	if (modelsDocument && touched.has(paths.modelsPath)) {
-		await writeJsonKeepingMode(paths.modelsPath, modelsDocument, 0o644);
-	}
-	return { edits, kept, applied: true, backupDir, errors };
+	return { edits, kept, errors };
 }

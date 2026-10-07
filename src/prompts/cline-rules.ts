@@ -1,8 +1,10 @@
-// Cline rules `kanban setup` installs into Cline's global rules dir (~/.cline/rules; cline 3.x loads every file
-// there into every Cline task). Kept byte-identical to the legacy kit's machine/cline-rules/*.md, so a machine set up
-// by the kit reports them as installed. Each rule came from an incident (docs/team/HISTORY.md): bounded-output
-// (archive/devteam-kit@0a3d1fc), keep-acting (@050d390), small-tool-calls (@8590bad), status-line (@ebde195),
-// tool-call-json (@16879d1). The kit's dev-servers.md is Pawsome-specific and belongs in that project (plan §2.5).
+// Cline rules every Cline launch gets as worktree-local rules (`<cwd>/.cline/rules/kanban-<name>`, git-excluded;
+// cline 3.x loads every file there into the task, see installClineLaunchRules in agent-session-adapters.ts). Kanban
+// writes nothing under ~/.cline (user rule, 2026-10-07), so these no longer go into Cline's global rules dir; doctor
+// reports copies an older `kanban setup` or the legacy kit left there (byte-identical to these). Each rule came from
+// an incident (docs/team/HISTORY.md): bounded-output (archive/devteam-kit@0a3d1fc), keep-acting (@050d390),
+// small-tool-calls (@8590bad), status-line (@ebde195), tool-call-json (@16879d1). The kit's dev-servers.md is
+// Pawsome-specific and belongs in that project (plan §2.5).
 export const CLINE_RULE_FILES: Readonly<Record<string, string>> = {
 	"bounded-output.md": `# Keep command output small
 

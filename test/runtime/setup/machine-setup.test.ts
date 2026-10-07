@@ -1,10 +1,9 @@
-import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { parsePipelineConfig } from "../../../src/config/pipeline-config";
-import { CLINE_RULE_FILES } from "../../../src/setup/cline-rules";
 import { type MachineSetupPaths, planMachineSetup, type SetupStepPlan } from "../../../src/setup/machine-setup";
 import { runMachineSetup } from "../../../src/setup/run-setup";
 import { createFakeLemonadeFetch } from "../../utilities/lemonade-fixtures";
@@ -24,8 +23,6 @@ describe("kanban setup steps", () => {
 		({ path: root, cleanup } = createTempDir("kanban-machine-setup-"));
 		paths = {
 			npmrc: join(root, ".npmrc"),
-			clineRulesDir: join(root, "cline", "rules"),
-			clineNotices: join(root, "cline", "data", "settings", "cli-notices.json"),
 			clineProviders: join(root, "cline", "data", "settings", "providers.json"),
 			clineModels: join(root, "cline", "data", "settings", "models.json"),
 			claudeDir: join(root, "claude"),
@@ -34,12 +31,11 @@ describe("kanban setup steps", () => {
 	});
 	afterEach(() => cleanup());
 
-	function plan(overrides: { legacyKitInstalled?: boolean; env?: NodeJS.ProcessEnv; forceRules?: boolean } = {}) {
+	function plan(overrides: { legacyKitInstalled?: boolean; env?: NodeJS.ProcessEnv } = {}) {
 		return planMachineSetup({
 			origin: ORIGIN,
 			legacyKitInstalled: overrides.legacyKitInstalled ?? false,
 			config: parsePipelineConfig({}).config,
-			forceRules: overrides.forceRules,
 			env: overrides.env ?? {},
 			now: NOW,
 			paths,
@@ -67,65 +63,46 @@ describe("kanban setup steps", () => {
 		expect(byId(await plan(), "npmrc").status).toBe("ok");
 	});
 
-	it("installs missing Cline rules, leaves a changed one alone unless forced, and ships no project rule", async () => {
-		expect(Object.keys(CLINE_RULE_FILES)).not.toContain("dev-servers.md");
-		mkdirSync(paths.clineRulesDir, { recursive: true });
-		writeFileSync(join(paths.clineRulesDir, "keep-acting.md"), "my own version\n");
-		const step = byId(await plan(), "cline-rules");
-		expect(step.details).toContain(
-			"keep-acting.md differs from Kanban's copy; left alone (--force-rules overwrites)",
-		);
-		await step.apply?.();
-		expect(readFileSync(join(paths.clineRulesDir, "keep-acting.md"), "utf8")).toBe("my own version\n");
-		expect(readFileSync(join(paths.clineRulesDir, "status-line.md"), "utf8")).toBe(
-			CLINE_RULE_FILES["status-line.md"],
-		);
-		expect(byId(await plan(), "cline-rules").status).toBe("ok");
-		await byId(await plan({ forceRules: true }), "cline-rules").apply?.();
-		expect(readFileSync(join(paths.clineRulesDir, "keep-acting.md"), "utf8")).toBe(
-			CLINE_RULE_FILES["keep-acting.md"],
-		);
+	it("has no step that writes Cline's rules or notices (Kanban writes nothing under ~/.cline)", async () => {
+		const ids = (await plan()).map((entry) => entry.id);
+		expect(ids).not.toContain("cline-rules");
+		expect(ids).not.toContain("cline-notices");
 	});
 
-	it("marks the Cline TUI promo notices shown and keeps the file's other keys", async () => {
+	it("only checks Cline's Bedrock settings: providers.json or the environment, and says what to run", async () => {
 		mkdirSync(join(root, "cline", "data", "settings"), { recursive: true });
-		writeFileSync(paths.clineNotices, JSON.stringify({ shown: { other: true }, extra: 1 }));
-		await byId(await plan(), "cline-notices").apply?.();
-		expect(JSON.parse(readFileSync(paths.clineNotices, "utf8"))).toEqual({
-			shown: { other: true, "cline-cli-cline-pass-intro": true, "cline-cli-desktop-launch": true },
-			extra: 1,
+		const original = JSON.stringify({ version: 1, providers: { lemonade: { settings: { provider: "lemonade" } } } });
+		writeFileSync(paths.clineProviders, original, { mode: 0o600 });
+		const missing = byId(await plan({ env: { BEDROCK_API_KEY: "secret-value-123" } }), "cline-providers");
+		expect(missing.status).toBe("manual");
+		expect(missing.apply).toBeUndefined();
+		expect(missing.details.join("\n")).toContain("export AWS_BEARER_TOKEN_BEDROCK=$BEDROCK_API_KEY");
+		expect(missing.details.join("\n")).toContain("export AWS_REGION=us-west-2");
+		expect(missing.details.join("\n")).not.toContain("secret-value-123");
+
+		const fromEnv = byId(
+			await plan({ env: { AWS_BEARER_TOKEN_BEDROCK: "secret-value-123", AWS_REGION: "us-east-1" } }),
+			"cline-providers",
+		);
+		expect(fromEnv).toMatchObject({
+			status: "ok",
+			details: ["bedrock key from AWS_BEARER_TOKEN_BEDROCK, region us-east-1"],
 		});
+
+		writeFileSync(
+			paths.clineProviders,
+			JSON.stringify({ providers: { bedrock: { settings: { apiKey: "k", aws: { region: "eu-west-1" } } } } }),
+		);
+		expect(byId(await plan(), "cline-providers")).toMatchObject({
+			status: "ok",
+			details: ["bedrock key from providers.json, region eu-west-1"],
+		});
+		const settingsFiles = readdirSync(join(root, "cline", "data", "settings"));
+		expect(settingsFiles).toEqual(["providers.json"]);
 	});
 
-	it("adds the Bedrock provider entry with a key from the environment, backs up the file, never prints the key", async () => {
-		mkdirSync(join(root, "cline", "data", "settings"), { recursive: true });
-		const original = { version: 1, providers: { lemonade: { settings: { provider: "lemonade", model: "m" } } } };
-		writeFileSync(paths.clineProviders, JSON.stringify(original), { mode: 0o600 });
-		const step = byId(await plan({ env: { BEDROCK_API_KEY: "secret-value-123" } }), "cline-providers");
-		expect(step.status).toBe("change");
-		const applied = (await step.apply?.()) ?? [];
-		const output = [...step.details, ...applied].join("\n");
-		expect(output).not.toContain("secret-value-123");
-		expect(output).toContain("bedrock.settings.apiKey (from BEDROCK_API_KEY)");
-		const written = JSON.parse(readFileSync(paths.clineProviders, "utf8"));
-		expect(written.providers.bedrock.settings).toEqual({
-			provider: "bedrock",
-			model: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-			aws: { region: "us-west-2" },
-			apiKey: "secret-value-123",
-		});
-		expect(written.providers.lemonade).toEqual(original.providers.lemonade);
-		expect(statSync(paths.clineProviders).mode & 0o777).toBe(0o600);
-		const backups = readdirSync(join(root, "cline", "data", "settings")).filter((name) => name.includes(".bak-"));
-		expect(backups).toEqual(["providers.json.bak-before-kanban-setup-20261007T120000Z"]);
-		expect(statSync(join(root, "cline", "data", "settings", backups[0] as string)).mode & 0o777).toBe(0o600);
-		expect(byId(await plan(), "cline-providers").status).toBe("ok");
-	});
-
-	it("skips providers.json and CLAUDE.md on a machine without Cline or Claude Code", async () => {
-		const plans = await plan();
-		expect(byId(plans, "cline-providers").status).toBe("skipped");
-		expect(byId(plans, "claude-md").status).toBe("skipped");
+	it("skips CLAUDE.md on a machine without Claude Code", async () => {
+		expect(byId(await plan(), "claude-md").status).toBe("skipped");
 	});
 
 	it("writes the CLAUDE.md section around the user's text, but not while the legacy kit is installed", async () => {

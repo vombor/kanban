@@ -1,16 +1,16 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { parsePipelineConfig } from "../../../src/config/pipeline-config";
 import {
-	cleanupDeprecatedProviders,
 	deprecatedProviderIds,
 	findCodexMantleProviders,
 	findDeprecatedProviderEntries,
 	type ProviderSettingsPaths,
 	type ProvidersPolicy,
+	planDeprecatedProviderCleanup,
 	providerForModel,
 } from "../../../src/models/cline-providers";
 import { createTempDir } from "../../utilities/temp-dir";
@@ -178,10 +178,11 @@ describe("deprecated provider settings", () => {
 		await expect(findDeprecatedProviderEntries(missing, POLICY)).resolves.toEqual([]);
 	});
 
-	it("cleanup is a dry run without apply", async () => {
-		const before = readFileSync(paths.providersPath, "utf8");
-		const result = await cleanupDeprecatedProviders({ paths, policy: POLICY, apply: false, backupsRoot });
-		expect(result.applied).toBe(false);
+	it("cleanup only lists the edits: Cline's files and the backups dir stay untouched", async () => {
+		const before = [paths.providersPath, paths.modelsPath, paths.codexConfigPath].map((path) =>
+			readFileSync(path, "utf8"),
+		);
+		const result = await planDeprecatedProviderCleanup({ paths, policy: POLICY });
 		expect(result.edits.map((edit) => edit.description)).toEqual([
 			"delete providers.openai-native",
 			"lastUsedProvider: openai-native -> bedrock",
@@ -189,45 +190,17 @@ describe("deprecated provider settings", () => {
 			"delete custom provider bedrock-mantle (https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1)",
 		]);
 		expect(result.kept.map((entry) => entry.id)).toEqual(["codex:bedrock-mantle"]);
-		expect(readFileSync(paths.providersPath, "utf8")).toBe(before);
+		expect(
+			[paths.providersPath, paths.modelsPath, paths.codexConfigPath].map((path) => readFileSync(path, "utf8")),
+		).toEqual(before);
 		expect(existsSync(backupsRoot)).toBe(false);
 	});
 
-	it("cleanup --apply backs up, edits only the workarounds, keeps file modes and never touches Codex", async () => {
-		const originalProviders = readFileSync(paths.providersPath, "utf8");
-		const result = await cleanupDeprecatedProviders({
-			paths,
-			policy: POLICY,
-			apply: true,
-			backupsRoot,
-			now: new Date("2026-10-07T12:00:00Z"),
-		});
-		expect(result.applied).toBe(true);
-		expect(result.backupDir).toBe(join(backupsRoot, "cline-settings-20261007T120000000Z"));
-		const backupDir = result.backupDir ?? "";
-		expect(readdirSync(backupDir).sort()).toEqual(["models.json", "providers.json"]);
-		expect(readFileSync(join(backupDir, "providers.json"), "utf8")).toBe(originalProviders);
-		expect(statSync(join(backupDir, "providers.json")).mode & 0o777).toBe(0o600);
-
-		const providers = JSON.parse(readFileSync(paths.providersPath, "utf8"));
-		expect(providers.lastUsedProvider).toBe("bedrock");
-		expect(Object.keys(providers.providers)).toEqual(["bedrock", "lemonade"]);
-		expect(providers.providers.bedrock.settings.apiKey).toBe("fake-bedrock");
-		expect(statSync(paths.providersPath).mode & 0o777).toBe(0o600);
-		const models = JSON.parse(readFileSync(paths.modelsPath, "utf8"));
-		expect(Object.keys(models.providers)).toEqual(["lemonade"]);
-		expect(readFileSync(paths.codexConfigPath, "utf8")).toBe(CODEX_TOML);
-
-		const again = await cleanupDeprecatedProviders({ paths, policy: POLICY, apply: true, backupsRoot });
-		expect(again).toMatchObject({ edits: [], applied: false, backupDir: null });
-	});
-
-	it("leaves a file that isn't valid JSON alone and says so", async () => {
+	it("says when a file isn't valid JSON", async () => {
 		writeFileSync(paths.modelsPath, "{ not json");
-		const result = await cleanupDeprecatedProviders({ paths, policy: POLICY, apply: true, backupsRoot });
+		const result = await planDeprecatedProviderCleanup({ paths, policy: POLICY });
 		expect(result.errors).toHaveLength(1);
 		expect(result.errors[0]).toContain(paths.modelsPath);
 		expect(result.edits.every((edit) => edit.file === paths.providersPath)).toBe(true);
-		expect(readFileSync(paths.modelsPath, "utf8")).toBe("{ not json");
 	});
 });

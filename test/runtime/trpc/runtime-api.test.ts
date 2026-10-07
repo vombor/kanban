@@ -442,12 +442,10 @@ describe("createRuntimeApi resetAllState", () => {
 		const tempHome = `/tmp/kanban-reset-home-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 		process.env.HOME = tempHome;
 		mkdirSync(tempHome, { recursive: true });
-		const debugPaths = [
-			join(tempHome, ".cline", "data"),
-			join(tempHome, ".kanban"),
-			join(tempHome, ".kanban", "worktrees"),
-		];
-		for (const path of debugPaths) {
+		const debugPaths = [join(tempHome, ".kanban"), join(tempHome, ".kanban", "worktrees")];
+		// Cline's data is Cline's: the reset never deletes it.
+		const clineDataPath = join(tempHome, ".cline", "data");
+		for (const path of [...debugPaths, clineDataPath]) {
 			mkdirSync(path, { recursive: true });
 			writeFileSync(join(path, "marker.txt"), "present");
 		}
@@ -473,6 +471,8 @@ describe("createRuntimeApi resetAllState", () => {
 			for (const path of debugPaths) {
 				expect(existsSync(path)).toBe(false);
 			}
+			expect(existsSync(join(clineDataPath, "marker.txt"))).toBe(true);
+			expect(response.clearedPaths).not.toContain(clineDataPath);
 		} finally {
 			if (originalHome === undefined) {
 				delete process.env.HOME;

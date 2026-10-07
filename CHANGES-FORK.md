@@ -550,3 +550,16 @@ of this repository is the complete record of changes.
   workspace without checks or a snapshot without check scripts gets QA right away. A newer snapshot of the card being
   checked stops that run and drops its result. The worker evaluates the workspace again when a checks result is recorded
   and when a wait times out. Before this, QA ran without the checks and foo 27549 landed with only a checks ERROR.
+- `src/terminal/agent-session-adapters.ts`, `src/prompts/cline-rules.ts` (moved from `src/setup/`), `src/setup/machine-setup.ts`,
+  `src/commands/setup.ts`, `src/models/cline-providers.ts`, `src/commands/models.ts`, `src/doctor/cline-dir-checks.ts` (new),
+  `src/doctor/run-doctor.ts`, `src/doctor/doctor-checks.ts`, `src/doctor/deep-checks.ts`, `docs/team/RUNBOOK.md`, `AGENTS.md`,
+  tests (Kanban writes nothing under `~/.cline`, user rule 2026-10-07): Cline launches get Kanban's Cline rules as
+  git-excluded worktree rules (`.cline/rules/kanban-*.md`) and `CLINE_DISABLE_CLINE_PASS_NOTICE=1` instead of
+  `kanban setup` writing `~/.cline/rules` and `cli-notices.json`. `kanban setup` no longer edits Cline's providers.json:
+  its `cline-providers` step checks that Cline cards can reach Bedrock (providers.json, or `AWS_BEARER_TOKEN_BEDROCK` and
+  `AWS_REGION` in the environment) and prints what to run; `--force-rules` is gone. `kanban models providers --cleanup`
+  lists the edits and refuses `--apply`. `kanban doctor` reports Kanban's rules left in Cline's global rules dir and the
+  backups older setup runs left next to Cline's settings, with the `rm` command.
+- `src/state/kanban-home.ts`, `test/runtime/state/kanban-home.test.ts`: the debug "Reset all state" no longer deletes Cline's
+  data dir (`~/.cline/data`) or any other path in or around Cline's dirs (`~/.cline`, `CLINE_DIR`, `CLINE_DATA_DIR`); it
+  deletes only Kanban's home and worktree roots.

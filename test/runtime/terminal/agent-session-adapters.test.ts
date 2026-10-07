@@ -6,9 +6,11 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildTaskAgentSettingsForUpdate } from "../../../src/commands/task";
+import { CLINE_RULE_FILES } from "../../../src/prompts/cline-rules";
 import { getKanbanHomePath } from "../../../src/state/kanban-home";
 import { parseCopilotConfig, prepareAgentLaunch } from "../../../src/terminal/agent-session-adapters";
 import { resolveHookRuntimeContext } from "../../../src/terminal/hook-runtime-context";
+import { createGitTestEnv } from "../../utilities/git-env";
 
 const originalHome = process.env.HOME;
 const originalAppData = process.env.APPDATA;
@@ -1122,6 +1124,57 @@ describe("cline adapter", () => {
 		const script = readFileSync(hookPath, "utf8");
 		expect(script).toContain("to_review");
 		expect(script).not.toContain("# stale");
+	});
+
+	// Kanban writes nothing under ~/.cline (user rule, 2026-10-07): the rules are workspace rules, the notices are off.
+	it("gives every Cline launch Kanban's rules as git-excluded worktree rules and writes nothing under ~/.cline", async () => {
+		const taskCwd = setupTaskCwd();
+		execFileSync("git", ["init", "-q"], { cwd: taskCwd, env: createGitTestEnv() });
+		const launch = await prepareAgentLaunch({
+			taskId: "task-1",
+			agentId: "cline",
+			binary: "cline",
+			args: [],
+			cwd: taskCwd,
+			prompt: "Ship the feature",
+			workspaceId: "workspace-1",
+		});
+
+		expect(launch.env.CLINE_DISABLE_CLINE_PASS_NOTICE).toBe("1");
+		for (const [name, content] of Object.entries(CLINE_RULE_FILES)) {
+			const rule = readFileSync(join(taskCwd, ".cline", "rules", `kanban-${name}`), "utf8");
+			expect(rule).toBe(`<!-- kanban-managed: cline rule -->\n${content}`);
+		}
+		const exclude = readFileSync(join(taskCwd, ".git", "info", "exclude"), "utf8");
+		expect(exclude).toContain("/.cline/rules/kanban-status-line.md");
+		const status = execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], {
+			cwd: taskCwd,
+			env: createGitTestEnv(),
+			encoding: "utf8",
+		});
+		expect(status).toBe("");
+		expect(existsSync(join(tempHome ?? "", ".cline"))).toBe(false);
+	});
+
+	it("never overwrites a user-owned rule file of the same name", async () => {
+		const taskCwd = setupTaskCwd();
+		const userRule = join(taskCwd, ".cline", "rules", "kanban-keep-acting.md");
+		mkdirSync(join(taskCwd, ".cline", "rules"), { recursive: true });
+		writeFileSync(userRule, "my own rule\n", "utf8");
+
+		const launch = await prepareAgentLaunch({
+			taskId: "task-1",
+			agentId: "cline",
+			binary: "cline",
+			args: [],
+			cwd: taskCwd,
+			prompt: "Ship the feature",
+			workspaceId: "workspace-1",
+		});
+
+		expect(readFileSync(userRule, "utf8")).toBe("my own rule\n");
+		expect(launch.sessionWarning).toContain("keep-acting.md");
+		expect(existsSync(join(taskCwd, ".cline", "rules", "kanban-status-line.md"))).toBe(true);
 	});
 
 	// Foo 27549 (10/07): Cline's hub daemon runs every card's .cline/hooks scripts with its own env, which is the

@@ -8,14 +8,13 @@ import { type PipelineConfig, readPipelineConfig } from "../config/pipeline-conf
 import { type BedrockProbeResult, isNeverProbedModel } from "../models/bedrock-probe";
 import { applyCardProviderMigrations, planCardProviderMigrations } from "../models/card-provider-migration";
 import {
-	cleanupDeprecatedProviders,
 	findDeprecatedProviderEntries,
 	getProviderSettingsPaths,
+	planDeprecatedProviderCleanup,
 	providerForModel,
 } from "../models/cline-providers";
 import { LEMONADE_PROVIDER_ID, type ModelProbeOutcome, probeModel } from "../models/model-probe";
 import { getBedrockProfilesCachePath, loadModelProbeDependencies } from "../models/model-probe-setup";
-import { getKanbanBackupsPath } from "../state/kanban-home";
 import { listWorkspaceIndexEntries, loadWorkspaceBoardById, mutateWorkspaceState } from "../state/workspace-state";
 import { registerModelPricesCommand } from "./model-prices";
 import { createRuntimeTrpcClient, notifyRuntimeWorkspaceStateUpdated } from "./runtime-trpc-client";
@@ -170,35 +169,35 @@ async function runProvidersReport(config: PipelineConfig, json: boolean): Promis
 }
 
 async function runProvidersCleanup(config: PipelineConfig, apply: boolean, json: boolean): Promise<number> {
-	const result = await cleanupDeprecatedProviders({
+	if (apply) {
+		process.stderr.write(
+			"--cleanup has no --apply: Kanban writes nothing under ~/.cline. Make the listed edits yourself (or with cline auth).\n",
+		);
+		return 1;
+	}
+	const result = await planDeprecatedProviderCleanup({
 		paths: getProviderSettingsPaths(config),
 		policy: config.models.providers,
-		apply,
-		backupsRoot: getKanbanBackupsPath(),
 	});
 	if (json) {
 		printJson({ ok: result.errors.length === 0, ...result });
 		return result.errors.length === 0 ? 0 : 1;
 	}
-	const lines = result.edits.map((edit) => `${result.applied ? "edit " : "would"} ${edit.file}: ${edit.description}`);
+	const lines = result.edits.map((edit) => `to do ${edit.file}: ${edit.description}`);
 	for (const entry of result.kept) {
 		lines.push(`keep  ${entry.file}: ${entry.what} (${entry.note})`);
 	}
-	if (result.edits.length === 0) {
-		lines.push("Nothing to clean up.");
-	} else if (!apply) {
-		lines.push("Dry run: add --apply to make these edits (both files are backed up first).");
-	}
-	if (result.backupDir) {
-		lines.push(`Backed up to ${result.backupDir}`);
-	}
+	lines.push(
+		result.edits.length === 0
+			? "Nothing to clean up."
+			: "These files are Cline's: make the edits yourself (back them up first) or redo the provider with cline auth.",
+	);
 	printLines(lines);
 	for (const error of result.errors) {
 		process.stderr.write(`Could not read ${error}; left alone.\n`);
 	}
 	return result.errors.length === 0 ? 0 : 1;
 }
-
 async function runMigrateCards(config: PipelineConfig, options: ProvidersCommandOptions): Promise<number> {
 	const policy = config.models.providers;
 	const targets = options.workspace
@@ -300,13 +299,13 @@ export function registerModelsCommand(program: Command): void {
 		.option("--for <modelId>", "Print the provider a new Cline card on this model should use.")
 		.option(
 			"--cleanup",
-			"Remove deprecated providers from Cline's providers.json/models.json (dry run unless --apply).",
+			"List the edits that remove deprecated providers from Cline's providers.json/models.json (you make them).",
 		)
 		.option(
 			"--migrate-cards",
 			"Move open cards on a deprecated provider to the model's provider (dry run unless --apply).",
 		)
-		.option("--apply", "Make the --cleanup or --migrate-cards edits.")
+		.option("--apply", "Make the --migrate-cards edits.")
 		.option("--workspace <workspace>", "--migrate-cards: only this workspace (id or project path); default all.")
 		.option("--json", "Print JSON.")
 		.action(async (options: ProvidersCommandOptions) => {

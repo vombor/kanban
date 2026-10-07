@@ -109,7 +109,7 @@ export function getClineHomeDirPath(): string {
 	return join(getUserHomePath(), CLINE_DIR);
 }
 
-/** Cline's own data dir. It belongs to Cline, not Kanban: the debug reset clears it, the Cline turn detector reads its sessions. */
+/** Cline's own data dir. It belongs to Cline, not Kanban: the Cline turn detector reads its sessions, nothing deletes it. */
 export function getClineDataPath(): string {
 	return join(getUserHomePath(), CLINE_DIR, CLINE_DATA_DIR);
 }
@@ -644,15 +644,32 @@ function isUnsafeResetTarget(path: string): boolean {
 	return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
-/** Directories the debug "Reset all state" action deletes. */
+function isPathInside(path: string, root: string): boolean {
+	const rel = relative(resolve(root), resolve(path));
+	return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+/** Cline's dirs as the Cline CLI resolves them (~/.cline, CLINE_DIR, CLINE_DATA_DIR). Kanban never deletes in them. */
+function getClineOwnedRootPaths(): string[] {
+	return uniquePaths([getClineHomeDirPath(), getClineConfigDirPath(), resolveClineDataDir(null)]);
+}
+
+/**
+ * Directories the debug "Reset all state" action deletes: Kanban's home and worktree roots only. Nothing in or
+ * around Cline's dirs (Kanban writes and deletes nothing under ~/.cline, user rule 2026-10-07), so a legacy worktree
+ * root under ~/.cline/worktrees is left alone too.
+ */
 export function getDebugResetTargetPaths(): string[] {
 	const resolution = resolveKanbanHome();
+	const clineRoots = getClineOwnedRootPaths();
 	return uniquePaths([
-		getClineDataPath(),
 		resolution.homePath,
 		resolution.worktreesRootPath,
 		...resolution.legacyWorktreeRootPaths,
-	]).filter((path) => !isUnsafeResetTarget(path));
+	]).filter(
+		(path) =>
+			!isUnsafeResetTarget(path) && !clineRoots.some((root) => isPathInside(path, root) || isPathInside(root, path)),
+	);
 }
 
 /** The paths the web UI shows (it cannot resolve them itself). */

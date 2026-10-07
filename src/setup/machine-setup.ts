@@ -3,19 +3,15 @@
 // is missing and never overwrites a value the user set. There is no bashrc step (nothing needs starting) and no
 // Commit/PR prompt override (plan §2.5).
 // Ported from archive/devteam-kit:bin/kit@d2fb30f `cmdMachineSetup` (npmrc, Cline rules, providers.json) and
-// @c8552ae (Cline TUI notices).
+// @c8552ae (Cline TUI notices). Kanban writes nothing under ~/.cline (user rule, 2026-10-07): the Cline rules and the
+// notice opt-out now come with every Cline launch (agent-session-adapters.ts), and the providers step only checks.
 import { chmod, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { type LemonadeModelListSettings, readLemonadeModelListSettings } from "../config/model-lists-config";
 import type { PipelineConfig } from "../config/pipeline-config";
-import {
-	getClineCliNoticesPath,
-	getClineGlobalRulesPath,
-	getClineModelsSettingsPath,
-	getClineProvidersSettingsPath,
-} from "../state/kanban-home";
+import { getClineModelsSettingsPath, getClineProvidersSettingsPath } from "../state/kanban-home";
 import {
 	CLAUDE_MD_SECTION,
 	getClaudeConfigDirPath,
@@ -24,20 +20,15 @@ import {
 } from "./claude-md-section";
 import { planClineLemonadeModels } from "./cline-lemonade-models";
 import { applyClineModelsSource, buildLemonadeModelListUrl, planClineModelsSource } from "./cline-models-source";
-import { CLINE_RULE_FILES } from "./cline-rules";
 import { readManagedSectionStatus, writeManagedSection } from "./managed-section";
 
-export type SetupStepId =
-	| "npmrc"
-	| "cline-rules"
-	| "cline-notices"
-	| "cline-providers"
-	| "cline-models-source"
-	| "cline-lemonade-models"
-	| "claude-md";
+export type SetupStepId = "npmrc" | "cline-providers" | "cline-models-source" | "cline-lemonade-models" | "claude-md";
 
-/** `ok`: nothing to do. `change`: `apply` would write. `skipped`: not applicable here. `error`: can't be planned. */
-export type SetupStepStatus = "ok" | "change" | "skipped" | "error";
+/**
+ * `ok`: nothing to do. `change`: `apply` would write. `manual`: something to do that Kanban doesn't write (the
+ * details say what to run). `skipped`: not applicable here. `error`: can't be planned.
+ */
+export type SetupStepStatus = "ok" | "change" | "manual" | "skipped" | "error";
 
 export interface SetupStepPlan {
 	id: SetupStepId;
@@ -52,8 +43,6 @@ export interface SetupStepPlan {
 export interface MachineSetupOptions {
 	/** Kanban server origin for Cline's Lemonade model list. */
 	origin: string;
-	/** Overwrite Cline rule files that differ from Kanban's copy. */
-	forceRules?: boolean;
 	/** Write the CLAUDE.md section even while the legacy kit is installed. */
 	forceClaudeMd?: boolean;
 	/** The legacy kit is installed (its kit.config.json exists). */
@@ -72,8 +61,6 @@ export interface MachineSetupOptions {
 
 export interface MachineSetupPaths {
 	npmrc: string;
-	clineRulesDir: string;
-	clineNotices: string;
 	clineProviders: string;
 	clineModels: string;
 	claudeDir: string;
@@ -86,8 +73,6 @@ export function getMachineSetupPaths(
 ): MachineSetupPaths {
 	return {
 		npmrc: env.NPM_CONFIG_USERCONFIG?.trim() || join(homedir(), ".npmrc"),
-		clineRulesDir: getClineGlobalRulesPath(),
-		clineNotices: getClineCliNoticesPath(clineDataDir),
 		clineProviders: getClineProvidersSettingsPath(clineDataDir),
 		clineModels: getClineModelsSettingsPath(clineDataDir),
 		claudeDir: getClaudeConfigDirPath(env),
@@ -113,13 +98,6 @@ async function pathExists(path: string): Promise<boolean> {
 	} catch {
 		return false;
 	}
-}
-
-function backupTimestamp(now: Date): string {
-	return now
-		.toISOString()
-		.replace(/[-:]/gu, "")
-		.replace(/\.\d+Z$/u, "Z");
 }
 
 /** Replaces `path` atomically with `content`, keeping its mode (new files get `newMode`). */
@@ -172,244 +150,72 @@ export async function planNpmrc(paths: MachineSetupPaths): Promise<SetupStepPlan
 	};
 }
 
-export async function planClineRules(paths: MachineSetupPaths, forceRules: boolean): Promise<SetupStepPlan> {
-	const details: string[] = [];
-	const toWrite: string[] = [];
-	for (const [name, content] of Object.entries(CLINE_RULE_FILES)) {
-		const current = await readTextOrNull(join(paths.clineRulesDir, name));
-		if (current === content) {
-			continue;
-		}
-		if (current === null) {
-			details.push(`install ${name}`);
-			toWrite.push(name);
-		} else if (forceRules) {
-			details.push(`overwrite ${name} (--force-rules)`);
-			toWrite.push(name);
-		} else {
-			details.push(`${name} differs from Kanban's copy; left alone (--force-rules overwrites)`);
-		}
-	}
-	if (toWrite.length === 0) {
-		return {
-			id: "cline-rules",
-			target: paths.clineRulesDir,
-			status: "ok",
-			details: details.length > 0 ? details : [`${Object.keys(CLINE_RULE_FILES).length} rules installed`],
-		};
-	}
-	return {
-		id: "cline-rules",
-		target: paths.clineRulesDir,
-		status: "change",
-		details,
-		apply: async () => {
-			await mkdir(paths.clineRulesDir, { recursive: true });
-			for (const name of toWrite) {
-				await writeFile(join(paths.clineRulesDir, name), CLINE_RULE_FILES[name] ?? "");
-			}
-			return [`wrote ${toWrite.join(", ")}`];
-		},
-	};
-}
-
-// cline 3.x shows each promo notice on every task open until its id is marked shown, and the notice covers the TUI
-// the card agent types into. Ported from archive/devteam-kit:bin/kit@c8552ae.
-const CLINE_NOTICE_IDS = ["cline-cli-cline-pass-intro", "cline-cli-desktop-launch"];
-
-export async function planClineNotices(paths: MachineSetupPaths): Promise<SetupStepPlan> {
-	const text = await readTextOrNull(paths.clineNotices);
-	let notices: Record<string, unknown> = {};
-	if (text !== null) {
-		try {
-			const parsed: unknown = JSON.parse(text);
-			if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-				notices = parsed as Record<string, unknown>;
-			}
-		} catch {
-			return {
-				id: "cline-notices",
-				target: paths.clineNotices,
-				status: "error",
-				details: ["not valid JSON; left alone"],
-			};
-		}
-	}
-	const shown =
-		notices.shown && typeof notices.shown === "object" && !Array.isArray(notices.shown)
-			? (notices.shown as Record<string, unknown>)
-			: {};
-	const unshown = CLINE_NOTICE_IDS.filter((id) => shown[id] !== true);
-	if (unshown.length === 0) {
-		return { id: "cline-notices", target: paths.clineNotices, status: "ok", details: ["promo notices marked shown"] };
-	}
-	return {
-		id: "cline-notices",
-		target: paths.clineNotices,
-		status: "change",
-		details: [`mark shown: ${unshown.join(", ")}`],
-		apply: async () => {
-			const next = { ...notices, shown: { ...shown, ...Object.fromEntries(unshown.map((id) => [id, true])) } };
-			await writeFileKeepingMode(paths.clineNotices, `${JSON.stringify(next, null, 2)}\n`);
-			return [`marked shown: ${unshown.join(", ")}`];
-		},
-	};
-}
-
 type JsonObject = Record<string, unknown>;
 
 function isJsonObject(value: unknown): value is JsonObject {
 	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-/** Adds keys of `source` missing in `target` (recursively); returns the dotted keys it added. Never overwrites. */
-function addMissingKeys(target: JsonObject, source: JsonObject, prefix: string): string[] {
-	const added: string[] = [];
-	for (const [key, value] of Object.entries(source)) {
-		const current = target[key];
-		if (current === undefined) {
-			target[key] = structuredClone(value);
-			added.push(`${prefix}${key}`);
-		} else if (isJsonObject(value) && isJsonObject(current)) {
-			added.push(...addMissingKeys(current, value, `${prefix}${key}.`));
-		}
-	}
-	return added;
+function readNonEmptyString(value: unknown): string | null {
+	return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-/** The provider entries Kanban adds to Cline's providers.json. No secrets: the key comes from the environment. */
-function buildClineProviderTemplate(bedrockRegion: string): Record<string, JsonObject> {
-	return {
-		bedrock: {
-			settings: {
-				provider: "bedrock",
-				model: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-				aws: { region: bedrockRegion },
-			},
-		},
-	};
-}
-
-interface ProvidersPlanResult {
-	document: JsonObject;
-	added: string[];
-	notes: string[];
-}
-
-function planProviderEntries(
-	document: JsonObject,
-	template: Record<string, JsonObject>,
-	env: NodeJS.ProcessEnv,
-	now: Date,
-): ProvidersPlanResult {
-	const next = structuredClone(document);
-	if (!isJsonObject(next.providers)) {
-		next.providers = {};
-	}
-	const providers = next.providers as JsonObject;
-	const envKey = env.BEDROCK_API_KEY?.trim() || null;
-	const existingKey =
-		Object.values(providers)
-			.map((entry) => (isJsonObject(entry) && isJsonObject(entry.settings) ? entry.settings.apiKey : undefined))
-			.find((key): key is string => typeof key === "string" && key.length > 0) ?? null;
-	const added: string[] = [];
-	const notes: string[] = [];
-	for (const [name, entry] of Object.entries(template)) {
-		const current = isJsonObject(providers[name]) ? (providers[name] as JsonObject) : {};
-		providers[name] = current;
-		added.push(...addMissingKeys(current, entry, `${name}.`));
-		if (!isJsonObject(current.settings)) {
-			current.settings = {};
-		}
-		const settings = current.settings as JsonObject;
-		if (!settings.apiKey) {
-			const key = envKey ?? existingKey;
-			if (key) {
-				// The key's value is never printed, only where it came from.
-				settings.apiKey = key;
-				current.tokenSource ??= "manual";
-				added.push(`${name}.settings.apiKey (from ${envKey ? "BEDROCK_API_KEY" : "another provider entry"})`);
-			} else {
-				notes.push(`${name} has no apiKey; set BEDROCK_API_KEY and run kanban setup again`);
-			}
-		}
-		if (current.updatedAt === undefined) {
-			current.updatedAt = now.toISOString();
-		}
-	}
-	return { document: next, added, notes };
-}
-
+/**
+ * Whether Cline cards can reach Bedrock. Read-only: Kanban writes nothing under ~/.cline (user rule, 2026-10-07).
+ * Cards pass `-P bedrock -m <model>`, and cline 3.0.69's Bedrock client takes the key and region from providers.json
+ * (`settings.apiKey`, `settings.aws.region`), else from AWS_BEARER_TOKEN_BEDROCK (or AWS access keys) and AWS_REGION
+ * in the environment Kanban, and so every card, starts from. When neither has them this says what to run.
+ */
 export async function planClineProviders(
 	paths: MachineSetupPaths,
-	options: { bedrockRegion: string; defaultProvider: string; env: NodeJS.ProcessEnv; now: Date },
+	options: { bedrockRegion: string; defaultProvider: string; env: NodeJS.ProcessEnv },
 ): Promise<SetupStepPlan> {
+	const base = { id: "cline-providers" as const, target: paths.clineProviders };
 	if (options.defaultProvider !== "bedrock") {
 		return {
-			id: "cline-providers",
-			target: paths.clineProviders,
+			...base,
 			status: "skipped",
-			details: [`models.providers.default is ${options.defaultProvider}; Kanban only ships a bedrock entry`],
+			details: [`models.providers.default is ${options.defaultProvider}; Kanban only checks bedrock`],
 		};
 	}
 	const raw = await readTextOrNull(paths.clineProviders);
-	if (raw === null) {
-		// Cline writes this file when it is first configured; a machine without it doesn't run Cline yet.
-		return {
-			id: "cline-providers",
-			target: paths.clineProviders,
-			status: "skipped",
-			details: ["no providers.json (Cline is not configured on this machine)"],
-		};
+	let settings: JsonObject = {};
+	if (raw !== null) {
+		let document: unknown;
+		try {
+			document = JSON.parse(raw);
+		} catch {
+			return { ...base, status: "error", details: ["not valid JSON (Kanban never edits it)"] };
+		}
+		const entry = isJsonObject(document) && isJsonObject(document.providers) ? document.providers.bedrock : null;
+		settings = isJsonObject(entry) && isJsonObject(entry.settings) ? entry.settings : {};
 	}
-	let document: unknown;
-	try {
-		document = JSON.parse(raw);
-	} catch {
-		return {
-			id: "cline-providers",
-			target: paths.clineProviders,
-			status: "error",
-			details: ["not valid JSON; left alone"],
-		};
+	const { env } = options;
+	const keySource = readNonEmptyString(settings.apiKey)
+		? "providers.json"
+		: readNonEmptyString(env.AWS_BEARER_TOKEN_BEDROCK)
+			? "AWS_BEARER_TOKEN_BEDROCK"
+			: readNonEmptyString(env.AWS_ACCESS_KEY_ID)
+				? "AWS_ACCESS_KEY_ID"
+				: null;
+	const region =
+		readNonEmptyString(isJsonObject(settings.aws) ? settings.aws.region : undefined) ??
+		readNonEmptyString(env.AWS_REGION);
+	const missing: string[] = [];
+	if (!keySource) {
+		missing.push(
+			readNonEmptyString(env.BEDROCK_API_KEY)
+				? "no Bedrock key for Cline: export AWS_BEARER_TOKEN_BEDROCK=$BEDROCK_API_KEY before starting Kanban, or run `cline auth bedrock -k <key>`"
+				: "no Bedrock key for Cline: export AWS_BEARER_TOKEN_BEDROCK before starting Kanban, or run `cline auth bedrock -k <key>`",
+		);
 	}
-	if (!isJsonObject(document)) {
-		return {
-			id: "cline-providers",
-			target: paths.clineProviders,
-			status: "error",
-			details: ["not a JSON object; left alone"],
-		};
+	if (!region) {
+		missing.push(`no Bedrock region for Cline: export AWS_REGION=${options.bedrockRegion} before starting Kanban`);
 	}
-	const plan = planProviderEntries(
-		document,
-		buildClineProviderTemplate(options.bedrockRegion),
-		options.env,
-		options.now,
-	);
-	if (plan.added.length === 0) {
-		return {
-			id: "cline-providers",
-			target: paths.clineProviders,
-			status: "ok",
-			details: plan.notes.length > 0 ? plan.notes : ["provider entries present"],
-		};
+	if (missing.length > 0) {
+		return { ...base, status: "manual", details: missing };
 	}
-	return {
-		id: "cline-providers",
-		target: paths.clineProviders,
-		status: "change",
-		details: [`add ${plan.added.join(", ")} (existing values are kept)`, ...plan.notes],
-		apply: async () => {
-			// The file holds API keys: the backup sits next to it with the same mode, never in a repo.
-			const mode = (await stat(paths.clineProviders)).mode & 0o7777;
-			const backupPath = `${paths.clineProviders}.bak-before-kanban-setup-${backupTimestamp(options.now)}`;
-			await writeFile(backupPath, raw, { encoding: "utf8", mode, flag: "wx" });
-			await chmod(backupPath, mode);
-			await writeFileKeepingMode(paths.clineProviders, `${JSON.stringify(plan.document, null, 2)}\n`);
-			return [`added ${plan.added.join(", ")}`, `backup: ${backupPath}`];
-		},
-	};
+	return { ...base, status: "ok", details: [`bedrock key from ${keySource}, region ${region}`] };
 }
 
 export async function planClineModelsSourceStep(paths: MachineSetupPaths, origin: string): Promise<SetupStepPlan> {
@@ -511,12 +317,6 @@ export async function planMachineSetup(options: MachineSetupOptions): Promise<Se
 	const steps: Array<{ id: SetupStepId; target: string; plan: () => Promise<SetupStepPlan> }> = [
 		{ id: "npmrc", target: paths.npmrc, plan: () => planNpmrc(paths) },
 		{
-			id: "cline-rules",
-			target: paths.clineRulesDir,
-			plan: () => planClineRules(paths, options.forceRules === true),
-		},
-		{ id: "cline-notices", target: paths.clineNotices, plan: () => planClineNotices(paths) },
-		{
 			id: "cline-providers",
 			target: paths.clineProviders,
 			plan: () =>
@@ -524,7 +324,6 @@ export async function planMachineSetup(options: MachineSetupOptions): Promise<Se
 					bedrockRegion: options.config.models.bedrockRegion,
 					defaultProvider: options.config.models.providers.default,
 					env,
-					now,
 				}),
 		},
 		{

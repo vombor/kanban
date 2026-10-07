@@ -57,9 +57,17 @@ Fix it before anything else.
 - **Managed sections** (the `agents-qa` section in a project's AGENTS.md): `kanban project sync <path> [--dry-run]`
   rewrites only the text between the managed markers. The edit is an uncommitted change in the project; land it
   through a card.
-- **Machine setup** (npm settings, Cline rules, the Bedrock provider entry, the CLAUDE.md section, trust):
+- **Machine setup** (npm settings, Cline's Lemonade model list, the CLAUDE.md section, trust):
   `kanban setup [--dry-run]`. While the legacy kit's `kit.config.json` exists, it leaves the CLAUDE.md section alone
   unless `--claude-md`.
+- **Cline settings and ~/.cline:** Kanban writes nothing under `~/.cline` (that is Cline's). Every Cline launch gets
+  Kanban's rules as worktree rules (`.cline/rules/kanban-*.md`, git-excluded) and `CLINE_DISABLE_CLINE_PASS_NOTICE=1`.
+  Bedrock comes from your own Cline settings (`cline auth bedrock`) or from `AWS_BEARER_TOKEN_BEDROCK` + `AWS_REGION`
+  in the environment Kanban starts from; `kanban setup` only checks and prints what to run (status "to do by hand").
+  `kanban models providers --cleanup` lists the edits for Cline's files; you make them. `kanban doctor` reports
+  Kanban's rules left in `~/.cline/rules` and `*.bak-before-kanban-setup-*` backups with the `rm` command; it never
+  deletes them. (Open: the Lemonade model list/metadata steps still edit `~/.cline/data/settings/models.json` until
+  the user picks a replacement.)
 
 ## Switching a runtime feature on (one owner at a time)
 

@@ -48,6 +48,7 @@ export function resolveSetupOrigin(options: {
 const STATUS_LABELS: Record<SetupStepOutcome["plan"]["status"], string> = {
 	ok: "ok",
 	change: "change",
+	manual: "to do by hand",
 	skipped: "skipped",
 	error: "error",
 };
@@ -82,7 +83,6 @@ function formatSetupResult(result: SetupResult): string[] {
 interface SetupCommandOptions {
 	dryRun?: boolean;
 	origin?: string;
-	forceRules?: boolean;
 	claudeMd?: boolean;
 	json?: boolean;
 }
@@ -91,11 +91,10 @@ export function registerSetupCommand(program: Command): void {
 	program
 		.command("setup")
 		.description(
-			"Set up this machine for Kanban: quiet npm, Cline rules, Cline TUI notices, Cline providers and its Lemonade model list, the kanban section of ~/.claude/CLAUDE.md, and Claude Code / Codex trust for every project. Only adds what is missing.",
+			"Set up this machine for Kanban: quiet npm, a check that Cline cards can reach Bedrock, Cline's Lemonade model list, the kanban section of ~/.claude/CLAUDE.md, and Claude Code / Codex trust for every project. Only adds what is missing.",
 		)
 		.option("--dry-run", "Print what would change; write nothing.")
 		.option("--origin <url>", "Kanban server origin agent CLIs should call (default: the running server).")
-		.option("--force-rules", "Overwrite Cline rule files that differ from Kanban's copy.")
 		.option("--claude-md", "Write the CLAUDE.md section even while the legacy kit is installed.")
 		.option("--json", "Print the result as JSON.")
 		.action(async (options: SetupCommandOptions, command: Command) => {
@@ -114,7 +113,6 @@ export function registerSetupCommand(program: Command): void {
 				]);
 				const result = await runMachineSetup({
 					origin: choice.origin,
-					forceRules: options.forceRules === true,
 					forceClaudeMd: options.claudeMd === true,
 					legacyKitInstalled: legacyKit.raw !== null,
 					config,
