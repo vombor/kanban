@@ -497,6 +497,45 @@ export const runtimeProjectAddResponseSchema = z.object({
 });
 export type RuntimeProjectAddResponse = z.infer<typeof runtimeProjectAddResponseSchema>;
 
+// The projects roots (`projects.roots`): new, cloned and opened projects must be strictly inside one of them.
+export const runtimeProjectRootsResponseSchema = z.object({
+	roots: z.array(z.string()),
+	error: z.string().optional(),
+});
+export type RuntimeProjectRootsResponse = z.infer<typeof runtimeProjectRootsResponseSchema>;
+
+// The add-project dialog's advisory typeahead for one directory name directly under a projects root.
+export const runtimeProjectNameCheckRequestSchema = z.object({
+	root: z.string(),
+	name: z.string(),
+});
+export type RuntimeProjectNameCheckRequest = z.infer<typeof runtimeProjectNameCheckRequestSchema>;
+
+export const runtimeProjectNameCheckResponseSchema = z.object({
+	ok: z.boolean(),
+	exists: z.boolean(),
+	isGitRepository: z.boolean(),
+	isEmpty: z.boolean(),
+	error: z.string().optional(),
+});
+export type RuntimeProjectNameCheckResponse = z.infer<typeof runtimeProjectNameCheckResponseSchema>;
+
+export const runtimeProjectCreateRequestSchema = z.object({
+	path: z.string(),
+	name: z.string().optional(),
+	initialBranch: z.string().optional(),
+	initialCommit: z.boolean().optional(),
+});
+export type RuntimeProjectCreateRequest = z.infer<typeof runtimeProjectCreateRequestSchema>;
+
+export const runtimeProjectCreateResponseSchema = z.object({
+	ok: z.boolean(),
+	project: runtimeProjectSummarySchema.nullable(),
+	notes: z.array(z.string()),
+	error: z.string().optional(),
+});
+export type RuntimeProjectCreateResponse = z.infer<typeof runtimeProjectCreateResponseSchema>;
+
 export const runtimeProjectDirectoryPickerResponseSchema = z.object({
 	ok: z.boolean(),
 	path: z.string().nullable(),

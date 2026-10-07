@@ -369,16 +369,17 @@ export function ProjectNavigationPanel({
 						))}
 
 						{!isLoadingProjects ? (
-							<button
-								type="button"
-								className="kb-project-row flex cursor-pointer items-center gap-1.5 rounded-md text-text-secondary hover:text-text-primary"
-								style={{ padding: "6px 8px" }}
+							// Same props as the board's "Create task" button (board-column.tsx).
+							<Button
+								icon={<Plus size={14} />}
+								aria-label="Add project"
+								fill
 								onClick={onAddProject}
 								disabled={removingProjectId !== null}
+								style={{ marginBottom: 6, flexShrink: 0 }}
 							>
-								<Plus size={14} className="shrink-0" />
-								<span className="text-sm">Add Project</span>
-							</button>
+								Add project
+							</Button>
 						) : null}
 					</div>
 					<ShortcutsCard />

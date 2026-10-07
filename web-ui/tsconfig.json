@@ -22,6 +22,7 @@
       "@runtime-shortcuts": ["../src/config/shortcut-utils.ts"],
       "@runtime-task-id": ["../src/core/task-id.ts"],
       "@runtime-task-title": ["../src/core/task-title.ts"],
+      "@runtime-project-paths": ["../src/core/project-paths.ts"],
       "@runtime-card-role": ["../src/core/card-role.ts"],
       "@runtime-task-worktree-path": ["../src/workspace/task-worktree-path.ts"],
       "@runtime-task-state": ["../src/core/task-board-mutations.ts"],

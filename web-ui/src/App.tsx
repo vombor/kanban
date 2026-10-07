@@ -112,7 +112,6 @@ export default function App(): ReactElement {
 		handleRemoveProject,
 		isAddProjectDialogOpen,
 		setIsAddProjectDialogOpen,
-		pendingNativeGitInitPath,
 		resetProjectNavigationState,
 	} = useProjectNavigation({
 		onProjectSwitchStart: handleProjectSwitchStart,
@@ -762,9 +761,7 @@ export default function App(): ReactElement {
 							void handleSelectProject(projectId);
 						}}
 						onRemoveProject={handleRemoveProject}
-						onAddProject={() => {
-							void handleAddProject();
-						}}
+						onAddProject={handleAddProject}
 						sidebarWidth={sidebarLayout.sidebarWidth}
 						setExpandedSidebarWidth={sidebarLayout.setExpandedSidebarWidth}
 						isCollapsed={sidebarLayout.isCollapsed}
@@ -840,12 +837,7 @@ export default function App(): ReactElement {
 										<p className="text-[13px] text-text-secondary">
 											Add a git repository to start using Kanban.
 										</p>
-										<Button
-											variant="primary"
-											onClick={() => {
-												void handleAddProject();
-											}}
-										>
+										<Button variant="primary" onClick={handleAddProject}>
 											Add Project
 										</Button>
 									</div>
@@ -1085,7 +1077,6 @@ export default function App(): ReactElement {
 					onOpenChange={setIsAddProjectDialogOpen}
 					onProjectAdded={handleAddProjectSuccess}
 					currentProjectId={currentProjectId}
-					initialGitInitPath={pendingNativeGitInitPath}
 				/>
 
 				<UpdateNotificationController />

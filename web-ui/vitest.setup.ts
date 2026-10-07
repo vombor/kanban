@@ -84,3 +84,20 @@ if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
 		}),
 	});
 }
+
+// jsdom has no ResizeObserver; Radix primitives (Checkbox's bubble input, Select) measure with it.
+if (typeof globalThis.ResizeObserver === "undefined") {
+	class MockResizeObserver implements ResizeObserver {
+		disconnect(): void {}
+
+		observe(_target: Element): void {}
+
+		unobserve(_target: Element): void {}
+	}
+
+	Object.defineProperty(globalThis, "ResizeObserver", {
+		writable: true,
+		configurable: true,
+		value: MockResizeObserver,
+	});
+}

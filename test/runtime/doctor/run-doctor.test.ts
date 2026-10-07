@@ -78,6 +78,29 @@ describe("kanban doctor", () => {
 		});
 	});
 
+	it("warns once per registered project outside the projects root, and never for one inside", async () => {
+		await withTemporaryKanbanHome(async ({ userHomePath, globalConfigPath }) => {
+			const root = join(realpathSync(userHomePath), "projects");
+			const inside = createRepo(join(root, "app"));
+			const outside = createRepo(join(userHomePath, "legacy-board"));
+			// Both registered while the root was the whole temp home (like the legacy kit's board before the rule).
+			await addProject({ repoPath: inside });
+			await addProject({ repoPath: outside });
+			writeJson(globalConfigPath, { projects: { roots: [root] } });
+
+			const report = await runDoctor(DOCTOR);
+			const rows = report.findings.filter((finding) => finding.message.includes("outside the projects volume"));
+			expect(rows).toHaveLength(1);
+			expect(rows[0]).toMatchObject({ level: "warn", area: "project" });
+			expect(rows[0]?.message).toContain(`${outside} is outside the projects volume (${root})`);
+			// It still works: its info row is there, nothing was removed.
+			expect(find(report.findings, "project", `(${outside}): kit default`)?.level).toBe("info");
+			expect((await listWorkspaceIndexEntries()).map((entry) => entry.repoPath).sort()).toEqual(
+				[inside, outside].sort(),
+			);
+		});
+	});
+
 	it("reports missing Claude Code trust and --fix trusts the main repo", async () => {
 		await withTemporaryKanbanHome(async ({ userHomePath }) => {
 			process.env.CLAUDE_CONFIG_DIR = join(userHomePath, "claude-config");

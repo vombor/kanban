@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -28,6 +28,12 @@ isolateGitConfig(process.env, gitGlobalConfigPath);
 afterAll(() => {
 	rmSync(gitConfigDir, { recursive: true, force: true });
 });
+
+// New, cloned and opened projects must be inside a projects root (src/projects/project-roots.ts). In the pod the
+// default is /projects, which tests must never write to, so their default root is the temp dir they create repos in.
+// Tests of the rule itself pass explicit roots or set projects.roots.
+// The literal, not PROJECTS_ROOTS_ENV: importing project-roots here would load real modules before a test file mocks them.
+process.env.KANBAN_PROJECTS_ROOTS = realpathSync(tmpdir());
 
 // A run without HOME=<temp dir> resolved the real Kanban home: pipeline-worker tests with the team kit's default
 // features appended 392 test lines to foo's live data/foo/scoreboard.jsonl (2026-10-07). So a HOME outside the temp

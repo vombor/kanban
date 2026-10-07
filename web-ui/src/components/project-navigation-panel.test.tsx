@@ -1,7 +1,8 @@
-import { act, type ComponentProps } from "react";
+import { act, type ComponentProps, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { AddProjectDialog } from "@/components/add-project-dialog";
 import { ProjectNavigationPanel } from "@/components/project-navigation-panel";
 import { useProjectNavigationLayout } from "@/resize/use-project-navigation-layout";
 import type { RuntimeProjectSummary } from "@/runtime/types";
@@ -9,6 +10,18 @@ import { LocalStorageKey } from "@/storage/local-storage-store";
 
 vi.mock("@/resize/layout-customizations", () => ({
 	useLayoutResetEffect: () => {},
+}));
+
+// Only the add-project dialog talks to the runtime here.
+vi.mock("@/runtime/trpc-client", () => ({
+	getRuntimeTrpcClient: () => ({
+		projects: {
+			roots: { query: async () => ({ roots: ["/projects"] }) },
+			listDirectoryContents: {
+				query: async () => ({ ok: true, currentPath: "/projects", parentPath: null, rootPath: "/", entries: [] }),
+			},
+		},
+	}),
 }));
 
 /** Wrapper that owns the sidebar layout state via the hook and passes it as props. */
@@ -20,6 +33,24 @@ function PanelWithLayout(
 ): React.ReactElement {
 	const layout = useProjectNavigationLayout();
 	return <ProjectNavigationPanel {...props} {...layout} />;
+}
+
+/** The panel wired to the add-project dialog the way App.tsx does it. */
+function PanelWithAddProjectDialog(
+	props: Omit<ComponentProps<typeof PanelWithLayout>, "onAddProject">,
+): React.ReactElement {
+	const [isAddProjectDialogOpen, setIsAddProjectDialogOpen] = useState(false);
+	return (
+		<>
+			<PanelWithLayout {...props} onAddProject={() => setIsAddProjectDialogOpen(true)} />
+			<AddProjectDialog
+				open={isAddProjectDialogOpen}
+				onOpenChange={setIsAddProjectDialogOpen}
+				onProjectAdded={() => {}}
+				currentProjectId={null}
+			/>
+		</>
+	);
 }
 
 const SIDEBAR_MIN_EXPANDED_WIDTH = 200;
@@ -141,6 +172,39 @@ describe("ProjectNavigationPanel width persistence", () => {
 	function clampExpandedWidth(width: number): number {
 		return Math.max(SIDEBAR_MIN_EXPANDED_WIDTH, Math.min(SIDEBAR_MAX_EXPANDED_WIDTH, width));
 	}
+
+	it("shows Add project as a button like Create task, and it opens the add-project dialog", async () => {
+		act(() => {
+			root.render(
+				<PanelWithAddProjectDialog
+					projects={PROJECTS}
+					currentProjectId="project-1"
+					removingProjectId={null}
+					activeSection="projects"
+					onActiveSectionChange={() => {}}
+					canShowAgentSection
+					selectedAgentId={null}
+					onSelectProject={() => {}}
+					onRemoveProject={async () => true}
+				/>,
+			);
+		});
+		const button = container.querySelector<HTMLButtonElement>('button[aria-label="Add project"]');
+		expect(button?.textContent).toBe("Add project");
+		// The board's "Create task" Button: default variant, md size, full width, icon first.
+		expect(button?.className).toContain("bg-surface-2");
+		expect(button?.className).toContain("h-8");
+		expect(button?.className).toContain("w-full");
+		expect(button?.firstElementChild?.tagName.toLowerCase()).toBe("svg");
+		expect(document.body.textContent).not.toContain("Clone from URL");
+
+		await act(async () => {
+			button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+		});
+		expect(document.body.querySelector('[role="dialog"]')?.textContent).toContain("Add Project");
+		expect(document.body.textContent).toContain("Clone from URL");
+		expect(document.body.textContent).toContain("New project");
+	});
 
 	it("uses a proportional one-fifth default width when no value is persisted", () => {
 		renderPanel();

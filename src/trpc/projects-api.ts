@@ -1,13 +1,30 @@
-import { readdir, stat } from "node:fs/promises";
+import { readdir, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 import type {
 	RuntimeBoardData,
 	RuntimeDirectoryListResponse,
 	RuntimeProjectAddResponse,
+	RuntimeProjectCreateResponse,
+	RuntimeProjectNameCheckResponse,
+	RuntimeProjectRootsResponse,
 	RuntimeProjectSummary,
 	RuntimeProjectTaskCounts,
 } from "../core/api-contract";
-import { parseDirectoryListRequest, parseProjectAddRequest, parseProjectRemoveRequest } from "../core/api-validation";
+import {
+	parseDirectoryListRequest,
+	parseProjectAddRequest,
+	parseProjectCreateRequest,
+	parseProjectNameCheckRequest,
+	parseProjectRemoveRequest,
+} from "../core/api-validation";
+import { createProject } from "../projects/project-create";
+import {
+	checkProjectDirectoryName,
+	describeProjectRoots,
+	type ProjectRoots,
+	readProjectRoots,
+	resolvePathInsideProjectRoots,
+} from "../projects/project-roots";
 import type { PreparedWorktreeReap } from "../server/process-reaper";
 import {
 	listWorkspaceIndexEntries,
@@ -62,10 +79,41 @@ export interface CreateProjectsApiDependencies {
 	}>;
 	pickDirectoryPathFromSystemDialog: () => string | null;
 	serverCwd: string;
+	/** The projects roots (default: config.json's `projects.roots`, src/projects/project-roots.ts). */
+	readProjectRoots?: () => Promise<ProjectRoots>;
 }
 
 export function createProjectsApi(deps: CreateProjectsApiDependencies): RuntimeTrpcContext["projectsApi"] {
 	const filesystemRoot = resolve(deps.serverCwd, "/");
+	const readRoots = deps.readProjectRoots ?? readProjectRoots;
+
+	const isRegisteredProjectPath = async (projectPath: string): Promise<boolean> => {
+		const real = await realpath(projectPath).catch(() => projectPath);
+		return (await listWorkspaceIndexEntries()).some(
+			(entry) => entry.repoPath === projectPath || entry.repoPath === real,
+		);
+	};
+
+	// Registers a project the way "Open folder" always has, and makes it active when nothing is.
+	const registerProject = async (projectPath: string): Promise<RuntimeProjectSummary> => {
+		const context = await loadWorkspaceContext(projectPath);
+		deps.rememberWorkspace(context.workspaceId, context.repoPath);
+		const projectsAfterAdd = await listWorkspaceIndexEntries();
+		const activeWorkspaceId = deps.getActiveWorkspaceId();
+		const hasActiveWorkspace = activeWorkspaceId
+			? projectsAfterAdd.some((project) => project.workspaceId === activeWorkspaceId)
+			: false;
+		if (!hasActiveWorkspace) {
+			await deps.setActiveWorkspace(context.workspaceId, context.repoPath);
+		}
+		const taskCounts = await deps.summarizeProjectTaskCounts(context.workspaceId, context.repoPath);
+		void deps.broadcastRuntimeProjectsUpdated(context.workspaceId);
+		return deps.createProjectSummary({
+			workspaceId: context.workspaceId,
+			repoPath: context.repoPath,
+			taskCounts,
+		});
+	};
 
 	return {
 		listProjects: async (preferredWorkspaceId) => {
@@ -82,16 +130,15 @@ export function createProjectsApi(deps: CreateProjectsApiDependencies): RuntimeT
 				: null;
 			const resolveBasePath = preferredWorkspaceContext?.repoPath ?? deps.getActiveWorkspacePath() ?? process.cwd();
 			try {
+				const projectRoots = await readRoots();
 				let projectPath: string;
 				if (body.gitUrl) {
-					// Clone from Git URL. If a custom path is provided alongside
-					// gitUrl, use it as the clone destination. Otherwise derive
-					// a destination from the URL.
-					// Resolve relative to serverCwd (the default clone base), not the
-					// active project — the clone target belongs under the kanban
-					// working directory, not inside another project.
-					const customDest = body.path ? deps.resolveProjectInputPath(body.path, deps.serverCwd) : undefined;
-					const cloneResult = await cloneGitRepository(body.gitUrl, deps.serverCwd, customDest, filesystemRoot);
+					// Clone from Git URL into a new (or empty) directory inside a projects root. A custom path is the
+					// clone destination; otherwise it goes to <first root>/<repo name>.
+					const customDest = body.path
+						? deps.resolveProjectInputPath(body.path, projectRoots.roots[0] ?? deps.serverCwd)
+						: undefined;
+					const cloneResult = await cloneGitRepository(body.gitUrl, projectRoots, customDest);
 					if (!cloneResult.ok) {
 						return {
 							ok: false,
@@ -103,6 +150,14 @@ export function createProjectsApi(deps: CreateProjectsApiDependencies): RuntimeT
 				} else {
 					// path is guaranteed to exist here by the schema refine and the gitUrl branch above.
 					projectPath = deps.resolveProjectInputPath(body.path as string, resolveBasePath);
+					// Open folder: a new registration must be inside a projects root; registered ones keep working.
+					if (!(await isRegisteredProjectPath(projectPath))) {
+						const check = await resolvePathInsideProjectRoots(projectPath, projectRoots);
+						if (!check.ok) {
+							return { ok: false, project: null, error: check.error } satisfies RuntimeProjectAddResponse;
+						}
+						projectPath = check.path;
+					}
 				}
 				await deps.assertPathIsDirectory(projectPath);
 				if (!deps.hasGitRepository(projectPath)) {
@@ -132,25 +187,9 @@ export function createProjectsApi(deps: CreateProjectsApiDependencies): RuntimeT
 						} satisfies RuntimeProjectAddResponse;
 					}
 				}
-				const context = await loadWorkspaceContext(projectPath);
-				deps.rememberWorkspace(context.workspaceId, context.repoPath);
-				const projectsAfterAdd = await listWorkspaceIndexEntries();
-				const activeWorkspaceId = deps.getActiveWorkspaceId();
-				const hasActiveWorkspace = activeWorkspaceId
-					? projectsAfterAdd.some((project) => project.workspaceId === activeWorkspaceId)
-					: false;
-				if (!hasActiveWorkspace) {
-					await deps.setActiveWorkspace(context.workspaceId, context.repoPath);
-				}
-				const taskCounts = await deps.summarizeProjectTaskCounts(context.workspaceId, context.repoPath);
-				void deps.broadcastRuntimeProjectsUpdated(context.workspaceId);
 				return {
 					ok: true,
-					project: deps.createProjectSummary({
-						workspaceId: context.workspaceId,
-						repoPath: context.repoPath,
-						taskCounts,
-					}),
+					project: await registerProject(projectPath),
 				} satisfies RuntimeProjectAddResponse;
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
@@ -160,6 +199,57 @@ export function createProjectsApi(deps: CreateProjectsApiDependencies): RuntimeT
 					error: message,
 				} satisfies RuntimeProjectAddResponse;
 			}
+		},
+		createProject: async (_preferredWorkspaceId, input) => {
+			try {
+				const body = parseProjectCreateRequest(input);
+				const created = await createProject({
+					path: body.path,
+					name: body.name,
+					initialBranch: body.initialBranch,
+					initialCommit: body.initialCommit,
+					projectRoots: await readRoots(),
+				});
+				return {
+					ok: true,
+					project: await registerProject(created.repoPath),
+					notes: created.notes,
+				} satisfies RuntimeProjectCreateResponse;
+			} catch (error) {
+				return {
+					ok: false,
+					project: null,
+					notes: [],
+					error: error instanceof Error ? error.message : String(error),
+				} satisfies RuntimeProjectCreateResponse;
+			}
+		},
+		getProjectRoots: async () => {
+			try {
+				const projectRoots = await readRoots();
+				return {
+					roots: projectRoots.roots,
+					...(projectRoots.roots.length === 0
+						? {
+								error: `No projects root exists (${describeProjectRoots(projectRoots)}, setting projects.roots).`,
+							}
+						: {}),
+				} satisfies RuntimeProjectRootsResponse;
+			} catch (error) {
+				return { roots: [], error: error instanceof Error ? error.message : String(error) };
+			}
+		},
+		checkProjectName: async (input) => {
+			const body = parseProjectNameCheckRequest(input);
+			const check = await checkProjectDirectoryName(body, await readRoots());
+			// Only the three facts, never the path or any listing.
+			return {
+				ok: check.ok,
+				exists: check.exists,
+				isGitRepository: check.isGitRepository,
+				isEmpty: check.isEmpty,
+				...(check.error ? { error: check.error } : {}),
+			} satisfies RuntimeProjectNameCheckResponse;
 		},
 		removeProject: async (_preferredWorkspaceId, input) => {
 			try {

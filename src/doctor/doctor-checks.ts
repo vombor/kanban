@@ -13,6 +13,7 @@ import {
 } from "../config/pipeline-config";
 import { DEFAULT_KIT_NAME, type KitCatalog, resolveWorkspaceKit } from "../kits/resolve-kit";
 import { addProject, resolveProjectRepoPath } from "../projects/project-add";
+import { describeProjectRoots, type ProjectRoots, resolvePathInsideProjectRoots } from "../projects/project-roots";
 import { readAgentsQaSectionStatus, syncProjectSections } from "../projects/project-sections";
 import type { SetupStepPlan } from "../setup/machine-setup";
 import {
@@ -34,6 +35,8 @@ export interface DoctorProjectContext {
 	entries: RuntimeWorkspaceIndexEntry[];
 	/** Projects the legacy kit lists (it owns their AGENTS.md section until cutover). */
 	legacyKitProjects: LegacyKitProject[];
+	/** The projects roots (`projects.roots`); a registered project outside them gets a warning. */
+	projectRoots?: ProjectRoots;
 }
 
 async function isDirectory(path: string): Promise<boolean> {
@@ -163,6 +166,14 @@ export async function checkProjects(context: DoctorProjectContext): Promise<Doct
 			area: "project",
 			message: `${entry.workspaceId} (${entry.repoPath}): kit ${resolution.kitName}, landing ${settings.landing.mode}${extras.length ? ` (${extras.join(", ")})` : ""}`,
 		});
+		if (context.projectRoots && !(await resolvePathInsideProjectRoots(entry.repoPath, context.projectRoots)).ok) {
+			findings.push({
+				level: "warn",
+				area: "project",
+				message: `${entry.workspaceId}: ${entry.repoPath} is outside the projects volume (${describeProjectRoots(context.projectRoots)}); it keeps working, but new projects can only be added inside it`,
+				hint: "move the repo into the projects root and add it again, or remove the project once it is retired",
+			});
+		}
 		for (const issue of resolution.issues) {
 			findings.push({
 				level: "warn",

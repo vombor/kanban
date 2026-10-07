@@ -1,11 +1,11 @@
-import { rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// ── Mock git commands ─────────────────────────────────────
+// ── Mock git commands (the filesystem is a real temp dir) ──
 const childProcessMocks = vi.hoisted(() => ({
 	execFile: vi.fn(),
 	execFilePromise: vi.fn(),
@@ -17,20 +17,8 @@ vi.mock("node:child_process", () => ({
 	}),
 }));
 
-// ── Mock fs/promises for access, mkdir & stat ─────────────
-const fsMocks = vi.hoisted(() => ({
-	access: vi.fn(),
-	mkdir: vi.fn(),
-	stat: vi.fn(),
-}));
-
-vi.mock("node:fs/promises", () => ({
-	access: fsMocks.access,
-	mkdir: fsMocks.mkdir,
-	stat: fsMocks.stat,
-}));
-
-import { cloneGitRepository, deriveRepoNameFromUrl, validateCloneDestination } from "../../../src/workspace/git-clone";
+import { type ProjectRoots, resolveProjectRoots } from "../../../src/projects/project-roots";
+import { cloneGitRepository, deriveRepoNameFromUrl } from "../../../src/workspace/git-clone";
 
 describe("deriveRepoNameFromUrl", () => {
 	it("extracts repo name from HTTPS URL", () => {
@@ -74,232 +62,120 @@ describe("deriveRepoNameFromUrl", () => {
 	});
 });
 
-describe("validateCloneDestination", () => {
-	const serverCwd = "/home/user/workspace";
-
-	it("accepts a path within the CWD", () => {
-		expect(validateCloneDestination("/home/user/workspace/my-repo", serverCwd)).toBe("/home/user/workspace/my-repo");
-	});
-
-	it("accepts a deeply nested path within the CWD", () => {
-		expect(validateCloneDestination("/home/user/workspace/a/b/c", serverCwd)).toBe("/home/user/workspace/a/b/c");
-	});
-
-	it("accepts the CWD itself", () => {
-		expect(validateCloneDestination("/home/user/workspace", serverCwd)).toBe("/home/user/workspace");
-	});
-
-	it("rejects a path outside the CWD", () => {
-		expect(() => validateCloneDestination("/home/user/other", serverCwd)).toThrow(
-			"outside the server working directory",
-		);
-	});
-
-	it("rejects a parent traversal that escapes CWD", () => {
-		expect(() => validateCloneDestination("/home/user/workspace/../other", serverCwd)).toThrow(
-			"outside the server working directory",
-		);
-	});
-
-	it("rejects a sibling directory with similar prefix", () => {
-		expect(() => validateCloneDestination("/home/user/workspace-other/repo", serverCwd)).toThrow(
-			"outside the server working directory",
-		);
-	});
-
-	it("rejects absolute path to root", () => {
-		expect(() => validateCloneDestination("/tmp/repo", serverCwd)).toThrow("outside the server working directory");
-	});
-});
-
 describe("cloneGitRepository", () => {
-	let testCwd: string;
+	let sandbox: string;
+	let root: string;
+	let projectRoots: ProjectRoots;
 
-	beforeEach(() => {
-		testCwd = join(tmpdir(), `kanban-test-clone-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
-		// Use real mkdirSync for setup only; the module uses mocked mkdir from fs/promises
-		require("node:fs").mkdirSync(testCwd, { recursive: true });
+	beforeEach(async () => {
+		sandbox = realpathSync(mkdtempSync(join(tmpdir(), "kanban-test-clone-")));
+		root = join(sandbox, "projects");
+		mkdirSync(root);
+		projectRoots = await resolveProjectRoots([root]);
 		childProcessMocks.execFilePromise.mockReset();
-		fsMocks.access.mockReset();
-		fsMocks.mkdir.mockReset();
-		fsMocks.stat.mockReset();
+		childProcessMocks.execFilePromise.mockResolvedValue({ stdout: "", stderr: "" });
 	});
 
 	afterEach(() => {
-		rmSync(testCwd, { recursive: true, force: true });
+		rmSync(sandbox, { recursive: true, force: true });
 	});
 
-	it("clones a repo to the default destination derived from URL", async () => {
-		fsMocks.access.mockRejectedValueOnce(new Error("ENOENT"));
-		fsMocks.mkdir.mockResolvedValueOnce(undefined);
-		childProcessMocks.execFilePromise.mockResolvedValueOnce({ stdout: "", stderr: "" });
+	function cloneArgs(): string[] {
+		return childProcessMocks.execFilePromise.mock.calls[0]?.[1] as string[];
+	}
 
-		const result = await cloneGitRepository("https://github.com/user/my-repo.git", testCwd);
+	it("clones to <first root>/<repo name> by default", async () => {
+		const result = await cloneGitRepository("https://github.com/user/my-repo.git", projectRoots);
 
-		expect(result.ok).toBe(true);
-		expect(result.clonedPath).toBe(resolve(testCwd, "my-repo"));
+		expect(result).toEqual({ ok: true, clonedPath: join(root, "my-repo") });
 		expect(childProcessMocks.execFilePromise).toHaveBeenCalledOnce();
-		const callArgs = childProcessMocks.execFilePromise.mock.calls[0];
-		expect(callArgs[0]).toBe("git");
-		expect(callArgs[1]).toContain("clone");
-		expect(callArgs[1]).toContain("https://github.com/user/my-repo.git");
-		expect(callArgs[1]).toContain(resolve(testCwd, "my-repo"));
+		expect(childProcessMocks.execFilePromise.mock.calls[0]?.[0]).toBe("git");
+		expect(cloneArgs()).toEqual(
+			expect.arrayContaining(["clone", "https://github.com/user/my-repo.git", join(root, "my-repo")]),
+		);
 	});
 
-	it("clones a repo to a custom destination path", async () => {
-		const customDest = join(testCwd, "custom-dir");
-		fsMocks.access.mockRejectedValueOnce(new Error("ENOENT"));
-		fsMocks.mkdir.mockResolvedValueOnce(undefined);
-		childProcessMocks.execFilePromise.mockResolvedValueOnce({ stdout: "", stderr: "" });
+	it("clones to a custom destination inside the root, creating missing parents", async () => {
+		const dest = join(root, "nested", "dir", "repo");
+		const result = await cloneGitRepository("https://github.com/user/my-repo.git", projectRoots, dest);
 
-		const result = await cloneGitRepository("https://github.com/user/my-repo.git", testCwd, customDest);
-
-		expect(result.ok).toBe(true);
-		expect(result.clonedPath).toBe(customDest);
+		expect(result).toEqual({ ok: true, clonedPath: dest });
 	});
 
-	it("clones into an existing directory by appending repo name", async () => {
-		const existingDir = join(testCwd, "projects");
-		// First access() succeeds (existingDir exists), stat says it's a directory
-		fsMocks.access.mockResolvedValueOnce(undefined);
-		fsMocks.stat.mockResolvedValueOnce({ isDirectory: () => true });
-		// Second access() for the nested path (projects/my-repo) rejects — does not exist
-		fsMocks.access.mockRejectedValueOnce(new Error("ENOENT"));
-		fsMocks.mkdir.mockResolvedValueOnce(undefined);
-		childProcessMocks.execFilePromise.mockResolvedValueOnce({ stdout: "", stderr: "" });
+	it("clones into an existing empty directory", async () => {
+		mkdirSync(join(root, "empty"));
+		const result = await cloneGitRepository("https://github.com/user/my-repo.git", projectRoots, join(root, "empty"));
 
-		const result = await cloneGitRepository("https://github.com/user/my-repo.git", testCwd, existingDir);
-
-		expect(result.ok).toBe(true);
-		expect(result.clonedPath).toBe(join(existingDir, "my-repo"));
+		expect(result).toEqual({ ok: true, clonedPath: join(root, "empty") });
 	});
 
-	it("returns error when existing directory already contains the repo folder", async () => {
-		const existingDir = join(testCwd, "projects");
-		// First access() succeeds (existingDir exists), stat says it's a directory
-		fsMocks.access.mockResolvedValueOnce(undefined);
-		fsMocks.stat.mockResolvedValueOnce({ isDirectory: () => true });
-		// Second access() for the nested path (projects/my-repo) also succeeds — already exists
-		fsMocks.access.mockResolvedValueOnce(undefined);
+	it("refuses an existing non-empty directory or a file", async () => {
+		mkdirSync(join(root, "used"));
+		writeFileSync(join(root, "used", "file.txt"), "x");
+		writeFileSync(join(root, "file"), "x");
 
-		const result = await cloneGitRepository("https://github.com/user/my-repo.git", testCwd, existingDir);
-
-		expect(result.ok).toBe(false);
-		expect(result.error).toContain("Destination already exists");
+		for (const dest of [join(root, "used"), join(root, "file")]) {
+			const result = await cloneGitRepository("https://github.com/user/my-repo.git", projectRoots, dest);
+			expect(result.ok).toBe(false);
+			expect(result.error).toContain("already exists and is not an empty directory");
+		}
 		expect(childProcessMocks.execFilePromise).not.toHaveBeenCalled();
 	});
 
-	it("returns error when destination exists but is not a directory", async () => {
-		fsMocks.access.mockResolvedValueOnce(undefined);
-		fsMocks.stat.mockResolvedValueOnce({ isDirectory: () => false });
-
-		const result = await cloneGitRepository("https://github.com/user/my-repo.git", testCwd);
-
-		expect(result.ok).toBe(false);
-		expect(result.error).toContain("Destination already exists");
+	it("refuses destinations outside the root, the root itself, a .. escape and a symlink escape", async () => {
+		const outside = join(sandbox, "outside");
+		mkdirSync(outside);
+		symlinkSync(outside, join(root, "link"));
+		const cases: Array<[string, string]> = [
+			[join(sandbox, "elsewhere", "repo"), "outside the projects root"],
+			[root, "the projects root itself"],
+			[`${root}/../outside/repo`, 'contains ".."'],
+			[join(root, "link", "repo"), "outside the projects root"],
+		];
+		for (const [dest, message] of cases) {
+			const result = await cloneGitRepository("https://github.com/user/my-repo.git", projectRoots, dest);
+			expect(result.ok, dest).toBe(false);
+			expect(result.error).toContain(message);
+		}
 		expect(childProcessMocks.execFilePromise).not.toHaveBeenCalled();
 	});
 
-	it("returns error when destination is outside CWD", async () => {
-		const result = await cloneGitRepository("https://github.com/user/my-repo.git", testCwd, "/tmp/outside-repo");
-
-		expect(result.ok).toBe(false);
-		expect(result.error).toContain("outside the server working directory");
-		expect(childProcessMocks.execFilePromise).not.toHaveBeenCalled();
-	});
-
-	it("allows destination outside CWD when allowedRootPath is broader", async () => {
-		const outsidePath = "/tmp/outside-repo";
-		fsMocks.access.mockRejectedValueOnce(new Error("ENOENT"));
-		fsMocks.mkdir.mockResolvedValueOnce(undefined);
-		childProcessMocks.execFilePromise.mockResolvedValueOnce({ stdout: "", stderr: "" });
-
-		const result = await cloneGitRepository("https://github.com/user/my-repo.git", testCwd, outsidePath, "/");
-
-		expect(result.ok).toBe(true);
-		expect(result.clonedPath).toBe(outsidePath);
-	});
-
-	it("returns error when repo name cannot be derived and no destination provided", async () => {
-		const result = await cloneGitRepository("   ", testCwd);
+	it("returns an error when the repo name cannot be derived and no destination is given", async () => {
+		const result = await cloneGitRepository("   ", projectRoots);
 
 		expect(result.ok).toBe(false);
 		expect(result.error).toContain("Could not derive repository name");
 	});
 
-	it("returns error when git clone command fails", async () => {
-		fsMocks.access.mockRejectedValueOnce(new Error("ENOENT"));
-		fsMocks.mkdir.mockResolvedValueOnce(undefined);
-		const gitError = Object.assign(new Error("clone failed"), {
-			code: 128,
-			stdout: "",
-			stderr: "fatal: repository not found",
-		});
-		childProcessMocks.execFilePromise.mockRejectedValueOnce(gitError);
-
-		const result = await cloneGitRepository("https://github.com/user/bad-repo.git", testCwd);
+	it("returns an error when no projects root exists", async () => {
+		const result = await cloneGitRepository(
+			"https://github.com/user/my-repo.git",
+			await resolveProjectRoots([join(sandbox, "missing")]),
+		);
 
 		expect(result.ok).toBe(false);
-		expect(result.error).toBeTruthy();
+		expect(result.error).toContain("No projects root exists");
 	});
 
-	it("creates parent directory if it does not exist", async () => {
-		const nestedDest = join(testCwd, "nested", "dir", "my-repo");
-		fsMocks.access.mockRejectedValueOnce(new Error("ENOENT"));
-		fsMocks.mkdir.mockResolvedValueOnce(undefined);
-		childProcessMocks.execFilePromise.mockResolvedValueOnce({ stdout: "", stderr: "" });
+	it("returns an error when git clone fails", async () => {
+		childProcessMocks.execFilePromise.mockReset();
+		childProcessMocks.execFilePromise.mockRejectedValueOnce(
+			Object.assign(new Error("clone failed"), { code: 128, stdout: "", stderr: "fatal: repository not found" }),
+		);
 
-		const result = await cloneGitRepository("https://github.com/user/my-repo.git", testCwd, nestedDest);
-
-		expect(result.ok).toBe(true);
-		expect(fsMocks.mkdir).toHaveBeenCalledWith(join(testCwd, "nested", "dir"), { recursive: true });
-	});
-
-	it("returns error when parent directory creation fails", async () => {
-		const nestedDest = join(testCwd, "nested", "repo");
-		fsMocks.access.mockRejectedValueOnce(new Error("ENOENT"));
-		fsMocks.mkdir.mockRejectedValueOnce(new Error("EACCES: permission denied"));
-
-		const result = await cloneGitRepository("https://github.com/user/my-repo.git", testCwd, nestedDest);
+		const result = await cloneGitRepository("https://github.com/user/bad-repo.git", projectRoots);
 
 		expect(result.ok).toBe(false);
-		expect(result.error).toContain("Failed to create parent directory");
+		expect(result.error).toContain("repository not found");
 	});
 
-	it("passes '--' separator before the URL to prevent flag injection", async () => {
+	it("passes '--' before the URL to prevent flag injection", async () => {
 		const maliciousUrl = "--upload-pack=/usr/bin/malicious";
-		const dest = join(testCwd, "repo");
-		fsMocks.access.mockRejectedValueOnce(new Error("ENOENT"));
-		fsMocks.mkdir.mockResolvedValueOnce(undefined);
-		childProcessMocks.execFilePromise.mockResolvedValueOnce({ stdout: "", stderr: "" });
+		await cloneGitRepository(maliciousUrl, projectRoots, join(root, "repo"));
 
-		await cloneGitRepository(maliciousUrl, testCwd, dest);
-
-		expect(childProcessMocks.execFilePromise).toHaveBeenCalledOnce();
-		const callArgs = childProcessMocks.execFilePromise.mock.calls[0];
-		const gitArgs: string[] = callArgs[1];
-		const cloneIdx = gitArgs.indexOf("clone");
+		const gitArgs = cloneArgs();
 		const separatorIdx = gitArgs.indexOf("--");
-		const urlIdx = gitArgs.indexOf(maliciousUrl);
-
-		// The '--' separator must appear between 'clone' and the URL.
-		expect(separatorIdx).toBeGreaterThan(cloneIdx);
-		expect(urlIdx).toBeGreaterThan(separatorIdx);
-	});
-
-	it("always includes '--' separator even for normal URLs", async () => {
-		fsMocks.access.mockRejectedValueOnce(new Error("ENOENT"));
-		fsMocks.mkdir.mockResolvedValueOnce(undefined);
-		childProcessMocks.execFilePromise.mockResolvedValueOnce({ stdout: "", stderr: "" });
-
-		await cloneGitRepository("https://github.com/user/my-repo.git", testCwd);
-
-		const callArgs = childProcessMocks.execFilePromise.mock.calls[0];
-		const gitArgs: string[] = callArgs[1];
-		const separatorIdx = gitArgs.indexOf("--");
-		const urlIdx = gitArgs.indexOf("https://github.com/user/my-repo.git");
-
-		expect(separatorIdx).not.toBe(-1);
-		expect(urlIdx).toBeGreaterThan(separatorIdx);
+		expect(separatorIdx).toBeGreaterThan(gitArgs.indexOf("clone"));
+		expect(gitArgs.indexOf(maliciousUrl)).toBeGreaterThan(separatorIdx);
 	});
 });

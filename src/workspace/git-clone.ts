@@ -1,8 +1,8 @@
-import { access, mkdir, stat } from "node:fs/promises";
-import { basename, dirname, resolve } from "node:path";
+import { lstat, mkdir, readdir } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 
+import { describeProjectRoots, type ProjectRoots, resolvePathInsideProjectRoots } from "../projects/project-roots.js";
 import { runGit } from "./git-utils.js";
-import { isPathWithinRoot } from "./path-sandbox.js";
 
 export interface GitCloneResult {
 	ok: boolean;
@@ -39,34 +39,18 @@ export function deriveRepoNameFromUrl(gitUrl: string): string | null {
 }
 
 /**
- * Validate that a resolved destination path is within the server CWD sandbox.
- * Returns the resolved absolute path if valid, or throws an error.
- */
-export function validateCloneDestination(destination: string, serverCwd: string): string {
-	const resolved = resolve(destination);
-	if (!isPathWithinRoot(serverCwd, resolved)) {
-		throw new Error(
-			`Clone destination is outside the server working directory. Destination "${resolved}" must be within "${serverCwd}".`,
-		);
-	}
-	return resolved;
-}
-
-/**
- * Clone a Git repository to a destination directory within the server CWD.
+ * Clone a Git repository into a new (or empty) directory strictly inside a projects root
+ * (src/projects/project-roots.ts: realpath of the deepest existing ancestor, no symlink or `..` escapes).
  *
  * @param gitUrl - The Git repository URL to clone.
- * @param serverCwd - The server's current working directory (sandbox root).
- * @param destinationPath - Optional custom destination path. If omitted, the
- *   clone is placed at `<serverCwd>/<repo-name>`.
- * @param allowedRootPath - Optional root boundary for destination validation.
- *   Defaults to `serverCwd`.
+ * @param projectRoots - The allowed roots; the first one is the default parent.
+ * @param destinationPath - Optional absolute destination. If omitted, the clone is placed at
+ *   `<first root>/<repo-name>`. An existing destination must be an empty directory.
  */
 export async function cloneGitRepository(
 	gitUrl: string,
-	serverCwd: string,
+	projectRoots: ProjectRoots,
 	destinationPath?: string,
-	allowedRootPath: string = serverCwd,
 ): Promise<GitCloneResult> {
 	const repoName = deriveRepoNameFromUrl(gitUrl);
 	if (!repoName && !destinationPath) {
@@ -76,58 +60,33 @@ export async function cloneGitRepository(
 			error: "Could not derive repository name from URL and no destination path was provided.",
 		};
 	}
-
-	// At this point either repoName or destinationPath is truthy (guarded above).
-	const rawDestination = destinationPath ?? resolve(serverCwd, repoName as string);
-
-	let clonePath: string;
-	try {
-		clonePath = validateCloneDestination(rawDestination, allowedRootPath);
-	} catch (error) {
+	const defaultParent = projectRoots.roots[0];
+	if (!destinationPath && !defaultParent) {
 		return {
 			ok: false,
-			clonedPath: rawDestination,
-			error: error instanceof Error ? error.message : String(error),
+			clonedPath: "",
+			error: `No projects root exists (${describeProjectRoots(projectRoots)}, setting projects.roots): create it first.`,
 		};
 	}
 
-	// If the destination already exists and is a directory, append the repo name
-	// so the behavior matches native `git clone <url> <existing-dir>` — the repo
-	// is cloned *into* the directory rather than rejected outright.
-	try {
-		await access(clonePath);
-		const destStat = await stat(clonePath);
-		if (destStat.isDirectory() && repoName) {
-			const nestedPath = resolve(clonePath, repoName);
-			try {
-				clonePath = validateCloneDestination(nestedPath, allowedRootPath);
-			} catch (error) {
-				return {
-					ok: false,
-					clonedPath: nestedPath,
-					error: error instanceof Error ? error.message : String(error),
-				};
-			}
-			// Verify the nested destination doesn't already exist.
-			try {
-				await access(clonePath);
-				return {
-					ok: false,
-					clonedPath: clonePath,
-					error: `Destination already exists: "${clonePath}".`,
-				};
-			} catch {
-				// Good — the nested path does not exist yet.
-			}
-		} else {
+	// At this point either destinationPath or (repoName and a root) is set (guarded above).
+	const rawDestination = destinationPath ?? join(defaultParent as string, repoName as string);
+	const check = await resolvePathInsideProjectRoots(rawDestination, projectRoots);
+	if (!check.ok) {
+		return { ok: false, clonedPath: check.path, error: check.error };
+	}
+	const clonePath = check.path;
+
+	const existing = await lstat(clonePath).catch(() => null);
+	if (existing) {
+		const isEmptyDirectory = existing.isDirectory() && (await readdir(clonePath).catch(() => ["?"])).length === 0;
+		if (!isEmptyDirectory) {
 			return {
 				ok: false,
 				clonedPath: clonePath,
-				error: `Destination already exists: "${clonePath}".`,
+				error: `Destination already exists and is not an empty directory: "${clonePath}".`,
 			};
 		}
-	} catch {
-		// Expected: destination does not exist yet.
 	}
 
 	// Ensure the parent directory exists.

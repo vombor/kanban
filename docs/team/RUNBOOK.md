@@ -37,10 +37,18 @@ Fix it before anything else.
 
 ## Projects
 
-- **New project:** `kanban project add <path> [--kit <name>] [--landing off|commit|pr|qa] [--base B] [--name N]
-  [--blurb "Project: …"] [--agents-md]`. It registers the repo with Kanban, pre-trusts it for Claude Code and Codex,
-  and creates `data/<ws>/`. Without `--kit` the project is on `default` with landing `off`: plain Kanban, landed by
-  hand.
+- **Add an existing repo:** `kanban project add <path> [--kit <name>] [--landing off|commit|pr|qa] [--base B]
+  [--name N] [--blurb "Project: …"] [--agents-md]`. It registers the repo with Kanban, pre-trusts it for Claude Code
+  and Codex, and creates `data/<ws>/`. Without `--kit` the project is on `default` with landing `off`: plain
+  Kanban, landed by hand. The browser's "Open folder" does the same registration.
+- **Brand-new project:** `kanban project create <path> [--name N] [--branch main] [--no-initial-commit]`, or "New
+  project" in the browser's Add Project dialog. It makes the directory (new or empty, not inside another git repo),
+  runs `git init -b <branch>`, commits a `README.md` (`# <name>`) unless told not to, and then adds it like
+  `project add`. Without a git identity the commit is made as "Kanban (no git identity configured)" for that commit
+  only (git config is never changed) and the result says so.
+- **Where projects live:** new, cloned and opened projects must be strictly inside a projects root
+  (`projects.roots`, see CONFIG.md; `/projects` in the container, the projects volume). Projects registered
+  before keep working; `kanban doctor` warns about each one outside the root.
 - **Opt a project into the team workflow:** first set `workspaces.<ws>.pipeline.shadow: true` in config.json
   (shadow is a core key, not a kit key), then `kanban kit apply team --project <ws> --landing qa --dry-run`, then
   without `--dry-run`. Watch the decision log for a while before turning shadow off (see "Shadow day").

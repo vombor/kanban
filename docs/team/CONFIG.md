@@ -160,6 +160,24 @@ session `__home_agent__:<target or ws>:<selected agent>`.
 | `backups.board.enabled`, `.everyMin`, `.keep` | `true`, 10, 200 | every board write writes `board-latest.json`, plus a timestamped copy at most every `everyMin` |
 | `processes.reaper.enabled`, `.intervalSec`, `.mode` | `true`, 300, `terminate` | the orphan-process sweep (read on every sweep; anything unclear means `report`) |
 
+## `projects.*`
+
+Where Kanban projects live (`src/projects/project-roots.ts`). A project that is created (New project, `kanban
+project create`), cloned (Clone from URL) or opened for the first time (Open folder, `kanban project add`) must be
+strictly inside one of the roots, never a root itself. The check resolves the path the way the OS will: the realpath
+of its deepest existing ancestor, so a symlink pointing out of the root is refused, and a path with `..` is refused
+outright. The server is the one check; the browser's Add Project dialog only pre-validates (its directory field
+starts with the root as a read-only prefix, and its "does it exist" typeahead answers only for one name directly
+under a root).
+
+| Key | Default | What |
+|---|---|---|
+| `projects.roots` | null = `$KANBAN_PROJECTS_ROOTS` (path-list separated), else `["/projects"]` in a container (`/run/.containerenv` or `/.dockerenv`), else `[<home>]` | the allowed parent roots, first one is the dialog's default; `~` is expanded. Roots that don't exist are skipped |
+
+In the container `/projects` is the projects volume, and `/root` holds config, the Kanban home and task worktrees.
+Task worktrees are not projects and never go through this check. Projects registered before the rule (or outside a
+narrowed root) are not removed and keep working; `kanban doctor` shows a warn row for each.
+
 ## `guardrails.*`
 
 Task-card guardrails (`src/guardrails/`). They are resolved for every launch in `runtimeApi.startTaskSession`, and

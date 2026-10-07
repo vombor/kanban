@@ -416,6 +416,18 @@ const guardrailsSectionSchema = z
 	.strict();
 export type GuardrailsSettings = z.infer<typeof guardrailsSectionSchema>;
 
+// Where Kanban projects live (src/projects/project-roots.ts). A new, cloned or opened ("Open folder",
+// `kanban project add`) project must be strictly inside one of `roots` (never a root itself), after realpath. null
+// = the built-in default: $KANBAN_PROJECTS_ROOTS (path-list separated), else `/projects` in a container (the
+// projects volume; /root holds config, the Kanban home and worktrees), else the user's home directory. Task
+// worktrees are not projects and are never checked. Registered projects outside keep working; doctor warns.
+const projectsSectionSchema = z
+	.object({
+		roots: z.array(z.string().min(1)).min(1).nullable().default(null),
+	})
+	.strict();
+export type ProjectsSettings = z.infer<typeof projectsSectionSchema>;
+
 const SECTION_SCHEMAS = {
 	sessionSync: sessionSyncSectionSchema,
 	pipeline: pipelineSectionSchema,
@@ -425,6 +437,7 @@ const SECTION_SCHEMAS = {
 	agents: agentsSectionSchema,
 	backups: backupsSectionSchema,
 	guardrails: guardrailsSectionSchema,
+	projects: projectsSectionSchema,
 } as const;
 
 type SectionName = keyof typeof SECTION_SCHEMAS;

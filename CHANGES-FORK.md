@@ -520,3 +520,20 @@ of this repository is the complete record of changes.
   only). The PID-pressure reader ignores the legacy kit's flag files once review-watch is switched off (it never
   removes them). The test setup replaces a HOME outside the temp dir with a temp one, after a run without it wrote
   pipeline-worker test lines into foo's live scoreboard.
+- `src/projects/project-create.ts`, `src/projects/project-roots.ts`, `src/core/project-paths.ts` (new),
+  `src/projects/project-add.ts`, `src/commands/project.ts`, `src/trpc/projects-api.ts`, `src/trpc/app-router.ts`,
+  `src/core/api-contract.ts`, `src/core/api-validation.ts`, `src/workspace/git-clone.ts`, `src/config/pipeline-config.ts`,
+  `src/doctor/doctor-checks.ts`, `src/doctor/run-doctor.ts`, `web-ui/src/components/add-project-dialog.tsx`,
+  `web-ui/src/components/add-project/*` (new), `web-ui/src/hooks/use-project-name-check.ts`,
+  `web-ui/src/hooks/use-project-roots.ts`, `web-ui/src/utils/directory-picker.ts` (new),
+  `web-ui/src/hooks/use-project-navigation.ts`, `web-ui/src/components/project-navigation-panel.tsx`, `web-ui/src/App.tsx`,
+  `web-ui/src/components/directory-autocomplete.tsx` (removed), `docs/team/CONFIG.md`, `docs/team/RUNBOOK.md`: "New
+  project" in the Add Project dialog and `kanban project create <path> [--name] [--branch main] [--no-initial-commit]`
+  (one runtime procedure, tRPC `projects.create`): mkdir, `git init -b`, a README.md commit (a fallback identity for
+  that commit only when git has none), then registered like `project add` (default kit, landing off). New, cloned and
+  opened projects must be strictly inside a projects root (core setting `projects.roots`; `/projects` in the
+  container), checked server-side with realpath (no symlink or `..` escapes); registered projects outside keep working
+  and `kanban doctor` warns about them. The dialog shows the root as a read-only prefix, checks New project/Clone names
+  with a debounced server typeahead (`projects.checkName`: exists/isGitRepository/isEmpty only), lists the root's
+  folders one level for Open folder, and shows errors inline. "Add project" always opens the dialog (the native picker
+  moved into Open folder) and is a button like "Create task". Tests get a temp `KANBAN_PROJECTS_ROOTS`.

@@ -3,7 +3,8 @@
 // nothing is QA'd or landed automatically. Nothing is copied from another project (plan §3.4). An already
 // configured project keeps its kit and landing mode (`kanban kit apply` changes them); only missing keys are added.
 // Ported from archive/devteam-kit:bin/kit@d2fb30f `kit init` (and its trust step from @0782636), with K-1's rule
-// that a new project starts with everything off (legacy kit bin/kit@92101ca).
+// that a new project starts with everything off (legacy kit bin/kit@92101ca). A new registration must be strictly
+// inside a projects root (src/projects/project-roots.ts).
 import { lstat, realpath, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
@@ -18,6 +19,7 @@ import { DEFAULT_KIT_NAME } from "../kits/resolve-kit";
 import { fixWorkspaceTrust, readWorkspaceTrust } from "../setup/workspace-trust-report";
 import { listWorkspaceIndexEntries, loadWorkspaceContext } from "../state/workspace-state";
 import { runGit } from "../workspace/git-utils";
+import { assertPathInsideProjectRoots, type ProjectRoots, readProjectRoots } from "./project-roots";
 import { addAgentsQaSection, type ProjectSectionResult } from "./project-sections";
 
 export interface AddProjectInput {
@@ -29,6 +31,10 @@ export interface AddProjectInput {
 	name?: string;
 	blurb?: string;
 	agentsMd?: boolean;
+	/** Register a repo without commits (New project with the initial commit turned off). */
+	allowUnbornHead?: boolean;
+	/** Resolved projects roots (default: config.json's `projects.roots`). */
+	projectRoots?: ProjectRoots;
 }
 
 export interface AddProjectResult {
@@ -45,7 +51,10 @@ export interface AddProjectResult {
 }
 
 /** The repo's top directory, refusing anything Kanban can't run cards in. */
-export async function resolveProjectRepoPath(path: string): Promise<string> {
+export async function resolveProjectRepoPath(
+	path: string,
+	options: { allowUnbornHead?: boolean } = {},
+): Promise<string> {
 	let directory: string;
 	try {
 		directory = await realpath(path);
@@ -73,15 +82,19 @@ export async function resolveProjectRepoPath(path: string): Promise<string> {
 		);
 	}
 	const head = await runGit(directory, ["rev-parse", "--verify", "--quiet", "HEAD"]);
-	if (!head.ok) {
+	if (!head.ok && !options.allowUnbornHead) {
 		throw new Error(`${directory} has no commits yet; Kanban needs one to create task worktrees.`);
 	}
 	return directory;
 }
 
 export async function addProject(input: AddProjectInput): Promise<AddProjectResult> {
-	const repoPath = await resolveProjectRepoPath(input.repoPath);
+	const repoPath = await resolveProjectRepoPath(input.repoPath, { allowUnbornHead: input.allowUnbornHead });
 	const before = (await listWorkspaceIndexEntries()).find((entry) => entry.repoPath === repoPath) ?? null;
+	// Only new registrations: a project registered outside the roots keeps working (doctor warns about it).
+	if (before === null) {
+		await assertPathInsideProjectRoots(repoPath, input.projectRoots ?? (await readProjectRoots()));
+	}
 	const context = await loadWorkspaceContext(repoPath);
 	const workspaceId = context.workspaceId;
 	const warnings: string[] = [];

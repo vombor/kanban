@@ -1,11 +1,15 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { RuntimeProjectTaskCounts } from "../../../src/core/api-contract";
+import { resolveProjectRoots } from "../../../src/projects/project-roots";
 import type { TerminalSessionManager } from "../../../src/terminal/session-manager";
 import { type CreateProjectsApiDependencies, createProjectsApi } from "../../../src/trpc/projects-api";
+import { createGitTestEnv } from "../../utilities/git-env";
+import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
 
 function createTestCwd(): string {
 	const base = join(tmpdir(), `kanban-test-dir-list-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
@@ -293,18 +297,138 @@ describe("addProject", () => {
 		await expect(api.addProject(null, {})).rejects.toThrow();
 	});
 
-	it("resolves clone destination relative to serverCwd, not the active project", async () => {
+	it("resolves clone destination relative to the first projects root, not the active project", async () => {
 		const activeProjectPath = join(testCwd, "active-project");
 		mkdirSync(activeProjectPath);
 		const deps = createDefaultDeps(testCwd);
+		const projectRoots = await resolveProjectRoots([testCwd]);
+		deps.readProjectRoots = async () => projectRoots;
 		(deps.getActiveWorkspacePath as ReturnType<typeof vi.fn>).mockReturnValue(activeProjectPath);
 		const api = createProjectsApi(deps);
 		// The clone itself will fail (no real git server), but we can verify
-		// that resolveProjectInputPath was called with serverCwd as the base.
+		// that resolveProjectInputPath was called with the projects root as the base.
 		await api.addProject(null, { gitUrl: "https://example.com/repo.git", path: "my-new-proj" });
 		const resolveSpy = deps.resolveProjectInputPath as ReturnType<typeof vi.fn>;
 		expect(resolveSpy).toHaveBeenCalledWith("my-new-proj", testCwd);
 		// Crucially, it must NOT have been called with the active project path:
 		expect(resolveSpy).not.toHaveBeenCalledWith("my-new-proj", activeProjectPath);
+	});
+});
+
+describe("projects roots over tRPC: create, checkName, roots, open folder", () => {
+	const gitEnvKeys = ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"] as const;
+	let savedGitEnv: Array<[string, string | undefined]>;
+
+	beforeEach(() => {
+		savedGitEnv = gitEnvKeys.map((key) => [key, process.env[key]]);
+		for (const key of gitEnvKeys) {
+			process.env[key] = key.endsWith("EMAIL") ? "test@test.com" : "Test";
+		}
+	});
+
+	afterEach(() => {
+		for (const [key, value] of savedGitEnv) {
+			if (value === undefined) {
+				delete process.env[key];
+			} else {
+				process.env[key] = value;
+			}
+		}
+	});
+
+	async function withRoot(
+		run: (input: {
+			root: string;
+			outside: string;
+			api: ReturnType<typeof createProjectsApi>;
+			deps: CreateProjectsApiDependencies;
+		}) => Promise<void>,
+	): Promise<void> {
+		await withTemporaryKanbanHome(async ({ userHomePath }) => {
+			const home = realpathSync(userHomePath);
+			const root = join(home, "projects");
+			const outside = join(home, "outside");
+			mkdirSync(root);
+			mkdirSync(outside);
+			const projectRoots = await resolveProjectRoots([root]);
+			const deps = createDefaultDeps(home);
+			deps.readProjectRoots = async () => projectRoots;
+			deps.resolveProjectInputPath = vi.fn((inputPath: string, cwd: string) => resolve(cwd, inputPath));
+			await run({ root, outside, api: createProjectsApi(deps), deps });
+		});
+	}
+
+	it("returns the roots", async () => {
+		await withRoot(async ({ api, root }) => {
+			expect(await api.getProjectRoots()).toEqual({ roots: [root] });
+		});
+	});
+
+	it("checkName answers only exists / isGitRepository / isEmpty, and only under a root", async () => {
+		await withRoot(async ({ api, root, outside }) => {
+			mkdirSync(join(root, "repo", ".git"), { recursive: true });
+			expect(await api.checkProjectName({ root, name: "repo" })).toEqual({
+				ok: true,
+				exists: true,
+				isGitRepository: true,
+				isEmpty: false,
+			});
+			expect(await api.checkProjectName({ root, name: "fresh" })).toEqual({
+				ok: true,
+				exists: false,
+				isGitRepository: false,
+				isEmpty: false,
+			});
+			const refused = await api.checkProjectName({ root: outside, name: "x" });
+			expect(refused).toMatchObject({ ok: false, exists: false });
+			expect(await api.checkProjectName({ root, name: "../outside" })).toMatchObject({ ok: false, exists: false });
+		});
+	});
+
+	it("create makes, registers and activates the project", async () => {
+		await withRoot(async ({ api, deps, root }) => {
+			const result = await api.createProject(null, { path: join(root, "new-app"), name: "New App" });
+			expect(result).toMatchObject({ ok: true, notes: [] });
+			expect(deps.rememberWorkspace).toHaveBeenCalledWith(expect.any(String), join(root, "new-app"));
+			expect(deps.setActiveWorkspace).toHaveBeenCalledOnce();
+			expect(deps.broadcastRuntimeProjectsUpdated).toHaveBeenCalled();
+		});
+	});
+
+	it("create re-checks on the server: a name taken after the typeahead said 'available' is refused", async () => {
+		await withRoot(async ({ api, root }) => {
+			expect(await api.checkProjectName({ root, name: "race" })).toMatchObject({ exists: false });
+			// Someone else creates it between the check and the click.
+			mkdirSync(join(root, "race"));
+			writeFileSync(join(root, "race", "theirs.txt"), "x");
+			const result = await api.createProject(null, { path: join(root, "race") });
+			expect(result).toMatchObject({ ok: false, project: null });
+			expect(result.error).toContain("already exists and is not empty");
+			expect(readdirSync(join(root, "race"))).toEqual(["theirs.txt"]);
+		});
+	});
+
+	it("create returns errors for paths outside the root", async () => {
+		await withRoot(async ({ api, root, outside }) => {
+			expect((await api.createProject(null, { path: join(outside, "app") })).error).toContain(
+				"outside the projects root",
+			);
+			expect((await api.createProject(null, { path: root })).error).toContain("the projects root itself");
+		});
+	});
+
+	it("open folder refuses a directory outside the root and accepts one inside", async () => {
+		await withRoot(async ({ api, deps, root, outside }) => {
+			(deps.hasGitRepository as ReturnType<typeof vi.fn>).mockReturnValue(true);
+			const refused = await api.addProject(null, { path: outside });
+			expect(refused).toMatchObject({ ok: false, project: null });
+			expect(refused.error).toContain("outside the projects root");
+
+			const inside = join(root, "existing");
+			mkdirSync(inside);
+			execFileSync("git", ["init", "-q", "-b", "main"], { cwd: inside, env: createGitTestEnv() });
+			execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "init"], { cwd: inside, env: createGitTestEnv() });
+			expect(await api.addProject(null, { path: inside })).toMatchObject({ ok: true });
+		});
 	});
 });

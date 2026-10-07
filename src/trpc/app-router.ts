@@ -31,9 +31,14 @@ import type {
 	RuntimeProcessSweepResponse,
 	RuntimeProjectAddRequest,
 	RuntimeProjectAddResponse,
+	RuntimeProjectCreateRequest,
+	RuntimeProjectCreateResponse,
 	RuntimeProjectDirectoryPickerResponse,
+	RuntimeProjectNameCheckRequest,
+	RuntimeProjectNameCheckResponse,
 	RuntimeProjectRemoveRequest,
 	RuntimeProjectRemoveResponse,
+	RuntimeProjectRootsResponse,
 	RuntimeProjectsResponse,
 	RuntimeRunUpdateResponse,
 	RuntimeShellSessionStartRequest,
@@ -89,9 +94,14 @@ import {
 	runtimeProcessSweepResponseSchema,
 	runtimeProjectAddRequestSchema,
 	runtimeProjectAddResponseSchema,
+	runtimeProjectCreateRequestSchema,
+	runtimeProjectCreateResponseSchema,
 	runtimeProjectDirectoryPickerResponseSchema,
+	runtimeProjectNameCheckRequestSchema,
+	runtimeProjectNameCheckResponseSchema,
 	runtimeProjectRemoveRequestSchema,
 	runtimeProjectRemoveResponseSchema,
+	runtimeProjectRootsResponseSchema,
 	runtimeProjectsResponseSchema,
 	runtimeRunUpdateResponseSchema,
 	runtimeShellSessionStartRequestSchema,
@@ -235,6 +245,12 @@ export interface RuntimeTrpcContext {
 			preferredWorkspaceId: string | null,
 			input: RuntimeProjectRemoveRequest,
 		) => Promise<RuntimeProjectRemoveResponse>;
+		createProject: (
+			preferredWorkspaceId: string | null,
+			input: RuntimeProjectCreateRequest,
+		) => Promise<RuntimeProjectCreateResponse>;
+		getProjectRoots: () => Promise<RuntimeProjectRootsResponse>;
+		checkProjectName: (input: RuntimeProjectNameCheckRequest) => Promise<RuntimeProjectNameCheckResponse>;
 		pickProjectDirectory: (preferredWorkspaceId: string | null) => Promise<RuntimeProjectDirectoryPickerResponse>;
 		listDirectoryContents: (
 			preferredWorkspaceId: string | null,
@@ -477,6 +493,21 @@ export const runtimeAppRouter = t.router({
 			.output(runtimeProjectAddResponseSchema)
 			.mutation(async ({ ctx, input }) => {
 				return await ctx.projectsApi.addProject(ctx.requestedWorkspaceId, input);
+			}),
+		create: t.procedure
+			.input(runtimeProjectCreateRequestSchema)
+			.output(runtimeProjectCreateResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				return await ctx.projectsApi.createProject(ctx.requestedWorkspaceId, input);
+			}),
+		roots: t.procedure.output(runtimeProjectRootsResponseSchema).query(async ({ ctx }) => {
+			return await ctx.projectsApi.getProjectRoots();
+		}),
+		checkName: t.procedure
+			.input(runtimeProjectNameCheckRequestSchema)
+			.output(runtimeProjectNameCheckResponseSchema)
+			.query(async ({ ctx, input }) => {
+				return await ctx.projectsApi.checkProjectName(input);
 			}),
 		remove: t.procedure
 			.input(runtimeProjectRemoveRequestSchema)

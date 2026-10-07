@@ -6,6 +6,7 @@ import { listLegacyKitProjects, readLegacyKitConfig, readLegacyKitServices } fro
 import { readPipelineConfig, readRawGlobalConfig } from "../config/pipeline-config";
 import { loadGlobalRuntimeConfig } from "../config/runtime-config";
 import { loadKitCatalog } from "../kits/resolve-kit";
+import { resolveProjectRoots } from "../projects/project-roots";
 import { buildLemonadeModelListUrl, planClineModelsSource } from "../setup/cline-models-source";
 import { planMachineSetup } from "../setup/machine-setup";
 import { getAgentTrustConfigPaths } from "../setup/workspace-trust-report";
@@ -52,7 +53,13 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
 		readLegacyKitConfig(),
 	]);
 	const legacyKitProjects = legacyKit.raw ? listLegacyKitProjects(legacyKit.raw) : [];
-	const projectContext = { config, catalog, entries, legacyKitProjects };
+	const projectContext = {
+		config,
+		catalog,
+		entries,
+		legacyKitProjects,
+		projectRoots: await resolveProjectRoots(config.projects.roots),
+	};
 	const findings: DoctorFinding[] = [];
 
 	findings.push(

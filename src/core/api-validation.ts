@@ -6,6 +6,8 @@ import {
 	type RuntimeGitCheckoutRequest,
 	type RuntimeHookIngestRequest,
 	type RuntimeProjectAddRequest,
+	type RuntimeProjectCreateRequest,
+	type RuntimeProjectNameCheckRequest,
 	type RuntimeProjectRemoveRequest,
 	type RuntimeShellSessionStartRequest,
 	type RuntimeTaskInputDeliveryRequest,
@@ -25,6 +27,8 @@ import {
 	runtimeGitCheckoutRequestSchema,
 	runtimeHookIngestRequestSchema,
 	runtimeProjectAddRequestSchema,
+	runtimeProjectCreateRequestSchema,
+	runtimeProjectNameCheckRequestSchema,
 	runtimeProjectRemoveRequestSchema,
 	runtimeShellSessionStartRequestSchema,
 	runtimeTaskInputDeliveryRequestSchema,
@@ -163,6 +167,25 @@ export function parseTaskTrashRequest(value: unknown): RuntimeTaskTrashRequest {
 
 export function parseWorkspaceStateSaveRequest(value: unknown): RuntimeWorkspaceStateSaveRequest {
 	return parseWithSchema(runtimeWorkspaceStateSaveRequestSchema, value);
+}
+
+export function parseProjectCreateRequest(value: unknown): RuntimeProjectCreateRequest {
+	const parsed = parseWithSchema(runtimeProjectCreateRequestSchema, value);
+	const path = parsed.path.trim();
+	if (!path) {
+		throw new Error("A project path is required.");
+	}
+	return {
+		path,
+		name: parsed.name?.trim() || undefined,
+		initialBranch: parsed.initialBranch?.trim() || undefined,
+		initialCommit: parsed.initialCommit,
+	};
+}
+
+export function parseProjectNameCheckRequest(value: unknown): RuntimeProjectNameCheckRequest {
+	const parsed = parseWithSchema(runtimeProjectNameCheckRequestSchema, value);
+	return { root: parsed.root, name: parsed.name };
 }
 
 export function parseProjectAddRequest(value: unknown): RuntimeProjectAddRequest {
