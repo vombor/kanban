@@ -9,6 +9,7 @@ import packageJson from "../package.json" with { type: "json" };
 import { registerAgentsCommand } from "./commands/agents";
 import { registerHomeCommand } from "./commands/home";
 import { registerHooksCommand } from "./commands/hooks";
+import { registerSetupCommand } from "./commands/setup";
 import { registerTaskCommand } from "./commands/task";
 import { loadGlobalRuntimeConfig, loadRuntimeConfig } from "./config/runtime-config";
 import { createGitProcessEnv } from "./core/git-process-env";
@@ -707,6 +708,7 @@ function createProgram(invocationArgs: string[]): Command {
 	registerHooksCommand(program);
 	registerAgentsCommand(program);
 	registerHomeCommand(program);
+	registerSetupCommand(program);
 
 	program
 		.command("mcp")

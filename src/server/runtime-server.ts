@@ -4,6 +4,7 @@ import { createServer as createHttpsServer } from "node:https";
 import { join } from "node:path";
 
 import { createHTTPHandler } from "@trpc/server/adapters/standalone";
+import { createLemonadeModelListSettingsLoader } from "../config/model-lists-config";
 import { createProcessReaperSettingsLoader } from "../config/process-reaper-config";
 import type {
 	RuntimeRunUpdateResponse,
@@ -52,6 +53,7 @@ import {
 } from "../workspace/task-worktree";
 import { getWebUiDir, normalizeRequestPath, readAsset } from "./assets";
 import { handleHttpRequest, handleSocketUpgrade } from "./middleware";
+import { createModelListsRequestHandler } from "./model-lists-route";
 import { createOrphanProcessSweeper } from "./orphan-process-sweeper";
 import { createProcessReaper, type PreparedWorktreeReap } from "./process-reaper";
 import { createProcProcessTableReader, isProcessTableSupported } from "./process-table";
@@ -322,6 +324,11 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 
 	const getRemoteIp = (req: IncomingMessage): string => req.socket.remoteAddress ?? "unknown";
 
+	const handleModelListsRequest = createModelListsRequestHandler({
+		loadLemonadeSettings: createLemonadeModelListSettingsLoader(deps.warn),
+		warn: deps.warn,
+	});
+
 	const tlsConfig = getKanbanRuntimeTls();
 	const requestHandler = async (req: IncomingMessage, res: import("node:http").ServerResponse) => {
 		try {
@@ -331,6 +338,12 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 
 			const requestUrl = new URL(req.url ?? "/", "http://localhost");
 			const pathname = normalizeRequestPath(requestUrl.pathname);
+
+			// Model lists are fetched by agent CLIs (Cline's modelsSourceUrl), which have no session cookie or token.
+			// They hold only model ids and labels, so they are served ahead of the passcode gate.
+			if (await handleModelListsRequest(req, res, pathname)) {
+				return;
+			}
 
 			// ── Passcode gate (remote mode only) ──────────────────────────────
 			const passcodeActive = isRemoteMode && isPasscodeEnabled();

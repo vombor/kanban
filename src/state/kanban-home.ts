@@ -118,6 +118,17 @@ export function getClineDataPath(): string {
 	return join(getUserHomePath(), LEGACY_HOME_PARENT_DIR, CLINE_DATA_DIR);
 }
 
+/**
+ * Cline's custom-provider file (`<data>/settings/models.json`), resolved the way the Cline CLI resolves it:
+ * CLINE_DATA_DIR, else CLINE_DIR/data, else ~/.cline/data. `kanban setup` edits its `modelsSourceUrl`s.
+ */
+export function getClineModelsSettingsPath(): string {
+	const clineDir = readNonEmptyEnv("CLINE_DIR");
+	const dataDir =
+		readNonEmptyEnv("CLINE_DATA_DIR") ?? (clineDir ? join(clineDir, CLINE_DATA_DIR) : getClineDataPath());
+	return join(dataDir, "settings", "models.json");
+}
+
 function resolveHomePath(): { homePath: string; source: KanbanHomeSource } {
 	if (homeOverridePath) {
 		return { homePath: homeOverridePath, source: "flag" };

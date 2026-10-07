@@ -7,3 +7,5 @@ import { join } from "node:path";
 const missingAgentConfigDir = join(tmpdir(), "kanban-test-agent-config-never-created");
 process.env.CLAUDE_CONFIG_DIR = missingAgentConfigDir;
 process.env.CODEX_HOME = missingAgentConfigDir;
+// `kanban setup` edits Cline's models.json under CLINE_DATA_DIR; keep tests away from the real one too.
+process.env.CLINE_DATA_DIR = missingAgentConfigDir;

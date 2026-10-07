@@ -82,3 +82,13 @@ of this repository is the complete record of changes.
   `STOPSIGNAL SIGTERM` and `LABEL io.containers.autoupdate=registry`; the quadlet needs `StopTimeout=90`.
   `src/state/kanban-server-lock.ts` (comment), `test/runtime/server/process-reaper.test.ts`: the server is no longer
   PID 2 in the container; the reaper protects the entrypoint as the server's parent.
+- `src/server/model-lists-route.ts`, `src/config/model-lists-config.ts`, `src/setup/cline-models-source.ts`,
+  `src/commands/setup.ts` (new), `src/server/runtime-server.ts`, `src/cli.ts`, `src/state/kanban-home.ts`,
+  `test/utilities/isolate-agent-config.ts`: model-lists route. `GET /api/model-lists/lemonade` serves Lemonade's
+  model list filtered to downloaded models with every label in `models.lists.lemonade.requireLabels` (config.json;
+  default `["tool-calling"]`, upstream `models.lists.lemonade.url`, default `http://localhost:13305`), in Cline's
+  `modelsSourceUrl` shape, and 502 when Lemonade fails so Cline keeps its static list. It holds only model ids, so it
+  is served ahead of the passcode gate (agent CLIs have no session). `kanban setup [--dry-run] [--origin <url>]`
+  points the `lemonade` provider in Cline's `models.json` at the route (only when the URL is unset, the legacy kit's
+  `127.0.0.1:13306` service or the route on another origin; a timestamped backup first). Replaces the legacy kit's
+  model-lists service.
