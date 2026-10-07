@@ -168,9 +168,19 @@ const orchestratorSectionSchema = z
 				cooldownMin: z.number().nonnegative().default(30),
 				timeoutMin: z.number().positive().default(45),
 				liveSessionMin: z.number().nonnegative().default(10),
+				// One workspace id whose sidebar gets the wakes of every workspace (one orchestrator); null = each
+				// workspace wakes its own sidebar. Legacy kit `wakeTarget` (archive/devteam-kit:lib/sidebar-wake.cjs).
+				target: z.string().min(1).nullable().default(null),
 			})
 			.strict()
-			.default({ enabled: true, mode: "headless", cooldownMin: 30, timeoutMin: 45, liveSessionMin: 10 }),
+			.default({
+				enabled: true,
+				mode: "headless",
+				cooldownMin: 30,
+				timeoutMin: 45,
+				liveSessionMin: 10,
+				target: null,
+			}),
 	})
 	.strict();
 
@@ -255,7 +265,42 @@ const backupsSectionSchema = z
 	})
 	.strict();
 
+/** Session sync is on by default in this fork (docs/fork/session-sync.md). */
+export const DEFAULT_SESSION_SYNC_ENABLED = true;
+
+// Whether the server moves cards between In Progress and Review (src/server/session-column-sync.ts), read once at
+// server start. P2-1 shipped it as a top-level boolean (`"sessionSync": false`); that form still parses to the same
+// value, so a config written for a P2-1 build keeps working, and `kanban doctor --fix` / `kanban config import-kit`
+// rewrite it as `"sessionSync": { "enabled": false }` (isLegacySessionSyncValue).
+const sessionSyncObjectSchema = z.object({ enabled: z.boolean().default(DEFAULT_SESSION_SYNC_ENABLED) }).strict();
+export const sessionSyncSectionSchema = z.preprocess(
+	(value) => (typeof value === "boolean" ? { enabled: value } : value),
+	sessionSyncObjectSchema,
+);
+
+/** True for P2-1's top-level boolean form of `sessionSync`. */
+export function isLegacySessionSyncValue(value: unknown): value is boolean {
+	return typeof value === "boolean";
+}
+
+/**
+ * config.json with the keys an older build wrote in an older form rewritten (today only P2-1's boolean
+ * `sessionSync`). Returns the dotted keys it changed; an absent key stays absent (its default applies).
+ * A build from before the move (P2-1 up to P3-2) reads the new `sessionSync` object as invalid and uses the
+ * default (on), so after a rollback to one, `"sessionSync": { "enabled": false }` must be written back as `false`.
+ */
+export function migrateLegacyConfigKeys(config: Record<string, unknown>): {
+	config: Record<string, unknown>;
+	migrated: string[];
+} {
+	if (!isLegacySessionSyncValue(config.sessionSync)) {
+		return { config, migrated: [] };
+	}
+	return { config: { ...config, sessionSync: { enabled: config.sessionSync } }, migrated: ["sessionSync"] };
+}
+
 const SECTION_SCHEMAS = {
+	sessionSync: sessionSyncSectionSchema,
 	pipeline: pipelineSectionSchema,
 	watchdog: watchdogSectionSchema,
 	orchestrator: orchestratorSectionSchema,
@@ -356,6 +401,13 @@ async function readConfigJson(configPath: string): Promise<Record<string, unknow
 	return parsed as Record<string, unknown>;
 }
 
+/** config.json as it is on disk (`{}` when missing), for commands that change some keys and keep the rest. */
+export async function readRawGlobalConfig(
+	configPath: string = getKanbanGlobalConfigPath(),
+): Promise<Record<string, unknown>> {
+	return await readConfigJson(configPath);
+}
+
 export async function readPipelineConfig(
 	configPath: string = getKanbanGlobalConfigPath(),
 ): Promise<ParsedPipelineConfig & { configPath: string }> {
@@ -372,8 +424,8 @@ export async function updateWorkspacePipelineEntry(
 	update: (entry: Record<string, unknown>) => Record<string, unknown> | null,
 	configPath: string = getKanbanGlobalConfigPath(),
 ): Promise<WorkspacePipelineSettings> {
-	return await lockedFileSystem.withLock({ path: configPath, type: "file" }, async () => {
-		const config = await readConfigJson(configPath);
+	let settings: WorkspacePipelineSettings | null = null;
+	await updatePipelineConfigFile((config) => {
 		const rawWorkspaces = readObjectKey(config, "workspaces");
 		const workspaces =
 			rawWorkspaces && typeof rawWorkspaces === "object" && !Array.isArray(rawWorkspaces)
@@ -389,16 +441,37 @@ export async function updateWorkspacePipelineEntry(
 		if (!parsed.success) {
 			throw new Error(`workspaces.${workspaceId}: ${formatZodIssues(parsed.error)}`);
 		}
+		settings = parsed.data;
 		if (next === null) {
 			delete workspaces[workspaceId];
 		} else {
 			workspaces[workspaceId] = next;
 		}
-		const payload: Record<string, unknown> = { ...config, workspaces };
+		return { ...config, workspaces };
+	}, configPath);
+	return settings ?? getDefaultWorkspacePipelineSettings();
+}
+
+/**
+ * Rewrites config.json under the config lock: `update` gets the raw file (or `{}`) and returns the new content.
+ * Callers change only the keys they own, so every other key stays as it is in the file. The result must parse
+ * without a pipeline-settings issue that the file didn't already have, so a bad edit is refused before writing.
+ */
+export async function updatePipelineConfigFile(
+	update: (config: Record<string, unknown>) => Record<string, unknown>,
+	configPath: string = getKanbanGlobalConfigPath(),
+): Promise<void> {
+	await lockedFileSystem.withLock({ path: configPath, type: "file" }, async () => {
+		const config = await readConfigJson(configPath);
+		const before = new Set(parsePipelineConfig(config).issues);
+		const payload = update(structuredClone(config));
+		const added = parsePipelineConfig(payload).issues.filter((issue) => !before.has(issue));
+		if (added.length > 0) {
+			throw new Error(added.join("\n"));
+		}
 		if (shouldMarkKanbanHome()) {
 			payload.home = KANBAN_HOME_MARKER_VERSION;
 		}
 		await lockedFileSystem.writeJsonFileAtomic(configPath, payload, { lock: null });
-		return parsed.data;
 	});
 }

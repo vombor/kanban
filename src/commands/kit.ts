@@ -50,7 +50,7 @@ export function parseSetAssignments(assignments: string[]): Record<string, unkno
 	return result;
 }
 
-function parseLandingMode(value: string | undefined): LandingMode | undefined {
+export function parseLandingMode(value: string | undefined): LandingMode | undefined {
 	if (value === undefined) {
 		return undefined;
 	}

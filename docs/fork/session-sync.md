@@ -15,23 +15,27 @@ a 10 s sweep, with or without a browser open.
 
 ## Setting
 
-`sessionSync` in the Kanban home's `config.json` (the global config path in Settings; on the pod today that
+`sessionSync.enabled` in the Kanban home's `config.json` (the global config path in Settings; on the pod today that
 is the legacy home, `~/.cline/kanban/config.json`):
 
 ```json
-{ "sessionSync": false }
+{ "sessionSync": { "enabled": false } }
 ```
+
+P2-1 wrote it as a top-level boolean (`"sessionSync": false`). That form still reads the same; `kanban doctor`
+reports it and `kanban doctor --fix` (or `kanban config import-kit`) rewrites it. A build from before P3-2 reads the
+object form as invalid and uses the default (on), so after rolling back to one, write `false` back by hand.
 
 - Default: `true` (on) in this fork. The settings dialog never writes the key and keeps it when it saves.
 - It is **read once when Kanban starts**. The server's session sync and the browser get the same value from that
   read (the browser through `sessionSyncEnabled` in the runtime config), so they never both move cards or both
   leave them. Editing the file does nothing until the next restart.
-- A value that isn't `true`/`false`, or a config.json that doesn't parse, gives the default and a
+- A value that doesn't validate, or a config.json that doesn't parse, gives the default and a
   `[kanban] sessionSync ...` warning in the server log.
 
 ## Turning it off quickly
 
-1. Set `"sessionSync": false` in the Kanban home's `config.json`. Keep the other keys.
+1. Set `"sessionSync": { "enabled": false }` in the Kanban home's `config.json`. Keep the other keys.
 2. Restart Kanban: a container restart on the pod (`systemctl --user restart <unit>.service` on the host, when no
    cards are running; see `container-lifecycle.md`), or stop and start `kanban` locally.
 3. Reload the browser tab. With the setting off, the browser makes the upstream moves again, including upstream's

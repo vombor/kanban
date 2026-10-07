@@ -53,9 +53,14 @@ export function buildLemonadeModelListUrl(origin: string): string {
 	return `${new URL(origin).origin}${LEMONADE_MODEL_LIST_PATH}`;
 }
 
+/** True for the legacy kit's model-lists service URL. */
+export function isLegacyModelListsServiceUrl(url: string): boolean {
+	return LEGACY_MODEL_LISTS_URL_PATTERN.test(url);
+}
+
 /** True for a URL this step manages: the legacy kit service, or the route on any Kanban origin. */
 export function isManagedModelsSourceUrl(url: string): boolean {
-	if (LEGACY_MODEL_LISTS_URL_PATTERN.test(url)) {
+	if (isLegacyModelListsServiceUrl(url)) {
 		return true;
 	}
 	try {

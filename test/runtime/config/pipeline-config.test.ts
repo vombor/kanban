@@ -1,6 +1,15 @@
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
-import { getWorkspacePipelineSettings, parsePipelineConfig } from "../../../src/config/pipeline-config";
+import {
+	getWorkspacePipelineSettings,
+	migrateLegacyConfigKeys,
+	parsePipelineConfig,
+	updatePipelineConfigFile,
+} from "../../../src/config/pipeline-config";
+import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
 
 describe("pipeline config", () => {
 	it("fills in the documented defaults", () => {
@@ -64,5 +73,54 @@ describe("pipeline config", () => {
 	it("rejects unknown keys inside a section", () => {
 		const { issues } = parsePipelineConfig({ orchestrator: { agent: "claude" } });
 		expect(issues[0]).toContain("orchestrator");
+	});
+
+	it("has session sync on by default, as sessionSync.enabled, and still reads P2-1's top-level boolean", () => {
+		expect(parsePipelineConfig({}).config.sessionSync).toEqual({ enabled: true });
+		expect(parsePipelineConfig({ sessionSync: { enabled: false } }).config.sessionSync).toEqual({ enabled: false });
+		expect(parsePipelineConfig({ sessionSync: false })).toMatchObject({
+			config: { sessionSync: { enabled: false } },
+			issues: [],
+		});
+		expect(parsePipelineConfig({ sessionSync: "off" }).issues[0]).toContain("sessionSync");
+	});
+
+	it("migrates the old sessionSync form and leaves an absent or new one alone", () => {
+		expect(migrateLegacyConfigKeys({ a: 1, sessionSync: false })).toEqual({
+			config: { a: 1, sessionSync: { enabled: false } },
+			migrated: ["sessionSync"],
+		});
+		expect(migrateLegacyConfigKeys({ a: 1 })).toEqual({ config: { a: 1 }, migrated: [] });
+		const current = { sessionSync: { enabled: true } };
+		expect(migrateLegacyConfigKeys(current).migrated).toEqual([]);
+	});
+
+	it("has one wake target for every workspace's sidebar, none by default", () => {
+		expect(parsePipelineConfig({}).config.orchestrator.wake.target).toBeNull();
+		const { config, issues } = parsePipelineConfig({
+			orchestrator: { wake: { mode: "sidebar", target: "kanban-2uge" } },
+		});
+		expect(issues).toEqual([]);
+		expect(config.orchestrator.wake).toMatchObject({ mode: "sidebar", target: "kanban-2uge", enabled: true });
+	});
+
+	it("writes config.json keeping other keys, and refuses an edit that adds a settings issue", async () => {
+		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
+			mkdirSync(dirname(globalConfigPath), { recursive: true });
+			// An issue the file already has doesn't block an unrelated edit.
+			writeFileSync(globalConfigPath, JSON.stringify({ selectedAgentId: "claude", watchdog: { bogus: 1 } }));
+			await updatePipelineConfigFile((config) => ({ ...config, pipeline: { qa: { slots: 3 } } }));
+			const written = JSON.parse(readFileSync(globalConfigPath, "utf8"));
+			expect(written).toMatchObject({
+				selectedAgentId: "claude",
+				watchdog: { bogus: 1 },
+				pipeline: { qa: { slots: 3 } },
+				home: 1,
+			});
+			await expect(
+				updatePipelineConfigFile((config) => ({ ...config, pipeline: { qa: { slots: -1 } } })),
+			).rejects.toThrow("pipeline:");
+			expect(JSON.parse(readFileSync(globalConfigPath, "utf8")).pipeline).toEqual({ qa: { slots: 3 } });
+		});
 	});
 });

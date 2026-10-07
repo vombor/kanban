@@ -275,15 +275,14 @@ stay where they are. There are two schemas:
 | `kanbanHome`, `worktrees` | `KANBAN_HOME`, `worktreesRoot` (§6) | |
 | `clineSessions`, `codexSessions`, `clineProviders` | `agents.cline.dataDir`, `agents.codex.home` | ~/.cline/data, ~/.codex |
 
-Keys the P3-1 schema (`src/config/pipeline-config.ts`) does not have yet:
+Keys the P3-1 schema did not have, added by P3-2:
 
 - **`wakeTarget`** (legacy kit `00514f2`, `lib/sidebar-wake.cjs`): one workspace id whose sidebar gets the wakes of
   every watched workspace (one orchestrator, user 10/06), and the live value `wakeMode: "sidebar"` (the table above
-  defaults to `"headless"`). They need core keys, for example `orchestrator.wake.target` (a workspace id, null =
-  each workspace wakes its own sidebar) next to `orchestrator.wake.mode`. P3-2's import maps both; P4-7 (watchdog
-  wakes) reads them.
-- **`sessionSync`** (P2-1, a top-level boolean in config.json): moves into the core settings schema later, for
-  example as `sessionSync.enabled`, with P3-2's import or `kanban doctor` moving the old key.
+  defaults to `"headless"`). Core key `orchestrator.wake.target` (a workspace id, null = each workspace wakes its
+  own sidebar) next to `orchestrator.wake.mode`. P3-2's import maps both; P4-7 (watchdog wakes) reads them.
+- **`sessionSync`** (P2-1, a top-level boolean in config.json): now the core section `sessionSync.enabled`
+  (default true). The boolean still reads the same; `kanban doctor --fix` and `kanban config import-kit` rewrite it.
 
 ### 3.2 Kit schema
 

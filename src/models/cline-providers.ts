@@ -17,6 +17,8 @@ import { chmod, copyFile, mkdir, readFile, rename, stat, writeFile } from "node:
 import { basename, join } from "node:path";
 
 import type { PipelineConfig } from "../config/pipeline-config";
+import { getClineModelsSettingsPath, getClineProvidersSettingsPath } from "../state/kanban-home";
+import { getCodexConfigFilePath } from "../terminal/codex-workspace-trust";
 
 export type ProvidersPolicy = PipelineConfig["models"]["providers"];
 
@@ -43,6 +45,18 @@ export interface ProviderSettingsPaths {
 	providersPath: string;
 	modelsPath: string;
 	codexConfigPath: string;
+}
+
+/** Cline's and Codex's settings files, honouring `agents.cline.dataDir` and `agents.codex.home`. */
+export function getProviderSettingsPaths(config: PipelineConfig): ProviderSettingsPaths {
+	const clineDataDir = config.agents.cline.dataDir;
+	return {
+		providersPath: getClineProvidersSettingsPath(clineDataDir),
+		modelsPath: getClineModelsSettingsPath(clineDataDir),
+		codexConfigPath: config.agents.codex.home
+			? join(config.agents.codex.home, "config.toml")
+			: getCodexConfigFilePath(),
+	};
 }
 
 export interface DeprecatedProviderEntry {

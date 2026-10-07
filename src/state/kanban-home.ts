@@ -126,6 +126,11 @@ export function getClineDataPath(): string {
 	return join(getUserHomePath(), LEGACY_HOME_PARENT_DIR, CLINE_DATA_DIR);
 }
 
+/** Cline's config dir as the Cline CLI resolves it: CLINE_DIR, else ~/.cline. */
+function getClineConfigDirPath(): string {
+	return readNonEmptyEnv("CLINE_DIR") ?? join(getUserHomePath(), LEGACY_HOME_PARENT_DIR);
+}
+
 /**
  * Cline's data dir, resolved the way the Cline CLI resolves it: CLINE_DATA_DIR, else CLINE_DIR/data, else
  * ~/.cline/data. `dataDirOverride` is `agents.cline.dataDir` from config.json (null = Cline's own default).
@@ -146,6 +151,49 @@ export function getClineModelsSettingsPath(dataDirOverride: string | null = null
 /** Cline's provider settings (`<data>/settings/providers.json`): API keys, `lastUsedProvider`. */
 export function getClineProvidersSettingsPath(dataDirOverride: string | null = null): string {
 	return join(resolveClineDataDir(dataDirOverride), CLINE_SETTINGS_DIR, "providers.json");
+}
+
+/** Cline's "notice shown" record (`<data>/settings/cli-notices.json`). */
+export function getClineCliNoticesPath(dataDirOverride: string | null = null): string {
+	return join(resolveClineDataDir(dataDirOverride), CLINE_SETTINGS_DIR, "cli-notices.json");
+}
+
+/** Cline 3.x loads global rules from `<config>/rules` (~/.cline/rules). */
+export function getClineGlobalRulesPath(): string {
+	return join(getClineConfigDirPath(), "rules");
+}
+
+// The legacy dev-team kit (plan §1: "legacy kit") is a git repo in ~/.kanban until cutover (P5-3), with its own
+// config and its services' pid files. `kanban doctor` reads them (read-only) for the "one owner" check, and
+// `kanban config import-kit` maps its config into Kanban's. Same resolution as its lib/config.cjs.
+const LEGACY_KIT_HOME_ENV = "KANBAN_KIT_HOME";
+const LEGACY_KIT_CONFIG_ENV = "KIT_CONFIG";
+const LEGACY_KIT_CONFIG_FILENAME = "kit.config.json";
+/** Env vars that point at the legacy kit (tests clear them). */
+export const LEGACY_KIT_ENV_NAMES: readonly string[] = [LEGACY_KIT_HOME_ENV, LEGACY_KIT_CONFIG_ENV];
+
+/** The legacy kit's home: KANBAN_KIT_HOME, else ~/.kanban. */
+export function getLegacyKitHomePath(): string {
+	const envHome = readNonEmptyEnv(LEGACY_KIT_HOME_ENV);
+	return envHome ? expandUserPath(envHome, process.cwd()) : getDefaultKanbanHomePath();
+}
+
+/** The legacy kit's config: KIT_CONFIG, else <kit home>/kit.config.json. */
+export function getLegacyKitConfigPath(): string {
+	const envConfig = readNonEmptyEnv(LEGACY_KIT_CONFIG_ENV);
+	return envConfig
+		? expandUserPath(envConfig, process.cwd())
+		: join(getLegacyKitHomePath(), LEGACY_KIT_CONFIG_FILENAME);
+}
+
+/** The legacy kit's default run dir (pid files and `<service>.disabled` switches); its config may move it. */
+export function getLegacyKitDefaultRunPath(): string {
+	return join(getLegacyKitHomePath(), RUN_DIR);
+}
+
+/** Expands `~` and resolves relative paths against `baseDir`, as config values in the home are read. */
+export function expandKanbanConfigPath(path: string, baseDir: string): string {
+	return expandUserPath(path, baseDir);
 }
 
 function resolveHomePath(): { homePath: string; source: KanbanHomeSource } {
@@ -315,13 +363,14 @@ export function getPipelineDecisionLogPath(workspaceId: string, homePath = getKa
 
 /**
  * Where the legacy kit may have kept a workspace's `checks-state.json`, newest home first: the Kanban home's data dir
- * (the same file once the home is `~/.kanban`) and the legacy kit's own data dir (`~/.kanban/data/<workspaceId>`).
+ * (the same file once the home is `~/.kanban`) and the legacy kit's own data dir (`<kit home>/data/<workspaceId>`,
+ * `~/.kanban` unless KANBAN_KIT_HOME says otherwise; getLegacyKitHomePath()).
  * Read-only: the pipeline imports it once and never writes it.
  */
 export function getLegacyKitChecksStatePaths(workspaceId: string, homePath = getKanbanHomePath()): string[] {
 	return uniquePaths([
 		join(getKanbanWorkspaceDataPath(workspaceId, homePath), LEGACY_KIT_CHECKS_STATE_FILENAME),
-		join(getKanbanWorkspaceDataPath(workspaceId, getDefaultKanbanHomePath()), LEGACY_KIT_CHECKS_STATE_FILENAME),
+		join(getKanbanWorkspaceDataPath(workspaceId, getLegacyKitHomePath()), LEGACY_KIT_CHECKS_STATE_FILENAME),
 	]);
 }
 

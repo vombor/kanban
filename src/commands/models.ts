@@ -15,19 +15,13 @@ import { applyCardProviderMigrations, planCardProviderMigrations } from "../mode
 import {
 	cleanupDeprecatedProviders,
 	findDeprecatedProviderEntries,
-	type ProviderSettingsPaths,
+	getProviderSettingsPaths,
 	providerForModel,
 	readClineProvidersFile,
 } from "../models/cline-providers";
 import { LEMONADE_PROVIDER_ID, type ModelProbeOutcome, probeModel } from "../models/model-probe";
-import {
-	getClineModelsSettingsPath,
-	getClineProvidersSettingsPath,
-	getKanbanBackupsPath,
-	getKanbanModelsDataPath,
-} from "../state/kanban-home";
+import { getKanbanBackupsPath, getKanbanModelsDataPath } from "../state/kanban-home";
 import { listWorkspaceIndexEntries, loadWorkspaceBoardById, mutateWorkspaceState } from "../state/workspace-state";
-import { getCodexConfigFilePath } from "../terminal/codex-workspace-trust";
 import { createRuntimeTrpcClient, notifyRuntimeWorkspaceStateUpdated } from "./runtime-trpc-client";
 import { resolveWorkspaceTarget } from "./workspace-target";
 
@@ -57,17 +51,6 @@ async function readModelsConfig(): Promise<PipelineConfig> {
 		process.stderr.write(`config.json: ${issue} (using the defaults)\n`);
 	}
 	return config;
-}
-
-function providerSettingsPaths(config: PipelineConfig): ProviderSettingsPaths {
-	const clineDataDir = config.agents.cline.dataDir;
-	return {
-		providersPath: getClineProvidersSettingsPath(clineDataDir),
-		modelsPath: getClineModelsSettingsPath(clineDataDir),
-		codexConfigPath: config.agents.codex.home
-			? join(config.agents.codex.home, "config.toml")
-			: getCodexConfigFilePath(),
-	};
 }
 
 function readStringSetting(providersJson: unknown, providerId: string, key: string): string | null {
@@ -105,7 +88,7 @@ function formatProbeOutcome(requested: string, outcome: ModelProbeOutcome): stri
 
 async function runProbe(modelIds: string[], options: ProbeCommandOptions): Promise<number> {
 	const config = await readModelsConfig();
-	const providersJson = await readClineProvidersFile(providerSettingsPaths(config).providersPath);
+	const providersJson = await readClineProvidersFile(getProviderSettingsPaths(config).providersPath);
 	const region = options.region?.trim() || config.models.bedrockRegion;
 	const apiKey = resolveBedrockApiKey(providersJson);
 	const cachePath = join(getKanbanModelsDataPath(), BEDROCK_PROFILES_CACHE_FILE);
@@ -179,7 +162,7 @@ interface ProvidersCommandOptions {
 
 async function runProvidersReport(config: PipelineConfig, json: boolean): Promise<number> {
 	const policy = config.models.providers;
-	const entries = await findDeprecatedProviderEntries(providerSettingsPaths(config), policy);
+	const entries = await findDeprecatedProviderEntries(getProviderSettingsPaths(config), policy);
 	if (json) {
 		printJson({ ok: true, default: policy.default, fallback: policy.fallback, deprecated: entries });
 		return 0;
@@ -203,7 +186,7 @@ async function runProvidersReport(config: PipelineConfig, json: boolean): Promis
 
 async function runProvidersCleanup(config: PipelineConfig, apply: boolean, json: boolean): Promise<number> {
 	const result = await cleanupDeprecatedProviders({
-		paths: providerSettingsPaths(config),
+		paths: getProviderSettingsPaths(config),
 		policy: config.models.providers,
 		apply,
 		backupsRoot: getKanbanBackupsPath(),

@@ -159,3 +159,23 @@ of this repository is the complete record of changes.
   auto-review reconciler delivers its prompt to the agent the card's session runs on (`resolveEffectiveAgent`)
   instead of `card.agentId`, and never arms `qa`-mode or non-dev cards. Nothing changes for workspaces on landing
   `off` (every workspace without a config entry).
+- `src/doctor/` (new), `src/commands/doctor.ts`, `src/commands/project.ts` (new), `src/commands/setup.ts`,
+  `src/commands/config.ts`, `src/commands/kit.ts`, `src/cli.ts`, `src/projects/project-add.ts`,
+  `src/projects/project-sections.ts`, `src/projects/agents-qa-section.ts`, `src/setup/machine-setup.ts`,
+  `src/setup/run-setup.ts`, `src/setup/managed-section.ts`, `src/setup/claude-md-section.ts`, `src/setup/cline-rules.ts`,
+  `src/setup/workspace-trust-report.ts`, `src/setup/cline-models-source.ts`, `src/config/import-kit.ts`,
+  `src/config/legacy-kit-config.ts` (new), `src/config/pipeline-config.ts`, `src/state/kanban-home.ts`: the dev-team
+  kit's machine and project commands (plan step P3-2). `kanban doctor [path] [--fix] [--deep]` (home, each project's
+  kit and landing mode, Claude Code/Codex trust, managed sections, worktree pre-push hooks, setup drift, and the
+  "one owner" check against the legacy kit's services and toggles; `--deep` checks agent CLIs, env, ssh key and Cline
+  providers); `kanban project add <path> [--kit] [--landing] [--base] [--name] [--blurb] [--agents-md]` (default kit,
+  landing off) and `kanban project sync`; `kanban setup` adds quiet npm settings, Cline rules and TUI notices, the
+  Cline Bedrock provider entry, the CLAUDE.md `kanban` section (not while the legacy kit is installed) and agent trust
+  for every project; `kanban config import-kit [--dry-run]` maps kit.config.json (QA projects → kit `team` with
+  overrides, landing `qa`, shadow; every other project → `default`, landing `off`; top-level routing never copied
+  onto a project). New core keys `orchestrator.wake.target` and `sessionSync.enabled` (default on; P2-1's top-level
+  `sessionSync` boolean still reads the same, `src/config/session-sync-config.ts` reads it through the core schema,
+  and `doctor --fix` / `import-kit` rewrite it). The one-owner check covers session sync and the Cline turn detector
+  against the legacy column-sync. `src/models/cline-providers.ts` and `src/commands/models.ts`: the provider settings
+  paths (`getProviderSettingsPaths`) are shared with `doctor --deep`, which reports P3-3's deprecated-provider scan.
+  `docs/fork/session-sync.md`: the new key form. Nothing runs on its own: every command is explicit.

@@ -1,19 +1,12 @@
 import type { Command } from "commander";
 
+import { readLegacyKitConfig } from "../config/legacy-kit-config";
+import { readPipelineConfig } from "../config/pipeline-config";
 import { getKanbanRuntimeOrigin, setKanbanRuntimePort } from "../core/runtime-endpoint";
-import {
-	applyClineModelsSource,
-	buildLemonadeModelListUrl,
-	type ClineModelsSourceResult,
-} from "../setup/cline-models-source";
-import { getClineModelsSettingsPath, getKanbanHomePath } from "../state/kanban-home";
+import { runMachineSetup, type SetupResult, type SetupStepOutcome, setupFailed } from "../setup/run-setup";
+import { getKanbanHomePath } from "../state/kanban-home";
 import { readLiveKanbanServerLock } from "../state/kanban-server-lock";
-
-interface SetupCommandOptions {
-	dryRun?: boolean;
-	origin?: string;
-	json?: boolean;
-}
+import { listWorkspaceIndexEntries } from "../state/workspace-state";
 
 type RootPortOption = { mode: "fixed"; value: number } | { mode: "auto" };
 
@@ -52,36 +45,58 @@ export function resolveSetupOrigin(options: {
 	return { origin: getKanbanRuntimeOrigin(), source: "port" };
 }
 
-function formatClineModelsSource(result: ClineModelsSourceResult, dryRun: boolean): string[] {
-	const lines = [`Cline models.json: ${result.modelsPath}`];
-	const current = result.currentUrl ?? "(none)";
-	switch (result.action) {
-		case "update":
-			lines.push(
-				`  lemonade modelsSourceUrl: ${current} -> ${result.targetUrl}${dryRun ? " (dry run: not written)" : ""}`,
-			);
-			if (result.backupPath) {
-				lines.push(`  backup: ${result.backupPath}`);
-			}
-			break;
-		case "up-to-date":
-			lines.push(`  lemonade modelsSourceUrl: ${current} (up to date)`);
-			break;
-		case "custom":
-			lines.push(`  lemonade modelsSourceUrl: ${current} (${result.detail})`);
-			break;
-		default:
-			lines.push(`  ${result.detail}`);
+const STATUS_LABELS: Record<SetupStepOutcome["plan"]["status"], string> = {
+	ok: "ok",
+	change: "change",
+	skipped: "skipped",
+	error: "error",
+};
+
+function formatSetupResult(result: SetupResult): string[] {
+	const lines: string[] = [];
+	for (const step of result.steps) {
+		const { plan } = step;
+		const done =
+			plan.status === "change" ? (result.dryRun ? " (dry run: not written)" : step.error ? "" : " (written)") : "";
+		lines.push(`${plan.id} (${plan.target}): ${STATUS_LABELS[plan.status]}${done}`);
+		lines.push(...plan.details.map((detail) => `  ${detail}`));
+		lines.push(...step.applied.filter((line) => line.startsWith("backup:")).map((line) => `  ${line}`));
+		if (step.error) {
+			lines.push(`  failed: ${step.error}`);
+		}
+	}
+	const untrusted = result.trust.filter((entry) => entry.needsFix);
+	lines.push(
+		untrusted.length === 0
+			? `agent trust: ok (${result.trust.length} project${result.trust.length === 1 ? "" : "s"})`
+			: `agent trust: ${untrusted.length} project(s) to trust${result.dryRun ? " (dry run: not written)" : ""}`,
+	);
+	for (const entry of untrusted) {
+		lines.push(
+			...(entry.lines.length > 0 ? entry.lines : [`would trust ${entry.repoPath}`]).map((line) => `  ${line}`),
+		);
 	}
 	return lines;
+}
+
+interface SetupCommandOptions {
+	dryRun?: boolean;
+	origin?: string;
+	forceRules?: boolean;
+	claudeMd?: boolean;
+	json?: boolean;
 }
 
 export function registerSetupCommand(program: Command): void {
 	program
 		.command("setup")
-		.description("Configure agent CLIs on this machine for Kanban (Cline's Lemonade model list).")
+		.description(
+			"Set up this machine for Kanban: quiet npm, Cline rules, Cline TUI notices, Cline providers and its Lemonade model list, the kanban section of ~/.claude/CLAUDE.md, and Claude Code / Codex trust for every project. Only adds what is missing.",
+		)
 		.option("--dry-run", "Print what would change; write nothing.")
 		.option("--origin <url>", "Kanban server origin agent CLIs should call (default: the running server).")
+		.option("--force-rules", "Overwrite Cline rule files that differ from Kanban's copy.")
+		.option("--claude-md", "Write the CLAUDE.md section even while the legacy kit is installed.")
 		.option("--json", "Print the result as JSON.")
 		.action(async (options: SetupCommandOptions, command: Command) => {
 			try {
@@ -92,20 +107,27 @@ export function registerSetupCommand(program: Command): void {
 					portFlag: port,
 					homePath: getKanbanHomePath(),
 				});
-				const clineModelsSource = await applyClineModelsSource({
-					modelsPath: getClineModelsSettingsPath(),
-					targetUrl: buildLemonadeModelListUrl(choice.origin),
+				const [{ config }, legacyKit, entries] = await Promise.all([
+					readPipelineConfig(),
+					readLegacyKitConfig(),
+					listWorkspaceIndexEntries(),
+				]);
+				const result = await runMachineSetup({
+					origin: choice.origin,
+					forceRules: options.forceRules === true,
+					forceClaudeMd: options.claudeMd === true,
+					legacyKitInstalled: legacyKit.raw !== null,
+					config,
 					dryRun,
+					entries,
 				});
-				const failed = clineModelsSource.action === "error";
+				const failed = setupFailed(result);
 				if (options.json) {
-					process.stdout.write(
-						`${JSON.stringify({ ok: !failed, dryRun, origin: choice, clineModelsSource }, null, 2)}\n`,
-					);
+					process.stdout.write(`${JSON.stringify({ ok: !failed, origin: choice, ...result }, null, 2)}\n`);
 				} else {
 					const lines = [
 						`Kanban server: ${choice.origin} (${choice.source === "server" ? "running server" : choice.source === "flag" ? "--origin" : "runtime port"})`,
-						...formatClineModelsSource(clineModelsSource, dryRun),
+						...formatSetupResult(result),
 					];
 					process.stdout.write(`${lines.join("\n")}\n`);
 				}

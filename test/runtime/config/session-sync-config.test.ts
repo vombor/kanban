@@ -17,6 +17,11 @@ describe("parseSessionSyncSetting", () => {
 		expect(parseSessionSyncSetting({ sessionSync: true })).toEqual({ enabled: true, warning: null });
 	});
 
+	it("reads the core settings form, sessionSync.enabled", () => {
+		expect(parseSessionSyncSetting({ sessionSync: { enabled: false } })).toEqual({ enabled: false, warning: null });
+		expect(parseSessionSyncSetting({ sessionSync: {} })).toEqual({ enabled: true, warning: null });
+	});
+
 	it("warns and uses the default for a value that isn't a boolean", () => {
 		const parsed = parseSessionSyncSetting({ sessionSync: "off" });
 		expect(parsed.enabled).toBe(true);

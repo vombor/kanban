@@ -8,11 +8,13 @@ import ora, { type Ora } from "ora";
 import packageJson from "../package.json" with { type: "json" };
 import { registerAgentsCommand } from "./commands/agents";
 import { registerConfigCommand } from "./commands/config";
+import { registerDoctorCommand } from "./commands/doctor";
 import { registerHomeCommand } from "./commands/home";
 import { registerHooksCommand } from "./commands/hooks";
 import { registerKitCommand } from "./commands/kit";
 import { registerModelsCommand } from "./commands/models";
 import { registerPipelineCommand } from "./commands/pipeline";
+import { registerProjectCommand } from "./commands/project";
 import { registerSetupCommand } from "./commands/setup";
 import { registerTaskCommand } from "./commands/task";
 import { loadGlobalRuntimeConfig, loadRuntimeConfig } from "./config/runtime-config";
@@ -471,7 +473,7 @@ async function startServer(): Promise<{
 
 	// Session sync moves cards between In Progress and Review on session state changes, with or without a
 	// browser open (src/server/session-column-sync.ts). Like auto-review, only the process that bound the server
-	// runs it. With `sessionSync: false` it is never created and the browser makes the moves.
+	// runs it. With session sync off (`sessionSync.enabled: false`) it is never created and the browser makes the moves.
 	if (sessionSyncSetting.enabled) {
 		const sync = createSessionColumnSync({
 			listWorkspaces: () => workspaceRegistry.listManagedWorkspaces(),
@@ -796,6 +798,8 @@ function createProgram(invocationArgs: string[]): Command {
 	registerConfigCommand(program);
 	registerModelsCommand(program);
 	registerPipelineCommand(program);
+	registerProjectCommand(program);
+	registerDoctorCommand(program, KANBAN_VERSION);
 
 	program
 		.command("mcp")
