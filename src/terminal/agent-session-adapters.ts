@@ -44,7 +44,7 @@ import { isRuntimeDebugModeEnabled } from "./agent-registry";
 import { ensureClaudeWorkspaceTrusted } from "./claude-workspace-trust";
 import { configureCodexHooks, hasCodexConfigOverride } from "./codex-hook-config";
 import { ensureCodexWorkspaceTrusted } from "./codex-workspace-trust";
-import { createHookRuntimeEnv } from "./hook-runtime-context";
+import { createHookRuntimeArgs, createHookRuntimeEnv } from "./hook-runtime-context";
 import {
 	getOpenCodeAuthPathCandidates,
 	getOpenCodeConfigPathCandidates,
@@ -279,17 +279,29 @@ function getClineCliHookScriptPath(hooksDir: string, hookName: ClineCliHookName)
 	return join(hooksDir, hookName);
 }
 
-function buildClineCliHookCommandParts(event: RuntimeHookEvent, hookName: ClineCliHookName): string[] {
+function buildClineCliHookCommandParts(
+	event: RuntimeHookEvent,
+	hookName: ClineCliHookName,
+	hooks: HookContext | null,
+): string[] {
 	const parts = buildHooksCommandParts(["notify", "--event", event, "--source", CLINE_CLI_HOOK_SOURCE]);
 	parts.push("--hook-event-name", hookName);
+	// Cline runs these scripts in its shared hub daemon, whose KANBAN_HOOK_* env is another card's: name the card here.
+	if (hooks) {
+		parts.push(...createHookRuntimeArgs(hooks));
+	}
 	if (event === "to_review" && hookName === "TaskComplete") {
 		parts.push("--activity-text", "Waiting for review");
 	}
 	return parts;
 }
 
-function buildClineCliHookScriptContent(event: RuntimeHookEvent, hookName: ClineCliHookName): string {
-	const commandParts = buildClineCliHookCommandParts(event, hookName);
+function buildClineCliHookScriptContent(
+	event: RuntimeHookEvent,
+	hookName: ClineCliHookName,
+	hooks: HookContext | null,
+): string {
+	const commandParts = buildClineCliHookCommandParts(event, hookName, hooks);
 	if (process.platform === "win32") {
 		const command = commandParts.map(powerShellQuote).join(" ");
 		return `# ${KANBAN_MANAGED_CLINE_CLI_HOOK_MARKER} (${hookName})
@@ -313,10 +325,10 @@ echo '{"cancel":false}'
 
 // With a guard, the hook prints the guard's decision instead of `{"cancel":false}`: `{"cancel":true}` stops the
 // tool call before it runs (cline-guard.ts).
-function buildClineCliPreToolUseHookScriptContent(guardCommand?: string[]): string {
-	const activityCommand = buildClineCliHookCommandParts("activity", "PreToolUse");
-	const reviewCommand = buildClineCliHookCommandParts("to_review", "PreToolUse");
-	const inProgressCommand = buildClineCliHookCommandParts("to_in_progress", "PreToolUse");
+function buildClineCliPreToolUseHookScriptContent(hooks: HookContext | null, guardCommand?: string[]): string {
+	const activityCommand = buildClineCliHookCommandParts("activity", "PreToolUse", hooks);
+	const reviewCommand = buildClineCliHookCommandParts("to_review", "PreToolUse", hooks);
+	const inProgressCommand = buildClineCliHookCommandParts("to_in_progress", "PreToolUse", hooks);
 	if (process.platform === "win32") {
 		const activity = activityCommand.map(powerShellQuote).join(" ");
 		const review = reviewCommand.map(powerShellQuote).join(" ");
@@ -376,9 +388,9 @@ printf '%s\\n' "$DECISION"
 `;
 }
 
-function buildClineCliPostToolUseHookScriptContent(): string {
-	const activityCommand = buildClineCliHookCommandParts("activity", "PostToolUse");
-	const inProgressCommand = buildClineCliHookCommandParts("to_in_progress", "PostToolUse");
+function buildClineCliPostToolUseHookScriptContent(hooks: HookContext | null): string {
+	const activityCommand = buildClineCliHookCommandParts("activity", "PostToolUse", hooks);
+	const inProgressCommand = buildClineCliHookCommandParts("to_in_progress", "PostToolUse", hooks);
 	if (process.platform === "win32") {
 		const activity = activityCommand.map(powerShellQuote).join(" ");
 		const inProgress = inProgressCommand.map(powerShellQuote).join(" ");
@@ -1715,14 +1727,17 @@ const clineCliAdapter: AgentSessionAdapter = {
 			const hooksDir = join(input.cwd, ".cline", "hooks");
 			const executable = process.platform !== "win32";
 			const hookFiles: Array<{ name: ClineCliHookName; content: string }> = [
-				{ name: "TaskStart", content: buildClineCliHookScriptContent("to_in_progress", "TaskStart") },
-				{ name: "TaskResume", content: buildClineCliHookScriptContent("to_in_progress", "TaskResume") },
-				{ name: "TaskCancel", content: buildClineCliHookScriptContent("to_review", "TaskCancel") },
-				{ name: "TaskComplete", content: buildClineCliHookScriptContent("to_review", "TaskComplete") },
-				{ name: "TaskError", content: buildClineCliHookScriptContent("to_review", "TaskError") },
-				{ name: "PreToolUse", content: buildClineCliPreToolUseHookScriptContent(guardCommand) },
-				{ name: "PostToolUse", content: buildClineCliPostToolUseHookScriptContent() },
-				{ name: "UserPromptSubmit", content: buildClineCliHookScriptContent("to_in_progress", "UserPromptSubmit") },
+				{ name: "TaskStart", content: buildClineCliHookScriptContent("to_in_progress", "TaskStart", hooks) },
+				{ name: "TaskResume", content: buildClineCliHookScriptContent("to_in_progress", "TaskResume", hooks) },
+				{ name: "TaskCancel", content: buildClineCliHookScriptContent("to_review", "TaskCancel", hooks) },
+				{ name: "TaskComplete", content: buildClineCliHookScriptContent("to_review", "TaskComplete", hooks) },
+				{ name: "TaskError", content: buildClineCliHookScriptContent("to_review", "TaskError", hooks) },
+				{ name: "PreToolUse", content: buildClineCliPreToolUseHookScriptContent(hooks, guardCommand) },
+				{ name: "PostToolUse", content: buildClineCliPostToolUseHookScriptContent(hooks) },
+				{
+					name: "UserPromptSubmit",
+					content: buildClineCliHookScriptContent("to_in_progress", "UserPromptSubmit", hooks),
+				},
 			];
 			const skippedHooks: string[] = [];
 			for (const hookFile of hookFiles) {

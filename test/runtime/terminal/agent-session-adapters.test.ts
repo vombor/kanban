@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { buildTaskAgentSettingsForUpdate } from "../../../src/commands/task";
 import { getKanbanHomePath } from "../../../src/state/kanban-home";
 import { parseCopilotConfig, prepareAgentLaunch } from "../../../src/terminal/agent-session-adapters";
+import { resolveHookRuntimeContext } from "../../../src/terminal/hook-runtime-context";
 
 const originalHome = process.env.HOME;
 const originalAppData = process.env.APPDATA;
@@ -1121,6 +1123,68 @@ describe("cline adapter", () => {
 		expect(script).toContain("to_review");
 		expect(script).not.toContain("# stale");
 	});
+
+	// Foo 27549 (10/07): Cline's hub daemon runs every card's .cline/hooks scripts with its own env, which is the
+	// env of the card that started it. The QA card's TaskStart hook then reported to_in_progress for the finished
+	// dev card, and session sync moved that card from Review back to In Progress.
+	it.skipIf(process.platform === "win32")(
+		"reports hooks for the card whose worktree they are in, not the card in the hub daemon's env",
+		async () => {
+			const home = setupTempHome();
+			const qaCwd = join(home, "worktrees", "qa-card");
+			mkdirSync(qaCwd, { recursive: true });
+			const recordPath = join(home, "hook-calls.jsonl");
+			const recorderPath = join(home, "kanban-recorder.cjs");
+			writeFileSync(
+				recorderPath,
+				`require("node:fs").appendFileSync(process.env.HOOK_RECORD, JSON.stringify({ argv: process.argv.slice(2), env: { KANBAN_HOOK_TASK_ID: process.env.KANBAN_HOOK_TASK_ID, KANBAN_HOOK_WORKSPACE_ID: process.env.KANBAN_HOOK_WORKSPACE_ID } }) + "\\n");\n`,
+				"utf8",
+			);
+			process.argv = [originalExecPath, recorderPath];
+			process.execArgv = [];
+
+			await prepareAgentLaunch({
+				taskId: "qa-card",
+				agentId: "cline",
+				binary: "cline",
+				args: [],
+				cwd: qaCwd,
+				prompt: "QA the dev card",
+				workspaceId: "foo",
+			});
+
+			const daemonEnv = {
+				...process.env,
+				HOOK_RECORD: recordPath,
+				KANBAN_HOOK_TASK_ID: "dev-card",
+				KANBAN_HOOK_WORKSPACE_ID: "foo",
+			};
+			for (const hookName of ["TaskStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "TaskComplete"]) {
+				execFileSync("bash", [clineCliHookPath(qaCwd, hookName)], {
+					cwd: qaCwd,
+					env: daemonEnv,
+					input: JSON.stringify({ hookName, toolName: "ask_followup_question" }),
+				});
+			}
+
+			const calls = readFileSync(recordPath, "utf8")
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line) as { argv: string[]; env: NodeJS.ProcessEnv });
+			expect(calls.length).toBeGreaterThanOrEqual(5);
+			for (const call of calls) {
+				expect(call.argv.slice(0, 2)).toEqual(["hooks", "notify"]);
+				const flag = (name: string) => {
+					const index = call.argv.indexOf(name);
+					return index === -1 ? undefined : call.argv[index + 1];
+				};
+				expect(call.env.KANBAN_HOOK_TASK_ID).toBe("dev-card");
+				expect(
+					resolveHookRuntimeContext({ taskId: flag("--task-id"), workspaceId: flag("--workspace-id") }, call.env),
+				).toEqual({ taskId: "qa-card", workspaceId: "foo" });
+			}
+		},
+	);
 
 	it("forces the interactive TUI when launching with a prompt", async () => {
 		setupTempHome();

@@ -10,7 +10,7 @@ import { buildWindowsCmdArgsArray, resolveWindowsComSpec, shouldUseWindowsCmdLau
 import type { ClineGuardPolicy, CommandGuardPolicy } from "../terminal/agent-guardrails";
 import { evaluateClaudeGuard } from "../terminal/claude-guard";
 import { evaluateClineGuard } from "../terminal/cline-guard";
-import { parseHookRuntimeContextFromEnv } from "../terminal/hook-runtime-context";
+import { parseHookRuntimeContextFromEnv, resolveHookRuntimeContext } from "../terminal/hook-runtime-context";
 import type { RuntimeAppRouter } from "../trpc/app-router";
 import {
 	type CodexMappedHookEvent,
@@ -46,6 +46,8 @@ interface HookCommandMetadataOptionValues {
 	hookEventName?: string;
 	notificationType?: string;
 	metadataBase64?: string;
+	taskId?: string;
+	workspaceId?: string;
 }
 
 interface CodexWrapperArgs {
@@ -367,7 +369,7 @@ function parseHooksIngestArgs(
 	payloadArg: string | undefined,
 	stdinPayload: string,
 ): HooksIngestArgs {
-	const context = parseHookRuntimeContextFromEnv();
+	const context = resolveHookRuntimeContext(options);
 	const flagMetadata = parseMetadataFromOptions(options);
 	const payloadFromBase64 = parseMetadataFromBase64(options.metadataBase64);
 	const payloadFromStdin = parseJsonObject(stdinPayload.trim());
@@ -785,6 +787,8 @@ export function registerHooksCommand(program: Command): void {
 		.option("--hook-event-name <name>", "Original hook event name.")
 		.option("--notification-type <type>", "Notification type.")
 		.option("--metadata-base64 <base64>", "Base64-encoded JSON metadata payload.")
+		.option("--task-id <id>", "Card the hook belongs to (wins over KANBAN_HOOK_TASK_ID).")
+		.option("--workspace-id <id>", "Workspace of that card (wins over KANBAN_HOOK_WORKSPACE_ID).")
 		.action(
 			async (
 				payload: string | undefined,
@@ -805,6 +809,8 @@ export function registerHooksCommand(program: Command): void {
 		.option("--hook-event-name <name>", "Original hook event name.")
 		.option("--notification-type <type>", "Notification type.")
 		.option("--metadata-base64 <base64>", "Base64-encoded JSON metadata payload.")
+		.option("--task-id <id>", "Card the hook belongs to (wins over KANBAN_HOOK_TASK_ID).")
+		.option("--workspace-id <id>", "Workspace of that card (wins over KANBAN_HOOK_WORKSPACE_ID).")
 		.action(
 			async (
 				payload: string | undefined,
@@ -848,6 +854,8 @@ export function registerHooksCommand(program: Command): void {
 		.option("--hook-event-name <name>", "Original hook event name.")
 		.option("--notification-type <type>", "Notification type.")
 		.option("--metadata-base64 <base64>", "Base64-encoded JSON metadata payload.")
+		.option("--task-id <id>", "Card the hook belongs to (wins over KANBAN_HOOK_TASK_ID).")
+		.option("--workspace-id <id>", "Workspace of that card (wins over KANBAN_HOOK_WORKSPACE_ID).")
 		.action(
 			async (
 				payload: string | undefined,
