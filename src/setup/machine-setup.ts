@@ -8,6 +8,7 @@ import { chmod, mkdir, readFile, rename, stat, writeFile } from "node:fs/promise
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { type LemonadeModelListSettings, readLemonadeModelListSettings } from "../config/model-lists-config";
 import type { PipelineConfig } from "../config/pipeline-config";
 import {
 	getClineCliNoticesPath,
@@ -21,6 +22,7 @@ import {
 	getClaudeUserMemoryPath,
 	renderClaudeMdSection,
 } from "./claude-md-section";
+import { planClineLemonadeModels } from "./cline-lemonade-models";
 import { applyClineModelsSource, buildLemonadeModelListUrl, planClineModelsSource } from "./cline-models-source";
 import { CLINE_RULE_FILES } from "./cline-rules";
 import { readManagedSectionStatus, writeManagedSection } from "./managed-section";
@@ -31,6 +33,7 @@ export type SetupStepId =
 	| "cline-notices"
 	| "cline-providers"
 	| "cline-models-source"
+	| "cline-lemonade-models"
 	| "claude-md";
 
 /** `ok`: nothing to do. `change`: `apply` would write. `skipped`: not applicable here. `error`: can't be planned. */
@@ -61,6 +64,10 @@ export interface MachineSetupOptions {
 	now?: Date;
 	/** Test hooks: file locations. */
 	paths?: Partial<MachineSetupPaths>;
+	/** Test hook: `models.lists.lemonade` (default: read from the global config.json). */
+	lemonadeModelList?: LemonadeModelListSettings;
+	/** Test hook: the fetch that asks Lemonade for its models. */
+	fetch?: typeof fetch;
 }
 
 export interface MachineSetupPaths {
@@ -435,6 +442,31 @@ export async function planClineModelsSourceStep(paths: MachineSetupPaths, origin
 	}
 }
 
+export async function planClineLemonadeModelsStep(
+	paths: MachineSetupPaths,
+	options: { lemonadeModelList: LemonadeModelListSettings; fetch?: typeof fetch; now: Date },
+): Promise<SetupStepPlan> {
+	const plan = await planClineLemonadeModels({
+		modelsPath: paths.clineModels,
+		requireLabels: options.lemonadeModelList.requireLabels,
+		lemonadeUrl: options.lemonadeModelList.url,
+		fetch: options.fetch,
+		now: options.now,
+	});
+	const base = { id: "cline-lemonade-models" as const, target: paths.clineModels, details: plan.details };
+	switch (plan.action) {
+		case "update":
+			return { ...base, status: "change", apply: plan.apply };
+		case "up-to-date":
+			return { ...base, status: "ok" };
+		case "error":
+			return { ...base, status: "error" };
+		default:
+			// Lemonade down is not a setup failure: the file keeps its values and the next run fills them in.
+			return { ...base, status: "skipped" };
+	}
+}
+
 export async function planClaudeMd(
 	paths: MachineSetupPaths,
 	options: { legacyKitInstalled: boolean; force: boolean },
@@ -499,6 +531,16 @@ export async function planMachineSetup(options: MachineSetupOptions): Promise<Se
 			id: "cline-models-source",
 			target: paths.clineModels,
 			plan: () => planClineModelsSourceStep(paths, options.origin),
+		},
+		{
+			id: "cline-lemonade-models",
+			target: paths.clineModels,
+			plan: async () =>
+				planClineLemonadeModelsStep(paths, {
+					lemonadeModelList: options.lemonadeModelList ?? (await readLemonadeModelListSettings()).settings,
+					fetch: options.fetch,
+					now,
+				}),
 		},
 		{
 			id: "claude-md",

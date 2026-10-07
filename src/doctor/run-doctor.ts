@@ -12,6 +12,7 @@ import { getAgentTrustConfigPaths } from "../setup/workspace-trust-report";
 import { getClineModelsSettingsPath, resolveKanbanHome } from "../state/kanban-home";
 import { readLiveKanbanServerLock } from "../state/kanban-server-lock";
 import { listWorkspaceIndexEntries, loadWorkspaceBoardById } from "../state/workspace-state";
+import { checkClineLemonadeContextWindows } from "./cline-models-checks";
 import { createDeepCheckDeps, type DeepCheckDeps, runDeepChecks } from "./deep-checks";
 import {
 	checkHome,
@@ -38,6 +39,8 @@ export interface DoctorOptions {
 	kanbanVersion: string;
 	deepDeps?: DeepCheckDeps;
 	guardrailDeps?: GuardrailCheckDeps;
+	/** Test hook: the fetch setup's Lemonade step plans with. */
+	fetch?: typeof fetch;
 }
 
 export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
@@ -85,14 +88,14 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
 				origin: options.origin,
 				legacyKitInstalled: legacyKit.raw !== null,
 				config,
+				fetch: options.fetch,
 			}),
 		),
 	);
+	const clineModelsPath = getClineModelsSettingsPath(config.agents.cline.dataDir);
+	findings.push(...(await checkClineLemonadeContextWindows(clineModelsPath)));
 
-	const modelsSource = await planClineModelsSource(
-		getClineModelsSettingsPath(config.agents.cline.dataDir),
-		buildLemonadeModelListUrl(options.origin),
-	);
+	const modelsSource = await planClineModelsSource(clineModelsPath, buildLemonadeModelListUrl(options.origin));
 	findings.push(
 		...(await checkOneOwner({
 			legacyKit,

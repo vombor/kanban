@@ -7,10 +7,13 @@ import { parsePipelineConfig } from "../../../src/config/pipeline-config";
 import { CLINE_RULE_FILES } from "../../../src/setup/cline-rules";
 import { type MachineSetupPaths, planMachineSetup, type SetupStepPlan } from "../../../src/setup/machine-setup";
 import { runMachineSetup } from "../../../src/setup/run-setup";
+import { createFakeLemonadeFetch } from "../../utilities/lemonade-fixtures";
 import { createTempDir } from "../../utilities/temp-dir";
 
 const ORIGIN = "http://127.0.0.1:3485";
 const NOW = new Date("2026-10-07T12:00:00.000Z");
+// Never the machine's own Lemonade or config.json.
+const LEMONADE = { lemonadeModelList: { url: "http://lemonade.test:13305", requireLabels: ["tool-calling"] } };
 
 describe("kanban setup steps", () => {
 	let root: string;
@@ -40,6 +43,8 @@ describe("kanban setup steps", () => {
 			env: overrides.env ?? {},
 			now: NOW,
 			paths,
+			...LEMONADE,
+			fetch: createFakeLemonadeFetch(),
 		});
 	}
 
@@ -158,6 +163,44 @@ describe("kanban setup steps", () => {
 		);
 	});
 
+	it("fills in Cline's Lemonade model metadata in the same run that repoints the model list", async () => {
+		mkdirSync(join(root, "cline", "data", "settings"), { recursive: true });
+		writeFileSync(
+			paths.clineModels,
+			JSON.stringify({
+				version: 1,
+				providers: {
+					lemonade: {
+						provider: { name: "Lemonade", baseUrl: "http://lemonade.test:13305/api/v1" },
+						models: ["GLM-4.7-Flash-GGUF"],
+					},
+				},
+			}),
+		);
+		const result = await runMachineSetup({
+			origin: ORIGIN,
+			legacyKitInstalled: false,
+			config: parsePipelineConfig({}).config,
+			env: {},
+			now: NOW,
+			paths,
+			...LEMONADE,
+			fetch: createFakeLemonadeFetch(),
+			dryRun: false,
+			entries: [],
+		});
+		const step = result.steps.find((entry) => entry.plan.id === "cline-lemonade-models");
+		expect(step?.error).toBeNull();
+		expect(step?.plan.status).toBe("change");
+		const lemonade = JSON.parse(readFileSync(paths.clineModels, "utf8")).providers.lemonade;
+		expect(lemonade.provider.modelsSourceUrl).toBe(`${ORIGIN}/api/model-lists/lemonade`);
+		expect(lemonade.models["GLM-4.7-Flash-GGUF"]).toMatchObject({ contextWindow: 202752, maxTokens: 32768 });
+		// Two writes in the same second: two backups, neither overwritten.
+		expect(readdirSync(join(root, "cline", "data", "settings")).filter((name) => name.includes(".bak-")).length).toBe(
+			2,
+		);
+	});
+
 	it("a dry run writes nothing", async () => {
 		const result = await runMachineSetup({
 			origin: ORIGIN,
@@ -166,6 +209,8 @@ describe("kanban setup steps", () => {
 			env: {},
 			now: NOW,
 			paths,
+			...LEMONADE,
+			fetch: createFakeLemonadeFetch(),
 			dryRun: true,
 			entries: [],
 		});

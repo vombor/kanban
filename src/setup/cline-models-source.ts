@@ -74,6 +74,56 @@ function isMissingFileError(error: unknown): boolean {
 	return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
 }
 
+/** Cline's models.json as read, down to the Lemonade provider entry. Every non-`found` kind says why in `detail`. */
+export type ClineLemonadeEntryRead =
+	/** No models.json, or no Lemonade provider in it. */
+	| { kind: "absent"; detail: string }
+	| { kind: "error"; detail: string }
+	| {
+			kind: "found";
+			/** The file as read, kept for the backup. */
+			raw: string;
+			document: Record<string, unknown>;
+			/** `document.providers.lemonade`, the same object. */
+			entry: Record<string, unknown>;
+			modelsSourceUrl: string | null;
+	  };
+
+export async function readClineLemonadeEntry(modelsPath: string): Promise<ClineLemonadeEntryRead> {
+	let raw: string;
+	try {
+		raw = await readFile(modelsPath, "utf8");
+	} catch (error) {
+		if (isMissingFileError(error)) {
+			return { kind: "absent", detail: "Cline has no models.json (no custom providers)." };
+		}
+		return { kind: "error", detail: `Could not read it: ${String(error)}` };
+	}
+	let document: unknown;
+	try {
+		document = JSON.parse(raw);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		return { kind: "error", detail: `Not valid JSON (${message}); left alone.` };
+	}
+	const parsed = clineModelsFileSchema.safeParse(document);
+	if (!parsed.success) {
+		return { kind: "error", detail: "Not a Cline models file (no providers object); left alone." };
+	}
+	const entry = parsed.data.providers[CLINE_LEMONADE_PROVIDER_ID];
+	if (!entry) {
+		return { kind: "absent", detail: `No "${CLINE_LEMONADE_PROVIDER_ID}" provider in it.` };
+	}
+	const records = document as Record<string, Record<string, Record<string, unknown>>>;
+	return {
+		kind: "found",
+		raw,
+		document: records,
+		entry: records.providers[CLINE_LEMONADE_PROVIDER_ID] as Record<string, unknown>,
+		modelsSourceUrl: entry.provider?.modelsSourceUrl?.trim() || null,
+	};
+}
+
 interface ReadModelsFile {
 	plan: ClineModelsSourcePlan;
 	document: Record<string, unknown> | null;
@@ -87,58 +137,25 @@ async function readAndPlan(modelsPath: string, targetUrl: string): Promise<ReadM
 		detail: string,
 		currentUrl: string | null = null,
 	): ClineModelsSourcePlan => ({ action, modelsPath, currentUrl, targetUrl, detail });
-	let raw: string;
-	try {
-		raw = await readFile(modelsPath, "utf8");
-	} catch (error) {
-		if (isMissingFileError(error)) {
-			return { plan: plan("skip", "Cline has no models.json (no custom providers)."), document: null, raw: null };
-		}
-		return { plan: plan("error", `Could not read it: ${String(error)}`), document: null, raw: null };
+	const read = await readClineLemonadeEntry(modelsPath);
+	if (read.kind !== "found") {
+		return { plan: plan(read.kind === "absent" ? "skip" : "error", read.detail), document: null, raw: null };
 	}
-	let document: unknown;
-	try {
-		document = JSON.parse(raw);
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		return { plan: plan("error", `Not valid JSON (${message}); left alone.`), document: null, raw: null };
-	}
-	const parsed = clineModelsFileSchema.safeParse(document);
-	if (!parsed.success) {
-		return {
-			plan: plan("error", "Not a Cline models file (no providers object); left alone."),
-			document: null,
-			raw: null,
-		};
-	}
-	const entry = parsed.data.providers[CLINE_LEMONADE_PROVIDER_ID];
-	if (!entry) {
-		return { plan: plan("skip", `No "${CLINE_LEMONADE_PROVIDER_ID}" provider in it.`), document: null, raw: null };
-	}
-	const currentUrl = entry.provider?.modelsSourceUrl?.trim() || null;
-	const records = document as Record<string, unknown>;
+	const { document, raw, modelsSourceUrl: currentUrl } = read;
 	if (currentUrl === targetUrl) {
-		return {
-			plan: plan("up-to-date", "Already points at the model-lists route.", currentUrl),
-			document: records,
-			raw,
-		};
+		return { plan: plan("up-to-date", "Already points at the model-lists route.", currentUrl), document, raw };
 	}
 	if (currentUrl === null) {
-		return { plan: plan("update", "No modelsSourceUrl yet.", currentUrl), document: records, raw };
+		return { plan: plan("update", "No modelsSourceUrl yet.", currentUrl), document, raw };
 	}
 	if (isManagedModelsSourceUrl(currentUrl)) {
 		return {
 			plan: plan("update", "Points at the legacy model-lists service or another Kanban origin.", currentUrl),
-			document: records,
+			document,
 			raw,
 		};
 	}
-	return {
-		plan: plan("custom", "Points at a URL Kanban doesn't manage; left alone.", currentUrl),
-		document: records,
-		raw,
-	};
+	return { plan: plan("custom", "Points at a URL Kanban doesn't manage; left alone.", currentUrl), document, raw };
 }
 
 export async function planClineModelsSource(modelsPath: string, targetUrl: string): Promise<ClineModelsSourcePlan> {
@@ -150,6 +167,41 @@ function backupTimestamp(now: Date): string {
 		.toISOString()
 		.replace(/[-:]/gu, "")
 		.replace(/\.\d+Z$/u, "Z");
+}
+
+/** Writes a backup that never replaces another: setup's two models.json steps can write in the same second. */
+async function writeNewBackup(basePath: string, raw: string, mode: number): Promise<string> {
+	for (let attempt = 0; ; attempt += 1) {
+		const path = attempt === 0 ? basePath : `${basePath}-${attempt}`;
+		try {
+			await writeFile(path, raw, { encoding: "utf8", mode, flag: "wx" });
+			return path;
+		} catch (error) {
+			if (!(error && typeof error === "object" && "code" in error && error.code === "EEXIST") || attempt >= 99) {
+				throw error;
+			}
+		}
+	}
+}
+
+/**
+ * Replaces models.json with `document` after a timestamped backup of `raw` (the file as read) next to it. The
+ * replacement is atomic and keeps the original's mode. Returns the backup's path.
+ */
+export async function writeClineModelsFile(
+	modelsPath: string,
+	raw: string,
+	document: Record<string, unknown>,
+	now: Date,
+): Promise<string> {
+	const mode = (await stat(modelsPath)).mode & 0o7777;
+	const backupPath = await writeNewBackup(`${modelsPath}.bak-before-kanban-setup-${backupTimestamp(now)}`, raw, mode);
+	const tempPath = `${modelsPath}.tmp.${process.pid}.${Date.now()}`;
+	await writeFile(tempPath, `${JSON.stringify(document, null, 2)}\n`, { encoding: "utf8", mode });
+	// writeFile's mode is masked by the umask; the replacement keeps the original's mode exactly.
+	await chmod(tempPath, mode);
+	await rename(tempPath, modelsPath);
+	return backupPath;
 }
 
 /**
@@ -171,13 +223,6 @@ export async function applyClineModelsSource(options: {
 	const provider = (lemonade.provider as Record<string, unknown> | undefined) ?? {};
 	lemonade.provider = { ...provider, modelsSourceUrl: options.targetUrl };
 
-	const mode = (await stat(options.modelsPath)).mode & 0o7777;
-	const backupPath = `${options.modelsPath}.bak-before-kanban-setup-${backupTimestamp(options.now ?? new Date())}`;
-	await writeFile(backupPath, raw, { encoding: "utf8", mode, flag: "wx" });
-	const tempPath = `${options.modelsPath}.tmp.${process.pid}.${Date.now()}`;
-	await writeFile(tempPath, `${JSON.stringify(document, null, 2)}\n`, { encoding: "utf8", mode });
-	// writeFile's mode is masked by the umask; the replacement keeps the original's mode exactly.
-	await chmod(tempPath, mode);
-	await rename(tempPath, options.modelsPath);
+	const backupPath = await writeClineModelsFile(options.modelsPath, raw, document, options.now ?? new Date());
 	return { ...plan, applied: true, backupPath };
 }
