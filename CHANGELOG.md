@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.1.70-fork.4]
+
+Fixes
+- Starting a Copilot task no longer wipes the Copilot login when `~/.copilot/config.json` contains comments
+- Auto-review prompts are confirmed as received by the agent, with Enter retried once if the agent did not react
+- Claude and Codex task worktrees are pre-trusted via the project's main git root, so agents start without trust prompts
+- The board no longer goes stale behind tunnels and reverse proxies: the runtime stream sends keep-alive pings
+- Moving a card to Done runs one server-side workflow for the browser, the CLI and auto-review, so it no longer races board saves
+- Shutdown waits for in-flight state locks, so the next start no longer fails with "Lock file is already being held"
+
+Features
+- `KANBAN_HOME` sets where Kanban keeps its board state, config and task worktrees
+- `kanban home migrate` moves an existing Kanban home, including task worktrees, to a new location
+- Done, task delete and project removal stop the card's processes (including detached dev servers) before deleting its worktree
+- A periodic sweep reaps leftover processes of Done cards and reports the rest (`processes.reaper` in config.json); the debug dialog shows the last sweep with a "Sweep now" button
+
+Removals
+- The Electron desktop app is no longer built or shipped; the fork runs headless and is used through a browser or the PWA
+- Removed the "Open" (in editor) button and the Cline logo; header, favicon, PWA icons and docs link are Kanban/fork-branded
+
+Security
+- No telemetry: PostHog analytics and the hardcoded upstream Sentry DSNs are removed; error reporting is off unless a build supplies its own DSN
+- Removed the `runtime.runCommand` endpoint, which ran arbitrary shell commands in a workspace
+
 ## [0.1.70]
 
 - Fixed a freeze that could occur when clearing completed tasks on large boards by limiting cleanup concurrency
