@@ -1,0 +1,147 @@
+{
+	"kit": 1,
+	"name": "team",
+	"description": "Cline juniors on tier-3 models, cross-vendor QA, same-model rework, escalation to the orchestrator",
+	"dev": {
+		"agent": "cline",
+		"model": {
+			"tier": "tier3"
+		}
+	},
+	"qa": {
+		"enabled": true,
+		"requireDifferentVendor": true,
+		"skip": {
+			"roles": [
+				"qa",
+				"triage",
+				"calibration"
+			],
+			"effectiveAgents": []
+		},
+		"default": {
+			"agent": "codex"
+		},
+		"routes": [
+			{
+				"devModel": "(^|\\.)openai\\.|^gpt-",
+				"agent": "cline",
+				"provider": "bedrock",
+				"model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+				"rules": [
+					"drive"
+				],
+				"why": "OpenAI-built cards: Haiku 4.5 on Cline (user 10/06 19:5xZ, calibration qa-models-v5..v7)"
+			}
+		],
+		"rules": {
+			"drive": "DRIVE THE CHANGED PATH (required): log in as needed (a seeded user; the seed script has the credentials), then actually use every user path this card adds or changes in the browser with npm run browse (click and fill through it to the end, not just load the page), and screenshot each step's result into {outbox}. Rendering a page is not exercising it: a UI card whose changed path you did not drive can not PASS."
+		}
+	},
+	"onFail": {
+		"rework": "same-model",
+		"reworkRounds": 3,
+		"conflict": "rework",
+		"then": "escalate",
+		"runoff": null
+	},
+	"escalate": {
+		"to": "orchestrator",
+		"requireApproval": true
+	},
+	"features": [
+		"scoreboard",
+		"bench",
+		"runoffs",
+		"calibration",
+		"tiers"
+	],
+	"tiers": {
+		"tier3": [
+			{
+				"provider": "bedrock",
+				"model": "us.openai.gpt-6.1-sol",
+				"default": true,
+				"note": "tier-3 default since 2026-10-06 (won runoff tier3-multiregion: 4.0 vs 3.67, ~21 min vs ~2h45); provider becomes bedrock after the fork switch (kit providers --for)"
+			}
+		],
+		"tier2": [
+			{
+				"provider": "bedrock",
+				"model": "us.moonshotai.kimi-k3",
+				"note": "candidate, runoff tier2-coupons-2026-10-06 (096bd); provider becomes bedrock after the fork switch (kimi-k3 on bedrock untested: 503 outage 10/06)"
+			},
+			{
+				"provider": "bedrock",
+				"model": "us.anthropic.claude-opus-5-5",
+				"note": "candidate, runoff tier2-coupons-2026-10-06 (c9e97)"
+			}
+		],
+		"tier1": [],
+		"qa": [
+			{
+				"provider": "bedrock",
+				"model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+				"note": "candidate, calibration qa-models-v5"
+			},
+			{
+				"provider": "bedrock",
+				"model": "us.amazon.nova-2-lite-v1:0",
+				"note": "candidate, calibration qa-models-v5"
+			}
+		]
+	},
+	"dropped": [
+		{
+			"provider": "bedrock",
+			"model": "qwen.qwen3-next-80b-a3b",
+			"at": "2026-10-05",
+			"why": "3 own QA FAILs on f80db and 58f74; broke large TSX files"
+		},
+		{
+			"provider": "bedrock",
+			"model": "us.amazon.nova-2-lite-v1:0",
+			"at": "2026-10-05",
+			"why": "ends turns narrating instead of calling tools; no Cline caching makes it ~$26 per 62a99-sized run vs luna ~$1"
+		},
+		{
+			"provider": "bedrock",
+			"model": "openai.gpt-oss-120b-1:0",
+			"at": "2026-10-05",
+			"why": "3 own QA FAILs on de30c (scores ~1/5), context-overflow crashes"
+		},
+		{
+			"provider": "bedrock",
+			"model": "nvidia.nemotron-super-3-120b",
+			"at": "2026-10-05",
+			"why": "3 own QA FAILs on 43360 (Docker/CI); user read its output: cannot perform. Card deleted, work kept as tag preserve/43360-nemotron-r3"
+		},
+		{
+			"provider": "openai-native",
+			"model": "us.openai.gpt-6-luna",
+			"at": "2026-10-06",
+			"why": "lost tier-3 runoff to gpt-6.1-sol (3.67 vs 4.0, ~2h45 vs ~21 min); user: tier 3 = sol 6.1. Not a failure: in-flight luna cards (8e891) finish on luna"
+		},
+		{
+			"provider": "bedrock",
+			"model": "us.anthropic.claude-sonnet-5-5",
+			"at": "2026-10-06",
+			"why": "not a tier-2 candidate (user: ~$20/run, no Sonnet)"
+		}
+	],
+	"tierRules": {
+		"tier3": "< $20 per 62a99-sized run (86M input, 0.19M output) at list price",
+		"tier2": ">= $20 per run"
+	},
+	"tierNotes": {
+		"tier1": "none yet; user 10/06: not sure one is needed",
+		"qa": "user 10/06: QA = Haiku or Nova 2 Lite (on Cline), decided by calibration v5. Rule: QA vendor != dev vendor. Codex sol6 stays QA until the tier-2 runoff is decided"
+	},
+	"prices": {
+		"region": "us-west-2",
+		"autoSync": true
+	},
+	"recommends": {
+		"landingMode": "qa"
+	}
+}

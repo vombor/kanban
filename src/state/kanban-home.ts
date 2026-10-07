@@ -34,6 +34,7 @@ export const KANBAN_HOME_WORKSPACES_DIR = "workspaces";
 const WORKTREES_DIR = "worktrees";
 const RUN_DIR = "run";
 const BACKUPS_DIR = "backups";
+const KITS_DIR = "kits";
 const PROJECT_CONFIG_PARENT_DIR = ".cline";
 const PROJECT_CONFIG_DIR = "kanban";
 
@@ -262,6 +263,11 @@ export function getKanbanRunPath(homePath = getKanbanHomePath()): string {
 /** Backups Kanban takes before it rewrites state (`<home>/backups`). */
 export function getKanbanBackupsPath(homePath = getKanbanHomePath()): string {
 	return join(homePath, BACKUPS_DIR);
+}
+
+/** User routing kits (`<home>/kits/<name>.json`); the built-in kits ship in the package. */
+export function getKanbanKitsPath(homePath = getKanbanHomePath()): string {
+	return join(homePath, KITS_DIR);
 }
 
 export function getKanbanWorkspacesRootPath(homePath = getKanbanHomePath()): string {

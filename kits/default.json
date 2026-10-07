@@ -1,0 +1,20 @@
+{
+	"kit": 1,
+	"name": "default",
+	"description": "Kanban's selected agent for every card; no QA, no rework automation",
+	"qa": {
+		"enabled": false,
+		"requireDifferentVendor": false,
+		"skip": { "roles": ["qa", "triage", "calibration"], "effectiveAgents": [] },
+		"routes": [],
+		"rules": {},
+		"blurb": "",
+		"promptNotes": { "screenshotFallback": "", "knownBaseIssues": "", "dbSetup": "" },
+		"serversScript": null,
+		"preview": null
+	},
+	"onFail": { "rework": "none", "reworkRounds": 0, "conflict": "stop", "then": "stop", "runoff": null },
+	"escalate": { "to": "orchestrator", "requireApproval": false },
+	"land": { "postLand": [] },
+	"features": []
+}

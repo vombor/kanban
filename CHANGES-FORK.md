@@ -92,3 +92,13 @@ of this repository is the complete record of changes.
   points the `lemonade` provider in Cline's `models.json` at the route (only when the URL is unset, the legacy kit's
   `127.0.0.1:13306` service or the route on another origin; a timestamped backup first). Replaces the legacy kit's
   model-lists service.
+- `src/config/pipeline-config.ts`, `src/kits/` (`kit-schema.ts`, `resolve-kit.ts`, `policy.ts`, `tier-lookup.ts`,
+  `kit-report.ts`, `apply-kit.ts`), `kits/default.json`, `kits/team.json`, `src/core/effective-agent.ts`,
+  `src/commands/kit.ts`, `src/commands/config.ts`, `src/commands/workspace-target.ts` (new), `src/cli.ts`,
+  `src/state/kanban-home.ts`, `package.json` (`files`): routing kits (plan step P3-1). Core pipeline settings
+  (`pipeline.*`, `watchdog.*`, `orchestrator.*`, `models.*`, `agents.*`, `backups.*`, `workspaces.<id>.*` in
+  config.json, zod with defaults); the kit schema; built-in kits `default` (no routing) and `team` (the dev-team
+  kit's routing as data); user kits in `$KANBAN_HOME/kits/`; the resolver (workspace override > kit > `default`,
+  nothing inherited from another workspace); `resolveEffectiveAgent`/`resolveEffectiveModel`; the routing-policy
+  evaluator with the tier → model lookup; `kanban kit list|show|apply` and `kanban config show`. No behaviour
+  change: nothing acts on these settings yet, and only `kanban kit show` calls the evaluator.

@@ -219,7 +219,7 @@ Everything in this table is **core** (machine setup), except `dev-servers.md`, w
 | Merge conflict = FAIL | **R** | core | |
 | Escalation mechanics (`BLOCKED:` + backlog, ESCALATE section, ATTENTION.md, TRIAGE card, sibling card on another model), handback | **R** + `kanban task handback` | core | |
 | Escalation policy: after how many FAILs, to the orchestrator or to a senior tier | **R** as kit data | kit | |
-| Lemonade "one model loaded" rework hold (kit `a01625e`) | **R** as provider capacity `models.providers.lemonade.maxLoadedModels: 1` | core | |
+| Lemonade "one model loaded" rework hold (kit `a01625e`) | **R** as provider capacity `models.providerCapacity.lemonade.maxLoadedModels: 1` | core | |
 | Crash nudges, premature stop, poisoned history (/clear + resend), no-images, overflow cleanup, hung-request cancel (`f9ed1c3`) | **R** `src/pipeline/recovery.ts` | core | Session states come from the runtime state machine |
 | Transient retry, outage hold, model probes | **R** (probe in-process) | core | |
 | Restart recovery (orphans, manifest, WIP tags, `startTaskSession`) | **R** | core | **Yes**: shutdown cleanup (§4.5) |
@@ -267,13 +267,23 @@ stay where they are. There are two schemas:
 | `toggles.WAKE_ORCHESTRATOR`, `wakeMode`, `WAKE_COOLDOWN_MIN`, `ORCH_TIMEOUT_MIN`, `ORCH_LIVE_MIN` | `orchestrator.wake.{enabled,mode,cooldownMin,timeoutMin,liveSessionMin}`. There is **no** `orchestrator.agent`: the target is always `selectedAgentId` | true, "headless" (falls back to "sidebar" when the selected agent has no headless runner), 30, 45, 10 |
 | `toggles.PRETRUST` | `agents.pretrust` | true |
 | `providers` (`default`, `fallback`, `legacyUpstream`, `deprecated`) | `models.providers.{default,fallback,deprecated}` (`legacyUpstream` **D**) | bedrock |
-| (code in autoland `a01625e`) | `models.providers.<id>.maxLoadedModels` (rework/start waits while another card holds a different model on that provider) | lemonade: 1 |
+| (code in autoland `a01625e`) | `models.providerCapacity.<id>.maxLoadedModels` (P3-1 key; P3-2's import mapping uses it. Merged over the defaults, so setting one provider keeps `lemonade: 1`. Rework/start waits while another card holds a different model on that provider) | lemonade: 1 |
 | `bedrockRegion` | `models.bedrockRegion` | us-west-2 |
 | `modelLists` | `models.lists.lemonade.{url,requireLabels}` | http://localhost:13305, ["tool-calling"] |
 | `BOARD_BACKUP_MIN`, `BOARD_BACKUP_KEEP` | `backups.board.{everyMin,keep}` | 10, 200 |
 | `kanbanUrl`, `runtimeUrl`, `kanbanCli`, `syncIntervalSec`, `logs.*`, `runDir`, `dataRoot`, `pricesDir`, `boardBackupDir` | **D**: in-process, or a fixed path under `KANBAN_HOME` | |
 | `kanbanHome`, `worktrees` | `KANBAN_HOME`, `worktreesRoot` (§6) | |
 | `clineSessions`, `codexSessions`, `clineProviders` | `agents.cline.dataDir`, `agents.codex.home` | ~/.cline/data, ~/.codex |
+
+Keys the P3-1 schema (`src/config/pipeline-config.ts`) does not have yet:
+
+- **`wakeTarget`** (legacy kit `00514f2`, `lib/sidebar-wake.cjs`): one workspace id whose sidebar gets the wakes of
+  every watched workspace (one orchestrator, user 10/06), and the live value `wakeMode: "sidebar"` (the table above
+  defaults to `"headless"`). They need core keys, for example `orchestrator.wake.target` (a workspace id, null =
+  each workspace wakes its own sidebar) next to `orchestrator.wake.mode`. P3-2's import maps both; P4-7 (watchdog
+  wakes) reads them.
+- **`sessionSync`** (P2-1, a top-level boolean in config.json): moves into the core settings schema later, for
+  example as `sessionSync.enabled`, with P3-2's import or `kanban doctor` moving the old key.
 
 ### 3.2 Kit schema
 

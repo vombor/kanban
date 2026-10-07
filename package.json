@@ -38,6 +38,7 @@
 	"files": [
 		"dist",
 		"man",
+		"kits",
 		"README.md",
 		"LICENSE",
 		"CHANGES-FORK.md"

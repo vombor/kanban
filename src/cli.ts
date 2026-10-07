@@ -7,8 +7,10 @@ import { Command, Option } from "commander";
 import ora, { type Ora } from "ora";
 import packageJson from "../package.json" with { type: "json" };
 import { registerAgentsCommand } from "./commands/agents";
+import { registerConfigCommand } from "./commands/config";
 import { registerHomeCommand } from "./commands/home";
 import { registerHooksCommand } from "./commands/hooks";
+import { registerKitCommand } from "./commands/kit";
 import { registerSetupCommand } from "./commands/setup";
 import { registerTaskCommand } from "./commands/task";
 import { loadGlobalRuntimeConfig, loadRuntimeConfig } from "./config/runtime-config";
@@ -709,6 +711,8 @@ function createProgram(invocationArgs: string[]): Command {
 	registerAgentsCommand(program);
 	registerHomeCommand(program);
 	registerSetupCommand(program);
+	registerKitCommand(program);
+	registerConfigCommand(program);
 
 	program
 		.command("mcp")
