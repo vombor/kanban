@@ -462,7 +462,7 @@ export function getMachineConfigPaths(homePath = getKanbanHomePath()): string[] 
 	return [
 		join(homePath, CONFIG_FILENAME),
 		getKanbanKitsPath(homePath),
-		join(getKanbanWorkspacesRootPath(homePath), "index.json"),
+		getKanbanWorkspaceIndexPath(homePath),
 		join(userHome, ".claude.json"),
 		join(claudeDir, "settings.json"),
 		join(claudeDir, "settings.local.json"),
@@ -642,6 +642,11 @@ export function getServerStartRecordPath(homePath = getKanbanHomePath()): string
 	return join(getKanbanRunPath(homePath), SERVER_START_RECORD_FILENAME);
 }
 
+/** The journal of an unfinished `kanban project rename-id` (`<home>/run/rename-id.json`); a rerun finishes it. */
+export function getProjectRenameJournalPath(homePath = getKanbanHomePath()): string {
+	return join(getKanbanRunPath(homePath), "rename-id.json");
+}
+
 /** `kanban restart recover` asks the pipeline worker to check a workspace now (`<home>/run/restart-recover.now`). */
 export function getRestartRecoverRequestPath(homePath = getKanbanHomePath()): string {
 	return join(getKanbanRunPath(homePath), RESTART_RECOVER_REQUEST_FILENAME);
@@ -662,6 +667,38 @@ export function getLegacyKitChecksStatePaths(workspaceId: string, homePath = get
 
 export function getKanbanWorkspacesRootPath(homePath = getKanbanHomePath()): string {
 	return join(homePath, KANBAN_HOME_WORKSPACES_DIR);
+}
+
+/** The workspace index (`<home>/workspaces/index.json`): workspace id ↔ repo path. */
+export function getKanbanWorkspaceIndexPath(homePath = getKanbanHomePath()): string {
+	return join(getKanbanWorkspacesRootPath(homePath), "index.json");
+}
+
+/** A workspace's board state dir (`<home>/workspaces/<workspaceId>`: board.json, sessions.json, meta.json). */
+export function getKanbanWorkspaceStatePath(workspaceId: string, homePath = getKanbanHomePath()): string {
+	return join(getKanbanWorkspacesRootPath(homePath), workspaceId);
+}
+
+/** Names under `<home>/data` that are machine-wide, not a workspace's: no workspace may take one as its id. */
+export function getReservedDataDirNames(): string[] {
+	return [MODELS_DATA_DIR, PRICES_DATA_DIR];
+}
+
+/**
+ * Every path in the home named after a workspace id (`kanban project rename-id` moves them). Task worktrees are
+ * keyed by task id, and the legacy kit's paths are read-only, so neither is here. A new per-workspace path goes here.
+ */
+export function getWorkspaceIdKeyedPaths(
+	workspaceId: string,
+	homePath = getKanbanHomePath(),
+): Array<{ path: string; kind: "dir" | "file" }> {
+	return [
+		{ path: getKanbanWorkspaceStatePath(workspaceId, homePath), kind: "dir" },
+		{ path: getKanbanWorkspaceDataPath(workspaceId, homePath), kind: "dir" },
+		{ path: getBoardBackupsPath(workspaceId, homePath), kind: "dir" },
+		{ path: getQaPreviewMarkPath(workspaceId, homePath), kind: "file" },
+		{ path: getOrchestratorLockPath(workspaceId, homePath), kind: "file" },
+	];
 }
 
 export function getTaskWorktreesRootPath(): string {

@@ -577,7 +577,21 @@ async function findBlockers(
 				"Retire the repository first (plan §8.3, P5-3) or choose another target with --to.",
 		);
 	}
-	for (const homePath of [fromPath, toPath]) {
+	blockers.push(...(await findRunningKanbanServerBlockers([fromPath, toPath], probeRuntimeServer)));
+	return blockers;
+}
+
+/**
+ * Refusals while a Kanban server runs for one of these homes: its server lock names a live process, or a server
+ * answers at the configured runtime endpoint for one of them (or doesn't say which home it serves). Commands that
+ * rewrite files a server holds open (`home migrate`, `project rename-id`) share it.
+ */
+export async function findRunningKanbanServerBlockers(
+	homePaths: readonly string[],
+	probeRuntimeServer: () => Promise<RunningServerProbe | null> = probeConfiguredRuntimeServer,
+): Promise<string[]> {
+	const blockers: string[] = [];
+	for (const homePath of homePaths) {
 		const lock = readLiveKanbanServerLock(homePath);
 		if (lock) {
 			const lockPath = getKanbanServerLockPath(homePath);
@@ -589,7 +603,7 @@ async function findBlockers(
 		}
 	}
 	const probe = await probeRuntimeServer();
-	if (probe && (probe.homePath === null || [fromPath, toPath].includes(resolve(probe.homePath)))) {
+	if (probe && (probe.homePath === null || homePaths.includes(resolve(probe.homePath)))) {
 		blockers.push(
 			`A Kanban server answers at ${probe.origin}${probe.homePath ? ` for ${probe.homePath}` : " (its home is unknown)"}. Stop it first.`,
 		);
@@ -597,7 +611,8 @@ async function findBlockers(
 	return blockers;
 }
 
-function formatBackupTimestamp(date: Date): string {
+/** `2026-10-07T12-00-00Z`: an ISO time without milliseconds, safe in a file name. */
+export function formatBackupTimestamp(date: Date): string {
 	return date
 		.toISOString()
 		.replace(/\.\d+Z$/u, "Z")

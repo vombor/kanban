@@ -156,6 +156,25 @@ asks the worker to check now. Never restart the pod yourself: that is the user's
   `<home>/backups/home-migrate-<ts>/`. `--dry-run` lists every file it would copy, keep or replace. The rest of
   `run/` stays behind (a home moved by hand has no start record: recovery takes a manifest at most 24 h old). Rename the old home (`<old home>.migrated-<ts>`) and move it out of `~/.cline` once no rollback
   needs it. Rollback: stop Kanban and point `KANBAN_HOME` at the renamed old home.
+- **Rename a project's workspace id** (Kanban stopped, in a restart window; the user's step, refused from every agent
+  session): stop the pod (its stop hook runs `kanban restart prepare` as usual), then in a one-off container on the
+  same volumes run `kanban project rename-id <old> <new> --dry-run`, check the list, and run it without `--dry-run`.
+  It refuses while a server runs on the home (the server lock or an answer on the runtime port, as `home migrate`).
+  It writes `<home>/backups/rename-id-<ts>.tgz` first, then moves `workspaces/<old>`, `data/<old>`,
+  `backups/boards/<old>` (and the QA preview pid / orchestrator lock in `run/`) to the new id and rewrites the index
+  entry, config.json `workspaces.<old>` and `orchestrator.wake.target`, the home-agent session ids
+  (`__home_agent__:<old>:<agent>`) in every workspace's `sessions.json`, the project's side of every `messages.jsonl`,
+  calibration specs' `workspace` and pending `restart-recover.now` lines. Logs are history and keep the old id:
+  decision logs, the watchdog's and isolation's, `scoreboard.jsonl`, `qa-log.md`, `ATTENTION.md`, `logs/`, and
+  pipeline-state's `importedFrom`. The output lists files in the data dir that still name `data/<old>` (your own
+  scripts and notes too): update your scripts. State already at the new id that isn't a registered project (the
+  retired kit board's `data/kanban`, its `__home_agent__:kanban:*` summaries) makes it refuse until you add
+  `--move-aside`, which moves it to `<home>/backups/rename-id-<ts>/`. Interrupted? Rerun the same command: the journal
+  in `run/rename-id.json` lets it finish the job (no second backup). Task worktrees are keyed by task id and stay;
+  per-launch hook files are rewritten when a card relaunches. The restart manifest moves with `data/`, so restart
+  recovery resumes the cards on the next start. Afterwards the browser opens the project at `/<new>` (old links and
+  bookmarks to `/<old>` don't). Rollback: stop Kanban and unpack the `.tgz` over the home (`tar -xzf … -C <home>`
+  after moving the new-id dirs away).
 
 **Stuck card.**
 

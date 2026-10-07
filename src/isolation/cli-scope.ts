@@ -51,12 +51,14 @@ export const MACHINE_WIDE_COMMANDS = [
 ] as const;
 
 /**
- * Commands no agent session may run, whatever the isolation mode: registering projects, grants, writing Cline's files
- * and approving a plan are the user's (and `plan expand --approved-by-user`).
+ * Commands no agent session may run, whatever the isolation mode: registering and renaming projects, grants, writing
+ * Cline's files and approving a plan are the user's (and `plan expand --approved-by-user`).
  */
 export const USER_ONLY_COMMANDS = [
 	"project add",
 	"project create",
+	// Also refuses while a server runs, so it can't wait for the console code (the server prints it).
+	"project rename-id",
 	"isolation grant",
 	"isolation revoke",
 	"isolation approve",

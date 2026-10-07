@@ -659,3 +659,12 @@ of this repository is the complete record of changes.
   breakdown's sha256, now the one the user was shown. The CLI refuses both commands inside a session. A plan card in
   Review gets an Approve plan button with a confirmation dialog (spec title, card count, code field). The console
   line now reads "Approval <id> (<kind>)" for every kind.
+- `src/projects/project-rename-id.ts` (new), `src/commands/project.ts`, `src/state/kanban-home.ts`,
+  `src/state/kanban-home-migrate.ts`, `src/isolation/cli-scope.ts`, `docs/team/RUNBOOK.md`, `docs/fork/project-isolation.md`,
+  `AGENTS.md`, tests (user request 2026-10-07): `kanban project rename-id <old> <new> [--move-aside] [--dry-run]`
+  changes a project's workspace id. A user action refused from every agent session; it refuses while a Kanban server
+  runs on the home (the same check as `home migrate`, now shared). It backs up to `<home>/backups/rename-id-<ts>.tgz`,
+  then moves every path named after the id (`getWorkspaceIdKeyedPaths`) and rewrites the stored references (index,
+  config.json `workspaces.<id>` and `orchestrator.wake.target`, home-agent session ids, `messages.jsonl`, calibration
+  specs, restart-recover requests). Logs keep the old id as history. State left at the new id by an unregistered
+  project is refused unless `--move-aside`. A journal in `run/rename-id.json` makes a rerun finish an interrupted run.

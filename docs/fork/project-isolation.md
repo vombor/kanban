@@ -111,7 +111,7 @@ workspace's `isolation.jsonl` and on its console. Who made the edit isn't known 
 ## Projects are the user's
 
 Creating, registering and removing projects is done by the user through Kanban's UI or CLI. Every agent session is
-refused, in every mode: tRPC `projects.create/add/remove` and `kanban project add|create`, plus in-process
+refused, in every mode: tRPC `projects.create/add/remove` and `kanban project add|create|rename-id`, plus in-process
 registration (`kanban task create --project-path <new repo>`). Re-registering the session's own project is a no-op
 and allowed. A message can't get around this: the receiving orchestrator is refused the same way.
 
