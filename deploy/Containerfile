@@ -1,5 +1,5 @@
 # Dev container with the vombor/kanban fork. Built by .github/workflows/image.yml and published to GHCR.
-# Same toolset as the hand-built image, plus the standalone cline CLI (the fork's cline-cli agent, #643).
+# Same toolset as the hand-built image, plus the standalone cline CLI (the fork's cline-cli agent, #643) and gh.
 # Kanban is installed from the fork's npm pack tarball (deploy/kanban.tgz, made in CI) instead of
 # `npx kanban`, which fetched upstream at every start.
 # AGENT_CLIS is resolved in CI to exact versions (pkg@x.y.z ...), so a new npm release of any of them
@@ -15,6 +15,18 @@ RUN apt-get update && \
     unzip \
     bubblewrap \
     openssh-client && \
+    rm -rf /var/lib/apt/lists/*
+
+# GitHub CLI from GitHub's apt repository (https://cli.github.com/packages). No token or gh config in the image:
+# run `gh auth login` once in the container; its config lives in /root/.config/gh on the persistent /root volume.
+RUN mkdir -p -m 755 /etc/apt/keyrings && \
+    curl -fsSL -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+      https://cli.github.com/packages/githubcli-archive-keyring.gpg && \
+    chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends gh && \
     rm -rf /var/lib/apt/lists/*
 
 ARG AGENT_CLIS="npm @anthropic-ai/claude-code @github/copilot @openai/codex cline"

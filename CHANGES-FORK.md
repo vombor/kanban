@@ -537,3 +537,6 @@ of this repository is the complete record of changes.
   with a debounced server typeahead (`projects.checkName`: exists/isGitRepository/isEmpty only), lists the root's
   folders one level for Open folder, and shows errors inline. "Add project" always opens the dialog (the native picker
   moved into Open folder) and is a button like "Create task". Tests get a temp `KANBAN_PROJECTS_ROOTS`.
+- `deploy/Containerfile`: the image installs the GitHub CLI (`gh`) from GitHub's apt repository
+  (https://cli.github.com/packages, keyring in `/etc/apt/keyrings`). No token or gh config is baked in: run
+  `gh auth login` once in the container; the config lives in `/root/.config/gh` on the persistent `/root` volume.
