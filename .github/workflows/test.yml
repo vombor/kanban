@@ -33,7 +33,7 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: npm
 
-      # macOS node-gyp/electron rebuilds can fail with Python 3.12/distutils; pin 3.11.
+      # macOS node-gyp rebuilds (node-pty) can fail with Python 3.12/distutils; pin 3.11.
       - name: Setup Python (for node-gyp on macOS)
         if: matrix.os == 'macos-latest'
         uses: actions/setup-python@v5
@@ -45,9 +45,6 @@ jobs:
 
       - name: Install web-ui dependencies
         run: npm ci --prefix web-ui
-
-      - name: Install packages/desktop dependencies
-        run: npm ci --prefix packages/desktop
 
       - name: Build
         run: npm run build
@@ -63,9 +60,3 @@ jobs:
 
       - name: Web UI tests
         run: npm --prefix web-ui run test
-
-      - name: packages/desktop typecheck
-        run: npm --prefix packages/desktop run typecheck
-
-      - name: packages/desktop tests
-        run: npm --prefix packages/desktop test

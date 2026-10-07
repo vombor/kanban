@@ -6,7 +6,9 @@ As required by Section 4(b) of the license, the files listed below were modified
 of this repository is the complete record of changes.
 
 - `package.json`: `homepage`, `bugs` and `repository` point at the fork; `CHANGES-FORK.md` is shipped in the package.
-- `packages/desktop/src/app-menu.ts`: Help menu "Kanban Documentation" and "Report Issue" link to the fork.
+- `packages/desktop/`: removed. The fork runs headless and is used through a browser (or the web UI's PWA), so the
+  Electron desktop app is not built or shipped. `package.json` (`install:all`), `.github/workflows/test.yml`,
+  `.gitignore` and `vitest.config.ts` no longer reference it; `.plan/desktop-5-way-split-handoff.md` is removed.
 - `web-ui/src/components/project-navigation-panel.tsx`: removed the Cline logo from the sidebar header; the
   "report an issue" link points at the fork.
 - `web-ui/src/components/ui/cline-icon.tsx`: removed (only used by the sidebar header logo).
