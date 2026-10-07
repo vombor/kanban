@@ -1,11 +1,11 @@
-// `kanban bench metrics|record-verdict|scoreboard|reset`: the team kit's scoring tools for humans and backfills (plan
+// `kanban bench metrics|record-verdict|scoreboard|reset|calibrate`: the team kit's scoring tools for humans and backfills (plan
 // §2.4). The pipeline records verdicts itself through the `scoreboard` feature; these commands write the same files
 // (`<home>/data/<workspace>/scoreboard.jsonl`, `scoreboard.md`), whatever the workspace's kit.
 //
 // Ported from archive/devteam-kit:bench/card-metrics.cjs@760fd36c, bench/record-verdict.cjs@5266ea62,
-// bench/scoreboard.cjs@d2fb30fc and bench/snapshot-reset.mjs@264680fc.
+// bench/scoreboard.cjs@d2fb30fc and bench/snapshot-reset.mjs@264680fc; `calibrate` is bench-calibrate.ts.
 import { readFile } from "node:fs/promises";
-import type { Command } from "commander";
+import { type Command, Option } from "commander";
 
 import { getWorkspacePipelineSettings, type PipelineConfig, readPipelineConfig } from "../config/pipeline-config";
 import { loadGlobalRuntimeConfig } from "../config/runtime-config";
@@ -28,6 +28,7 @@ import {
 } from "../kits/team/scoreboard/scoreboard-store";
 import { getPipelineStatePath, getPricesDataPaths, getTeamBenchWorkspacePaths } from "../state/kanban-home";
 import { loadWorkspaceBoardById } from "../state/workspace-state";
+import { type CalibrateOptions, runCalibrateCommand } from "./bench-calibrate";
 import { resolveWorkspaceTarget, type WorkspaceTarget } from "./workspace-target";
 
 function toErrorMessage(error: unknown): string {
@@ -253,7 +254,9 @@ function runAction<Args extends unknown[]>(label: string, run: (...args: Args) =
 export function registerBenchCommand(program: Command): void {
 	const bench = program
 		.command("bench")
-		.description("The team kit's scoring tools: card metrics, the QA scoreboard and benchmark resets.");
+		.description(
+			"The team kit's scoring tools: card metrics, the QA scoreboard, benchmark resets and QA calibrations.",
+		);
 	bench
 		.command("metrics")
 		.description("Print who built a card (agent/provider/model, from its session files) and what it cost, as JSON.")
@@ -311,4 +314,19 @@ export function registerBenchCommand(program: Command): void {
 		.option("--force", "Reset even with cards In Progress or in Review.")
 		.option("--dry-run", "Print what would be archived.")
 		.action(runAction("reset", runReset));
+	bench
+		.command("calibrate")
+		.description(
+			"Run a QA calibration: the same QA review on fixed snapshots by several QA models (calibration cards), detached; results in data/<ws>/calibration/<name>/.",
+		)
+		.argument("<spec>", "The calibration spec (JSON: name, workspace, parallel, timeoutMin, sets[], models[]).")
+		.option(
+			"--project <workspace>",
+			"Workspace id or project path (default: the spec's workspace, else the current project).",
+		)
+		.option("--foreground", "Run in this process instead of detaching (logs to stderr too).")
+		.option("--print", "Check the inputs (dev prompts, refs) without creating cards.")
+		.option("--force", "Run on a workspace whose kit doesn't list the calibration feature.")
+		.addOption(new Option("--worker", "The detached runner (started by calibrate itself).").hideHelp())
+		.action(runAction("calibrate", (spec: string, options: CalibrateOptions) => runCalibrateCommand(spec, options)));
 }

@@ -538,6 +538,42 @@ export function getKanbanLogsPath(homePath = getKanbanHomePath()): string {
 	return join(homePath, LOGS_DIR);
 }
 
+/**
+ * One calibration run's files (`<home>/data/<workspaceId>/calibration/<name>/`, the legacy kit's layout): its spec,
+ * resumable state, results and the judge's README/report, plus the runner's pid lock.
+ */
+export interface CalibrationPaths {
+	dir: string;
+	spec: string;
+	state: string;
+	resultsJson: string;
+	resultsMd: string;
+	readme: string;
+	lock: string;
+}
+
+export function getCalibrationPaths(
+	workspaceId: string,
+	name: string,
+	homePath = getKanbanHomePath(),
+): CalibrationPaths {
+	const dir = join(getWatchdogWorkspacePaths(workspaceId, homePath).calibrationDir, name);
+	return {
+		dir,
+		spec: join(dir, "spec.json"),
+		state: join(dir, "state.json"),
+		resultsJson: join(dir, "results.json"),
+		resultsMd: join(dir, "results.md"),
+		readme: join(dir, "README.md"),
+		lock: join(dir, "runner.pid"),
+	};
+}
+
+/** The calibration runner's log (`<home>/logs/calibrate.log`, the legacy kit's name). */
+export function getCalibrationLogPath(homePath = getKanbanHomePath()): string {
+	return join(getKanbanLogsPath(homePath), "calibrate.log");
+}
+
 /** The headless orchestrator run's lock for a workspace (`<home>/run/orchestrator-<workspaceId>.lock`, holds its pid). */
 export function getOrchestratorLockPath(workspaceId: string, homePath = getKanbanHomePath()): string {
 	return join(getKanbanRunPath(homePath), `orchestrator-${workspaceId}.lock`);

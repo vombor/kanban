@@ -80,6 +80,13 @@ function toMessage(value: unknown): ClineSessionMessage | null {
 export interface ClineSessionFileReader {
 	/** The newest cline 3.x session in `sessionsPath` whose cwd or workspace root is `workspacePath`, or null. */
 	readLatestSession: (sessionsPath: string, workspacePath: string) => Promise<ClineSessionSnapshot | null>;
+	/** Every message of that session (`<id>.messages.json` as written), or null when there is none yet. */
+	readLatestSessionMessages: (sessionsPath: string, workspacePath: string) => Promise<unknown[] | null>;
+}
+
+function readMessagesArray(parsed: unknown): unknown[] {
+	const messages = Array.isArray(parsed) ? parsed : ((parsed as { messages?: unknown } | null)?.messages ?? []);
+	return Array.isArray(messages) ? messages : [];
 }
 
 /**
@@ -107,51 +114,67 @@ export function createClineSessionFileReader(): ClineSessionFileReader {
 		return meta;
 	};
 
+	const findLatestSessionId = async (sessionsPath: string, workspacePath: string): Promise<string | null> => {
+		let names: string[];
+		try {
+			names = (await readdir(sessionsPath)).filter((name) => CLI_SESSION_DIR_PATTERN.test(name));
+		} catch {
+			return null;
+		}
+		const target = normalizePath(workspacePath);
+		let best: { sessionId: string; startedAt: number } | null = null;
+		for (const sessionId of names) {
+			const meta = await readMeta(sessionsPath, sessionId);
+			if (!meta?.paths.includes(target)) {
+				continue;
+			}
+			const startedAt = meta.startedAt ?? 0;
+			if (!best || startedAt > best.startedAt) {
+				best = { sessionId, startedAt };
+			}
+		}
+		return best?.sessionId ?? null;
+	};
+
 	return {
 		readLatestSession: async (sessionsPath, workspacePath) => {
-			let names: string[];
-			try {
-				names = (await readdir(sessionsPath)).filter((name) => CLI_SESSION_DIR_PATTERN.test(name));
-			} catch {
+			const sessionId = await findLatestSessionId(sessionsPath, workspacePath);
+			if (!sessionId) {
 				return null;
 			}
-			const target = normalizePath(workspacePath);
-			let best: { sessionId: string; startedAt: number } | null = null;
-			for (const sessionId of names) {
-				const meta = await readMeta(sessionsPath, sessionId);
-				if (!meta?.paths.includes(target)) {
-					continue;
-				}
-				const startedAt = meta.startedAt ?? 0;
-				if (!best || startedAt > best.startedAt) {
-					best = { sessionId, startedAt };
-				}
-			}
-			if (!best) {
-				return null;
-			}
-			const dir = join(sessionsPath, best.sessionId);
-			const file = await readJsonObject(join(dir, `${best.sessionId}.json`));
-			const messagesPath = join(dir, `${best.sessionId}.messages.json`);
+			const dir = join(sessionsPath, sessionId);
+			const file = await readJsonObject(join(dir, `${sessionId}.json`));
+			const messagesPath = join(dir, `${sessionId}.messages.json`);
 			let messagesWrittenAt: number | null = null;
 			let lastMessage: ClineSessionMessage | null = null;
 			try {
 				messagesWrittenAt = (await stat(messagesPath)).mtimeMs;
 				const parsed: unknown = JSON.parse(await readFile(messagesPath, "utf8"));
-				const messages = Array.isArray(parsed)
-					? parsed
-					: ((parsed as { messages?: unknown } | null)?.messages ?? []);
-				lastMessage = Array.isArray(messages) ? toMessage(messages.at(-1)) : null;
+				lastMessage = toMessage(readMessagesArray(parsed).at(-1));
 			} catch {
 				// No messages yet, or a half-written file: nothing to decide on this tick.
 			}
 			return {
-				sessionId: best.sessionId,
+				sessionId,
 				status: typeof file?.status === "string" ? file.status : null,
-				startedAt: best.startedAt || null,
+				startedAt: (await readMeta(sessionsPath, sessionId))?.startedAt || null,
 				messagesWrittenAt,
 				lastMessage,
 			};
+		},
+		readLatestSessionMessages: async (sessionsPath, workspacePath) => {
+			const sessionId = await findLatestSessionId(sessionsPath, workspacePath);
+			if (!sessionId) {
+				return null;
+			}
+			try {
+				const parsed: unknown = JSON.parse(
+					await readFile(join(sessionsPath, sessionId, `${sessionId}.messages.json`), "utf8"),
+				);
+				return readMessagesArray(parsed);
+			} catch {
+				return null;
+			}
 		},
 	};
 }

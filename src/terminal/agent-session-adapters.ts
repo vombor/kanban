@@ -1670,10 +1670,15 @@ function joinWarnings(...warnings: Array<string | null | undefined>): string | u
 	return warnings.filter(Boolean).join(" ") || undefined;
 }
 
+/** Copilot's own dir (`$COPILOT_HOME`, else `~/.copilot`): config.json (JSONC, holds the login) and session-state/. */
+export function getCopilotHomePath(): string {
+	return process.env.COPILOT_HOME ?? join(homedir(), ".copilot");
+}
+
 // Returns a warning for the session output when the worktree could not be pre-trusted.
 async function addCopilotTrustedFolder(folderPath: string): Promise<string | null> {
 	try {
-		const copilotHome = process.env.COPILOT_HOME ?? join(homedir(), ".copilot");
+		const copilotHome = getCopilotHomePath();
 		const configPath = join(copilotHome, "config.json");
 		let content = "";
 		try {
@@ -1718,9 +1723,9 @@ async function addCopilotTrustedFolder(folderPath: string): Promise<string | nul
  * Find the most recent Copilot CLI session ID for a given working directory.
  * Scans `~/.copilot/session-state/` workspace manifests to match by cwd.
  */
-async function findCopilotSessionIdForCwd(cwd: string): Promise<string | null> {
+export async function findCopilotSessionIdForCwd(cwd: string): Promise<string | null> {
 	try {
-		const copilotHome = process.env.COPILOT_HOME ?? join(homedir(), ".copilot");
+		const copilotHome = getCopilotHomePath();
 		const sessionStateDir = join(copilotHome, "session-state");
 		const entries = await readdir(sessionStateDir);
 		const normalizedCwd = cwd.replace(/\/+$/u, "");

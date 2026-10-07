@@ -34,8 +34,19 @@ function runIdsOf(state: unknown): string[] {
 }
 
 /**
+ * A calibration is finished when its state says so (`finishedAt`, `kanban bench calibrate`). A legacy kit state (no
+ * `version`) has no such field; its runner wrote results.md at the end, so that counts there.
+ */
+async function isFinishedCalibration(dir: string, state: unknown): Promise<boolean> {
+	if (state && typeof state === "object" && "version" in state) {
+		return Boolean((state as { finishedAt?: unknown }).finishedAt);
+	}
+	return await exists(join(dir, "results.md"));
+}
+
+/**
  * Card ids of calibration runs (`<calibrationDir>/<name>/state.json` `runs.*.id`). `onlyUnfinished`: only runs of
- * calibrations without a `results.md` yet (a finished calibration writes it).
+ * calibrations that are not finished yet (isFinishedCalibration).
  */
 export async function readCalibrationRunIds(
 	calibrationDir: string,
@@ -50,10 +61,11 @@ export async function readCalibrationRunIds(
 	}
 	for (const name of names) {
 		const dir = join(calibrationDir, name);
-		if (options.onlyUnfinished && (await exists(join(dir, "results.md")))) {
+		const state = await readJson(join(dir, "state.json"));
+		if (options.onlyUnfinished && (await isFinishedCalibration(dir, state))) {
 			continue;
 		}
-		for (const id of runIdsOf(await readJson(join(dir, "state.json")))) {
+		for (const id of runIdsOf(state)) {
 			ids.add(id);
 		}
 	}

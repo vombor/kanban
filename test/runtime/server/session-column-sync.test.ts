@@ -552,7 +552,7 @@ describe("session column sync with the Cline CLI idle-TUI check", () => {
 				loadSettings: async () => ({ mode: input.mode ?? "on", intervalSec: 15, dataDir: "/cline-data" }),
 				getSelectedAgentId,
 				log,
-				reader: { readLatestSession },
+				reader: { readLatestSession, readLatestSessionMessages: async () => null },
 			},
 			now: () => NOW,
 		});

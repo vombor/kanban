@@ -117,3 +117,35 @@ describe("cline session file reader", () => {
 		});
 	});
 });
+
+describe("cline session messages", () => {
+	it("returns every message of the worktree's newest session, in both file shapes", async () => {
+		const toolUse = {
+			role: "assistant",
+			content: [{ type: "tool_use", id: "t1", name: "read_file", input: { path: "a" } }],
+		};
+		const sessionsPath = createSessionsDir([
+			{
+				id: "1791335000000_old",
+				meta: { status: "completed", started_at: "2026-10-07T01:00:00.000Z", cwd: WORKTREE },
+				messages: [{ role: "user", content: "old" }],
+			},
+			{
+				id: "1791335760135_new",
+				meta: { status: "running", started_at: "2026-10-07T02:00:00.000Z", workspace_root: WORKTREE },
+				messages: { messages: [{ role: "user", content: "review" }, toolUse] },
+			},
+			{
+				id: "1791335760999_nomsg",
+				meta: { status: "running", started_at: "2026-10-07T03:00:00.000Z", cwd: "/other" },
+			},
+		]);
+		const reader = createClineSessionFileReader();
+		expect(await reader.readLatestSessionMessages(sessionsPath, WORKTREE)).toEqual([
+			{ role: "user", content: "review" },
+			toolUse,
+		]);
+		expect(await reader.readLatestSessionMessages(sessionsPath, "/other")).toBeNull();
+		expect(await reader.readLatestSessionMessages(sessionsPath, "/nowhere")).toBeNull();
+	});
+});

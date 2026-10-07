@@ -42,7 +42,10 @@ function createHarness(mode: ClineTurnDetectorMode, summaries: RuntimeTaskSessio
 	const manager = new TerminalSessionManager();
 	manager.hydrateFromRecord(Object.fromEntries(summaries.map((entry) => [entry.taskId, entry])));
 	const settings: ClineTurnDetectorSettings = { mode, intervalSec: 15, dataDir: "/cline-data" };
-	const reader: ClineSessionFileReader = { readLatestSession: vi.fn(async () => FINISHED) };
+	const reader: ClineSessionFileReader = {
+		readLatestSession: vi.fn(async () => FINISHED),
+		readLatestSessionMessages: async () => null,
+	};
 	const endTurn = vi.fn<ClineTurnMonitorDependencies["endTurn"]>(async ({ taskId }) => {
 		manager.transitionToReview(taskId, "hook");
 		return { ok: true };

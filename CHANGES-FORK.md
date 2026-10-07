@@ -291,3 +291,20 @@ of this repository is the complete record of changes.
   watchdog's; the server refuses them for workspaces not on landing `qa`. `kanban qa shot` (port of
   `qa/qa-shot.cjs`; Playwright from the scratch copy). Nothing changes for workspaces on landing `off`/`commit`/`pr`
   or in shadow (shadow only logs).
+- `src/kits/team/calibration/` (new: `calibration-spec.ts`, `calibration-state.ts`, `calibration-prompt.ts`,
+  `calibration-runner.ts`), `src/commands/bench-calibrate.ts` (new), `src/commands/bench.ts`, `src/commands/task.ts`,
+  `src/terminal/agent-run-signals.ts` (new), `src/terminal/cline-session-files.ts`,
+  `src/terminal/agent-session-adapters.ts`, `src/pipeline/qa-verdict.ts`, `src/pipeline/watchdog/workspace-data.ts`,
+  `src/kits/policy.ts`, `src/state/kanban-home.ts`: QA calibration (plan step P4-T4, ported from the legacy kit's
+  `qa/calibrate.mjs`). `kanban bench calibrate <spec> [--project] [--foreground] [--print] [--force]` runs the same
+  QA review on fixed snapshots by several QA models: one `role: "calibration"` card per set × model (title
+  `QA-CAL …`, the pipeline's QA prompt with a calibration intro on `refs/kanban/calibration/<name>-<set>`), a wave
+  of `parallel` runs at a time, set by set. It detaches (log `<home>/logs/calibrate.log`), keeps resumable state in
+  `data/<ws>/calibration/<name>/state.json` (the legacy kit's format plus `version`/`finishedAt`; one runner per
+  calibration, `runner.pid`), nudges cards that stop without a verdict, ends runs DNF on timeout, cost cap,
+  tool-call loop, no native tool calls, a signed-out agent or a card moved by hand, stops scratch servers, moves each
+  card to Done (discarded), writes `results.json`/`results.md` and queues an orchestrator wake when done. It talks to
+  the running server like `kanban task …`, refuses a workspace whose kit doesn't list the `calibration` feature
+  (`--force`), and never writes the scoreboard. Per-agent run facts (Cline session messages, Copilot login and
+  events) live in `src/terminal/agent-run-signals.ts`. prune-done now treats a calibration as finished by its
+  state's `finishedAt` (legacy states: `results.md`, as before). Nothing runs unless someone starts it.

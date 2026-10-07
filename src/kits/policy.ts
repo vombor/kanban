@@ -123,7 +123,8 @@ function failRoundCap(kit: KitDocument, history: CardHistory, limits: { maxFailR
 	return Math.min(kitRounds, limits.maxFailRounds) + history.extraRounds;
 }
 
-function getPromptParts(kit: KitDocument, ruleNames: string[]): QaPromptParts {
+/** The QA prompt parts of a kit: its project blurb, notes and servers script, plus the named `qa.rules` texts. */
+export function getPromptParts(kit: KitDocument, ruleNames: string[]): QaPromptParts {
 	const rules = kit.qa?.rules ?? {};
 	return {
 		rules: ruleNames.flatMap((name) => (Object.hasOwn(rules, name) ? [rules[name] as string] : [])),

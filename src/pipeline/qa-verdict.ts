@@ -130,6 +130,11 @@ export async function readQaVerdictFile(outboxDir: string): Promise<QaVerdictRea
 	return parseQaVerdictText(text);
 }
 
+/** What to tell an agent whose verdict.json can't be read (the error is quoted, so it learns what to fix). */
+export function buildQaVerdictFixHint(file: string, error: string): string {
+	return `${file} exists but is not usable: ${error}. Rewrite it as valid JSON (escape newlines inside strings as \\n, or make "log" an array of strings).`;
+}
+
 /** The nudge for a QA card that stopped without a usable verdict. */
 export function buildQaVerdictNudge(
 	outboxDir: string,
@@ -139,7 +144,7 @@ export function buildQaVerdictNudge(
 	const file = getQaVerdictPath(outboxDir);
 	const ask =
 		read.kind === "invalid"
-			? `${file} exists but is not usable: ${read.error}. Rewrite it as valid JSON (escape newlines inside strings as \\n, or make "log" an array of strings).`
+			? buildQaVerdictFixHint(file, read.error)
 			: `Your review isn't finished: write ${file} exactly as step 6 says (valid JSON with verdict, scores, blocking, visual, notes, log).`;
 	return `${ask} Then reply with the one-line summary. Don't run kanban commands or touch ${kanbanHome}.`;
 }
