@@ -10,10 +10,11 @@ import {
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
+import type * as FsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 
 import {
 	ensureClaudeWorkspaceTrusted,
@@ -26,6 +27,28 @@ import {
 import { resolveWorkspaceTrustRoot } from "../../../src/terminal/workspace-trust-root";
 import { createGitTestEnv } from "../../utilities/git-env";
 import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
+
+// Lets a test run code at fixed points of the pre-trust write: before it writes its temp file and after it
+// renames that over the config. Pass-through otherwise.
+const fsHooks = vi.hoisted(() => ({
+	beforeWriteFile: null as ((path: string) => Promise<void>) | null,
+	afterRename: null as ((to: string) => Promise<void>) | null,
+}));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+	const actual = await importOriginal<typeof FsPromises>();
+	return {
+		...actual,
+		writeFile: async (...args: Parameters<typeof actual.writeFile>) => {
+			await fsHooks.beforeWriteFile?.(String(args[0]));
+			return await actual.writeFile(...args);
+		},
+		rename: async (...args: Parameters<typeof actual.rename>) => {
+			await actual.rename(...args);
+			await fsHooks.afterRename?.(String(args[1]));
+		},
+	};
+});
 
 // Claude Code 2.1.291 trust dialog as Ink writes it to the PTY: words placed with cursor moves, and
 // "No, exit" listed first with the pointer on it.
@@ -135,24 +158,83 @@ describe("claude workspace pre-trust", () => {
 	});
 
 	it("keeps its key while another process keeps rewriting the file", async () => {
-		const configFilePath = writeConfig("concurrent.json", { n: 0, projects: {} });
-		// Like a running Claude Code session: read, change, write temp + rename, every few ms.
-		const writer = spawn(process.execPath, [
-			"-e",
-			`const fs=require("fs");const f=${JSON.stringify(configFilePath)};const end=Date.now()+1500;
-			(function w(){const d=JSON.parse(fs.readFileSync(f,"utf8"));d.n++;fs.writeFileSync(f+".w",JSON.stringify(d));fs.renameSync(f+".w",f);if(Date.now()<end)setTimeout(w,3)})()`,
-		]);
-		const writerDone = new Promise((resolveWriter) => writer.on("exit", resolveWriter));
-		await new Promise((resolveDelay) => setTimeout(resolveDelay, 200));
-		const result = await ensureClaudeWorkspaceTrusted(repo, { configFilePath, attempts: 40, retryDelayMs: () => 20 });
-		await writerDone;
-		const final = JSON.parse(readFileSync(configFilePath, "utf8")) as {
-			n: number;
-			projects: Record<string, { hasTrustDialogAccepted?: boolean }>;
+		const configFilePath = writeConfig("concurrent.json", { n: 0, other: "kept", projects: {} });
+		// Like a running Claude Code session (read, change, write temp + rename), but stepped over IPC so the
+		// rewrites land at fixed points inside our compare-and-swap instead of racing it.
+		const writer = spawn(
+			process.execPath,
+			[
+				"-e",
+				`const fs=require("fs");const f=${JSON.stringify(configFilePath)};let snapshot=null;
+				const write=(d)=>{d.n++;fs.writeFileSync(f+".w",JSON.stringify(d));fs.renameSync(f+".w",f)};
+				process.on("message",(op)=>{const read=()=>JSON.parse(fs.readFileSync(f,"utf8"));
+				if(op==="rewrite")write(read());if(op==="read")snapshot=read();if(op==="write-stale")write(snapshot);
+				if(op==="exit")process.disconnect();else process.send(op)})`,
+			],
+			{ stdio: ["ignore", "inherit", "inherit", "ipc"] },
+		);
+		onTestFinished(() => {
+			writer.kill();
+		});
+		const writerExited = new Promise((resolveExit) => writer.once("exit", resolveExit));
+		const tell = async (op: "rewrite" | "read" | "write-stale"): Promise<void> => {
+			await new Promise<void>((resolveOp) => {
+				writer.once("message", () => resolveOp());
+				writer.send(op);
+			});
 		};
-		expect(final.n).toBeGreaterThan(10);
-		expect(result).toEqual({ changed: true, trustRootPath: repo });
-		expect(final.projects[repo]?.hasTrustDialogAccepted).toBe(true);
+		const readConfig = () =>
+			JSON.parse(readFileSync(configFilePath, "utf8")) as {
+				n: number;
+				other: string;
+				projects: Record<string, { hasTrustDialogAccepted?: boolean }>;
+			};
+		let tempWrites = 0;
+		let keyLostToStaleWrite = false;
+		fsHooks.beforeWriteFile = async (path) => {
+			if (!path.startsWith(`${configFilePath}.kanban-`)) {
+				return;
+			}
+			tempWrites += 1;
+			// Attempts 1 and 2: the file changes between our read and our swap.
+			// Attempt 3: the other process reads now and writes its stale copy right after our rename.
+			// Attempt 4: no interference.
+			if (tempWrites <= 2) {
+				await tell("rewrite");
+			} else if (tempWrites === 3) {
+				await tell("read");
+			}
+		};
+		fsHooks.afterRename = async (to) => {
+			if (to === configFilePath && tempWrites === 3) {
+				await tell("write-stale");
+				keyLostToStaleWrite = readConfig().projects[repo]?.hasTrustDialogAccepted !== true;
+			}
+		};
+		const retryDelays: number[] = [];
+		try {
+			const result = await ensureClaudeWorkspaceTrusted(repo, {
+				configFilePath,
+				attempts: 5,
+				retryDelayMs: (attempt) => {
+					retryDelays.push(attempt);
+					return 0;
+				},
+			});
+			expect(result).toEqual({ changed: true, trustRootPath: repo });
+		} finally {
+			fsHooks.beforeWriteFile = null;
+			fsHooks.afterRename = null;
+		}
+		expect(tempWrites).toBe(4);
+		expect(retryDelays).toEqual([0, 1, 2]);
+		expect(keyLostToStaleWrite).toBe(true);
+		// The other process keeps writing after us and keeps our key.
+		await tell("rewrite");
+		writer.send("exit");
+		await writerExited;
+		expect(readConfig()).toEqual({ n: 4, other: "kept", projects: { [repo]: { hasTrustDialogAccepted: true } } });
+		expect(readdirSync(root).filter((name) => name.endsWith(".tmp"))).toEqual([]);
 	});
 });
 

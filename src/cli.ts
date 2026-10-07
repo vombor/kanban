@@ -30,6 +30,7 @@ import {
 	setKanbanRuntimePort,
 	setKanbanRuntimeTls,
 } from "./core/runtime-endpoint";
+import { lockedFileSystem } from "./fs/locked-file-system";
 import { disablePasscode, generateInternalToken, generatePasscode } from "./security/passcode-manager";
 import type { AutoReviewReconciler } from "./server/auto-review-reconciler";
 import type { RuntimeStateHub } from "./server/runtime-state-hub";
@@ -497,6 +498,9 @@ async function startServer(): Promise<{
 			closeRuntimeServer: close,
 			skipSessionCleanup: options?.skipSessionCleanup ?? false,
 		});
+		// Work that started before shutdown (an auto-review evaluation, a late request) may still be taking or
+		// releasing a state lock; exiting now would leave it behind for the next start.
+		await lockedFileSystem.waitForPendingLocks();
 	};
 
 	return {

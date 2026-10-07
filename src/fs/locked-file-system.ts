@@ -69,6 +69,8 @@ async function readFileIfExists(path: string): Promise<string | null> {
 }
 
 export class LockedFileSystem {
+	private readonly pendingLockOperations = new Set<Promise<unknown>>();
+
 	private async normalizeLockRequest(request: LockRequest): Promise<NormalizedLockRequest> {
 		if (request.type === "directory") {
 			await mkdir(request.path, { recursive: true });
@@ -94,6 +96,26 @@ export class LockedFileSystem {
 	}
 
 	async withLocks<T>(requests: readonly LockRequest[], operation: () => Promise<T>): Promise<T> {
+		const pending = this.runWithLocks(requests, operation);
+		this.pendingLockOperations.add(pending);
+		try {
+			return await pending;
+		} finally {
+			this.pendingLockOperations.delete(pending);
+		}
+	}
+
+	// Resolves once no lock operation of this instance is acquiring, holding or releasing a lock. Exiting the process
+	// before that leaves proper-lockfile's lock directory behind (its exit hook only removes fully acquired locks),
+	// and the next process to start on the same files then fails with "Lock file is already being held" until the
+	// orphan goes stale.
+	async waitForPendingLocks(): Promise<void> {
+		while (this.pendingLockOperations.size > 0) {
+			await Promise.allSettled(Array.from(this.pendingLockOperations));
+		}
+	}
+
+	private async runWithLocks<T>(requests: readonly LockRequest[], operation: () => Promise<T>): Promise<T> {
 		const normalizedRequests = await Promise.all(
 			requests.map(async (request) => await this.normalizeLockRequest(request)),
 		);

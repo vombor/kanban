@@ -1,6 +1,12 @@
 import type { IncomingMessage } from "node:http";
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+	getKanbanRuntimeHost,
+	getKanbanRuntimePort,
+	setKanbanRuntimeHost,
+	setKanbanRuntimePort,
+} from "../../../src/core/runtime-endpoint";
 import { evaluateCors, evaluateHost, handleSocketUpgrade } from "../../../src/server/middleware";
 
 const ALLOWED_ORIGIN = "http://127.0.0.1:3484";
@@ -130,6 +136,31 @@ describe("evaluateHost", () => {
 });
 
 describe("handleSocketUpgrade", () => {
+	// handleSocketUpgrade checks against the live runtime endpoint, which starts from KANBAN_RUNTIME_HOST/PORT.
+	// Pin it to the endpoint these requests target so the result does not depend on the environment.
+	const originalEnv = { host: process.env.KANBAN_RUNTIME_HOST, port: process.env.KANBAN_RUNTIME_PORT };
+	const original = { host: getKanbanRuntimeHost(), port: getKanbanRuntimePort() };
+
+	beforeEach(() => {
+		setKanbanRuntimeHost("127.0.0.1");
+		setKanbanRuntimePort(3484);
+	});
+
+	afterEach(() => {
+		setKanbanRuntimeHost(original.host);
+		setKanbanRuntimePort(original.port);
+		for (const [key, value] of [
+			["KANBAN_RUNTIME_HOST", originalEnv.host],
+			["KANBAN_RUNTIME_PORT", originalEnv.port],
+		] as const) {
+			if (value === undefined) {
+				delete process.env[key];
+			} else {
+				process.env[key] = value;
+			}
+		}
+	});
+
 	it("passes through upgrades whose Host and Origin are both allowed", () => {
 		const socket = new PassThrough();
 		const request = makeFakeRequest({ host: "127.0.0.1:3484", origin: ALLOWED_ORIGIN });

@@ -50,3 +50,13 @@ of this repository is the complete record of changes.
 - `web-ui/src/components/runtime-settings-dialog.tsx`: "Read the docs" links to the fork's README.
 - `src/cli.ts`, `src/workspace/initialize-repo.ts` (and two integration tests): "Kanban" instead of "Cline Kanban" in
   the startup message and the initial-commit message.
+- `src/fs/locked-file-system.ts`, `src/cli.ts`: shutdown waits for lock operations still acquiring, holding or
+  releasing a state lock before the process exits. Exiting mid-operation left a proper-lockfile lock directory
+  behind, and the next start on the same home failed with "Lock file is already being held".
+  `test/runtime/locked-file-system.test.ts` covers the wait; `test/integration/runtime-state-stream.integration.test.ts`
+  checks that a stopped server leaves no lock behind.
+- `test/runtime/server/middleware.test.ts`: the WebSocket upgrade tests pin the runtime host and port instead of
+  inheriting `KANBAN_RUNTIME_HOST`/`KANBAN_RUNTIME_PORT` from the environment.
+- `test/runtime/terminal/claude-workspace-trust.test.ts`: the concurrent-writer pre-trust test steps the other
+  process at fixed points inside the compare-and-swap (change before the swap, stale overwrite after it) instead of
+  racing a timed writer loop.

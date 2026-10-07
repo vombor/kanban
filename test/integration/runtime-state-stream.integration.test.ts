@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
@@ -158,6 +158,13 @@ function commitAll(cwd: string, message: string): string {
 	runGit(cwd, ["add", "."]);
 	runGit(cwd, ["commit", "-qm", message]);
 	return runGit(cwd, ["rev-parse", "HEAD"]);
+}
+
+// proper-lockfile locks are directories named *.lock. One left behind by a stopped server blocks the next start.
+function findLockDirectories(root: string): string[] {
+	return readdirSync(root, { recursive: true, withFileTypes: true })
+		.filter((entry) => entry.isDirectory() && entry.name.endsWith(".lock"))
+		.map((entry) => join(entry.parentPath, entry.name));
 }
 
 function resolveShutdownIpcHookPath(): string {
@@ -1327,6 +1334,8 @@ describe.sequential("runtime state stream integration", () => {
 		} finally {
 			await firstServer.stop();
 		}
+		expect(findLockDirectories(tempHome)).toEqual([]);
+		expect(findLockDirectories(projectPath)).toEqual([]);
 
 		const secondPort = await getAvailablePort();
 		const secondServer = await startKanbanServer({
