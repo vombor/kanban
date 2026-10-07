@@ -1,8 +1,10 @@
 // The server side of the pipeline worker (decision 1, plan §5): starts `kanban pipeline worker` as a child
 // process, restarts it when it dies, and feeds it workspace snapshots.
 //
-// - The worker runs only while some registered workspace has landing mode `qa` and `pipeline.paused` is off. A
-//   pod where every workspace is on landing `off` (every workspace without a config entry) never starts it.
+// - The worker runs only while some registered workspace has landing mode `qa` and `pipeline.paused` is off, or
+//   while `watchdog.mode` is not "off" (then every registered workspace is sent: the watchdog's stuck-prompt check
+//   covers all of them). A pod where every workspace is on landing `off` and the watchdog is off never starts it.
+// - The worker's watchdog asks the server to act with `request` messages; `handleWatchdogRequest` answers them.
 // - Every `sweepIntervalMs` the host re-reads config.json, so a landing-mode change starts or stops the worker
 //   with no Kanban restart, and sends a snapshot of each pipeline workspace (a backstop for missed events).
 // - Between sweeps, board writes and session state changes from the state hub send a snapshot of that workspace
@@ -22,6 +24,7 @@ import type {
 } from "../core/api-contract";
 import { isPipelineWorkspace, type PipelineWorkspaceSnapshot } from "./engine";
 import type { PipelineEventMap } from "./events";
+import type { WatchdogActionRequest } from "./watchdog/actions";
 import {
 	isPipelineWorkerMessage,
 	type PipelineFinishTaskRequest,
@@ -58,6 +61,8 @@ export interface CreatePipelineWorkerHostDependencies {
 	onWorkerMessage?: (message: PipelineWorkerMessage) => void;
 	/** Runs the Done workflow for a worker `finishTask` request (in-process triggers `pipeline`/`hold_release`). */
 	finishTask?: (request: PipelineFinishTaskRequest) => Promise<RuntimeTaskTrashResponse>;
+	/** Carries out a watchdog action for the worker (src/server/watchdog-actions.ts). Without it requests fail. */
+	handleWatchdogRequest?: (request: WatchdogActionRequest) => Promise<unknown>;
 	sweepIntervalMs?: number;
 	coalesceMs?: number;
 	restartDelaysMs?: number[];
@@ -145,7 +150,7 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 	let sweepTimer: NodeJS.Timeout | null = null;
 	let sweepRunning: Promise<void> | null = null;
 	let closed = false;
-	/** Pipeline workspaces as of the last sweep: workspaceId → workspacePath. */
+	/** Workspaces sent to the worker as of the last sweep (pipeline workspaces, or all while the watchdog runs): id → path. */
 	let pipelineWorkspaces = new Map<string, string>();
 	const coalesceTimers = new Map<string, NodeJS.Timeout>();
 	const lastSessionStates = new Map<string, RuntimeTaskSessionState>();
@@ -217,6 +222,24 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 				deps.log(message.message);
 			} else if (message.type === "finishTask") {
 				void answerFinishTask(started, message.requestId, message.request);
+			} else if (message.type === "request") {
+				const handle = deps.handleWatchdogRequest;
+				void (async () => {
+					try {
+						if (!handle) {
+							throw new Error("this server does not carry out watchdog actions");
+						}
+						const result = await handle(message.request);
+						started.send({ type: "response", id: message.id, ok: true, result });
+					} catch (error) {
+						started.send({
+							type: "response",
+							id: message.id,
+							ok: false,
+							error: error instanceof Error ? error.message : String(error),
+						});
+					}
+				})();
 			} else if (message.type === "ready") {
 				// Snapshots sent before the worker listened would be lost; send them all now.
 				for (const [workspaceId, workspacePath] of pipelineWorkspaces) {
@@ -270,21 +293,19 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 		const parsed = await readConfig();
 		const config = parsed.config;
 		const next = new Map<string, string>();
-		if (!config.pipeline.paused) {
-			for (const workspace of deps.listWorkspaces()) {
-				if (
-					workspace.workspacePath &&
-					isPipelineWorkspace(getWorkspacePipelineSettings(config, workspace.workspaceId))
-				) {
-					next.set(workspace.workspaceId, workspace.workspacePath);
-				}
+		const watchdogOn = config.watchdog.mode !== "off";
+		for (const workspace of deps.listWorkspaces()) {
+			const pipeline =
+				!config.pipeline.paused && isPipelineWorkspace(getWorkspacePipelineSettings(config, workspace.workspaceId));
+			if (workspace.workspacePath && (pipeline || watchdogOn)) {
+				next.set(workspace.workspaceId, workspace.workspacePath);
 			}
 		}
 		const previous = pipelineWorkspaces;
 		pipelineWorkspaces = next;
 		if (next.size === 0) {
 			if (child) {
-				deps.log("pipeline worker stopped: no workspace has landing mode qa");
+				deps.log("pipeline worker stopped: no workspace has landing mode qa and the watchdog is off");
 			}
 			stopChild();
 			return;

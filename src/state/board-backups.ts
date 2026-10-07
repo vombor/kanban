@@ -16,6 +16,11 @@ import { getBoardBackupsPath } from "./kanban-home";
 export type BoardBackupSettings = PipelineConfig["backups"]["board"];
 
 const LATEST_FILENAME = "board-latest.json";
+
+/** The newest backup of a workspace's board (`backups/boards/<workspaceId>/board-latest.json`). */
+export function getLatestBoardBackupPath(workspaceId: string): string {
+	return join(getBoardBackupsPath(workspaceId), LATEST_FILENAME);
+}
 const STAMPED_FILENAME = /^board-(\d{8}T\d{6})\.json$/;
 
 export interface BoardBackups {

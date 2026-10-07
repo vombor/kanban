@@ -141,8 +141,15 @@ const pipelineSectionSchema = z
 	})
 	.strict();
 
+// What the watchdog (src/pipeline/watchdog/) does: "off" (default: the legacy kit's review-watch still runs on the
+// pod), "report" (decide and log to data/<ws>/watchdog-decisions.jsonl, act on nothing: no ATTENTION.md, no wake, no
+// input, no prune) or "on". The one-owner check in `kanban doctor` fails "on" while review-watch runs.
+export const watchdogModeSchema = z.enum(["off", "report", "on"]);
+export type WatchdogMode = z.infer<typeof watchdogModeSchema>;
+
 const watchdogSectionSchema = z
 	.object({
+		mode: watchdogModeSchema.default("off"),
 		intervalSec: z.number().positive().default(60),
 		triageCards: z.boolean().default(false),
 		triageCooldownMin: z.number().nonnegative().default(120),

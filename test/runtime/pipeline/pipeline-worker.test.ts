@@ -2,8 +2,11 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
-
+import { parsePipelineConfig } from "../../../src/config/pipeline-config";
 import type { ChecksResult } from "../../../src/pipeline/checks";
+import type { WatchdogActions } from "../../../src/pipeline/watchdog/actions";
+import { createPipelineWorker } from "../../../src/pipeline/worker";
+import type { PipelineWorkerMessage } from "../../../src/pipeline/worker-protocol";
 import { createPipelineWorkerHarness, createSnapshot } from "../../utilities/pipeline-worker";
 import { createBoard, createCard } from "../../utilities/workspace-state-store";
 
@@ -299,5 +302,49 @@ describe("pipeline worker", () => {
 		expect(harness.readCardDecisions("foo", "checks")).toMatchObject([
 			{ taskId: "dev-1", kit: "team", outcome: "acted", note: "checks FAIL on 01234567: install=ok test=fail" },
 		]);
+	});
+});
+
+describe("pipeline worker: watchdog requests", () => {
+	it("sends the watchdog's requests to the server and resolves them with its responses", async () => {
+		const sent: PipelineWorkerMessage[] = [];
+		let actions: WatchdogActions | null = null;
+		const observed: string[] = [];
+		const worker = createPipelineWorker({
+			send: (message) => sent.push(message),
+			readConfig: async () => parsePipelineConfig({}),
+			createWatchdog: (input) => {
+				actions = input.actions;
+				return {
+					observe: (snapshot) => observed.push(snapshot.workspaceId),
+					forget: () => {},
+					tick: async () => {},
+				};
+			},
+		});
+		await worker.handle({
+			type: "snapshot",
+			snapshot: createSnapshot({ workspaceId: "plain", board: createBoard({}), selectedAgentId: "claude" }),
+		});
+		expect(observed).toEqual(["plain"]);
+
+		const pending = (actions as WatchdogActions | null)?.request({
+			kind: "interrupt",
+			workspaceId: "plain",
+			taskId: "t1",
+		});
+		const request = sent.find((message) => message.type === "request");
+		expect(request).toEqual({
+			type: "request",
+			id: 1,
+			request: { kind: "interrupt", workspaceId: "plain", taskId: "t1" },
+		});
+		await worker.handle({ type: "response", id: 1, ok: true, result: { ok: true } });
+		await expect(pending).resolves.toEqual({ ok: true });
+
+		const failing = (actions as WatchdogActions | null)?.request({ kind: "sweepProcesses" });
+		await worker.handle({ type: "response", id: 2, ok: false, error: "no /proc" });
+		await expect(failing).rejects.toThrow("no /proc");
+		worker.close();
 	});
 });

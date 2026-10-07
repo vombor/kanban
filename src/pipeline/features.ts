@@ -26,7 +26,20 @@ export interface PipelineFeatureContext {
 	on: <Name extends PipelineEventName>(name: Name, handler: PipelineEventHandler<Name>) => void;
 	/** The only way out of a hold (`onPass → hold`): land or discard the card, optionally tagging its work first. */
 	releaseHold: (input: Omit<ReleaseHoldInput, "workspaceId" | "workspacePath">) => Promise<ReleaseHoldResult>;
+	/** Registers a periodic job for this workspace; the watchdog's job runner runs it while the feature is active. */
+	job: (job: PipelineFeatureJob) => void;
 	log: (message: string) => void;
+}
+
+/**
+ * A feature's periodic job (the team kit's daily price check, for example). The watchdog runs a due job once per
+ * `everyMin` per workspace and remembers its last run in watchdog-state.json, so a worker restart doesn't re-run it.
+ * Returns a one-line summary for the watchdog's log.
+ */
+export interface PipelineFeatureJob {
+	name: string;
+	everyMin: number;
+	run: () => Promise<string | undefined>;
 }
 
 export interface PipelineFeature {
@@ -46,11 +59,14 @@ export interface PipelineFeatureRegistry {
 	/** Activates exactly the registered features the kit lists for the workspace; restarts them when the kit changes. */
 	syncWorkspace: (workspaceId: string, kit: KitDocument) => PipelineFeatureSync;
 	removeWorkspace: (workspaceId: string) => void;
+	/** The jobs of the features active for the workspace, named `<feature>:<job>`. */
+	listJobs: (workspaceId: string) => PipelineFeatureJob[];
 	close: () => void;
 }
 
 interface ActiveFeature {
 	kitKey: string;
+	jobs: PipelineFeatureJob[];
 	stop: () => void;
 }
 
@@ -74,6 +90,7 @@ export function createPipelineFeatureRegistry(deps: {
 
 	const startFeature = (workspaceId: string, feature: PipelineFeature, kit: KitDocument, kitKey: string) => {
 		const unsubscribes: Array<() => void> = [];
+		const jobs: PipelineFeatureJob[] = [];
 		const context: PipelineFeatureContext = {
 			workspaceId,
 			kit,
@@ -90,6 +107,9 @@ export function createPipelineFeatureRegistry(deps: {
 				deps.actions
 					? await deps.actions.releaseHold(workspaceId, input)
 					: { ok: false, error: "this pipeline cannot release holds" },
+			job: (job) => {
+				jobs.push({ ...job, name: `${feature.name}:${job.name}` });
+			},
 			log: (message) => log(`pipeline ${workspaceId} [${feature.name}]: ${message}`),
 		};
 		let stop: (() => void) | undefined;
@@ -104,6 +124,7 @@ export function createPipelineFeatureRegistry(deps: {
 		}
 		return {
 			kitKey,
+			jobs,
 			stop: () => {
 				for (const unsubscribe of unsubscribes) {
 					unsubscribe();
@@ -170,6 +191,8 @@ export function createPipelineFeatureRegistry(deps: {
 			return { active: [...active.keys()], unavailable };
 		},
 		removeWorkspace,
+		listJobs: (workspaceId) =>
+			[...(activeByWorkspace.get(workspaceId)?.values() ?? [])].flatMap((active) => active.jobs),
 		close: () => {
 			for (const workspaceId of [...activeByWorkspace.keys()]) {
 				removeWorkspace(workspaceId);

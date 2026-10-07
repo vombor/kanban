@@ -51,8 +51,16 @@ export interface CreatePipelineDecisionLogOptions {
 	maxBytes?: number;
 }
 
-export function createPipelineDecisionLog(options: CreatePipelineDecisionLogOptions = {}): PipelineDecisionLog {
-	const getLogPath = options.getLogPath ?? ((workspaceId: string) => getPipelineDecisionLogPath(workspaceId));
+/** Appends JSON lines to one file per workspace, in order, rotating a file to `<log>.1` past `maxBytes`. */
+export interface WorkspaceJsonLinesLog<T extends { workspaceId: string }> {
+	append: (records: readonly T[]) => Promise<void>;
+}
+
+export function createWorkspaceJsonLinesLog<T extends { workspaceId: string }>(options: {
+	getLogPath: (workspaceId: string) => string;
+	maxBytes?: number;
+}): WorkspaceJsonLinesLog<T> {
+	const { getLogPath } = options;
 	const maxBytes = options.maxBytes ?? DECISION_LOG_MAX_BYTES;
 	// One write chain per file keeps the lines in decision order.
 	const chains = new Map<string, Promise<void>>();
@@ -92,4 +100,11 @@ export function createPipelineDecisionLog(options: CreatePipelineDecisionLogOpti
 			);
 		},
 	};
+}
+
+export function createPipelineDecisionLog(options: CreatePipelineDecisionLogOptions = {}): PipelineDecisionLog {
+	return createWorkspaceJsonLinesLog<PipelineDecisionRecord>({
+		getLogPath: options.getLogPath ?? ((workspaceId: string) => getPipelineDecisionLogPath(workspaceId)),
+		maxBytes: options.maxBytes,
+	});
 }

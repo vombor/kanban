@@ -22,6 +22,7 @@ import {
 	isKanbanRemoteHost,
 } from "../core/runtime-endpoint";
 import type { PipelineEventMap } from "../pipeline/events";
+import type { WatchdogActionRequest } from "../pipeline/watchdog/actions";
 import {
 	checkRateLimit,
 	clearRateLimit,
@@ -63,6 +64,7 @@ import { createProcProcessTableReader, isProcessTableSupported } from "./process
 import type { RuntimeStateHub } from "./runtime-state-hub";
 import { createTaskLandingGate } from "./task-landing-gate";
 import { createTaskTrashWorkflow, createTrashTaskRequestHandler, type TaskTrashWorkflow } from "./task-trash-workflow";
+import { createWatchdogActionHandler } from "./watchdog-actions";
 import type { WorkspaceRegistry } from "./workspace-registry";
 
 interface DisposeTrackedWorkspaceResult {
@@ -98,6 +100,8 @@ export interface CreateRuntimeServerDependencies {
 export interface RuntimeServer {
 	/** The server-side Done workflow; the auto-review reconciler completes cards through it. */
 	taskTrashWorkflow: TaskTrashWorkflow;
+	/** Carries out the pipeline worker's watchdog actions (src/server/watchdog-actions.ts). */
+	handleWatchdogRequest: (request: WatchdogActionRequest) => Promise<unknown>;
 	url: string;
 	close: () => Promise<void>;
 }
@@ -266,6 +270,18 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			return await orphanProcessSweeper.getStatus();
 		},
 		sessionSyncEnabled: deps.sessionSyncEnabled,
+	});
+
+	const handleWatchdogRequest = createWatchdogActionHandler({
+		getWorkspacePathById: deps.workspaceRegistry.getWorkspacePathById,
+		getTerminal: getScopedTerminalManager,
+		startTaskSession: async (scope, input) => await runtimeApi.startTaskSession(scope, input),
+		runProcessSweep: async () => {
+			await orphanProcessSweeper.sweep();
+			return await orphanProcessSweeper.getStatus();
+		},
+		onBoardMutated: async (scope) =>
+			await deps.runtimeStateHub.broadcastRuntimeWorkspaceStateUpdated(scope.workspaceId, scope.workspacePath),
 	});
 
 	const taskTrashWorkflow = createTaskTrashWorkflow({
@@ -598,6 +614,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 	return {
 		url,
 		taskTrashWorkflow,
+		handleWatchdogRequest,
 		close: async () => {
 			orphanProcessSweeper.close();
 			clineTurnMonitor.close();

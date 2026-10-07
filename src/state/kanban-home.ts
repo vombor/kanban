@@ -38,6 +38,9 @@ const BACKUPS_DIR = "backups";
 const KITS_DIR = "kits";
 const DATA_DIR = "data";
 const MODELS_DATA_DIR = "models";
+const LOGS_DIR = "logs";
+const LEGACY_KIT_BOARD_BACKUPS_DIR = "board-backups";
+const LEGACY_KIT_BOARD_LATEST_FILENAME = "board-latest.json";
 const PIPELINE_STATE_FILENAME = "pipeline-state.json";
 const PIPELINE_DECISIONS_FILENAME = "pipeline-decisions.jsonl";
 const QA_LOG_FILENAME = "qa-log.md";
@@ -371,6 +374,70 @@ export function getPipelineDecisionLogPath(workspaceId: string, homePath = getKa
 /** The workspace's QA log (`<home>/data/<workspaceId>/qa-log.md`): check results, verdicts; people and agents read it. */
 export function getPipelineQaLogPath(workspaceId: string, homePath = getKanbanHomePath()): string {
 	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), QA_LOG_FILENAME);
+}
+
+/**
+ * The watchdog's files for one workspace (`<home>/data/<workspaceId>/…`, plan §6.2). ATTENTION.md, qa-log.md,
+ * orchestrator-plan.md, runoffs.json and calibration/ keep the legacy kit's names: people, prompts and the
+ * orchestrator's memory already use them.
+ */
+export interface WatchdogWorkspacePaths {
+	dataDir: string;
+	attention: string;
+	qaLog: string;
+	state: string;
+	decisions: string;
+	orchestratorPlan: string;
+	orchestratorQueue: string;
+	orchestratorActions: string;
+	/** `kanban orchestrator wake` requests (immediate and `--when-*`) the watchdog picks up. */
+	wakeRequests: string;
+	runoffs: string;
+	calibrationDir: string;
+}
+
+export function getWatchdogWorkspacePaths(workspaceId: string, homePath = getKanbanHomePath()): WatchdogWorkspacePaths {
+	const dataDir = getKanbanWorkspaceDataPath(workspaceId, homePath);
+	return {
+		dataDir,
+		attention: join(dataDir, "ATTENTION.md"),
+		qaLog: join(dataDir, "qa-log.md"),
+		state: join(dataDir, "watchdog-state.json"),
+		decisions: join(dataDir, "watchdog-decisions.jsonl"),
+		orchestratorPlan: join(dataDir, "orchestrator-plan.md"),
+		orchestratorQueue: join(dataDir, "orchestrator-queue.txt"),
+		orchestratorActions: join(dataDir, "orchestrator-actions.md"),
+		wakeRequests: join(dataDir, "orchestrator-wake-requests.json"),
+		runoffs: join(dataDir, "runoffs.json"),
+		calibrationDir: join(dataDir, "calibration"),
+	};
+}
+
+/** Kanban's own logs (`<home>/logs`): the orchestrator's headless runs write here. */
+export function getKanbanLogsPath(homePath = getKanbanHomePath()): string {
+	return join(homePath, LOGS_DIR);
+}
+
+/** The headless orchestrator run's lock for a workspace (`<home>/run/orchestrator-<workspaceId>.lock`, holds its pid). */
+export function getOrchestratorLockPath(workspaceId: string, homePath = getKanbanHomePath()): string {
+	return join(getKanbanRunPath(homePath), `orchestrator-${workspaceId}.lock`);
+}
+
+/** Flag files the watchdog keeps while PID use is high (`<home>/run/pid-pressure`, `<home>/run/pid-brownout`). */
+export function getPidPressureFlagPaths(homePath = getKanbanHomePath()): { pressure: string; brownout: string } {
+	const runPath = getKanbanRunPath(homePath);
+	return { pressure: join(runPath, "pid-pressure"), brownout: join(runPath, "pid-brownout") };
+}
+
+/** The legacy kit's newest board backup of a workspace (`<kit home>/backups/board-backups/<id>/board-latest.json`, kept by autoland until cutover). Read-only. */
+export function getLegacyKitLatestBoardBackupPath(workspaceId: string): string {
+	return join(
+		getLegacyKitHomePath(),
+		BACKUPS_DIR,
+		LEGACY_KIT_BOARD_BACKUPS_DIR,
+		workspaceId,
+		LEGACY_KIT_BOARD_LATEST_FILENAME,
+	);
 }
 
 /**

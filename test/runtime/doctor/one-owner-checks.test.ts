@@ -75,10 +75,34 @@ describe("one-owner check", () => {
 		const findings = await checkOneOwner(
 			context({
 				legacyKit: { path: LEGACY_KIT_PATH, raw: null, error: null },
-				kanbanConfig: { agents: { cline: { turnDetector: { mode: "on" } } } },
+				kanbanConfig: { agents: { cline: { turnDetector: { mode: "on" } } }, watchdog: { mode: "on" } },
 			}),
 		);
-		expect(findings.map((finding) => finding.level)).toEqual(["pass", "pass", "pass"]);
+		expect(findings.map((finding) => finding.level)).toEqual(["pass", "pass", "pass", "pass"]);
+	});
+
+	it("fails when Kanban's watchdog is on while review-watch runs; report mode is the designed overlap", async () => {
+		const on = await checkOneOwner(context({ kanbanConfig: { watchdog: { mode: "on" } } }));
+		expect(on.find((finding) => finding.message.includes("review-watch") && finding.level === "fail")).toMatchObject({
+			message:
+				"two owners for stall detection, ATTENTION.md and orchestrator wakes: Kanban's watchdog (watchdog.mode on) and the legacy kit's review-watch",
+			hint: 'touch /kit/run/review-watch.disabled && kit stop review-watch, or set watchdog.mode to "report" in config.json',
+		});
+		const report = await checkOneOwner(context({ kanbanConfig: { watchdog: { mode: "report" } } }));
+		expect(levels(report)).toContainEqual([
+			"info",
+			"the legacy kit's review-watch watches the boards and wakes the orchestrator; Kanban's watchdog is report (logs to data/<workspace>/watchdog-decisions.jsonl only)",
+		]);
+		const retired = await checkOneOwner(
+			context({
+				services: services({ "review-watch": { pid: null, disabled: true } }),
+				kanbanConfig: { watchdog: { mode: "on" } },
+			}),
+		);
+		expect(levels(retired)).toContainEqual([
+			"pass",
+			"Kanban's watchdog watches the boards and wakes the orchestrator",
+		]);
 	});
 
 	it("fails when Kanban's session sync and the kit's column-sync both move cards", async () => {

@@ -13,6 +13,10 @@
 //
 // A workspace is evaluated only with landing mode `qa`. Everything else (`off`, `commit`, `pr`, no entry = `off`
 // on the `default` kit) is forgotten: no state file, no log, no kit question.
+//
+// The watchdog (src/pipeline/watchdog/) runs here too, on its own tick, over every snapshot the server sends (the
+// server sends every workspace while `watchdog.mode` is not "off"). It acts through requests to the server
+// (`request` → `response` over IPC), never on the board or a PTY itself.
 import { getWorkspacePipelineSettings, type ParsedPipelineConfig, readPipelineConfig } from "../config/pipeline-config";
 import type { RuntimeTaskTrashResponse } from "../core/api-contract";
 import { type EffectiveModelConfig, readClineDefaultModel } from "../core/effective-agent";
@@ -29,6 +33,8 @@ import { preserveTaskWork, releaseHold } from "./hold";
 import { createPipelineStateStore, type PipelineStateStore } from "./pipeline-state";
 import { type AppendQaLog, createQaLogAppender } from "./qa-log";
 import { createSubmissionStage, type SubmissionInspector } from "./submission-stage";
+import type { WatchdogActionRequest, WatchdogActionResult, WatchdogActions } from "./watchdog/actions";
+import { createWatchdog, type Watchdog } from "./watchdog/watchdog";
 import {
 	isPipelineHostMessage,
 	type PipelineFinishTaskRequest,
@@ -52,6 +58,18 @@ export interface PipelineWorkerDependencies {
 	loadAgentDefaultModels?: (config: ParsedPipelineConfig) => Promise<EffectiveModelConfig["agentDefaultModels"]>;
 	/** Tags a card's work for releaseHold (preserveTaskWork in src/pipeline/hold.ts). */
 	preserveWork?: (input: { workspacePath: string; taskId: string; tag: string }) => Promise<unknown>;
+	/** Builds the watchdog from the worker's actions client and stores (tests inject one with fake files and agents). */
+	createWatchdog?: (input: {
+		actions: WatchdogActions;
+		readConfig: () => Promise<ParsedPipelineConfig>;
+		loadCatalog: () => Promise<KitCatalog>;
+		store: PipelineStateStore;
+		features: PipelineFeatureRegistry;
+		loadAgentDefaultModels: (config: ParsedPipelineConfig) => Promise<EffectiveModelConfig["agentDefaultModels"]>;
+		log: (message: string) => void;
+	}) => Watchdog;
+	/** How long a watchdog request waits for the server's answer. */
+	requestTimeoutMs?: number;
 	now?: () => number;
 }
 
@@ -63,6 +81,10 @@ export interface PipelineWorker {
 	releaseHold: PipelineFeatureActions["releaseHold"];
 	/** Resolves once every queued evaluation has settled. */
 	idle: () => Promise<void>;
+	/** One watchdog pass (the process runner calls it every `watchdog.intervalSec`). */
+	tickWatchdog: () => Promise<void>;
+	/** Starts the watchdog's timer; it re-reads `watchdog.intervalSec` after every tick. */
+	startWatchdog: () => void;
 	close: () => void;
 }
 
@@ -200,6 +222,53 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 		});
 	const submissionStage = createSubmissionStage({ checks });
 	const inspectSubmission = deps.inspectSubmission ?? submissionStage.inspect;
+	const requestTimeoutMs = deps.requestTimeoutMs ?? 120_000;
+	let nextWatchdogRequestId = 1;
+	const pendingRequests = new Map<
+		number,
+		{ resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }
+	>();
+	const watchdogActions: WatchdogActions = {
+		request: async <Request extends WatchdogActionRequest>(request: Request) => {
+			const id = nextWatchdogRequestId++;
+			const result = await new Promise<unknown>((resolve, reject) => {
+				const timer = setTimeout(() => {
+					pendingRequests.delete(id);
+					reject(new Error(`no answer from the server to ${request.kind} within ${requestTimeoutMs} ms`));
+				}, requestTimeoutMs);
+				timer.unref();
+				pendingRequests.set(id, { resolve, reject, timer });
+				deps.send({ type: "request", id, request });
+			});
+			// The server answers each kind with its WatchdogActionResults entry (src/server/watchdog-actions.ts).
+			return result as WatchdogActionResult<Request["kind"]>;
+		},
+	};
+	const watchdog = (deps.createWatchdog ?? createWatchdog)({
+		actions: watchdogActions,
+		readConfig,
+		loadCatalog,
+		store,
+		features,
+		loadAgentDefaultModels,
+		log,
+	});
+	let watchdogTimer: NodeJS.Timeout | null = null;
+	let watchdogRunning: Promise<void> | null = null;
+	const tickWatchdog = async (): Promise<void> => {
+		if (closed) {
+			return;
+		}
+		watchdogRunning ??= watchdog
+			.tick()
+			.catch((error: unknown) => {
+				log(`watchdog tick failed: ${error instanceof Error ? error.message : String(error)}`);
+			})
+			.finally(() => {
+				watchdogRunning = null;
+			});
+		await watchdogRunning;
+	};
 
 	const queues = new Map<string, WorkspaceQueue>();
 	// "<workspaceId>:<taskId>:<stage>" → the last logged decision, so an unchanged one is logged once.
@@ -350,8 +419,10 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 				return;
 			}
 			if (message.type === "snapshot") {
+				watchdog.observe(message.snapshot);
 				await schedule(message.snapshot);
 			} else if (message.type === "forget") {
+				watchdog.forget(message.workspaceId);
 				forget(message.workspaceId);
 			} else if (message.type === "landed") {
 				await bus.emit("landed", message.event);
@@ -359,12 +430,41 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 				const pending = pendingFinishes.get(message.requestId);
 				pendingFinishes.delete(message.requestId);
 				pending?.resolve(message.result);
+			} else if (message.type === "response") {
+				const pending = pendingRequests.get(message.id);
+				if (pending) {
+					pendingRequests.delete(message.id);
+					clearTimeout(pending.timer);
+					if (message.ok) {
+						pending.resolve(message.result);
+					} else {
+						pending.reject(new Error(message.error));
+					}
+				}
 			}
 		},
 		finishTask,
 		releaseHold: actions.releaseHold,
 		idle: async () => {
 			await Promise.all([...queues.values()].map(async (queue) => await queue.running));
+			await watchdogRunning;
+		},
+		tickWatchdog,
+		startWatchdog: () => {
+			if (watchdogTimer || closed) {
+				return;
+			}
+			const schedule = async (): Promise<void> => {
+				const intervalSec = (await readConfig().catch(() => null))?.config.watchdog.intervalSec ?? 60;
+				if (closed) {
+					return;
+				}
+				watchdogTimer = setTimeout(() => {
+					void tickWatchdog().finally(() => void schedule());
+				}, intervalSec * 1000);
+				watchdogTimer.unref();
+			};
+			void schedule();
 		},
 		close: () => {
 			closed = true;
@@ -373,6 +473,15 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 				pending.reject(new Error("the pipeline worker is shutting down"));
 			}
 			pendingFinishes.clear();
+			if (watchdogTimer) {
+				clearTimeout(watchdogTimer);
+				watchdogTimer = null;
+			}
+			for (const [id, pending] of pendingRequests) {
+				clearTimeout(pending.timer);
+				pending.reject(new Error("the pipeline worker is shutting down"));
+				pendingRequests.delete(id);
+			}
 			features.close();
 		},
 	};
@@ -394,6 +503,7 @@ export async function runPipelineWorkerProcess(): Promise<void> {
 			}
 		},
 	});
+	worker.startWatchdog();
 	await new Promise<void>((resolve) => {
 		const stop = (): void => {
 			worker.close();

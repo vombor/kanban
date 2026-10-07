@@ -3,8 +3,8 @@
 // switches the kit's service or toggle off. This reports a responsibility both own (FAIL), and where the two
 // configs disagree about who owns it. Rows exist only for runtime features that exist: landing (vs autoland),
 // column moves (session sync vs column-sync), ending Cline CLI turns (the turn detector vs column-sync) and the
-// Lemonade model list. Kanban's landing step (P4-4) is in the landing rows. The rest of the pipeline (P4-x) and the
-// watchdog (P4-7) add theirs when they land.
+// Lemonade model list. Kanban's landing step (P4-4) is in the landing rows, and the watchdog (P4-7) has its row vs
+// review-watch. The rest of the pipeline (P4-x) adds theirs when it lands.
 
 import {
 	findImplicitLegacyToggleWarnings,
@@ -55,6 +55,7 @@ export async function checkOneOwner(context: OneOwnerContext): Promise<DoctorFin
 		return [
 			{ level: "pass", area: "owner", message: `no legacy kit (${legacyKit.path} absent): Kanban owns everything` },
 			...checkColumnMoveOwners(context.config, { columnSyncOwns: false, kitInstalled: false, runPath: null }),
+			...checkWatchdogOwner(context.config, { reviewWatchOwns: false, runPath: null }),
 		];
 	}
 	const columnSyncOwns = legacyKitServiceOwns(
@@ -68,6 +69,62 @@ export async function checkOneOwner(context: OneOwnerContext): Promise<DoctorFin
 			kitInstalled: true,
 			runPath: getLegacyKitRunPath(legacyKit.raw),
 		}),
+		...checkWatchdogOwner(context.config, {
+			reviewWatchOwns: legacyKitServiceOwns(
+				context.services.find((entry) => entry.name === "review-watch"),
+				true,
+			),
+			runPath: getLegacyKitRunPath(legacyKit.raw),
+		}),
+	];
+}
+
+/**
+ * Stall detection, ATTENTION.md, orchestrator wakes, PID pressure and prune-done. The legacy kit's review-watch does
+ * them (archive/devteam-kit:services/review-watch.mjs); in Kanban it is the watchdog (P4-7, `watchdog.mode`, "off" by
+ * default). Both on means two writers of ATTENTION.md and two wakes for every item. "report" only logs, so it can run
+ * beside review-watch for the cutover comparison.
+ */
+export function checkWatchdogOwner(
+	config: PipelineConfig,
+	kit: { reviewWatchOwns: boolean; runPath: string | null },
+): DoctorFinding[] {
+	const mode = config.watchdog.mode;
+	const retire = kit.runPath
+		? `touch ${kit.runPath}/review-watch.disabled && kit stop review-watch`
+		: "switch the legacy kit's review-watch off";
+	if (mode === "on" && kit.reviewWatchOwns) {
+		return [
+			{
+				level: "fail",
+				area: "owner",
+				message:
+					"two owners for stall detection, ATTENTION.md and orchestrator wakes: Kanban's watchdog (watchdog.mode on) and the legacy kit's review-watch",
+				hint: `${retire}, or set watchdog.mode to "report" in config.json`,
+			},
+		];
+	}
+	if (kit.reviewWatchOwns) {
+		return [
+			{
+				level: "info",
+				area: "owner",
+				message: `the legacy kit's review-watch watches the boards and wakes the orchestrator; Kanban's watchdog is ${mode}${mode === "report" ? " (logs to data/<workspace>/watchdog-decisions.jsonl only)" : ""}`,
+			},
+		];
+	}
+	if (mode === "on") {
+		return [
+			{ level: "pass", area: "owner", message: "Kanban's watchdog watches the boards and wakes the orchestrator" },
+		];
+	}
+	return [
+		{
+			level: "info",
+			area: "owner",
+			message: `nothing wakes the orchestrator or writes ATTENTION.md: no review-watch runs and watchdog.mode is ${mode}`,
+			hint: 'set watchdog.mode to "on" in config.json',
+		},
 	];
 }
 

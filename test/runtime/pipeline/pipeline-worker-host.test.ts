@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { parsePipelineConfig } from "../../../src/config/pipeline-config";
 import type { RuntimeTaskSessionSummary } from "../../../src/core/api-contract";
+import type { WatchdogActionRequest } from "../../../src/pipeline/watchdog/actions";
 import { createPipelineWorkerHost, type PipelineWorkerChild } from "../../../src/pipeline/worker-host";
 import type { PipelineHostMessage } from "../../../src/pipeline/worker-protocol";
 import { createSnapshot } from "../../utilities/pipeline-worker";
@@ -47,7 +48,10 @@ function createFakeChild(pid: number): FakeChild {
 	return child;
 }
 
-function createHostHarness(initialConfig: unknown) {
+function createHostHarness(
+	initialConfig: unknown,
+	options: { handleWatchdogRequest?: (request: WatchdogActionRequest) => Promise<unknown> } = {},
+) {
 	let rawConfig = initialConfig;
 	const children: FakeChild[] = [];
 	const spawnWorker = vi.fn((_entry: string | null) => {
@@ -70,6 +74,7 @@ function createHostHarness(initialConfig: unknown) {
 		sweepIntervalMs: 30_000,
 		coalesceMs: 2_000,
 		restartDelaysMs: [1_000, 5_000],
+		handleWatchdogRequest: options.handleWatchdogRequest,
 		log,
 	});
 	const snapshotsSent = (child: FakeChild | undefined) =>
@@ -208,6 +213,51 @@ describe("pipeline worker host", () => {
 
 		expect(harness.children[0]?.sent.at(-1)).toEqual({ type: "shutdown" });
 		expect(harness.spawnWorker).toHaveBeenLastCalledWith("/projects/kanban/dist/cli.js");
+		await harness.host.close();
+	});
+});
+
+describe("pipeline worker host: the watchdog", () => {
+	beforeEach(() => {
+		vi.useFakeTimers();
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("runs the worker for every workspace while watchdog.mode is not off, with no qa workspace", async () => {
+		const harness = createHostHarness({ watchdog: { mode: "report" } });
+		await harness.startReady();
+		expect(harness.spawnWorker).toHaveBeenCalledTimes(1);
+		expect(harness.snapshotsSent(harness.children[0]).sort()).toEqual(["foo", "kanban-2uge"]);
+
+		harness.setConfig({});
+		await harness.host.sweep();
+		expect(harness.children[0]?.sent.at(-1)).toEqual({ type: "shutdown" });
+		await harness.host.close();
+	});
+
+	it("answers the worker's requests with the server's handler, and errors as ok: false", async () => {
+		const handleWatchdogRequest = vi.fn(async (request: WatchdogActionRequest) => {
+			if (request.kind === "sweepProcesses") {
+				throw new Error("no /proc");
+			}
+			return { ok: true, taskId: "x" };
+		});
+		const harness = createHostHarness({ watchdog: { mode: "on" } }, { handleWatchdogRequest });
+		await harness.startReady();
+		const child = harness.children[0];
+		child?.emitMessage({
+			type: "request",
+			id: 7,
+			request: { kind: "startOrchestratorSession", workspaceId: "foo", agentId: "claude", prompt: "wake" },
+		});
+		child?.emitMessage({ type: "request", id: 8, request: { kind: "sweepProcesses" } });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(child?.sent.filter((message) => message.type === "response")).toEqual([
+			{ type: "response", id: 7, ok: true, result: { ok: true, taskId: "x" } },
+			{ type: "response", id: 8, ok: false, error: "no /proc" },
+		]);
 		await harness.host.close();
 	});
 });

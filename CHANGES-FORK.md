@@ -233,3 +233,24 @@ of this repository is the complete record of changes.
   never gated. Shadow workspaces only log what would happen; landing `off`/`commit`/`pr` and workspaces without a
   config entry are unchanged. `kanban doctor` fails when Kanban lands a project the legacy autoland still
   watches.
+- `src/pipeline/watchdog/` (new: `watchdog.ts`, `stalls.ts`, `prompt-watch.ts`, `attention.ts`, `wake.ts`,
+  `headless-run.ts`, `wake-requests.ts`, `pid-pressure.ts`, `prune-done.ts`, `watchdog-state.ts`, `workspace-data.ts`,
+  `actions.ts`), `src/server/watchdog-actions.ts`, `src/terminal/orchestrator-agents.ts`,
+  `src/state/board-restore.ts`, `src/state/board-backups.ts` (`getLatestBoardBackupPath`), `src/commands/{orchestrator,board}.ts` (new), `src/pipeline/{worker,worker-host,
+  worker-protocol,features,decision-log,engine}.ts`, `src/server/runtime-server.ts`, `src/cli.ts`,
+  `src/config/pipeline-config.ts`, `src/state/kanban-home.ts`, `src/doctor/one-owner-checks.ts`: the watchdog (plan
+  step P4-7, port of the legacy kit's review-watch). It runs in the pipeline worker on `watchdog.intervalSec` and
+  acts only through requests to the server. It finds stalls (Review with no QA, QA/TRIAGE stuck, dead sessions: one
+  continue, then a wake), escalations, PID pressure (flags, an orphan-process sweep, Esc at brownout), an idle
+  pipeline, open orchestrator-plan steps and cards stuck on a trust, startup or permission prompt. It writes
+  `data/<ws>/ATTENTION.md` and wakes the orchestrator: the agent selected in Kanban settings, in
+  `createHomeAgentSessionId(<orchestrator.wake.target or ws>, <agent>)`. It never starts two orchestrators: it types
+  into a live sidebar, queues for a running headless run, and otherwise starts a headless run (`claude -p`/`codex
+  exec`, lock, live-session check, timeout, follow-ups) or the sidebar session server-side. It never leaves zero.
+  Also: the hourly prune of old Done cards and a job runner for kit features' periodic jobs. New CLI:
+  `kanban orchestrator wake <issue> [--when-card-done <id> | --when-model-up <m>]`, `kanban board prune-done
+  [--days] [--dry-run]`, `kanban board restore <ws> [backup]`. New setting `watchdog.mode`: `off` (default, so
+  review-watch keeps the pod), `report` (decisions to `data/<ws>/watchdog-decisions.jsonl` only) or `on`. `kanban
+  doctor` fails `on` while review-watch runs. Workspaces on landing `off` (the `default` kit) get only the
+  stuck-prompt check. Roles come from P4-T1's `resolveCardRole` (legacy kit cards by their markers), plus
+  calibration-run ids from `data/<ws>/calibration/*/state.json`.

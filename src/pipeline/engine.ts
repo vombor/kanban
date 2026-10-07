@@ -33,7 +33,23 @@ import type { PipelineDecisionRecord } from "./decision-log";
 import type { PipelineCardState, PipelineWorkspaceState } from "./pipeline-state";
 import type { SubmissionCardInput, SubmissionInspection } from "./submission-stage";
 
-export type PipelineSessionView = Pick<RuntimeTaskSessionSummary, "taskId" | "agentId" | "modelId" | "state">;
+export type PipelineSessionView = Pick<RuntimeTaskSessionSummary, "taskId" | "agentId" | "modelId" | "state"> &
+	// What the watchdog reads (stalls, stuck prompts, the orchestrator sidebar's liveness); the server sends them.
+	Partial<
+		Pick<
+			RuntimeTaskSessionSummary,
+			| "pid"
+			| "startedAt"
+			| "updatedAt"
+			| "lastOutputAt"
+			| "lastHookAt"
+			| "latestHookActivity"
+			| "reviewReason"
+			| "warningMessage"
+			| "workspacePath"
+			| "exitCode"
+		>
+	>;
 
 /** What the server sends the worker about one workspace. */
 export interface PipelineWorkspaceSnapshot {

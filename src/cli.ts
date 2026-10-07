@@ -7,12 +7,14 @@ import { Command, Option } from "commander";
 import ora, { type Ora } from "ora";
 import packageJson from "../package.json" with { type: "json" };
 import { registerAgentsCommand } from "./commands/agents";
+import { registerBoardCommand } from "./commands/board";
 import { registerConfigCommand } from "./commands/config";
 import { registerDoctorCommand } from "./commands/doctor";
 import { registerHomeCommand } from "./commands/home";
 import { registerHooksCommand } from "./commands/hooks";
 import { registerKitCommand } from "./commands/kit";
 import { registerModelsCommand } from "./commands/models";
+import { registerOrchestratorCommand } from "./commands/orchestrator";
 import { registerPipelineCommand } from "./commands/pipeline";
 import { registerProjectCommand } from "./commands/project";
 import { registerSetupCommand } from "./commands/setup";
@@ -543,9 +545,11 @@ async function startServer(): Promise<{
 	await autoReviewReconciler.start();
 
 	// The pipeline worker (src/pipeline/worker-host.ts): a supervised child process that runs only while some
-	// workspace has landing mode qa. Like auto-review, only the process that bound the server starts it.
+	// workspace has landing mode qa or the watchdog is on. Like auto-review, only the process that bound the server
+	// starts it. The worker's watchdog acts through the server (handleWatchdogRequest).
 	const workerHost = createPipelineWorkerHost({
 		listWorkspaces: () => workspaceRegistry.listManagedWorkspaces(),
+		handleWatchdogRequest: runtimeServer.handleWatchdogRequest,
 		buildSnapshot: async (workspaceId, workspacePath) => {
 			const state = await loadWorkspaceStateById(workspaceId);
 			if (!state) {
@@ -557,11 +561,22 @@ async function startServer(): Promise<{
 				workspaceId,
 				workspacePath,
 				board: state.board,
-				sessions: (liveSummaries ?? Object.values(state.sessions)).map(({ taskId, agentId, modelId, state }) => ({
-					taskId,
-					agentId,
-					modelId,
-					state,
+				// Home agent (sidebar) sessions are included: the watchdog checks whether the orchestrator's is live.
+				sessions: (liveSummaries ?? Object.values(state.sessions)).map((summary) => ({
+					taskId: summary.taskId,
+					agentId: summary.agentId,
+					modelId: summary.modelId,
+					state: summary.state,
+					pid: summary.pid,
+					startedAt: summary.startedAt,
+					updatedAt: summary.updatedAt,
+					lastOutputAt: summary.lastOutputAt,
+					lastHookAt: summary.lastHookAt,
+					latestHookActivity: summary.latestHookActivity,
+					reviewReason: summary.reviewReason,
+					warningMessage: summary.warningMessage,
+					workspacePath: summary.workspacePath,
+					exitCode: summary.exitCode,
 				})),
 				selectedAgentId: config.selectedAgentId,
 			};
@@ -826,6 +841,8 @@ function createProgram(invocationArgs: string[]): Command {
 	registerConfigCommand(program);
 	registerModelsCommand(program);
 	registerPipelineCommand(program);
+	registerOrchestratorCommand(program);
+	registerBoardCommand(program);
 	registerProjectCommand(program);
 	registerDoctorCommand(program, KANBAN_VERSION);
 

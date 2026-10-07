@@ -69,6 +69,25 @@ describe("pipeline feature registry", () => {
 		expect(seen).toEqual(["foo:foo"]);
 	});
 
+	it("lists an active feature's jobs for the watchdog's job runner, and drops them when it stops", async () => {
+		const registry = createPipelineFeatureRegistry({ bus: createPipelineEventBus() });
+		const run = vi.fn(async () => "checked");
+		registry.register({
+			name: "bench",
+			activate: (context) => {
+				context.job({ name: "price-check", everyMin: 1440, run });
+				return undefined;
+			},
+		});
+		registry.syncWorkspace("foo", teamKit());
+		const jobs = registry.listJobs("foo");
+		expect(jobs.map((job) => [job.name, job.everyMin])).toEqual([["bench:price-check", 1440]]);
+		await expect(jobs[0]?.run()).resolves.toBe("checked");
+		expect(registry.listJobs("kanban-2uge")).toEqual([]);
+		registry.syncWorkspace("foo", getDefaultKit());
+		expect(registry.listJobs("foo")).toEqual([]);
+	});
+
 	it("reports a listed feature nobody registered once, and restarts a feature when the kit changes", () => {
 		const log = vi.fn();
 		const registry = createPipelineFeatureRegistry({ bus: createPipelineEventBus(), log });

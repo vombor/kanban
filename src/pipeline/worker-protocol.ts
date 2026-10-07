@@ -14,6 +14,8 @@ export interface PipelineFinishTaskRequest {
 	trigger: "pipeline" | "hold_release";
 }
 
+import type { WatchdogActionRequest } from "./watchdog/actions";
+
 export type PipelineHostMessage =
 	| { type: "snapshot"; snapshot: PipelineWorkspaceSnapshot }
 	/** The workspace left the server (project removed) or no longer runs the pipeline. */
@@ -21,13 +23,18 @@ export type PipelineHostMessage =
 	/** Kanban landed a card (any trigger); the worker emits `landed` for kit features. */
 	| { type: "landed"; event: PipelineEventMap["landed"] }
 	| { type: "finishTaskResult"; requestId: number; result: RuntimeTaskTrashResponse }
+	/** The server's answer to a worker `request` (the watchdog's actions, src/pipeline/watchdog/actions.ts). */
+	| { type: "response"; id: number; ok: true; result: unknown }
+	| { type: "response"; id: number; ok: false; error: string }
 	| { type: "shutdown" };
 
 export type PipelineWorkerMessage =
 	| { type: "ready"; pid: number }
 	| { type: "evaluated"; workspaceId: string; decisions: number; logged: number }
 	| { type: "log"; message: string }
-	| { type: "finishTask"; requestId: number; request: PipelineFinishTaskRequest };
+	| { type: "finishTask"; requestId: number; request: PipelineFinishTaskRequest }
+	/** The worker asks the server to act; the server answers with a `response` carrying the same id. */
+	| { type: "request"; id: number; request: WatchdogActionRequest };
 
 function hasType(value: unknown): value is { type: unknown } {
 	return Boolean(value) && typeof value === "object" && "type" in (value as object);
@@ -40,6 +47,7 @@ export function isPipelineHostMessage(value: unknown): value is PipelineHostMess
 			value.type === "forget" ||
 			value.type === "landed" ||
 			value.type === "finishTaskResult" ||
+			value.type === "response" ||
 			value.type === "shutdown")
 	);
 }
@@ -47,6 +55,10 @@ export function isPipelineHostMessage(value: unknown): value is PipelineHostMess
 export function isPipelineWorkerMessage(value: unknown): value is PipelineWorkerMessage {
 	return (
 		hasType(value) &&
-		(value.type === "ready" || value.type === "evaluated" || value.type === "log" || value.type === "finishTask")
+		(value.type === "ready" ||
+			value.type === "evaluated" ||
+			value.type === "log" ||
+			value.type === "finishTask" ||
+			value.type === "request")
 	);
 }

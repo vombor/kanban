@@ -1,0 +1,269 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+
+import type { PipelineSessionView } from "../../../../src/pipeline/engine";
+import { addWakeRequest } from "../../../../src/pipeline/watchdog/wake-requests";
+import { getPidPressureFlagPaths } from "../../../../src/state/kanban-home";
+import { createWatchdogHarness, WATCHDOG_NOW } from "../../../utilities/watchdog";
+import { createBoard, createCard } from "../../../utilities/workspace-state-store";
+
+const MIN = 60_000;
+const harnesses: Array<{ cleanup: () => void }> = [];
+afterEach(() => {
+	for (const harness of harnesses.splice(0)) {
+		harness.cleanup();
+	}
+});
+
+function harnessWith(config: unknown, options: Parameters<typeof createWatchdogHarness>[0] = {}) {
+	const harness = createWatchdogHarness({ ...options, config });
+	harnesses.push(harness);
+	return harness;
+}
+
+const QA_FOO = { foo: { landing: { mode: "qa" }, kit: { name: "team" } } };
+
+function readDecisions(path: string): Array<{ kind: string; outcome: string; note: string; taskId: string | null }> {
+	return existsSync(path)
+		? readFileSync(path, "utf8")
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line))
+		: [];
+}
+
+// A Claude card stuck on the trust dialog: running for 10 min with no hook since its start.
+function stuckOnPrompt(taskId: string): PipelineSessionView {
+	return {
+		taskId,
+		agentId: "claude",
+		modelId: null,
+		state: "running",
+		startedAt: WATCHDOG_NOW - 10 * MIN,
+		lastHookAt: null,
+		workspacePath: `/wt/${taskId}`,
+		pid: 10,
+	};
+}
+
+describe("watchdog modes", () => {
+	it("off (the default) does nothing at all", async () => {
+		const harness = harnessWith({ workspaces: QA_FOO });
+		harness.observe({
+			workspaceId: "foo",
+			board: createBoard({ review: [createCard({ id: "d0001", updatedAt: WATCHDOG_NOW - 60 * MIN })] }),
+		});
+		await harness.watchdog.tick();
+		expect(harness.requests).toEqual([]);
+		expect(existsSync(harness.paths("foo").decisions)).toBe(false);
+		expect(existsSync(harness.paths("foo").attention)).toBe(false);
+	});
+
+	it("report decides and logs, and acts on nothing", async () => {
+		const harness = harnessWith(
+			{ watchdog: { mode: "report" }, workspaces: QA_FOO },
+			{ pidUsage: { current: 95, max: 100 } },
+		);
+		harness.observe({
+			workspaceId: "foo",
+			board: createBoard({
+				review: [createCard({ id: "d0001", updatedAt: WATCHDOG_NOW - 60 * MIN })],
+				in_progress: [createCard({ id: "d0002", updatedAt: WATCHDOG_NOW - 60 * MIN })],
+			}),
+			sessions: [
+				{
+					taskId: "d0002",
+					agentId: "cline",
+					modelId: null,
+					state: "running",
+					updatedAt: WATCHDOG_NOW - 60 * MIN,
+					pid: 3,
+				},
+			],
+		});
+		harness.observe({ workspaceId: "plain", board: createBoard({}) });
+		await harness.watchdog.tick();
+		expect(harness.requests).toEqual([]);
+		expect(harness.startHeadlessRun).not.toHaveBeenCalled();
+		// Nothing to report for a quiet workspace on the default kit: not even its data dir.
+		expect(existsSync(harness.paths("plain").dataDir)).toBe(false);
+		expect(existsSync(harness.paths("foo").attention)).toBe(false);
+		expect(existsSync(harness.paths("foo").state)).toBe(false);
+		expect(existsSync(getPidPressureFlagPaths(harness.home).pressure)).toBe(false);
+		const decisions = readDecisions(harness.paths("foo").decisions);
+		expect(decisions.every((decision) => decision.outcome === "report" || decision.outcome === "skipped")).toBe(true);
+		expect(decisions.map((decision) => decision.kind)).toEqual(
+			expect.arrayContaining(["stall", "pause", "attention", "wake", "job"]),
+		);
+	});
+});
+
+describe("watchdog on", () => {
+	it("a workspace on the default kit with landing off gets only the stuck-prompt check", async () => {
+		const harness = harnessWith({ watchdog: { mode: "on" }, orchestrator: { wake: { mode: "sidebar" } } });
+		harness.observe({
+			workspaceId: "plain",
+			board: createBoard({
+				review: [createCard({ id: "d0001", updatedAt: WATCHDOG_NOW - 60 * MIN })],
+				in_progress: [
+					createCard({ id: "d0002", updatedAt: WATCHDOG_NOW - 60 * MIN }),
+					createCard({ id: "d0003", updatedAt: WATCHDOG_NOW - 60 * MIN }),
+				],
+				trash: [createCard({ id: "old01", updatedAt: WATCHDOG_NOW - 30 * 86_400_000 })],
+			}),
+			sessions: [
+				{
+					taskId: "d0002",
+					agentId: "claude",
+					modelId: null,
+					state: "idle",
+					updatedAt: WATCHDOG_NOW - 60 * MIN,
+					pid: 2,
+				},
+				stuckOnPrompt("d0003"),
+			],
+		});
+		await harness.watchdog.tick();
+		// No continue, no review stall, no prune: only the prompt item, which wakes the orchestrator.
+		expect(harness.requests.map((request) => request.kind)).toEqual(["startOrchestratorSession"]);
+		const attention = readFileSync(harness.paths("plain").attention, "utf8");
+		expect(attention).toContain("- **d0003** (prompt): claude card started");
+		expect(attention).not.toContain("d0001");
+	});
+
+	it("writes ATTENTION.md, sends one continue, prunes hourly and saves its state", async () => {
+		const harness = harnessWith({
+			watchdog: { mode: "on" },
+			orchestrator: { wake: { mode: "sidebar" } },
+			workspaces: QA_FOO,
+		});
+		const paths = harness.paths("foo");
+		mkdirSync(dirname(paths.attention), { recursive: true });
+		writeFileSync(paths.attention, "## Orchestrator: needs the user\n- **bb001**: choose\n");
+		writeFileSync(paths.qaLog, "## TRIAGE e0001: needs decision (10:00Z)\n");
+		writeFileSync(
+			`${paths.dataDir}/pipeline-state.json`,
+			JSON.stringify({
+				version: 1,
+				since: "2026-10-01T00:00:00.000Z",
+				importedFrom: null,
+				cards: { e0001: { qaflow: { escalated: { at: "2026-10-07T09:00:00Z", reason: "3 FAILs" } } } },
+			}),
+		);
+		const board = createBoard({
+			review: [
+				createCard({ id: "e0001", updatedAt: WATCHDOG_NOW - 60 * MIN }),
+				createCard({ id: "bb001", updatedAt: WATCHDOG_NOW - 60 * MIN }),
+			],
+			in_progress: [createCard({ id: "d0002", updatedAt: WATCHDOG_NOW - 60 * MIN })],
+		});
+		const sessions: PipelineSessionView[] = [
+			{ taskId: "d0002", agentId: "cline", modelId: null, state: "idle", updatedAt: WATCHDOG_NOW - 8 * MIN, pid: 2 },
+		];
+		harness.observe({ workspaceId: "foo", board, sessions });
+		await harness.watchdog.tick();
+
+		const attention = readFileSync(paths.attention, "utf8");
+		expect(attention).toContain(
+			"- **e0001** (review): escalated 2026-10-07T09:00:00Z (3 FAILs); triage: needs decision",
+		);
+		expect(attention).toContain("## Orchestrator: needs the user\n- **bb001**: choose");
+		expect(harness.requests).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ kind: "deliverInput", taskId: "d0002" }),
+				expect.objectContaining({ kind: "pruneDone", workspaceId: "foo", days: 3 }),
+				expect.objectContaining({ kind: "startOrchestratorSession", workspaceId: "foo" }),
+			]),
+		);
+		// bb001 is an open user item: not a review-stall wake.
+		const start = harness.requests.find((request) => request.kind === "startOrchestratorSession");
+		expect(start && "prompt" in start ? start.prompt : "").not.toContain("bb001");
+		const state = JSON.parse(readFileSync(paths.state, "utf8"));
+		expect(Object.keys(state.resumed)).toEqual([`d0002:${WATCHDOG_NOW - 8 * MIN}`]);
+		expect(state.jobs["prune-done"]).toBe(new Date(WATCHDOG_NOW).toISOString());
+
+		// Ten minutes later: no second continue for the same dead session, no second prune within the hour.
+		harness.requests.length = 0;
+		harness.setNow(WATCHDOG_NOW + 10 * MIN);
+		await harness.watchdog.tick();
+		expect(harness.requests.map((request) => request.kind)).not.toContain("pruneDone");
+		expect(
+			harness.requests.filter((request) => request.kind === "deliverInput" && request.taskId === "d0002"),
+		).toEqual([]);
+	});
+
+	it("PID pressure: flags, a process sweep, the ATTENTION line, no wake for it; brownout pauses running agents once", async () => {
+		const harness = harnessWith(
+			{ watchdog: { mode: "on" }, workspaces: QA_FOO },
+			{ pidUsage: { current: 95, max: 100 } },
+		);
+		harness.observe({
+			workspaceId: "foo",
+			board: createBoard({ in_progress: [createCard({ id: "d0001", updatedAt: WATCHDOG_NOW })] }),
+			sessions: [
+				{ taskId: "d0001", agentId: "cline", modelId: null, state: "running", updatedAt: WATCHDOG_NOW, pid: 3 },
+			],
+		});
+		await harness.watchdog.tick();
+		const flags = getPidPressureFlagPaths(harness.home);
+		expect(readFileSync(flags.pressure, "utf8")).toBe("95/100\n");
+		expect(existsSync(flags.brownout)).toBe(true);
+		expect(harness.requests.map((request) => request.kind)).toEqual(["sweepProcesses", "interrupt", "pruneDone"]);
+		expect(readFileSync(harness.paths("foo").attention, "utf8")).toContain(
+			"**PID pressure**: 95/100 PIDs in use (mostly zombies under PID 1). New QA cards and calibration waves are held; BROWNOUT",
+		);
+		expect(readFileSync(harness.paths("foo").attention, "utf8")).toContain("found 7 zombie(s)");
+
+		harness.requests.length = 0;
+		harness.setNow(WATCHDOG_NOW + MIN);
+		await harness.watchdog.tick();
+		expect(harness.requests.map((request) => request.kind)).toEqual([]);
+
+		harness.setPidUsage({ current: 10, max: 100 });
+		harness.setNow(WATCHDOG_NOW + 2 * MIN);
+		await harness.watchdog.tick();
+		expect(existsSync(flags.pressure)).toBe(false);
+		expect(existsSync(flags.brownout)).toBe(false);
+	});
+
+	it("wake requests: immediate, and --when-card-done once the card is Done", async () => {
+		const harness = harnessWith({ watchdog: { mode: "on" }, orchestrator: { wake: { mode: "sidebar" } } });
+		const paths = harness.paths("plain");
+		await addWakeRequest(paths.wakeRequests, { issue: "look at the plan", when: null, now: new Date(WATCHDOG_NOW) });
+		await addWakeRequest(paths.wakeRequests, {
+			issue: "audit finished: create fix cards",
+			when: { kind: "card-done", taskId: "a0001" },
+			now: new Date(WATCHDOG_NOW),
+		});
+		harness.observe({
+			workspaceId: "plain",
+			board: createBoard({ in_progress: [createCard({ id: "a0001ff", updatedAt: WATCHDOG_NOW })] }),
+		});
+		await harness.watchdog.tick();
+		const first = harness.requests.find((request) => request.kind === "startOrchestratorSession");
+		expect(first && "prompt" in first ? first.prompt : "").toContain("look at the plan");
+		expect(first && "prompt" in first ? first.prompt : "").not.toContain("audit finished");
+		expect(JSON.parse(readFileSync(paths.wakeRequests, "utf8")).requests).toHaveLength(1);
+
+		harness.requests.length = 0;
+		harness.setNow(WATCHDOG_NOW + MIN);
+		harness.observe({
+			workspaceId: "plain",
+			board: createBoard({ trash: [createCard({ id: "a0001ff", updatedAt: WATCHDOG_NOW })] }),
+			sessions: [
+				{
+					taskId: "__home_agent__:plain:claude",
+					agentId: "claude",
+					modelId: null,
+					state: "awaiting_review",
+					pid: 9,
+				},
+			],
+		});
+		await harness.watchdog.tick();
+		const second = harness.requests.find((request) => request.kind === "deliverInput");
+		expect(second && "text" in second ? second.text : "").toContain("audit finished: create fix cards");
+		expect(JSON.parse(readFileSync(paths.wakeRequests, "utf8")).requests).toEqual([]);
+	});
+});
