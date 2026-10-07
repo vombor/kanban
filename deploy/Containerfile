@@ -23,7 +23,8 @@ RUN npm install -g --no-fund $AGENT_CLIS
 # cline 3.x (verified on 3.0.68) puts its Bedrock prompt-cache checkpoint on the last *user* message; in agent
 # loops tool results are role "tool", so only the first prompt got cached (opus 10/06: 13K of 275K per turn,
 # ~5x the cost). Same-length patch to the compiled binary + JS: checkpoint on the last non-assistant message.
-# Warns instead of failing when a new cline no longer has the pattern (upstream fixed or code moved).
+# It also routes Amazon Nova 2 Lite (family "nova") to the cache point, on the last user message (Nova rejects one
+# after a tool result; verified 3.0.69, 10/07). Warns instead of failing when a new cline no longer has the pattern.
 COPY patch-cline-bedrock-cache.mjs /tmp/patch-cline-bedrock-cache.mjs
 RUN node /tmp/patch-cline-bedrock-cache.mjs /usr/local/lib/node_modules/cline/bin/.cline \
       /usr/local/lib/node_modules/cline/node_modules/@cline/llms/dist/providers.js \

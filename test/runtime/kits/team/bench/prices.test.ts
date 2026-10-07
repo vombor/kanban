@@ -22,6 +22,15 @@ describe("price table", () => {
 		expect(seed.priceFor("not-a-model")).toBeNull();
 	});
 
+	it("prices the Bedrock models Cline records no cost for, by their Converse ids", () => {
+		const seed = createPriceTable(getSeedPriceTableFile(), "seed");
+		expect(seed.priceFor("qwen.qwen3-vl-235b-a22b")?.awsModel).toBe("qwen.qwen3-vl-235b-a22b-instruct");
+		expect(seed.priceFor("mistral.mistral-large-3-675b-instruct")?.out).toBe(1.5);
+		// the Converse id deepseek.v3-v1:0 is the Price List's deepseek.v3.1
+		expect(seed.priceFor("deepseek.v3-v1:0")?.awsModel).toBe("deepseek.v3.1");
+		expect(seed.priceFor("deepseek.v3.2")?.awsModel).toBe("deepseek.v3.2");
+	});
+
 	it("prices cache reads and writes apart from plain input, and long-context turns at the long rate", () => {
 		const entry = { pattern: "x", in: 1, cacheRead: 0.1, cacheWrite: 2, out: 10 };
 		// 600 plain + 300 read + 100 written input, 50 output.
