@@ -1,5 +1,5 @@
-// The user's second factor for isolation's escape hatch (docs/fork/project-isolation.md). A grant, and under
-// `enforce` a project create/add/remove, doesn't happen on request: the server keeps it pending and prints a one-time
+// The user's second factor for isolation's escape hatch (docs/fork/project-isolation.md). A grant, a plan
+// approval (in every mode) and, under `enforce`, a project create/add/remove don't happen on request: the server keeps it pending and prints a one-time
 // code to its own console (stderr: the terminal that started Kanban, or `podman logs` for the container). The code is
 // never written to a file or returned by an API. The change runs once someone gives the code with `kanban isolation
 // approve <id> <code>`. An agent session doesn't see the server's console, so a process that drops its credential and
@@ -7,7 +7,8 @@
 // memory or pipes: like the rest of isolation this guards against an agent's ordinary commands, not a sandbox.
 import { randomBytes, timingSafeEqual } from "node:crypto";
 
-export type ApprovalKind = "grant" | "project.create" | "project.add" | "project.remove";
+/** `plan.approve`: a plan card's breakdown (src/trpc/plans-api.ts), the user's in every isolation mode. */
+export type ApprovalKind = "grant" | "project.create" | "project.add" | "project.remove" | "plan.approve";
 
 export interface PendingApprovalView {
 	id: string;
@@ -90,7 +91,7 @@ export function createApprovalStore(
 			};
 			pending.set(id, { view, code, attempts: 0, expiresAtMs, run });
 			announce(
-				`[kanban] Isolation approval ${id} (${kind}): ${summary}. If you asked for this, run in your own terminal: kanban isolation approve ${id} ${code}   (valid ${Math.round(ttlMs / 60_000)} min; never give this code to an agent)`,
+				`[kanban] Approval ${id} (${kind}): ${summary}. If you asked for this, enter the code where Kanban asks for it, or run in your own terminal: kanban isolation approve ${id} ${code}   (valid ${Math.round(ttlMs / 60_000)} min; never give this code to an agent)`,
 			);
 			return { ...view };
 		},

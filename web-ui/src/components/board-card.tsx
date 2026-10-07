@@ -8,6 +8,7 @@ import type { KeyboardEvent, MouseEvent } from "react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { BoardCardTaskId } from "@/components/board-card-task-id";
+import { PlanApprovalButton } from "@/components/plan-approval-button";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
 import { Spinner } from "@/components/ui/spinner";
@@ -450,6 +451,8 @@ export const BoardCard = memo(function BoardCard({
 	// Landing mode qa: Kanban lands the card itself, so Commit / Open PR become one Approve & land (onCommit).
 	const landingMode = useLandingMode();
 	const showApproveAndLand = isKanbanLandedCard(card, landingMode);
+	// A plan card's breakdown is approved by the user before the orchestrator expands it (src/trpc/plans-api.ts).
+	const showApprovePlan = columnId === "review" && card.role === "plan";
 	const isAnyGitActionLoading = isCommitLoading || isOpenPrLoading;
 	const cancelAutomaticActionLabel =
 		!isTrashCard && card.autoReviewEnabled ? getTaskAutoReviewCancelButtonLabel(card.autoReviewMode) : null;
@@ -834,6 +837,11 @@ export const BoardCard = memo(function BoardCard({
 										</>
 									) : null}
 								</p>
+							) : null}
+							{showApprovePlan ? (
+								<div className="flex gap-1.5 mt-1.5">
+									<PlanApprovalButton taskId={card.id} taskTitle={displayTitle} />
+								</div>
 							) : null}
 							{showReviewGitActions && showApproveAndLand ? (
 								<div className="flex gap-1.5 mt-1.5">

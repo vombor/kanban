@@ -2,83 +2,69 @@
 //
 //   show <task-id>     the spec and the breakdown in the plan card's worktree, with its approval and expansion
 //   check --file <f>   validates a breakdown file offline (the planner's self-check)
-//   approve <task-id>  the user's approval marker, pinned to the breakdown's hash
+//   approve <task-id>  the user's approval marker, pinned to the breakdown's hash: asked of the running server, which
+//                      refuses agent sessions and waits for the one-time code it prints on its console
 //   expand <task-id>   Backlog dev cards through the normal create path (the kit's devAssignment), linked by the
 //                      breakdown's dependencies; never starts a card. Needs the user's approval.
 //   metrics            per plan: planner, duration, cost, cards, approval, reworks of its cards
 //
-// The decisions are pure in src/plans/; this file reads the board, the worktree and the plan index, and asks.
+// The decisions are pure in src/plans/; this file reads the board, the worktree and the plan index, and asks. The
+// approval is the user's in every isolation mode, so it is never written in-process: the runtime route
+// (src/trpc/plans-api.ts) records it once the user has entered the console code.
 
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { createInterface } from "node:readline/promises";
 import type { Command } from "commander";
 
 import { readPipelineConfig } from "../config/pipeline-config";
-import type { RuntimeBoardCard, RuntimeBoardColumnId, RuntimeWorkspaceStateResponse } from "../core/api-contract";
 import { resolveCardRole } from "../core/card-role";
-import { readPlanSlugFromPrompt } from "../kits/plan-prompt";
+import { type CompleteApprovalInput, completeIsolationApproval } from "../isolation/cli-approval";
 import { measureCard } from "../kits/team/scoreboard/scoreboard-store";
 import { createPipelineStateStore } from "../pipeline/pipeline-state";
-import { type PlanBreakdown, parsePlanBreakdown, readPlanFiles } from "../plans/plan-breakdown";
+import { type PlanBreakdown, parsePlanBreakdown } from "../plans/plan-breakdown";
 import { checkPlanExpandable, hashPlanBreakdown, planExpansion } from "../plans/plan-expand";
 import {
 	createPlanIndexStore,
 	type PlanApproval,
 	type PlanCardMetrics,
 	type PlanIndexStore,
-	type PlanRecord,
 } from "../plans/plan-index";
 import { buildPlanMetrics } from "../plans/plan-metrics";
+import {
+	describePlanApprovalState,
+	type FindPlanWorktree,
+	findPlanWorktree,
+	type LocatedPlan,
+	loadPlanTarget,
+	locatePlan,
+	type PlanTarget,
+	readPlanWorktreeFiles,
+	readValidBreakdown,
+} from "../plans/plan-target";
 import { resolveProjectInputPath } from "../projects/project-path";
-import { loadWorkspaceContext, mutateWorkspaceState } from "../state/workspace-state";
-import { getTaskWorkspacePathInfo } from "../workspace/task-worktree";
+import { loadWorkspaceContext } from "../state/workspace-state";
+import { createRuntimeTrpcClient, type RuntimeTrpcClient } from "./runtime-trpc-client";
 import { createTask, linkTaskPairs } from "./task";
 
 type JsonRecord = Record<string, unknown>;
 
+/** The runtime calls of an approval: the plan route and the console-code completion. */
+export type PlanApprovalClient = Pick<RuntimeTrpcClient, "plans" | "isolation">;
+
 export interface PlanCommandDependencies {
 	index?: PlanIndexStore;
 	/** The plan card's worktree, or null when it has none. */
-	findWorktree?: (repoPath: string, card: RuntimeBoardCard) => Promise<string | null>;
-	/** Asks the user to confirm on the terminal; false when nobody can answer (no TTY). */
-	confirm?: (question: string, expected: string) => Promise<boolean>;
+	findWorktree?: FindPlanWorktree;
+	/** The running server, scoped to the plan's workspace (default: a CLI runtime client). */
+	createClient?: (workspaceId: string) => PlanApprovalClient;
+	/** How the console code is asked for (default: on the terminal, else wait for `kanban isolation approve`). */
+	approval?: Partial<Omit<CompleteApprovalInput, "client" | "approvalId" | "what">>;
 	/** The plan card's own metrics (card metrics); null when they can't be measured. */
 	measure?: (workspaceId: string, taskId: string) => Promise<PlanCardMetrics | null>;
 	createCard?: typeof createTask;
 	linkCards?: typeof linkTaskPairs;
 	randomUuid?: () => string;
 	now?: () => Date;
-}
-
-interface PlanTarget {
-	repoPath: string;
-	workspaceId: string;
-	state: RuntimeWorkspaceStateResponse;
-}
-
-interface LocatedPlan {
-	card: RuntimeBoardCard;
-	column: RuntimeBoardColumnId;
-	record: PlanRecord | null;
-	slug: string;
-}
-
-async function defaultFindWorktree(repoPath: string, card: RuntimeBoardCard): Promise<string | null> {
-	const info = await getTaskWorkspacePathInfo({ cwd: repoPath, taskId: card.id, baseRef: card.baseRef });
-	return info.exists ? info.path : null;
-}
-
-async function defaultConfirm(question: string, expected: string): Promise<boolean> {
-	if (!process.stdin.isTTY) {
-		return false;
-	}
-	const readline = createInterface({ input: process.stdin, output: process.stderr });
-	try {
-		return (await readline.question(question)).trim() === expected;
-	} finally {
-		readline.close();
-	}
 }
 
 async function defaultMeasure(workspaceId: string, taskId: string): Promise<PlanCardMetrics | null> {
@@ -97,62 +83,6 @@ async function defaultMeasure(workspaceId: string, taskId: string): Promise<Plan
 	} catch {
 		return null;
 	}
-}
-
-async function loadPlanTarget(cwd: string, projectPath: string | undefined): Promise<PlanTarget> {
-	const path = projectPath?.trim() ? resolveProjectInputPath(projectPath.trim(), cwd) : cwd;
-	const context = await loadWorkspaceContext(path, { autoCreateIfMissing: false });
-	// A read through the board lock: nothing is saved.
-	const { state } = await mutateWorkspaceState(context.repoPath, (current) => ({
-		board: current.board,
-		value: null,
-		save: false,
-	}));
-	return { repoPath: context.repoPath, workspaceId: context.workspaceId, state };
-}
-
-function findCard(
-	state: RuntimeWorkspaceStateResponse,
-	taskId: string,
-): { card: RuntimeBoardCard; column: RuntimeBoardColumnId } | null {
-	for (const column of state.board.columns) {
-		const card = column.cards.find((candidate) => candidate.id === taskId);
-		if (card) {
-			return { card, column: column.id };
-		}
-	}
-	return null;
-}
-
-async function locatePlan(target: PlanTarget, index: PlanIndexStore, taskId: string): Promise<LocatedPlan> {
-	const found = findCard(target.state, taskId);
-	if (!found) {
-		throw new Error(`Task ${taskId} is not on the board of ${target.repoPath}.`);
-	}
-	const role = resolveCardRole(found.card);
-	if (role !== "plan") {
-		throw new Error(`Task ${taskId} is a ${role} card, not a plan card.`);
-	}
-	const record = (await index.read(target.workspaceId)).plans[taskId] ?? null;
-	const slug = record?.slug ?? readPlanSlugFromPrompt(found.card.prompt);
-	if (!slug) {
-		throw new Error(
-			`Plan card ${taskId} names no docs/specs/<slug>.cards.json in its prompt and has no plan index entry.`,
-		);
-	}
-	return { ...found, record, slug };
-}
-
-async function readPlanWorktreeFiles(
-	target: PlanTarget,
-	plan: LocatedPlan,
-	findWorktree: NonNullable<PlanCommandDependencies["findWorktree"]>,
-) {
-	const worktreePath = await findWorktree(target.repoPath, plan.card);
-	if (!worktreePath) {
-		throw new Error(`Plan card ${plan.card.id} has no worktree (never started, or already Done).`);
-	}
-	return await readPlanFiles(worktreePath, plan.slug);
 }
 
 function formatBreakdown(breakdown: PlanBreakdown): string[] {
@@ -178,11 +108,11 @@ export async function showPlan(
 	const index = deps.index ?? createPlanIndexStore();
 	const target = await loadPlanTarget(input.cwd, input.projectPath);
 	const plan = await locatePlan(target, index, input.taskId);
-	const files = await readPlanWorktreeFiles(target, plan, deps.findWorktree ?? defaultFindWorktree);
+	const files = await readPlanWorktreeFiles(target, plan, deps.findWorktree ?? findPlanWorktree);
 	const parsed = files.breakdownText === null ? null : parsePlanBreakdown(files.breakdownText, plan.slug);
 	const sha = files.breakdownText === null ? null : hashPlanBreakdown(files.breakdownText);
 	const approval = plan.record?.approval ?? null;
-	const approvalState = !approval ? "not approved" : approval.breakdownSha256 === sha ? "approved" : "stale";
+	const approvalState = describePlanApprovalState(approval, sha);
 	const text = [
 		`Plan ${plan.card.id} (${plan.column}): ${plan.card.title ?? ""}`,
 		`Approval: ${approval ? `${approvalState} at ${approval.at} via ${approval.via}` : "not approved"}`,
@@ -217,54 +147,55 @@ export async function showPlan(
 	};
 }
 
-/** Reads and validates the plan card's breakdown; throws with every issue when it doesn't validate. */
-async function readValidBreakdown(
-	target: PlanTarget,
-	plan: LocatedPlan,
-	findWorktree: NonNullable<PlanCommandDependencies["findWorktree"]>,
-): Promise<{ breakdown: PlanBreakdown; sha: string; specPath: string; specExists: boolean }> {
-	const files = await readPlanWorktreeFiles(target, plan, findWorktree);
-	if (files.breakdownText === null) {
-		throw new Error(`Plan ${plan.card.id} has no ${files.paths.breakdownPath} in its worktree.`);
+/**
+ * Asks the running server for the user's approval (src/trpc/plans-api.ts): it refuses an agent session and holds
+ * anyone else's approval until the one-time code it printed on its console is entered here (or with `kanban isolation
+ * approve`). Returns the recorded approval; throws when it was refused or not completed.
+ */
+export async function requestPlanApproval(
+	input: {
+		target: PlanTarget;
+		plan: LocatedPlan;
+		via: PlanApproval["via"];
+		/** The breakdown this command read; the server refuses another one. */
+		breakdownSha256: string | null;
+		index: PlanIndexStore;
+	},
+	deps: Pick<PlanCommandDependencies, "createClient" | "approval">,
+): Promise<{ approval: PlanApproval; cards: number }> {
+	const taskId = input.plan.card.id;
+	const client = (deps.createClient ?? createRuntimeTrpcClient)(input.target.workspaceId);
+	const requested = await Promise.resolve()
+		.then(() => client.plans.approve.mutate({ taskId, via: input.via, breakdownSha256: input.breakdownSha256 }))
+		.catch((error: unknown) => {
+			throw new Error(
+				`Plan approval goes through the running Kanban server, which could not be reached: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		});
+	if (!requested.ok) {
+		throw new Error(requested.error ?? `Plan ${taskId} was not approved.`);
 	}
-	const parsed = parsePlanBreakdown(files.breakdownText, plan.slug);
-	if (!parsed.ok) {
-		throw new Error(`The breakdown ${files.paths.breakdownPath} is invalid: ${parsed.issues.join("; ")}`);
+	const cards = requested.plan?.cards ?? 0;
+	if (requested.approval) {
+		return { approval: requested.approval, cards };
 	}
-	return {
-		breakdown: parsed.breakdown,
-		sha: hashPlanBreakdown(files.breakdownText),
-		specPath: files.paths.specPath,
-		specExists: files.spec !== null,
-	};
-}
-
-async function writeApproval(
-	index: PlanIndexStore,
-	target: PlanTarget,
-	plan: LocatedPlan,
-	approval: PlanApproval,
-	now: Date,
-): Promise<void> {
-	await index.update(target.workspaceId, (current) => {
-		const existing = current.plans[plan.card.id];
-		const record: PlanRecord = existing ?? {
-			// A plan card made by hand (no `task create --role plan`) gets its entry on first approval.
-			taskId: plan.card.id,
-			slug: plan.slug,
-			title: plan.card.title ?? "",
-			createdAt: new Date(plan.card.createdAt || now.getTime()).toISOString(),
-			kit: "unknown",
-			agentId: plan.card.agentId ?? null,
-			providerId: plan.card.agentSettings?.providerId ?? null,
-			modelId: plan.card.agentSettings?.modelId ?? null,
-			startInPlanMode: plan.card.startInPlanMode,
-			approval: null,
-			expansion: null,
-			metrics: null,
-		};
-		return { ...current, plans: { ...current.plans, [plan.card.id]: { ...record, approval } } };
+	if (!requested.approvalId) {
+		throw new Error(`The server neither approved plan ${taskId} nor asked for the console code.`);
+	}
+	const outcome = await completeIsolationApproval({
+		...deps.approval,
+		client,
+		approvalId: requested.approvalId,
+		what: `The approval of plan ${taskId} (${cards} cards)`,
 	});
+	if (!outcome.ok) {
+		throw new Error(`Plan ${taskId} was not approved: ${outcome.error}`);
+	}
+	const approval = (await input.index.read(input.target.workspaceId)).plans[taskId]?.approval ?? null;
+	if (!approval) {
+		throw new Error(`Plan ${taskId} was approved, but its approval is not in the plan index.`);
+	}
+	return { approval, cards };
 }
 
 export async function approvePlan(
@@ -272,19 +203,14 @@ export async function approvePlan(
 	deps: PlanCommandDependencies = {},
 ): Promise<JsonRecord> {
 	const index = deps.index ?? createPlanIndexStore();
-	const now = (deps.now ?? (() => new Date()))();
 	const target = await loadPlanTarget(input.cwd, input.projectPath);
 	const plan = await locatePlan(target, index, input.taskId);
-	if (plan.record?.expansion?.status === "done") {
-		throw new Error(`Plan ${plan.card.id} was already expanded.`);
-	}
-	if (plan.column !== "review") {
-		throw new Error(`Plan ${plan.card.id} is in ${plan.column}; approve it once its planner has finished (Review).`);
-	}
-	const { breakdown, sha } = await readValidBreakdown(target, plan, deps.findWorktree ?? defaultFindWorktree);
-	const approval: PlanApproval = { at: now.toISOString(), via: "approve", breakdownSha256: sha };
-	await writeApproval(index, target, plan, approval, now);
-	return { ok: true, taskId: plan.card.id, slug: plan.slug, cards: breakdown.cards.length, approval };
+	// The server checks the plan (Review, a valid breakdown, not expanded) and shows what the code approves.
+	const { approval, cards } = await requestPlanApproval(
+		{ target, plan, via: "approve", breakdownSha256: null, index },
+		deps,
+	);
+	return { ok: true, taskId: plan.card.id, slug: plan.slug, cards, approval };
 }
 
 export async function expandPlan(
@@ -298,11 +224,9 @@ export async function expandPlan(
 	const dryRun = input.dryRun === true;
 	const target = await loadPlanTarget(input.cwd, input.projectPath);
 	const plan = await locatePlan(target, index, input.taskId);
-	const { breakdown, sha, specPath, specExists } = await readValidBreakdown(
-		target,
-		plan,
-		deps.findWorktree ?? defaultFindWorktree,
-	);
+	const valid = await readValidBreakdown(target, plan, deps.findWorktree ?? findPlanWorktree);
+	const { breakdown, sha, specPath } = valid;
+	const specExists = valid.spec !== null;
 	const check = checkPlanExpandable({
 		taskId: plan.card.id,
 		role: resolveCardRole(plan.card),
@@ -347,17 +271,9 @@ export async function expandPlan(
 
 	let approval = check.approval;
 	if (check.needsApproval) {
-		const confirmed = await (deps.confirm ?? defaultConfirm)(
-			`The user approves the breakdown of plan ${plan.card.id} (${breakdown.cards.length} cards)? Type the plan's task id to confirm: `,
-			plan.card.id,
-		);
-		if (!confirmed) {
-			throw new Error(
-				`Not confirmed: --approved-by-user needs the user to type the plan's task id on a terminal. Without one, the user runs kanban plan approve ${plan.card.id}.`,
-			);
-		}
-		approval = { at: now().toISOString(), via: "expand", breakdownSha256: sha };
-		await writeApproval(index, target, plan, approval, now());
+		// --approved-by-user: the same user-only approval as `kanban plan approve`, for exactly this breakdown.
+		approval = (await requestPlanApproval({ target, plan, via: "expand", breakdownSha256: sha, index }, deps))
+			.approval;
 	}
 
 	const startedAt = now().toISOString();
@@ -517,7 +433,7 @@ export function registerPlanCommand(program: Command): void {
 	plan
 		.command("approve")
 		.description(
-			"The user's approval of a plan card's breakdown (the plan card must be in Review). Only the user runs this: it is what lets the orchestrator expand the plan.",
+			"The user's approval of a plan card's breakdown (the plan card must be in Review), or use Approve plan on the board. Only the user: the Kanban server refuses agent sessions and asks for the one-time code it prints on its console. It is what lets the orchestrator expand the plan.",
 		)
 		.argument("<task-id>", "The plan card.")
 		.option("--project-path <path>", "Workspace path. Defaults to current directory workspace.")
@@ -537,7 +453,7 @@ export function registerPlanCommand(program: Command): void {
 		.option("--dry-run", "Validate and print the cards and links; write nothing.")
 		.option(
 			"--approved-by-user",
-			"The user approves it now: asks the user to confirm on the terminal (type the plan's task id).",
+			"The user approves it now, as kanban plan approve does (the code from the Kanban server's console; refused for agent sessions).",
 		)
 		.action(async (taskId: string, options: { projectPath?: string; dryRun?: boolean; approvedByUser?: boolean }) => {
 			await runPlanCommand(

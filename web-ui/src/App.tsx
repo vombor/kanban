@@ -63,6 +63,7 @@ import { useTerminalConnectionReady } from "@/runtime/use-terminal-connection-re
 import { useWorkspacePersistence } from "@/runtime/use-workspace-persistence";
 import { saveWorkspaceState } from "@/runtime/workspace-state-query";
 import { findCardSelection } from "@/state/board-state";
+import { setCurrentWorkspaceId } from "@/stores/current-workspace-store";
 import { setKanbanPaths } from "@/stores/kanban-paths-store";
 import { setLandingMode } from "@/stores/landing-mode-store";
 import {
@@ -133,6 +134,9 @@ export default function App(): ReactElement {
 		}
 		setLandingMode(runtimeProjectConfig?.landingMode ?? null);
 	}, [runtimeProjectConfig]);
+	useEffect(() => {
+		setCurrentWorkspaceId(currentProjectId);
+	}, [currentProjectId]);
 	const isTaskAgentReady = isTaskAgentSetupSatisfied(runtimeProjectConfig);
 	const settingsWorkspaceId = navigationCurrentProjectId ?? currentProjectId;
 	const { config: settingsRuntimeProjectConfig, refresh: refreshSettingsRuntimeProjectConfig } =

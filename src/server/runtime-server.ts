@@ -54,6 +54,7 @@ import { createTerminalWebSocketBridge } from "../terminal/ws-server";
 import { type RuntimeTrpcContext, type RuntimeTrpcWorkspaceScope, runtimeAppRouter } from "../trpc/app-router";
 import { createHooksApi } from "../trpc/hooks-api";
 import { createIsolationApi } from "../trpc/isolation-api";
+import { createPlansApi } from "../trpc/plans-api";
 import { createProjectsApi } from "../trpc/projects-api";
 import { createRuntimeApi } from "../trpc/runtime-api";
 import { createWorkspaceApi } from "../trpc/workspace-api";
@@ -340,6 +341,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		listEntries: listWorkspaceIndexEntries,
 		notices: messageNotices,
 	});
+	const plansApi = createPlansApi({ approvals: isolation.approvals, log: isolation.log });
 
 	const handleWatchdogRequest = createWatchdogActionHandler({
 		getWorkspacePathById: deps.workspaceRegistry.getWorkspacePathById,
@@ -419,6 +421,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			// The passcode gate's browser cookie (remote mode): the user at the browser, so no console code is needed.
 			trustedBrowser: isRemoteMode && isPasscodeEnabled() && sessionToken !== null && validateSession(sessionToken),
 			isolationApi,
+			plansApi,
 			runtimeApi,
 			workspaceApi: createWorkspaceApi({
 				ensureTerminalManagerForWorkspace: deps.ensureTerminalManagerForWorkspace,

@@ -646,3 +646,16 @@ of this repository is the complete record of changes.
   Lemonade no longer lists are now dropped from the entry (before, they were kept). `kanban doctor`'s Lemonade row now
   compares models.json with what Lemonade reports (one round of requests, 1.5 s timeout): WARN with the added, removed
   and changed models and the command, PASS in sync, INFO when Lemonade is down.
+- `src/trpc/plans-api.ts` (new), `src/plans/plan-target.ts` (new), `src/commands/plan.ts`, `src/plans/plan-expand.ts`,
+  `src/trpc/app-router.ts`, `src/server/runtime-server.ts`, `src/isolation/approvals.ts`, `src/isolation/cli-scope.ts`,
+  `src/trpc/isolation-api.ts`, `web-ui/src/components/plan-approval-button.tsx` (new),
+  `web-ui/src/hooks/use-plan-approval.ts` (new), `web-ui/src/stores/current-workspace-store.ts` (new),
+  `web-ui/src/components/board-card.tsx`, `web-ui/src/App.tsx`, `docs/team/WORKFLOW.md`, `AGENTS.md`, tests (plan
+  approval is the user's, user decision 2026-10-07): `kanban plan approve` and `kanban plan expand --approved-by-user`
+  ask the running server (`plans.preview`/`plans.approve`) instead of writing the plan index in-process. In every
+  isolation mode the server refuses agent sessions (credential, process tree or unidentified) and holds anyone else's
+  approval until the one-time code it prints on its console is entered (the CLI's terminal prompt, `kanban isolation
+  approve`, or the board's dialog); a passcode-authenticated browser needs none. The approval stays pinned to the
+  breakdown's sha256, now the one the user was shown. The CLI refuses both commands inside a session. A plan card in
+  Review gets an Approve plan button with a confirmation dialog (spec title, card count, code field). The console
+  line now reads "Approval <id> (<kind>)" for every kind.

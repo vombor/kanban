@@ -125,6 +125,19 @@ describe("applyCliSessionScope", () => {
 		});
 	});
 
+	it("refuses plan approve and plan expand --approved-by-user from a session, isolation off included", async () => {
+		await withTemporaryKanbanHome(async () => {
+			const scope = (commandPath: string, options: Record<string, unknown>, env: NodeJS.ProcessEnv) =>
+				applyCliSessionScope({ commandPath, options, args: ["p1"], createClient: noServer as never, env });
+			const refusal = "Plan approval is the user's; ask them to run kanban plan approve p1 or use the board.";
+			expect(await scope("plan approve", {}, SESSION_ENV)).toBe(refusal);
+			expect(await scope("plan expand", { approvedByUser: true }, SESSION_ENV)).toBe(refusal);
+			// The orchestrator expands an approved plan; the user's own terminal is asked by the server.
+			expect(await scope("plan expand", {}, SESSION_ENV)).toBeNull();
+			expect(await scope("plan approve", {}, {})).toBeNull();
+		});
+	});
+
 	it("refuses machine-wide commands under enforce only; doctor without --fix stays allowed", async () => {
 		await withTemporaryKanbanHome(async () => {
 			const env = { ...SESSION_ENV, [KANBAN_SESSION_WORKSPACE_ENV]: "a" };

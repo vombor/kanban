@@ -93,8 +93,8 @@ export type PlanExpandCheck =
 
 /**
  * May the plan card be expanded now? It must be a plan card in Review, not expanded yet, and approved by the user for
- * exactly this breakdown: a recorded approval (`kanban plan approve`) whose hash matches, or `--approved-by-user`
- * (`needsApproval`: the caller confirms with the user, then records it).
+ * exactly this breakdown: a recorded approval (`kanban plan approve` or the board) whose hash matches, or
+ * `--approved-by-user` (`needsApproval`: the caller asks the runtime for the user's approval, which records it).
  */
 export function checkPlanExpandable(input: {
 	taskId: string;
@@ -130,7 +130,7 @@ export function checkPlanExpandable(input: {
 		}
 		return {
 			ok: false,
-			error: `The breakdown of plan ${input.taskId} changed after the user approved it at ${approval.at}; it needs a new approval (kanban plan approve ${input.taskId}).`,
+			error: `The breakdown of plan ${input.taskId} changed after the user approved it at ${approval.at}; it needs a new approval from the user (kanban plan approve ${input.taskId}, or Approve plan on the board).`,
 		};
 	}
 	if (approval) {
@@ -144,6 +144,6 @@ export function checkPlanExpandable(input: {
 	}
 	return {
 		ok: false,
-		error: `Plan ${input.taskId} is not approved. The user approves it with kanban plan approve ${input.taskId} (or kanban plan expand ${input.taskId} --approved-by-user, which asks to confirm).`,
+		error: `Plan ${input.taskId} is not approved. Plan approval is the user's: ask them to run kanban plan approve ${input.taskId} or use Approve plan on the board.`,
 	};
 }

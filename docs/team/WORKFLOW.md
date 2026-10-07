@@ -277,10 +277,19 @@ the code and writes the plan, and the orchestrator turns the approved plan into 
    `docs/specs/<slug>.cards.json` (cards with title, prompt, `dependsOn` by local id, `parallelGroup` and
    acceptance criteria, each sized for one agent session). It checks the file with `kanban plan check`, creates no
    card, and ends with a STATUS line. Schema: `src/plans/plan-breakdown.ts`.
-3. **Review and approval.** `kanban plan show <id>` prints the spec and the breakdown. Only the **user** approves:
-   `kanban plan approve <id>` (the plan card in Review), or `kanban plan expand <id> --approved-by-user`, which asks
-   the user to type the plan's id on a terminal. The approval is pinned to the breakdown's sha256, so an edited
-   breakdown needs a new one.
+3. **Review and approval.** `kanban plan show <id>` prints the spec and the breakdown. Only the **user** approves
+   (user decision 2026-10-07), in every isolation mode, `off` included: **Approve plan** on the plan card in Review
+   (a dialog with the spec's title and the card count), `kanban plan approve <id>`, or `kanban plan expand <id>
+   --approved-by-user`. All three ask the running server (`plans.approve`, `src/trpc/plans-api.ts`), never write
+   in-process. It refuses every agent session (orchestrator or card, any project; by credential or traced to its
+   process tree) with "Plan approval is the user's; ask them to run kanban plan approve <id> or use the board", and
+   the CLI refuses `plan approve` and `plan expand --approved-by-user` inside a session. "No credential and no session
+   above it" is not proof of the user (a reparented process looks the same), so the approval then waits for the
+   one-time code the server prints on its console (the terminal that started Kanban, or `podman logs`): the CLI asks
+   for it on the terminal (or waits for `kanban isolation approve <approval id> <code>`), the board's dialog has a
+   code field. A browser signed in with the passcode (remote mode) needs no code. The approval is pinned to the
+   breakdown's sha256: the one the user was shown (a breakdown changed while the code waited is refused), and an
+   edited breakdown needs a new approval. The orchestrator then runs `kanban plan expand <id>` without the flag.
 4. **Expand.** `kanban plan expand <id> [--dry-run]` validates the breakdown, creates the cards in Backlog through
    the normal create path (so the kit's `devAssignment` picks their agent and model), appends each card's acceptance
    criteria to its prompt (before a FINAL STEP, so the QA prompt's requirements include them), links them by

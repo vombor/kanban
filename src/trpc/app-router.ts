@@ -150,6 +150,13 @@ import {
 	messageSendResponseSchema,
 	type RuntimeIsolationApi,
 } from "./isolation-api";
+import {
+	planApproveRequestSchema,
+	planApproveResponseSchema,
+	planPreviewRequestSchema,
+	planPreviewResponseSchema,
+	type RuntimePlansApi,
+} from "./plans-api";
 
 export interface RuntimeTrpcWorkspaceScope {
 	workspaceId: string;
@@ -175,6 +182,8 @@ export interface RuntimeTrpcContext {
 	trustedBrowser?: boolean;
 	/** Project isolation's checks and procedures (src/trpc/isolation-api.ts); absent = no checks. */
 	isolationApi?: RuntimeIsolationApi;
+	/** Plan approval (src/trpc/plans-api.ts); absent = not available. */
+	plansApi?: RuntimePlansApi;
 	runtimeApi: {
 		loadConfig: (scope: RuntimeTrpcWorkspaceScope | null) => Promise<RuntimeConfigResponse>;
 		saveConfig: (
@@ -731,6 +740,40 @@ export const runtimeAppRouter = t.router({
 		grants: t.procedure.output(isolationGrantsResponseSchema).query(async ({ ctx }) => {
 			return ctx.isolationApi ? await ctx.isolationApi.listGrants(await readCaller(ctx)) : { grants: [] };
 		}),
+	}),
+	// Plan cards (src/trpc/plans-api.ts): what a plan's approval covers, and the user's approval itself.
+	plans: t.router({
+		preview: workspaceProcedure
+			.input(planPreviewRequestSchema)
+			.output(planPreviewResponseSchema)
+			.query(async ({ ctx, input }) => {
+				if (!ctx.plansApi) {
+					return { ok: false, plan: null, error: "Plan approval is not available here." };
+				}
+				return await ctx.plansApi.preview(ctx.workspaceScope.workspacePath, input);
+			}),
+		approve: workspaceProcedure
+			.input(planApproveRequestSchema)
+			.output(planApproveResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.plansApi) {
+					return {
+						ok: false,
+						approval: null,
+						approvalId: null,
+						plan: null,
+						error: "Plan approval is not available here.",
+					};
+				}
+				// The user's in every isolation mode: a session without its credential is traced to its process tree.
+				return await ctx.plansApi.approve({
+					caller: await readStrictCaller(ctx),
+					trustedBrowser: ctx.trustedBrowser === true,
+					workspaceId: ctx.workspaceScope.workspaceId,
+					repoPath: ctx.workspaceScope.workspacePath,
+					request: input,
+				});
+			}),
 	}),
 	// Orchestrator messages between projects (src/isolation/messages.ts).
 	message: t.router({

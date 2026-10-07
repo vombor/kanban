@@ -50,7 +50,10 @@ export const MACHINE_WIDE_COMMANDS = [
 	"board restore",
 ] as const;
 
-/** Commands no agent session may run, whatever the isolation mode: registering projects and writing Cline's files are the user's. */
+/**
+ * Commands no agent session may run, whatever the isolation mode: registering projects, grants, writing Cline's files
+ * and approving a plan are the user's (and `plan expand --approved-by-user`).
+ */
 export const USER_ONLY_COMMANDS = [
 	"project add",
 	"project create",
@@ -58,7 +61,13 @@ export const USER_ONLY_COMMANDS = [
 	"isolation revoke",
 	"isolation approve",
 	"cline apply-lemonade-models",
+	"plan approve",
 ] as const;
+
+/** The plan approval refusal (the server's, src/trpc/plans-api.ts, says the same). */
+function planApprovalRefusal(taskId: string | undefined): string {
+	return `Plan approval is the user's; ask them to run kanban plan approve ${taskId ?? "<id>"} or use the board.`;
+}
 
 /** The project changes that wait for an approval under `enforce` (src/isolation/approvals.ts). */
 const PROJECT_CHANGE_COMMANDS = { "project add": "project.add", "project create": "project.create" } as const;
@@ -249,6 +258,9 @@ export async function applyCliSessionScope(input: {
 					approval: input.approval,
 				})
 			: null;
+	}
+	if (input.commandPath === "plan approve" || (input.commandPath === "plan expand" && input.options.approvedByUser)) {
+		return planApprovalRefusal(input.args?.[0]);
 	}
 	if (matchesCommandPath(input.commandPath, USER_ONLY_COMMANDS)) {
 		return `\`kanban ${input.commandPath}\` is the user's: an agent session can't run it. Tell the user what you need.`;

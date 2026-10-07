@@ -3,12 +3,18 @@ import { dirname, join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { approvePlan, expandPlan, planMetrics, showPlan } from "../../../src/commands/plan";
+import { approvePlan, expandPlan, type PlanApprovalClient, planMetrics, showPlan } from "../../../src/commands/plan";
 import { createTask } from "../../../src/commands/task";
+import { parsePipelineConfig } from "../../../src/config/pipeline-config";
 import type { RuntimeBoardCard, RuntimeBoardColumnId } from "../../../src/core/api-contract";
+import { createIsolationService } from "../../../src/isolation/isolation-service";
+import type { RuntimeCaller } from "../../../src/isolation/session-identity";
 import { createPlanIndexStore } from "../../../src/plans/plan-index";
 import { getKanbanGlobalConfigPath, getPlanIndexPath } from "../../../src/state/kanban-home";
 import type * as WorkspaceStateModule from "../../../src/state/workspace-state";
+import { type RuntimeTrpcContext, runtimeAppRouter } from "../../../src/trpc/app-router";
+import { createIsolationApi } from "../../../src/trpc/isolation-api";
+import { createPlansApi } from "../../../src/trpc/plans-api";
 import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
 import { createTempDir } from "../../utilities/temp-dir";
 import {
@@ -18,8 +24,9 @@ import {
 } from "../../utilities/workspace-state-store";
 
 // The plan flow end to end against an in-memory board: `task create --role plan` applies the kit's plan routing,
-// `plan approve` records the user's approval, and `plan expand` creates linked Backlog cards through the real
-// createTask (so the kit's devAssignment applies). Never launches an agent.
+// `plan approve` asks the runtime route (the real router, plans API and console-code store) for the user's approval,
+// and `plan expand` creates linked Backlog cards through the real createTask (so the kit's devAssignment applies).
+// Never launches an agent.
 const harness = vi.hoisted(() => ({ store: null as null | WorkspaceStateStore }));
 
 vi.mock("@trpc/client", () => ({
@@ -51,6 +58,26 @@ function writeConfig(kit: string): void {
 	const path = getKanbanGlobalConfigPath();
 	mkdirSync(dirname(path), { recursive: true });
 	writeFileSync(path, JSON.stringify({ workspaces: { [WORKSPACE_ID]: { kit: { name: kit } } } }));
+}
+
+function orchestrator(via: "credential" | "process" = "credential"): RuntimeCaller {
+	return {
+		kind: "session",
+		session: {
+			workspaceId: WORKSPACE_ID,
+			taskId: `__home_agent__:${WORKSPACE_ID}:claude`,
+			role: "orchestrator",
+			agentId: "claude",
+			cwd: "/repo",
+		},
+		via,
+	};
+}
+
+/** The code in the last approval line on the server's console (approvals.ts). */
+function lastCode(lines: readonly string[]): string {
+	const line = lines.at(-1) ?? "";
+	return line.split(/kanban isolation approve a-[0-9a-f]+ /u)[1]?.split(/\s/u)[0] ?? "";
 }
 
 function allCards(): Array<{ card: RuntimeBoardCard; column: RuntimeBoardColumnId }> {
@@ -107,6 +134,11 @@ describe("kanban plan", () => {
 	let worktree: ReturnType<typeof createTempDir>;
 
 	beforeEach(() => {
+		runtime.caller = { kind: "user" };
+		runtime.trustedBrowser = false;
+		runtime.consoleLines = [];
+		router = createRouterCaller();
+		readCode.mockClear();
 		harness.store = createWorkspaceStateStore({ board: createBoard({}), sessions: {}, revision: 1 });
 		stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 		worktree = createTempDir("kanban-plan-worktree-");
@@ -127,7 +159,52 @@ describe("kanban plan", () => {
 		);
 	};
 
-	const confirm = vi.fn(async () => true);
+	// The running server: who calls (strict lookup, isolation off) and whether it is a passcode browser.
+	const runtime = {
+		caller: { kind: "user" } as RuntimeCaller,
+		trustedBrowser: false,
+		consoleLines: [] as string[],
+	};
+	const createRouterCaller = () => {
+		const service = createIsolationService({
+			readConfig: async () => parsePipelineConfig({}).config,
+			processReader: null,
+			listLiveSessions: () => [],
+			log: async () => {},
+			announceApproval: (line) => runtime.consoleLines.push(line),
+		});
+		const notices = { allowSend: () => true, enqueue: () => {} };
+		const context = {
+			requestedWorkspaceId: WORKSPACE_ID,
+			workspaceScope: { workspaceId: WORKSPACE_ID, workspacePath: "/repo" },
+			getCaller: async () => runtime.caller,
+			resolveStrictCaller: async () => runtime.caller,
+			get trustedBrowser() {
+				return runtime.trustedBrowser;
+			},
+			isolationApi: createIsolationApi({ service, listEntries: async () => [], notices }),
+			plansApi: createPlansApi({
+				approvals: service.approvals,
+				log: service.log,
+				findWorktree: async () => worktree.path,
+			}),
+		} as unknown as RuntimeTrpcContext;
+		return runtimeAppRouter.createCaller(context);
+	};
+	let router: ReturnType<typeof createRouterCaller>;
+	const client = (): PlanApprovalClient =>
+		({
+			plans: {
+				approve: { mutate: (input: never) => router.plans.approve(input) },
+				preview: { query: (input: never) => router.plans.preview(input) },
+			},
+			isolation: {
+				approve: { mutate: (input: never) => router.isolation.approve(input) },
+				approvalStatus: { query: (input: never) => router.isolation.approvalStatus(input) },
+			},
+		}) as unknown as PlanApprovalClient;
+	/** The user at the terminal: reads the code off the server's console. */
+	const readCode = vi.fn(async (): Promise<string | null> => lastCode(runtime.consoleLines));
 	const deps = () => ({
 		findWorktree: async () => worktree.path,
 		measure: async () => ({
@@ -139,7 +216,8 @@ describe("kanban plan", () => {
 			activeMin: 9,
 			costUSD: null,
 		}),
-		confirm,
+		createClient: () => client(),
+		approval: { readCode, write: () => {} },
 	});
 
 	const createPlanCard = async () => {
@@ -225,7 +303,9 @@ describe("kanban plan", () => {
 			expect(approved).toMatchObject({ ok: true, cards: 3, approval: { via: "approve" } });
 			const expanded = await expandPlan({ cwd: "/repo", taskId: id }, deps());
 			expect(expanded).toMatchObject({ ok: true, linksAdded: 2, linksSkipped: 0 });
-			expect(confirm).not.toHaveBeenCalled();
+			// One console code, for the approval; the expand needed none.
+			expect(readCode).toHaveBeenCalledTimes(1);
+			expect(runtime.consoleLines).toHaveLength(1);
 
 			const mapping = (await createPlanIndexStore().read(WORKSPACE_ID)).plans[id];
 			expect(mapping?.expansion).toMatchObject({
@@ -287,18 +367,19 @@ describe("kanban plan", () => {
 		});
 	});
 
-	it("--approved-by-user needs the user's confirmation on the terminal", async () => {
+	it("--approved-by-user needs the user's console code", async () => {
 		await withTemporaryKanbanHome(async () => {
 			writeConfig("team");
 			const { id } = await createPlanCard();
 			moveToReview(id);
 			writeBreakdown();
 
-			confirm.mockResolvedValueOnce(false);
+			readCode.mockResolvedValueOnce("WRONGCODE").mockResolvedValueOnce(null);
 			await expect(expandPlan({ cwd: "/repo", taskId: id, approvedByUser: true }, deps())).rejects.toThrow(
-				/Not confirmed/u,
+				/was not approved: No code entered/u,
 			);
 			expect(allCards()).toHaveLength(1);
+			expect((await createPlanIndexStore().read(WORKSPACE_ID)).plans[id]?.approval).toBeNull();
 
 			const expanded = await expandPlan({ cwd: "/repo", taskId: id, approvedByUser: true }, deps());
 			expect(expanded).toMatchObject({ ok: true, approval: { via: "expand" } });
@@ -334,6 +415,183 @@ describe("kanban plan", () => {
 					.map(({ card }) => card.id)
 					.filter((taskId) => taskId !== id),
 			).toEqual(Object.values(chosen?.cards ?? {}));
+		});
+	});
+
+	describe("the user-only approval route", () => {
+		const setUpPlan = async () => {
+			writeConfig("team");
+			const { id } = await createPlanCard();
+			moveToReview(id);
+			writeBreakdown();
+			return id;
+		};
+		const approvalOf = async (id: string) => (await createPlanIndexStore().read(WORKSPACE_ID)).plans[id]?.approval;
+		const refusal = (id: string) =>
+			`Plan approval is the user's; ask them to run kanban plan approve ${id} or use the board`;
+
+		it("refuses every agent session, isolation off: credentialed, traced to its process tree, or unidentified", async () => {
+			await withTemporaryKanbanHome(async () => {
+				const id = await setUpPlan();
+				const card: RuntimeCaller = {
+					kind: "session",
+					session: { workspaceId: "other", taskId: "c1", role: "card", agentId: "codex", cwd: "/w/c1" },
+					via: "credential",
+				};
+				const callers: RuntimeCaller[] = [
+					orchestrator(),
+					card,
+					// A process that dropped its credential but still runs under its session's PTY.
+					orchestrator("process"),
+					// A credential used outside its session's process tree.
+					{ kind: "unknown", reason: "credential used outside its session's process tree" },
+				];
+				for (const caller of callers) {
+					runtime.caller = caller;
+					const answer = await router.plans.approve({ taskId: id });
+					expect(answer).toMatchObject({ ok: false, approval: null, approvalId: null });
+					expect(answer.error).toContain(refusal(id));
+					await expect(approvePlan({ cwd: "/repo", taskId: id }, deps())).rejects.toThrow(refusal(id));
+					await expect(expandPlan({ cwd: "/repo", taskId: id, approvedByUser: true }, deps())).rejects.toThrow(
+						refusal(id),
+					);
+				}
+				// No code was ever printed, nothing approved, no card created.
+				expect(runtime.consoleLines).toEqual([]);
+				expect(await approvalOf(id)).toBeNull();
+				expect(allCards()).toHaveLength(1);
+			});
+		});
+
+		it("no credential and no session above it is not enough: a reparented process gets only a pending approval", async () => {
+			await withTemporaryKanbanHome(async () => {
+				const id = await setUpPlan();
+				// The strict lookup finds no session above it: it looks like the user.
+				runtime.caller = { kind: "user" };
+				const pending = await router.plans.approve({ taskId: id });
+				expect(pending).toMatchObject({ ok: true, approval: null, plan: { cards: 3, specTitle: "Coupons" } });
+				expect(pending.approvalId).toMatch(/^a-/u);
+				expect(await approvalOf(id)).toBeNull();
+				// Without the console's code it can't finish, and a session can't enter one at all.
+				const id2 = pending.approvalId as string;
+				expect(await router.isolation.approve({ id: id2, code: "NOTTHECODE" })).toMatchObject({ ok: false });
+				runtime.caller = orchestrator();
+				expect(await router.isolation.approve({ id: id2, code: lastCode(runtime.consoleLines) })).toMatchObject({
+					ok: false,
+					error: expect.stringContaining("Only the user"),
+				});
+				expect(await approvalOf(id)).toBeNull();
+				expect(runtime.consoleLines[0]).toContain(`plan ${id} "Coupons" in ${WORKSPACE_ID}: 3 cards`);
+			});
+		});
+
+		it("kanban plan approve: the code typed on the terminal, or entered with kanban isolation approve", async () => {
+			await withTemporaryKanbanHome(async () => {
+				const id = await setUpPlan();
+				const typed = await approvePlan({ cwd: "/repo", taskId: id }, deps());
+				expect(typed).toMatchObject({ ok: true, cards: 3, approval: { via: "approve" } });
+				expect(await approvalOf(id)).toEqual(typed.approval);
+
+				// No terminal: it waits until the user runs `kanban isolation approve <id> <code>` elsewhere.
+				writeBreakdown({ ...BREAKDOWN, summary: "Second round." });
+				const waited = await approvePlan(
+					{ cwd: "/repo", taskId: id },
+					{
+						...deps(),
+						approval: {
+							readCode: null,
+							write: () => {},
+							pollMs: 1,
+							sleep: async () => {
+								const approvalId = /approve (a-[0-9a-f]+) /u.exec(runtime.consoleLines.at(-1) ?? "")?.[1];
+								await router.isolation.approve({
+									id: approvalId as string,
+									code: lastCode(runtime.consoleLines),
+								});
+							},
+						},
+					},
+				);
+				expect(waited).toMatchObject({ ok: true, approval: { via: "approve" } });
+				expect((waited.approval as { breakdownSha256: string }).breakdownSha256).not.toBe(
+					(typed.approval as { breakdownSha256: string }).breakdownSha256,
+				);
+			});
+		});
+
+		it("the browser: a passcode browser is approved at once, a local one enters the console code", async () => {
+			await withTemporaryKanbanHome(async () => {
+				const id = await setUpPlan();
+				const preview = await router.plans.preview({ taskId: id });
+				expect(preview).toMatchObject({
+					ok: true,
+					plan: { taskId: id, specTitle: "Coupons", cards: 3, approval: null },
+				});
+				const shownSha = preview.plan?.breakdownSha256 ?? null;
+
+				const local = await router.plans.approve({ taskId: id, breakdownSha256: shownSha });
+				expect(local.approval).toBeNull();
+				expect(
+					await router.isolation.approve({
+						id: local.approvalId as string,
+						code: lastCode(runtime.consoleLines),
+					}),
+				).toMatchObject({ ok: true, result: `plan ${id} approved (3 cards)` });
+				expect(await approvalOf(id)).toMatchObject({ via: "approve", breakdownSha256: shownSha });
+
+				writeBreakdown({ ...BREAKDOWN, summary: "Changed after the review." });
+				// The browser approves only what it showed.
+				expect(await router.plans.approve({ taskId: id, breakdownSha256: shownSha })).toMatchObject({
+					ok: false,
+					error: expect.stringContaining("changed since it was shown"),
+				});
+				runtime.trustedBrowser = true;
+				const lines = runtime.consoleLines.length;
+				const trusted = await router.plans.approve({ taskId: id });
+				expect(trusted).toMatchObject({ ok: true, approvalId: null, approval: { via: "approve" } });
+				expect(trusted.plan?.approval?.state).toBe("approved");
+				expect(runtime.consoleLines).toHaveLength(lines);
+				expect(await approvalOf(id)).toEqual(trusted.approval);
+			});
+		});
+
+		it("a breakdown changed while the code waited is not approved", async () => {
+			await withTemporaryKanbanHome(async () => {
+				const id = await setUpPlan();
+				const pending = await router.plans.approve({ taskId: id });
+				writeBreakdown({ ...BREAKDOWN, summary: "Edited while waiting." });
+				expect(
+					await router.isolation.approve({
+						id: pending.approvalId as string,
+						code: lastCode(runtime.consoleLines),
+					}),
+				).toMatchObject({ ok: false, error: expect.stringContaining("changed while the approval waited") });
+				expect(await approvalOf(id)).toBeNull();
+			});
+		});
+
+		it("the orchestrator expands an approved plan; an edited breakdown needs the user again", async () => {
+			await withTemporaryKanbanHome(async () => {
+				const id = await setUpPlan();
+				await approvePlan({ cwd: "/repo", taskId: id }, deps());
+				readCode.mockClear();
+
+				writeBreakdown({ ...BREAKDOWN, summary: "Edited after the approval." });
+				runtime.caller = orchestrator();
+				await expect(expandPlan({ cwd: "/repo", taskId: id }, deps())).rejects.toThrow(
+					/changed after the user approved/u,
+				);
+				await expect(approvePlan({ cwd: "/repo", taskId: id }, deps())).rejects.toThrow(refusal(id));
+
+				runtime.caller = { kind: "user" };
+				await approvePlan({ cwd: "/repo", taskId: id }, deps());
+				runtime.caller = orchestrator();
+				const expanded = await expandPlan({ cwd: "/repo", taskId: id }, deps());
+				expect(expanded).toMatchObject({ ok: true, linksAdded: 2 });
+				expect(allCards()).toHaveLength(4);
+				// One code: the user's second approval. The expand asked nobody.
+				expect(readCode).toHaveBeenCalledTimes(1);
+			});
 		});
 	});
 });

@@ -415,6 +415,25 @@ describe("BoardCard", () => {
 		expect(container.querySelector('[data-testid="board-card-role-badge"]')).toBeNull();
 	});
 
+	it("shows Approve plan only on a plan card in Review", async () => {
+		const hasApprovePlan = () =>
+			Array.from(container.querySelectorAll("button")).some(
+				(button) => button.textContent?.trim() === "Approve plan",
+			);
+		await act(async () => {
+			renderWithTooltips(<BoardCard card={createCard({ role: "plan" })} index={0} columnId="review" />);
+		});
+		expect(hasApprovePlan()).toBe(true);
+		await act(async () => {
+			renderWithTooltips(<BoardCard card={createCard({ role: "plan" })} index={0} columnId="in_progress" />);
+		});
+		expect(hasApprovePlan()).toBe(false);
+		await act(async () => {
+			renderWithTooltips(<BoardCard card={createCard({})} index={0} columnId="review" />);
+		});
+		expect(hasApprovePlan()).toBe(false);
+	});
+
 	it("shows agent override details with the model and effort verbatim", async () => {
 		await act(async () => {
 			renderWithTooltips(

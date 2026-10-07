@@ -135,6 +135,10 @@ output carries it. On a terminal the command asks for the code; otherwise comple
 callers, and the CLI refuses `grant`, `approve` and `revoke` inside a session. Nothing an agent can set (config,
 messages, env) turns this on or off.
 
+A plan card's approval (`kanban plan approve`, `plan expand --approved-by-user`, the board's Approve plan) uses the
+same code in every isolation mode, `off` included (docs/team/WORKFLOW.md §13): the user's alone, refused for every
+agent session.
+
 A grant lets one session of a project reach the named projects for up to 24 h. Its API and CLI access applies
 immediately. Its file denies are dropped at that session's next launch. Grants live only in the server's memory and
 end at a restart. Every grant, use and revoke is logged on both sides. The server refuses grants from agent sessions
