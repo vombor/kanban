@@ -4,21 +4,26 @@
 // or a landing-mode change needs no restart), asks the kit, and writes each new decision to the decision log.
 // A pipeline fix ships as a worker restart instead of a Kanban restart, so no card's PTY dies for it.
 //
+// Each Review card goes through the submission stage first (snapshot, scripted checks; submission-stage.ts). The
+// checks run in this process, one at a time for the whole worker (checks.ts), and their results go to the card's
+// pipeline-state entry, the QA log and the decision log.
+//
 // A workspace is evaluated only with landing mode `qa`. Everything else (`off`, `commit`, `pr`, no entry = `off`
 // on the `default` kit) is forgotten: no state file, no log, no kit question.
 import { getWorkspacePipelineSettings, type ParsedPipelineConfig, readPipelineConfig } from "../config/pipeline-config";
-import type { RuntimeBoardCard } from "../core/api-contract";
 import { type EffectiveModelConfig, readClineDefaultModel } from "../core/effective-agent";
 import { createRoutingPolicy } from "../kits/policy";
 import { type KitCatalog, loadKitCatalog, resolveWorkspaceKit } from "../kits/resolve-kit";
 import { readClineProvidersFile } from "../models/cline-providers";
 import { getClineProvidersSettingsPath } from "../state/kanban-home";
+import { CHECKS_VERSION, type ChecksResult, type ChecksRunner, createChecksRunner, formatChecksReport } from "./checks";
 import { createPipelineDecisionLog, type PipelineDecisionLog, type PipelineDecisionRecord } from "./decision-log";
 import { evaluatePipelineWorkspace, isPipelineWorkspace, type PipelineWorkspaceSnapshot } from "./engine";
 import { createPipelineEventBus, type PipelineEventBus } from "./events";
 import { createPipelineFeatureRegistry, type PipelineFeatureRegistry } from "./features";
 import { createPipelineStateStore, type PipelineStateStore } from "./pipeline-state";
-import { probeTaskHasWork } from "./work-probe";
+import { type AppendQaLog, createQaLogAppender } from "./qa-log";
+import { createSubmissionStage, type SubmissionInspector } from "./submission-stage";
 import { isPipelineHostMessage, type PipelineHostMessage, type PipelineWorkerMessage } from "./worker-protocol";
 
 export interface PipelineWorkerDependencies {
@@ -29,7 +34,11 @@ export interface PipelineWorkerDependencies {
 	decisionLog?: PipelineDecisionLog;
 	bus?: PipelineEventBus;
 	features?: PipelineFeatureRegistry;
-	hasWork?: (workspacePath: string, card: RuntimeBoardCard) => Promise<boolean>;
+	/** The submission stage (snapshot + checks). Default: the real one, with `checks`. */
+	inspectSubmission?: SubmissionInspector;
+	/** Factory for the checks runner; gets the result recorder. */
+	createChecks?: (onResult: (result: ChecksResult) => Promise<void>) => ChecksRunner;
+	appendQaLog?: AppendQaLog;
 	loadAgentDefaultModels?: (config: ParsedPipelineConfig) => Promise<EffectiveModelConfig["agentDefaultModels"]>;
 	now?: () => number;
 }
@@ -66,12 +75,72 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 	const decisionLog = deps.decisionLog ?? createPipelineDecisionLog();
 	const bus = deps.bus ?? createPipelineEventBus({ log });
 	const features = deps.features ?? createPipelineFeatureRegistry({ bus, log });
-	const hasWork = deps.hasWork ?? probeTaskHasWork;
+	const appendQaLog = deps.appendQaLog ?? createQaLogAppender();
 	const loadAgentDefaultModels = deps.loadAgentDefaultModels ?? loadDefaultAgentModels;
 	const now = deps.now ?? Date.now;
 
+	const recordChecksResult = async (result: ChecksResult): Promise<void> => {
+		const { request } = result;
+		const parsed = await readConfig();
+		const settings = getWorkspacePipelineSettings(parsed.config, request.workspaceId);
+		const resolution = resolveWorkspaceKit(parsed.config, request.workspaceId, await loadCatalog());
+		const steps = result.steps.map((step) => ({
+			name: step.name,
+			status: step.skipped ? "skipped" : step.ok ? "ok" : step.timedOut ? "timeout" : "fail",
+			ms: step.ms ?? null,
+		}));
+		// The legacy checks-state fields (`snapshot`, `version`, `harness`: the checked snapshot) plus the result.
+		await store.update(request.workspaceId, (state) => {
+			state.cards[request.taskId] = {
+				...state.cards[request.taskId],
+				snapshot: request.snapshot,
+				version: CHECKS_VERSION,
+				harness: result.harness,
+				checks: {
+					verdict: result.verdict,
+					at: new Date(result.finishedAt).toISOString(),
+					logs: result.logsDir,
+					steps,
+					error: result.error,
+				},
+			};
+			return state;
+		});
+		if (result.verdict !== "ERROR") {
+			await appendQaLog(request.workspaceId, formatChecksReport(result));
+		}
+		const summary = result.error ?? steps.map((step) => `${step.name.replaceAll(" ", "_")}=${step.status}`).join(" ");
+		await decisionLog.append([
+			{
+				at: new Date(result.finishedAt).toISOString(),
+				workspaceId: request.workspaceId,
+				taskId: request.taskId,
+				stage: "checks",
+				kit: resolution.kitName,
+				landingMode: settings.landing.mode,
+				shadow: settings.pipeline.shadow,
+				effectiveAgent: null,
+				model: null,
+				role: "dev",
+				answer: null,
+				outcome: "acted",
+				note: `checks ${result.verdict} on ${request.snapshot.slice(0, 8)}${result.harness ? " (harness problems; checked again on the next submission)" : ""}: ${summary}`,
+			},
+		]);
+		log(`checks ${request.taskId}: ${result.verdict} (${summary})`);
+	};
+	const checks =
+		deps.createChecks?.(recordChecksResult) ??
+		createChecksRunner({
+			readSettings: async () => (await readConfig()).config.pipeline.checks,
+			onResult: recordChecksResult,
+			log,
+		});
+	const submissionStage = createSubmissionStage({ checks });
+	const inspectSubmission = deps.inspectSubmission ?? submissionStage.inspect;
+
 	const queues = new Map<string, WorkspaceQueue>();
-	// "<workspaceId>:<taskId>" → the last logged decision, so an unchanged answer is logged once.
+	// "<workspaceId>:<taskId>:<stage>" → the last logged decision, so an unchanged one is logged once.
 	const lastDecisionKeys = new Map<string, string>();
 	// workspaceId → the settings/kit line last logged for it.
 	const lastWatchKeys = new Map<string, string>();
@@ -80,6 +149,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 
 	const forget = (workspaceId: string): void => {
 		features.removeWorkspace(workspaceId);
+		submissionStage.forgetWorkspace(workspaceId);
 		if (lastWatchKeys.delete(workspaceId)) {
 			log(`pipeline ${workspaceId}: not watched any more`);
 		}
@@ -149,12 +219,22 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			state,
 			limits: { maxFailRounds: parsed.config.pipeline.rework.maxFailRounds },
 			agentDefaultModels: await loadAgentDefaultModels(parsed),
-			hasWork: async (card) => await hasWork(snapshot.workspacePath, card),
+			inspectSubmission: async (input) =>
+				await inspectSubmission(
+					{
+						workspaceId,
+						workspacePath: snapshot.workspacePath,
+						settings,
+						kitName: resolution.kitName,
+						state,
+					},
+					input,
+				),
 			now: now(),
 		});
 		const seen = new Set<string>();
 		for (const decision of decisions) {
-			const cardKey = `${workspaceId}:${decision.taskId}`;
+			const cardKey = `${workspaceId}:${decision.taskId}:${decision.stage}`;
 			seen.add(cardKey);
 			const key = decisionKey(decision);
 			if (lastDecisionKeys.get(cardKey) !== key) {
@@ -162,7 +242,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 				records.push(decision);
 			}
 		}
-		// A card that left Review (or lost its work) is decided again when it comes back.
+		// A card that left Review (or lost its work) is decided again when it comes back, stage by stage.
 		for (const key of [...lastDecisionKeys.keys()]) {
 			if (key.startsWith(`${workspaceId}:`) && !seen.has(key)) {
 				lastDecisionKeys.delete(key);
@@ -216,6 +296,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 		},
 		close: () => {
 			closed = true;
+			checks.close();
 			features.close();
 		},
 	};

@@ -6,14 +6,7 @@ export default defineConfig({
 	test: {
 		globals: true,
 		environment: "node",
-		exclude: [
-			"apps/**",
-			"web-ui/**",
-			"third_party/**",
-			"**/node_modules/**",
-			"**/dist/**",
-			".worktrees/**",
-		],
+		exclude: ["apps/**", "web-ui/**", "third_party/**", "**/node_modules/**", "**/dist/**", ".worktrees/**"],
 		// Clears KANBAN_HOME / KANBAN_WORKTREES so a developer's real home never leaks into tests, and points
 		// the Claude/Codex config files at a missing dir so pre-trust never edits the real ones.
 		setupFiles: ["test/utilities/vitest-setup.ts", "test/utilities/isolate-agent-config.ts"],

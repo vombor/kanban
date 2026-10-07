@@ -16,7 +16,7 @@ import { getPipelineDecisionLogPath } from "../state/kanban-home";
 /** Rotated to `<log>.1` past this size, so a long shadow period can't fill the disk. */
 const DECISION_LOG_MAX_BYTES = 5 * 1024 * 1024;
 
-export type PipelineStage = "worker" | "qa_gate";
+export type PipelineStage = "worker" | "snapshot" | "checks" | "qa_gate";
 
 /**
  * What the pipeline did with a decision. `none`: nothing to do. `shadow`: it would act, but the workspace is in

@@ -9,10 +9,13 @@ import type {
 	RuntimeTaskSessionSummary,
 } from "../../src/core/api-contract";
 import { loadKitCatalog } from "../../src/kits/resolve-kit";
+import type { ChecksResult, ChecksRunner } from "../../src/pipeline/checks";
 import { createPipelineDecisionLog, type PipelineDecisionRecord } from "../../src/pipeline/decision-log";
 import type { PipelineSessionView, PipelineWorkspaceSnapshot } from "../../src/pipeline/engine";
 import { createPipelineEventBus, type PipelineEventMap, type PipelineEventName } from "../../src/pipeline/events";
 import { createPipelineStateStore } from "../../src/pipeline/pipeline-state";
+import { type AppendQaLog, createQaLogAppender } from "../../src/pipeline/qa-log";
+import type { SubmissionInspector } from "../../src/pipeline/submission-stage";
 import { createPipelineWorker } from "../../src/pipeline/worker";
 import type { PipelineWorkerMessage } from "../../src/pipeline/worker-protocol";
 import { createTempDir } from "./temp-dir";
@@ -20,8 +23,12 @@ import { createTempDir } from "./temp-dir";
 export interface PipelineWorkerHarnessOptions {
 	/** The raw config.json content; mutable through `setConfig`. */
 	config?: unknown;
-	/** Default: every card has work. */
+	/** Default: every card has work (and the submission stage does nothing else). */
 	hasWork?: (card: RuntimeBoardCard) => boolean;
+	/** Replaces the fake submission stage built from `hasWork`. */
+	inspectSubmission?: SubmissionInspector;
+	createChecks?: (onResult: (result: ChecksResult) => Promise<void>) => ChecksRunner;
+	appendQaLog?: AppendQaLog;
 	/** Legacy checks-state.json per workspace id, for the import. */
 	legacyChecksState?: Record<string, unknown>;
 }
@@ -37,6 +44,7 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 	const events: Array<{ name: PipelineEventName; event: PipelineEventMap[PipelineEventName] }> = [];
 	const statePath = (workspaceId: string) => join(temp.path, "data", workspaceId, "pipeline-state.json");
 	const logPath = (workspaceId: string) => join(temp.path, "data", workspaceId, "pipeline-decisions.jsonl");
+	const qaLogPath = (workspaceId: string) => join(temp.path, "data", workspaceId, "qa-log.md");
 	const legacyDir = join(temp.path, "legacy");
 	const bus = createPipelineEventBus();
 	for (const name of ["verdictRecorded", "landed", "reworkSent", "escalated"] as const) {
@@ -55,7 +63,11 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 		}),
 		decisionLog: createPipelineDecisionLog({ getLogPath: logPath }),
 		bus,
-		hasWork: async (_workspacePath, card) => options.hasWork?.(card) ?? true,
+		inspectSubmission:
+			options.inspectSubmission ??
+			(async (_context, { card }) => ({ hasWork: options.hasWork?.(card) ?? true, records: [] })),
+		createChecks: options.createChecks,
+		appendQaLog: options.appendQaLog ?? createQaLogAppender(qaLogPath),
 		loadAgentDefaultModels: async () => ({}),
 		now: () => Date.parse("2026-10-07T10:00:00.000Z"),
 	});
@@ -79,12 +91,14 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 		legacyDir,
 		statePath,
 		logPath,
+		qaLogPath,
 		setConfig: (next: unknown) => {
 			rawConfig = next;
 		},
 		readDecisions,
-		/** Card decisions only (no "watching" records). */
-		readCardDecisions: (workspaceId: string) => readDecisions(workspaceId).filter((record) => record.taskId !== null),
+		/** A stage's card decisions (no "watching" records); default the QA gate's. */
+		readCardDecisions: (workspaceId: string, stage: PipelineDecisionRecord["stage"] = "qa_gate") =>
+			readDecisions(workspaceId).filter((record) => record.taskId !== null && record.stage === stage),
 		send: async (snapshot: PipelineWorkspaceSnapshot) => {
 			await worker.handle({ type: "snapshot", snapshot });
 			await worker.idle();

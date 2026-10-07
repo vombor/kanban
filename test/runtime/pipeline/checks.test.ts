@@ -1,0 +1,308 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+import { afterEach, describe, expect, it } from "vitest";
+
+import { getDefaultWorkspacePipelineSettings, parsePipelineConfig } from "../../../src/config/pipeline-config";
+import {
+	type ChecksRequest,
+	type ChecksResult,
+	type ChecksSettings,
+	createCheckStepEnv,
+	createChecksRunner,
+	formatChecksReport,
+	type RunCheckStepInput,
+	resolveChecksEnabled,
+	runCheckStep,
+} from "../../../src/pipeline/checks";
+import { createTempDir } from "../../utilities/temp-dir";
+
+function createDeferred() {
+	let resolve: () => void = () => {};
+	const promise = new Promise<void>((done) => {
+		resolve = done;
+	});
+	return { promise, resolve };
+}
+
+function request(overrides: Partial<ChecksRequest> = {}): ChecksRequest {
+	return {
+		workspaceId: "foo",
+		repoPath: "/repos/foo",
+		taskId: "dev-1",
+		title: "Add the thing",
+		baseRef: "main",
+		snapshot: "aaaaaaaa11111111",
+		scripts: ["typecheck", "lint", "test", "build"],
+		...overrides,
+	};
+}
+
+describe("resolveChecksEnabled", () => {
+	const settingsFor = (entry: unknown) =>
+		parsePipelineConfig({ workspaces: { foo: entry } }).config.workspaces.foo ??
+		getDefaultWorkspacePipelineSettings();
+
+	it("is off for a workspace without an entry and for the default kit, even on landing qa", () => {
+		expect(resolveChecksEnabled(getDefaultWorkspacePipelineSettings(), "default")).toBe(false);
+		expect(resolveChecksEnabled(settingsFor({ landing: { mode: "qa" } }), "default")).toBe(false);
+	});
+
+	it("is on by default only for landing qa on another kit", () => {
+		expect(resolveChecksEnabled(settingsFor({ landing: { mode: "qa" }, kit: { name: "team" } }), "team")).toBe(true);
+		expect(resolveChecksEnabled(settingsFor({ landing: { mode: "commit" }, kit: { name: "team" } }), "team")).toBe(
+			false,
+		);
+	});
+
+	it("an explicit setting wins both ways", () => {
+		expect(resolveChecksEnabled(settingsFor({ landing: { mode: "qa" }, checks: { enabled: false } }), "team")).toBe(
+			false,
+		);
+		expect(resolveChecksEnabled(settingsFor({ checks: { enabled: true } }), "default")).toBe(true);
+	});
+});
+
+describe("check step environment", () => {
+	it("caps test-runner workers, drops Kanban and git repo variables and NODE_ENV", () => {
+		const previous = { ...process.env };
+		process.env.KANBAN_HOME = "/live/home";
+		process.env.KANBAN_RUNTIME_PORT = "3484";
+		process.env.GIT_DIR = "/elsewhere/.git";
+		process.env.NODE_ENV = "production";
+		try {
+			const settings = parsePipelineConfig({ pipeline: { checks: { maxWorkers: 3 } } }).config.pipeline.checks;
+			const env = createCheckStepEnv(settings, "/tmp/checks/.npmrc");
+			expect(env).toMatchObject({
+				CI: "1",
+				npm_config_userconfig: "/tmp/checks/.npmrc",
+				VITEST_MAX_WORKERS: "3",
+				VITEST_MAX_THREADS: "3",
+				VITEST_MAX_FORKS: "3",
+			});
+			for (const key of ["KANBAN_HOME", "KANBAN_RUNTIME_PORT", "GIT_DIR", "NODE_ENV"]) {
+				expect(env[key]).toBeUndefined();
+			}
+		} finally {
+			process.env = previous;
+		}
+	});
+});
+
+describe("runCheckStep", () => {
+	const temps: Array<{ cleanup: () => void }> = [];
+	afterEach(() => {
+		for (const temp of temps.splice(0)) {
+			temp.cleanup();
+		}
+	});
+	const tempDir = () => {
+		const temp = createTempDir("kanban-check-step-");
+		temps.push(temp);
+		return temp.path;
+	};
+
+	it("runs the command niced with its output in the log file", async () => {
+		const dir = tempDir();
+		const result = await runCheckStep({
+			command: "echo hello; nice",
+			cwd: dir,
+			logFile: join(dir, "logs", "step.log"),
+			env: process.env,
+			timeoutMs: 10_000,
+			niceness: 7,
+			onSpawn: () => {},
+		});
+		expect(result.ok).toBe(true);
+		// `nice` with no arguments prints the niceness it runs at.
+		expect(
+			readFileSync(join(dir, "logs", "step.log"), "utf8")
+				.split("\n")
+				.slice(0, 2),
+		).toEqual(["hello", expect.stringMatching(/^\d+$/)]);
+		expect(Number(result.text?.split("\n")[1])).toBeGreaterThanOrEqual(7);
+	});
+
+	it("kills the step's whole process group at the timeout", async () => {
+		const dir = tempDir();
+		const pidFile = join(dir, "child.pid");
+		const started = Date.now();
+		const result = await runCheckStep({
+			// A background child in the same group must go too.
+			command: `sleep 30 & echo $! > ${pidFile}; wait`,
+			cwd: dir,
+			logFile: join(dir, "step.log"),
+			env: process.env,
+			timeoutMs: 300,
+			niceness: 0,
+			onSpawn: () => {},
+		});
+		expect(result).toMatchObject({ ok: false, timedOut: true });
+		expect(Date.now() - started).toBeLessThan(10_000);
+		const pid = Number(readFileSync(pidFile, "utf8"));
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(() => process.kill(pid, 0)).toThrow();
+	});
+});
+
+describe("checks runner", () => {
+	const temps: Array<{ cleanup: () => void }> = [];
+	afterEach(() => {
+		for (const temp of temps.splice(0)) {
+			temp.cleanup();
+		}
+	});
+
+	function createHarness(options: { scripts?: Record<string, string>; failing?: string[]; holdFirst?: boolean } = {}) {
+		const temp = createTempDir("kanban-checks-");
+		temps.push(temp);
+		const settings: ChecksSettings = {
+			...parsePipelineConfig({}).config.pipeline.checks,
+			scratchRoot: join(temp.path, "scratch"),
+		};
+		const steps: RunCheckStepInput[] = [];
+		const results: ChecksResult[] = [];
+		const exported: string[] = [];
+		const hold = createDeferred();
+		let active = 0;
+		let maxActive = 0;
+		const runner = createChecksRunner({
+			readSettings: async () => settings,
+			onResult: async (result) => {
+				results.push(result);
+			},
+			log: () => {},
+			exportSnapshot: async (_repoPath, snapshot, dir) => {
+				exported.push(snapshot);
+				mkdirSync(join(dir, "node_modules"), { recursive: true });
+				writeFileSync(join(dir, "package-lock.json"), "{}");
+				writeFileSync(
+					join(dir, "package.json"),
+					JSON.stringify({ scripts: options.scripts ?? { typecheck: "tsc", test: "vitest run" } }),
+				);
+			},
+			runStep: async (input) => {
+				steps.push(input);
+				active += 1;
+				maxActive = Math.max(maxActive, active);
+				if (options.holdFirst && steps.length === 1) {
+					await hold.promise;
+				}
+				active -= 1;
+				const failed = options.failing?.some((name) => input.command.includes(name)) ?? false;
+				return { ok: !failed, ms: 1000, timedOut: false, text: failed ? "Error: boom\nfailed" : "Tests  3 passed" };
+			},
+		});
+		return { runner, settings, steps, results, exported, hold, getMaxActive: () => maxActive };
+	}
+
+	it("installs, runs the configured scripts that exist, niced and capped, and reports PASS", async () => {
+		const harness = createHarness();
+		expect(harness.runner.enqueue(request())).toBe("queued");
+		await harness.runner.idle();
+
+		expect(harness.steps.map((step) => step.command)).toEqual([
+			"npm ci --no-audit --no-fund",
+			"npm run -s typecheck",
+			"npm run -s test",
+		]);
+		for (const step of harness.steps) {
+			expect(step.niceness).toBe(10);
+			expect(step.timeoutMs).toBe(15 * 60_000);
+			expect(step.env.VITEST_MAX_WORKERS).toBe("2");
+		}
+		expect(harness.results).toHaveLength(1);
+		expect(harness.results[0]).toMatchObject({ verdict: "PASS", harness: false, error: null });
+		// node_modules is removed after the run; the logs stay.
+		const dir = join(harness.settings.scratchRoot, "foo", "dev-1");
+		expect(existsSync(join(dir, "node_modules"))).toBe(false);
+		expect(existsSync(join(dir, ".checks"))).toBe(true);
+		expect(readFileSync(join(harness.settings.scratchRoot, ".npmrc-checks"), "utf8")).toContain(
+			"allow-scripts=esbuild,prisma,@prisma/engines,@prisma/client,sqlite3",
+		);
+	});
+
+	it("runs one step at a time across cards, and a newer snapshot replaces a queued one", async () => {
+		const harness = createHarness({ holdFirst: true });
+		expect(harness.runner.enqueue(request({ taskId: "a" }))).toBe("queued");
+		expect(harness.runner.enqueue(request({ taskId: "b", snapshot: "b1" }))).toBe("queued");
+		expect(harness.runner.enqueue(request({ taskId: "b", snapshot: "b1" }))).toBe("already_queued");
+		expect(harness.runner.enqueue(request({ taskId: "b", snapshot: "b2" }))).toBe("requeued");
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(harness.runner.enqueue(request({ taskId: "a" }))).toBe("running");
+		harness.hold.resolve();
+		await harness.runner.idle();
+
+		expect(harness.getMaxActive()).toBe(1);
+		expect(harness.exported).toEqual(["aaaaaaaa11111111", "b2"]);
+		expect(harness.results.map((result) => [result.request.taskId, result.request.snapshot])).toEqual([
+			["a", "aaaaaaaa11111111"],
+			["b", "b2"],
+		]);
+	});
+
+	it("reports a failing script as FAIL with the cause first", async () => {
+		const harness = createHarness({ failing: ["typecheck"] });
+		harness.runner.enqueue(request());
+		await harness.runner.idle();
+
+		const [result] = harness.results;
+		expect(result?.verdict).toBe("FAIL");
+		const report = formatChecksReport(result as ChecksResult);
+		expect(report).toContain("## dev-1 Add the thing — checks FAIL");
+		expect(report).toContain("typecheck ❌");
+		expect(report).toContain("- typecheck failed:");
+		expect(report).toContain("Error: boom");
+		expect(report).toContain("- Tests: Tests  3 passed");
+	});
+
+	it("skips the scripts when the root install fails, and flags network errors as harness problems", async () => {
+		const harness = createHarness({ failing: ["npm ci"] });
+		harness.runner.enqueue(request());
+		await harness.runner.idle();
+		expect(harness.results[0]?.steps.map((step) => [step.name, step.ok, step.skipped ?? null])).toEqual([
+			["install", false, null],
+			["typecheck", false, true],
+			["test", false, true],
+		]);
+	});
+
+	it("a checker error (export failed) is ERROR with harness set, and the queue goes on", async () => {
+		const temp = createTempDir("kanban-checks-");
+		temps.push(temp);
+		const results: ChecksResult[] = [];
+		const runner = createChecksRunner({
+			readSettings: async () => ({ ...parsePipelineConfig({}).config.pipeline.checks, scratchRoot: temp.path }),
+			onResult: async (result) => {
+				results.push(result);
+			},
+			log: () => {},
+			exportSnapshot: async (_repo, snapshot) => {
+				if (snapshot === "bad") {
+					throw new Error("git archive failed");
+				}
+			},
+			runStep: async () => ({ ok: true }),
+		});
+		runner.enqueue(request({ taskId: "a", snapshot: "bad" }));
+		runner.enqueue(request({ taskId: "b", snapshot: "good" }));
+		await runner.idle();
+		expect(results.map((result) => [result.request.taskId, result.verdict, result.harness])).toEqual([
+			["a", "ERROR", true],
+			["b", "PASS", false],
+		]);
+		expect(results[0]?.error).toContain("git archive failed");
+	});
+
+	it("close() drops the queue", async () => {
+		const harness = createHarness({ holdFirst: true });
+		harness.runner.enqueue(request({ taskId: "a" }));
+		harness.runner.enqueue(request({ taskId: "b" }));
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		harness.runner.close();
+		harness.hold.resolve();
+		await harness.runner.idle();
+		expect(harness.results).toEqual([]);
+		expect(harness.exported).toEqual(["aaaaaaaa11111111"]);
+	});
+});

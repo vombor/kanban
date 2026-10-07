@@ -58,7 +58,10 @@ function createSummary(
 }
 
 /** Stands in for a TerminalSessionManager: holds summaries and emits them like `emitSummary`. */
-function createFakeSessions(initial: RuntimeTaskSessionSummary[] = [], stateEnteredAt: Map<string, number> = new Map()) {
+function createFakeSessions(
+	initial: RuntimeTaskSessionSummary[] = [],
+	stateEnteredAt: Map<string, number> = new Map(),
+) {
 	const summaries = new Map(initial.map((summary) => [summary.taskId, summary]));
 	const listeners = new Set<(summary: RuntimeTaskSessionSummary) => void>();
 	const sessions: SessionColumnSyncSessions = {
@@ -598,9 +601,7 @@ describe("session column sync with the Cline CLI idle-TUI check", () => {
 		await harness.syncOnce();
 
 		expect(harness.columnOf("task-1")).toBe("in_progress");
-		expect(harness.moves).toEqual([
-			{ taskId: "task-1", from: "review", to: "in_progress", sessionState: "running" },
-		]);
+		expect(harness.moves).toEqual([{ taskId: "task-1", from: "review", to: "in_progress", sessionState: "running" }]);
 		expect(harness.log).not.toHaveBeenCalled();
 	});
 

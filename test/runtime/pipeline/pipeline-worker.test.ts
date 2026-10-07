@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import type { ChecksResult } from "../../../src/pipeline/checks";
 import { createPipelineWorkerHarness, createSnapshot } from "../../utilities/pipeline-worker";
 import { createBoard, createCard } from "../../utilities/workspace-state-store";
 
@@ -177,5 +178,126 @@ describe("pipeline worker", () => {
 		expect(harness.readCardDecisions("foo")[0]?.note).toMatch(/^round 3:/u);
 		// Read-only: the legacy file is untouched.
 		expect(JSON.parse(readFileSync(legacyPath, "utf8"))["old-1"]).toBe("deadbeef");
+	});
+
+	it("logs the submission stage's records once per stage, next to the QA gate's", async () => {
+		const harness = createHarness({
+			config: { workspaces: { foo: QA_WORKSPACE } },
+			inspectSubmission: async (_context, { card }) => ({
+				hasWork: true,
+				records: [
+					{ stage: "snapshot", outcome: "acted", note: `snapshot of ${card.id}` },
+					{ stage: "checks", outcome: "acted", note: "checks queued" },
+				],
+			}),
+		});
+		const snapshot = createSnapshot({
+			workspaceId: "foo",
+			board: createBoard({ review: [createCard({ id: "dev-1" })] }),
+			selectedAgentId: "claude",
+		});
+
+		await harness.send(snapshot);
+		await harness.send(snapshot);
+
+		expect(harness.readDecisions("foo").map((record) => [record.stage, record.taskId])).toEqual([
+			["worker", null],
+			["snapshot", "dev-1"],
+			["checks", "dev-1"],
+			["qa_gate", "dev-1"],
+		]);
+		expect(harness.readCardDecisions("foo", "snapshot")[0]).toMatchObject({
+			role: "dev",
+			effectiveAgent: { agentId: "claude", source: "selected" },
+			answer: null,
+			note: "snapshot of dev-1",
+		});
+	});
+
+	it("treats the legacy kit's QA and calibration cards (no role) as what they are, not as dev cards", async () => {
+		const inspected: string[] = [];
+		const harness = createHarness({
+			config: { workspaces: { foo: QA_WORKSPACE } },
+			inspectSubmission: async (_context, { card, effective }) => {
+				inspected.push(`${card.id}:${effective.role}`);
+				return { hasWork: true, records: [] };
+			},
+		});
+
+		await harness.send(
+			createSnapshot({
+				workspaceId: "foo",
+				board: createBoard({
+					review: [
+						createCard({ id: "qa-1", title: "QA abc12: Add a button" }),
+						createCard({ id: "cal-1", title: "QA-CAL v7 case 1" }),
+					],
+				}),
+				selectedAgentId: "claude",
+			}),
+		);
+
+		expect(inspected).toEqual(["qa-1:qa", "cal-1:calibration"]);
+		expect(harness.readCardDecisions("foo")).toMatchObject([
+			{ taskId: "qa-1", role: "qa", answer: { kind: "none" } },
+			{ taskId: "cal-1", role: "calibration", answer: { kind: "none" } },
+		]);
+	});
+
+	it("records a checks result in the card's state, the QA log and the decision log", async () => {
+		const recorders: Array<(result: ChecksResult) => Promise<void>> = [];
+		const harness = createHarness({
+			config: { workspaces: { foo: QA_WORKSPACE } },
+			createChecks: (onResult) => {
+				recorders.push(onResult);
+				return { enqueue: () => "queued", idle: async () => {}, close: () => {} };
+			},
+		});
+		const result: ChecksResult = {
+			request: {
+				workspaceId: "foo",
+				repoPath: "/repos/foo",
+				taskId: "dev-1",
+				title: "Add a button",
+				baseRef: "main",
+				snapshot: "0123456789abcdef",
+				scripts: ["test"],
+			},
+			verdict: "FAIL",
+			harness: false,
+			steps: [
+				{ name: "install", ok: true, ms: 2000 },
+				{ name: "test", ok: false, ms: 3000, text: "Error: expected 1 to be 2" },
+			],
+			logsDir: "/tmp/kanban-checks/foo/dev-1/.checks",
+			startedAt: Date.parse("2026-10-07T10:00:00.000Z"),
+			finishedAt: Date.parse("2026-10-07T10:01:00.000Z"),
+			timeoutMin: 15,
+			error: null,
+		};
+
+		expect(recorders).toHaveLength(1);
+		await recorders[0]?.(result);
+
+		const state = JSON.parse(readFileSync(harness.statePath("foo"), "utf8"));
+		expect(state.cards["dev-1"]).toMatchObject({
+			snapshot: "0123456789abcdef",
+			version: 2,
+			harness: false,
+			checks: {
+				verdict: "FAIL",
+				at: "2026-10-07T10:01:00.000Z",
+				steps: [
+					{ name: "install", status: "ok", ms: 2000 },
+					{ name: "test", status: "fail", ms: 3000 },
+				],
+			},
+		});
+		const qaLog = readFileSync(harness.qaLogPath("foo"), "utf8");
+		expect(qaLog).toContain("## dev-1 Add a button — checks FAIL");
+		expect(qaLog).toContain("Error: expected 1 to be 2");
+		expect(harness.readCardDecisions("foo", "checks")).toMatchObject([
+			{ taskId: "dev-1", kit: "team", outcome: "acted", note: "checks FAIL on 01234567: install=ok test=fail" },
+		]);
 	});
 });

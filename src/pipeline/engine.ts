@@ -10,9 +10,10 @@
 //   workspace without a config entry: `off` on the `default` kit) is never evaluated: no git probe, no kit
 //   question, no decision. `commit`/`pr` cards stay with the auto-review reconciler.
 //
-// This is the skeleton: it asks the QA-gate question (`qaPolicy`) for each submitted dev card and records the
-// answer. The stages that act on answers (snapshots, the QA gate, land, rework, recovery) are later cards; until
-// they exist a decision that would act is logged as `not_implemented` (or `shadow` on a shadow workspace).
+// For each Review card it runs the submission stage (submission-stage.ts: snapshot, scripted checks), then asks the
+// QA-gate question (`qaPolicy`) for each submitted card and records the answer. The stages that act on the
+// gate's answers (the QA gate, land, rework, recovery) are later cards; until they exist a decision that would act
+// is logged as `not_implemented` (or `shadow` on a shadow workspace).
 
 import type { WorkspacePipelineSettings } from "../config/pipeline-config";
 import type {
@@ -30,6 +31,7 @@ import {
 import type { CardHistory, EffectiveCard, QaPolicyAnswer, RoutingPolicy } from "../kits/policy";
 import type { PipelineDecisionRecord } from "./decision-log";
 import type { PipelineCardState, PipelineWorkspaceState } from "./pipeline-state";
+import type { SubmissionCardInput, SubmissionInspection } from "./submission-stage";
 
 export type PipelineSessionView = Pick<RuntimeTaskSessionSummary, "taskId" | "agentId" | "modelId" | "state">;
 
@@ -51,8 +53,8 @@ export interface PipelineEvaluationInput {
 	state: PipelineWorkspaceState;
 	limits: { maxFailRounds: number };
 	agentDefaultModels?: EffectiveModelConfig["agentDefaultModels"];
-	/** Whether the card's worktree has work to submit. Only called for candidates on a `qa` workspace. */
-	hasWork: (card: RuntimeBoardCard) => Promise<boolean>;
+	/** The submission stage for one Review card (snapshot, checks, has it work). Only called on a `qa` workspace. */
+	inspectSubmission: (input: SubmissionCardInput) => Promise<SubmissionInspection>;
 	now: number;
 }
 
@@ -150,29 +152,40 @@ export async function evaluatePipelineWorkspace(input: PipelineEvaluationInput):
 	const at = new Date(input.now).toISOString();
 	const decisions: PipelineDecisionRecord[] = [];
 	for (const card of review) {
-		if (!isPipelineCandidate(card) || !(await input.hasWork(card))) {
+		if (!isPipelineCandidate(card)) {
 			continue;
 		}
+		const session = sessions.get(card.id) ?? null;
 		const { effective, agentSource } = toEffectiveCard({
 			card,
-			session: sessions.get(card.id) ?? null,
+			session,
 			workspaceId: snapshot.workspaceId,
 			selectedAgentId: snapshot.selectedAgentId,
 			agentDefaultModels: input.agentDefaultModels,
 		});
-		const { history, round } = readCardHistory(input.state.cards[card.id]);
-		const answer = input.policy.qaPolicy({ dev: effective, round, history });
-		decisions.push({
+		const submission = await input.inspectSubmission({ card, effective, session });
+		const common = {
 			at,
 			workspaceId: snapshot.workspaceId,
 			taskId: card.id,
-			stage: "qa_gate",
 			kit: input.kitName,
 			landingMode: settings.landing.mode,
 			shadow,
 			effectiveAgent: agentSource,
 			model: effective.model,
 			role: effective.role,
+		};
+		for (const record of submission.records) {
+			decisions.push({ ...common, ...record, answer: null });
+		}
+		if (!submission.hasWork) {
+			continue;
+		}
+		const { history, round } = readCardHistory(input.state.cards[card.id]);
+		const answer = input.policy.qaPolicy({ dev: effective, round, history });
+		decisions.push({
+			...common,
+			stage: "qa_gate",
 			answer,
 			outcome: answer.kind === "none" ? "none" : shadow ? "shadow" : "not_implemented",
 			note: `round ${round}: ${describeQaAnswer(answer)}`,

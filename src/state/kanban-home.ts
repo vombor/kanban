@@ -40,6 +40,8 @@ const DATA_DIR = "data";
 const MODELS_DATA_DIR = "models";
 const PIPELINE_STATE_FILENAME = "pipeline-state.json";
 const PIPELINE_DECISIONS_FILENAME = "pipeline-decisions.jsonl";
+const QA_LOG_FILENAME = "qa-log.md";
+const BOARD_BACKUPS_DIR = "boards";
 /** The legacy kit's per-card pipeline state (`checks-state.json` in its per-project data dir). */
 const LEGACY_KIT_CHECKS_STATE_FILENAME = "checks-state.json";
 const PROJECT_CONFIG_PARENT_DIR = ".cline";
@@ -331,6 +333,11 @@ export function getKanbanBackupsPath(homePath = getKanbanHomePath()): string {
 	return join(homePath, BACKUPS_DIR);
 }
 
+/** Copies of a workspace's board.json (`<home>/backups/boards/<workspaceId>`), outside the workspaces dir on purpose. */
+export function getBoardBackupsPath(workspaceId: string, homePath = getKanbanHomePath()): string {
+	return join(getKanbanBackupsPath(homePath), BOARD_BACKUPS_DIR, workspaceId);
+}
+
 /** User routing kits (`<home>/kits/<name>.json`); the built-in kits ship in the package. */
 export function getKanbanKitsPath(homePath = getKanbanHomePath()): string {
 	return join(homePath, KITS_DIR);
@@ -359,6 +366,11 @@ export function getPipelineStatePath(workspaceId: string, homePath = getKanbanHo
 /** The pipeline's decision log, one JSON line per decision (`<home>/data/<workspaceId>/pipeline-decisions.jsonl`). */
 export function getPipelineDecisionLogPath(workspaceId: string, homePath = getKanbanHomePath()): string {
 	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), PIPELINE_DECISIONS_FILENAME);
+}
+
+/** The workspace's QA log (`<home>/data/<workspaceId>/qa-log.md`): check results, verdicts; people and agents read it. */
+export function getPipelineQaLogPath(workspaceId: string, homePath = getKanbanHomePath()): string {
+	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), QA_LOG_FILENAME);
 }
 
 /**

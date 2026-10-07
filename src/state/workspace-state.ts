@@ -18,6 +18,7 @@ import {
 import { createGitProcessEnv } from "../core/git-process-env";
 import { updateTaskDependencies } from "../core/task-board-mutations";
 import { type LockRequest, lockedFileSystem } from "../fs/locked-file-system";
+import { boardBackups } from "./board-backups";
 import { getKanbanHomePath, getKanbanWorkspacesRootPath, getTaskWorktreesRootPath } from "./kanban-home";
 
 const INDEX_FILENAME = "index.json";
@@ -692,6 +693,7 @@ export async function saveWorkspaceState(
 		await lockedFileSystem.writeJsonFileAtomic(metaPath, nextMeta, {
 			lock: null,
 		});
+		await boardBackups.backup(context.workspaceId, board);
 
 		return toWorkspaceStateResponse(context, board, sessions, nextRevision);
 	});
@@ -747,6 +749,7 @@ export async function mutateWorkspaceState<T>(
 		await lockedFileSystem.writeJsonFileAtomic(getWorkspaceMetaPath(context.workspaceId), nextMeta, {
 			lock: null,
 		});
+		await boardBackups.backup(context.workspaceId, nextBoard);
 
 		return {
 			value: mutation.value,

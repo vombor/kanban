@@ -196,3 +196,18 @@ of this repository is the complete record of changes.
   `src/pipeline/engine.ts`: a card with no `role` that carries the legacy kit's creation markers ("QA<n> <id>:",
   "QA-CAL …", "TRIAGE <id>:" titles, its QA/calibration/triage prompt intros) counts as a `qa`/`calibration`/`triage`
   card, so the pipeline never asks a kit to QA a legacy QA card. Cards with a `role` are unchanged.
+- `src/pipeline/snapshots.ts`, `checks.ts`, `submission-stage.ts`, `qa-log.ts` (new), `src/pipeline/engine.ts`,
+  `worker.ts`, `decision-log.ts`, `work-probe.ts`, `src/state/board-backups.ts` (new), `src/state/workspace-state.ts`,
+  `src/state/kanban-home.ts`, `src/config/pipeline-config.ts`, tests: snapshots, scripted checks and board backups
+  (plan step P4-2). On a landing-`qa` workspace the pipeline worker snapshots each submitted dev card to
+  `refs/kanban/snapshots/<id>` (temp index, fixed `kanban@localhost` identity; shadow builds the commit but moves no
+  ref), and a snapshot equal to its base is not submitted. Scripted checks run on the snapshot: off unless
+  `workspaces.<id>.checks.enabled` is true, or unset with landing `qa` on a kit other than `default`; one run at a
+  time for the whole worker, every step under `nice` (`pipeline.checks.niceness`, 10) with test runners capped at
+  `pipeline.checks.maxWorkers` (2) and killed as a process group after `timeoutMin`; no `KANBAN_*` variables reach
+  the project's scripts; results go to `data/<id>/qa-log.md`, the card's pipeline-state entry and the decision log.
+  `pipeline.checks.allowScripts` is now a package list (npm 12 `allow-scripts`). Every board write also writes
+  `backups/boards/<id>/board-latest.json` plus a timestamped copy every `backups.board.everyMin` (10), keeping `keep`
+  (200); `backups.board.enabled` (default on) turns it off. `package.json`: `npm run lint` runs `biome check`
+  (formatting and import order too, not only lint rules), so the checks and pre-commit catch unformatted files;
+  `test/runtime/server/session-column-sync.test.ts` and `vitest.config.ts` reformatted.

@@ -57,6 +57,9 @@ export const workspacePipelineSettingsSchema = z
 	.strict();
 export type WorkspacePipelineSettings = z.infer<typeof workspacePipelineSettingsSchema>;
 
+// Ported from archive/devteam-kit:services/kanban-autoland.mjs@6da71597 (CHECK_ALLOW_SCRIPTS).
+const DEFAULT_CHECK_ALLOW_SCRIPTS = ["esbuild", "prisma", "@prisma/engines", "@prisma/client", "sqlite3"] as const;
+
 const pipelineSectionSchema = z
 	.object({
 		paused: z.boolean().default(false),
@@ -82,14 +85,25 @@ const pipelineSectionSchema = z
 				outboxRoot: "/tmp/kanban-qa-out",
 				chromiumLibs: null,
 			}),
+		// Scripted checks (src/pipeline/checks.ts): one run at a time machine-wide, each step niced and with test
+		// runners capped at `maxWorkers` (a full install + test suite per Review card once pegged the pod).
 		checks: z
 			.object({
 				scratchRoot: z.string().default("/tmp/kanban-checks"),
 				timeoutMin: z.number().positive().default(15),
-				allowScripts: z.boolean().default(false),
+				// Packages whose install scripts npm may run in the checks install (npm 12 blocks them otherwise).
+				allowScripts: z.array(z.string()).default(() => [...DEFAULT_CHECK_ALLOW_SCRIPTS]),
+				maxWorkers: z.number().int().positive().default(2),
+				niceness: z.number().int().min(0).max(19).default(10),
 			})
 			.strict()
-			.default({ scratchRoot: "/tmp/kanban-checks", timeoutMin: 15, allowScripts: false }),
+			.default(() => ({
+				scratchRoot: "/tmp/kanban-checks",
+				timeoutMin: 15,
+				allowScripts: [...DEFAULT_CHECK_ALLOW_SCRIPTS],
+				maxWorkers: 2,
+				niceness: 10,
+			})),
 		rework: z
 			.object({
 				// The hard cap: at this many FAIL rounds the core escalates whatever the kit says.
@@ -259,9 +273,13 @@ const agentsSectionSchema = z
 const backupsSectionSchema = z
 	.object({
 		board: z
-			.object({ everyMin: z.number().positive().default(10), keep: z.number().int().positive().default(200) })
+			.object({
+				enabled: z.boolean().default(true),
+				everyMin: z.number().positive().default(10),
+				keep: z.number().int().positive().default(200),
+			})
 			.strict()
-			.default({ everyMin: 10, keep: 200 }),
+			.default({ enabled: true, everyMin: 10, keep: 200 }),
 	})
 	.strict();
 

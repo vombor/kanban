@@ -1,6 +1,7 @@
 // "Does this Review card have work to submit?": its worktree exists and has uncommitted changes or commits its
 // base doesn't have. A Review card with neither (a planning loop, a question to the user) is not submitted.
-// The snapshot stage (P4-2) replaces this with the snapshot's own diff against the base.
+// Dev cards are decided by their snapshot's diff against the base instead (submission-stage.ts); this probe is
+// only used for cards that are never snapshotted (QA, TRIAGE, calibration).
 import type { RuntimeBoardCard } from "../core/api-contract";
 import { probeGitWorkspaceState } from "../workspace/git-sync";
 import { runGit } from "../workspace/git-utils";
