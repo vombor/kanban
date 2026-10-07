@@ -30,6 +30,12 @@ vi.mock("@hello-pangea/dnd", () => ({
 	),
 }));
 
+const mockShowAppToast = vi.hoisted(() => vi.fn());
+
+vi.mock("@/components/app-toaster", () => ({
+	showAppToast: mockShowAppToast,
+}));
+
 vi.mock("@/stores/workspace-metadata-store", () => ({
 	useTaskWorkspaceSnapshotValue: () => mockWorkspaceSnapshot,
 }));
@@ -146,7 +152,12 @@ describe("BoardCard", () => {
 	let root: Root;
 	let previousActEnvironment: boolean | undefined;
 
+	const renderWithTooltips = (node: ReactNode) => {
+		root.render(<TooltipProvider>{node}</TooltipProvider>);
+	};
+
 	beforeEach(() => {
+		mockShowAppToast.mockClear();
 		mockWorkspaceSnapshot = undefined;
 		mockMeasureWidths = [240, 240, 240];
 		mockMeasureCallCount = 0;
@@ -192,7 +203,7 @@ describe("BoardCard", () => {
 			return { x: 0, y: 0, left: 0, top: 0, width, height: 32, right: width, bottom: 32, toJSON: () => ({}) };
 		});
 		await act(async () => {
-			root.render(
+			renderWithTooltips(
 				<BoardCard
 					card={createCard({ prompt: "Review API changes||Description at fractional scale" })}
 					index={0}
@@ -208,7 +219,7 @@ describe("BoardCard", () => {
 		mockMeasureWidths = [0, 0, 0];
 		const description = "This description contains enough words to wrap and truncate in a narrow card.";
 		await act(async () => {
-			root.render(
+			renderWithTooltips(
 				<BoardCard
 					card={createCard({ prompt: `Review API changes||${description}` })}
 					index={0}
@@ -219,7 +230,7 @@ describe("BoardCard", () => {
 		const wideText = container.textContent;
 		mockMeasureWidths = [80.25, 80.25, 80.25];
 		await act(async () => {
-			root.render(
+			renderWithTooltips(
 				<BoardCard
 					card={createCard({ prompt: `Review API changes||${description}` })}
 					index={0}
@@ -234,7 +245,7 @@ describe("BoardCard", () => {
 
 	it("shows a mode-specific cancel button and hides it after canceling auto review", async () => {
 		await act(async () => {
-			root.render(<Harness />);
+			renderWithTooltips(<Harness />);
 		});
 
 		const cancelButton = Array.from(container.querySelectorAll("button")).find(
@@ -255,7 +266,7 @@ describe("BoardCard", () => {
 
 	it("shows a loading state on the review done button while moving to done", async () => {
 		await act(async () => {
-			root.render(<BoardCard card={createCard()} index={0} columnId="review" isMoveToTrashLoading />);
+			renderWithTooltips(<BoardCard card={createCard()} index={0} columnId="review" isMoveToTrashLoading />);
 		});
 
 		const trashButton = container.querySelector('button[aria-label="Move task to done"]');
@@ -269,7 +280,7 @@ describe("BoardCard", () => {
 			"Alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau final hidden segment";
 
 		await act(async () => {
-			root.render(
+			renderWithTooltips(
 				<BoardCard card={createCard({ prompt: `Task title||${description}` })} index={0} columnId="backlog" />,
 			);
 		});
@@ -310,7 +321,7 @@ describe("BoardCard", () => {
 			projectConfigDisplayPath: "<project>/.cline/kanban/config.json",
 		});
 		await act(async () => {
-			root.render(
+			renderWithTooltips(
 				<TooltipProvider>
 					<BoardCard
 						card={createCard({ id: "trash-task-1" })}
@@ -327,7 +338,7 @@ describe("BoardCard", () => {
 
 	it("does not guess a trashed worktree path before the runtime reports the worktrees root", async () => {
 		await act(async () => {
-			root.render(
+			renderWithTooltips(
 				<TooltipProvider>
 					<BoardCard
 						card={createCard({ id: "trash-task-1" })}
@@ -344,19 +355,19 @@ describe("BoardCard", () => {
 
 	it("shows a role badge on QA, TRIAGE and calibration cards and none on dev cards", async () => {
 		await act(async () => {
-			root.render(<BoardCard card={createCard({ role: "qa" })} index={0} columnId="review" />);
+			renderWithTooltips(<BoardCard card={createCard({ role: "qa" })} index={0} columnId="review" />);
 		});
 		expect(container.querySelector('[data-testid="board-card-role-badge"]')?.textContent).toBe("QA");
 
 		await act(async () => {
-			root.render(<BoardCard card={createCard({})} index={0} columnId="review" />);
+			renderWithTooltips(<BoardCard card={createCard({})} index={0} columnId="review" />);
 		});
 		expect(container.querySelector('[data-testid="board-card-role-badge"]')).toBeNull();
 	});
 
 	it("shows agent override details with the model and effort verbatim", async () => {
 		await act(async () => {
-			root.render(
+			renderWithTooltips(
 				<BoardCard
 					card={createCard({
 						agentId: "cline",
@@ -376,7 +387,7 @@ describe("BoardCard", () => {
 
 	it("shows reasoning-only overrides against the default model", async () => {
 		await act(async () => {
-			root.render(
+			renderWithTooltips(
 				<BoardCard
 					card={createCard({
 						agentSettings: {
@@ -394,7 +405,7 @@ describe("BoardCard", () => {
 
 	it("does not mislabel provider-only overrides as the global default model", async () => {
 		await act(async () => {
-			root.render(
+			renderWithTooltips(
 				<BoardCard
 					card={createCard({
 						agentSettings: {
@@ -413,7 +424,7 @@ describe("BoardCard", () => {
 
 	it("shows tool input details in the session preview text", async () => {
 		await act(async () => {
-			root.render(
+			renderWithTooltips(
 				<BoardCard
 					card={createCard()}
 					index={0}
@@ -454,7 +465,7 @@ describe("BoardCard", () => {
 
 	it("shows non-cline tool activity in the compact tool label format", async () => {
 		await act(async () => {
-			root.render(
+			renderWithTooltips(
 				<BoardCard
 					card={createCard()}
 					index={0}
@@ -481,7 +492,7 @@ describe("BoardCard", () => {
 
 	it("keeps canonical tool names in the session preview label", async () => {
 		await act(async () => {
-			root.render(
+			renderWithTooltips(
 				<BoardCard
 					card={createCard()}
 					index={0}
@@ -507,7 +518,7 @@ describe("BoardCard", () => {
 
 	it("parses codex tool activity into the compact tool label format", async () => {
 		await act(async () => {
-			root.render(
+			renderWithTooltips(
 				<BoardCard
 					card={createCard()}
 					index={0}
@@ -534,7 +545,7 @@ describe("BoardCard", () => {
 
 	it("does not show a stale bare tool name for non-tool review updates", async () => {
 		await act(async () => {
-			root.render(
+			renderWithTooltips(
 				<BoardCard
 					card={createCard()}
 					index={0}
@@ -561,7 +572,7 @@ describe("BoardCard", () => {
 
 	it("keeps showing the last cline tool label during assistant streaming", async () => {
 		await act(async () => {
-			root.render(
+			renderWithTooltips(
 				<BoardCard
 					card={createCard()}
 					index={0}
@@ -604,7 +615,7 @@ describe("BoardCard", () => {
 		mockMeasureWidths = [0, 0, 0];
 
 		await act(async () => {
-			root.render(
+			renderWithTooltips(
 				<BoardCard
 					card={createCard({ prompt: "Task title||Freshly created task description" })}
 					index={0}
@@ -621,7 +632,7 @@ describe("BoardCard", () => {
 			"Reviewing the archived implementation details and collecting the final notes for the handoff before cleanup hidden tail";
 
 		await act(async () => {
-			root.render(
+			renderWithTooltips(
 				<TooltipProvider>
 					<BoardCard
 						card={createCard()}
@@ -659,7 +670,7 @@ describe("BoardCard", () => {
 			"Reviewing the archived implementation details and collecting the final notes for the handoff before cleanup hidden tail";
 
 		await act(async () => {
-			root.render(
+			renderWithTooltips(
 				<BoardCard
 					card={createCard()}
 					index={0}
@@ -692,7 +703,7 @@ describe("BoardCard", () => {
 
 	it("shows the latest assistant preview on active task cards", async () => {
 		await act(async () => {
-			root.render(
+			renderWithTooltips(
 				<BoardCard
 					card={createCard()}
 					index={0}
@@ -718,7 +729,7 @@ describe("BoardCard", () => {
 
 	it("shows normal agent messages without the agent prefix", async () => {
 		await act(async () => {
-			root.render(
+			renderWithTooltips(
 				<BoardCard
 					card={createCard()}
 					index={0}
@@ -741,5 +752,62 @@ describe("BoardCard", () => {
 
 		expect(container.textContent).toContain("checking the next file");
 		expect(container.textContent).not.toContain("Agent:");
+	});
+
+	it("shows the task id at the end of the agent/model row", async () => {
+		await act(async () => {
+			renderWithTooltips(
+				<BoardCard
+					card={createCard({ id: "7ad4d", agentId: "cline", agentSettings: { modelId: "gpt-x" } })}
+					index={0}
+					columnId="backlog"
+				/>,
+			);
+		});
+
+		const taskId = container.querySelector('[data-testid="board-card-task-id"]');
+		expect(taskId?.textContent).toBe("7ad4d");
+		const row = taskId?.closest('[data-testid="board-card-meta-row"]');
+		expect(row?.textContent).toContain("Cline · gpt-x");
+		expect(row?.lastElementChild).toBe(taskId);
+	});
+
+	it("shows the task id on cards without an agent/model row", async () => {
+		await act(async () => {
+			renderWithTooltips(<BoardCard card={createCard({ id: "b31c9" })} index={0} columnId="backlog" />);
+		});
+
+		const row = container.querySelector('[data-testid="board-card-meta-row"]');
+		expect(row?.children).toHaveLength(1);
+		expect(row?.querySelector('[data-testid="board-card-task-id"]')?.textContent).toBe("b31c9");
+	});
+
+	it("copies the task id without opening or dragging the card", async () => {
+		const writeText = vi.fn(async () => {});
+		Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+		const onClick = vi.fn();
+		await act(async () => {
+			renderWithTooltips(
+				<BoardCard card={createCard({ id: "7ad4d" })} index={0} columnId="backlog" onClick={onClick} />,
+			);
+		});
+
+		const taskId = container.querySelector<HTMLButtonElement>('[data-testid="board-card-task-id"]');
+		const mouseDown = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+		await act(async () => {
+			taskId?.dispatchEvent(mouseDown);
+			taskId?.click();
+		});
+
+		expect(mouseDown.defaultPrevented).toBe(true);
+		expect(writeText).toHaveBeenCalledWith("7ad4d");
+		expect(mockShowAppToast).toHaveBeenCalledWith(
+			expect.objectContaining({ intent: "success", message: "Copied 7ad4d" }),
+			expect.any(String),
+		);
+		expect(onClick).not.toHaveBeenCalled();
+
+		container.querySelector<HTMLElement>('[data-task-id="7ad4d"]')?.click();
+		expect(onClick).toHaveBeenCalledTimes(1);
 	});
 });

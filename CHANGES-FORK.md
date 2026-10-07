@@ -211,3 +211,6 @@ of this repository is the complete record of changes.
   (200); `backups.board.enabled` (default on) turns it off. `package.json`: `npm run lint` runs `biome check`
   (formatting and import order too, not only lint rules), so the checks and pre-commit catch unformatted files;
   `test/runtime/server/session-column-sync.test.ts` and `vitest.config.ts` reformatted.
+- `web-ui/src/components/board-card.tsx`, `web-ui/src/components/board-card-task-id.tsx` (new): every board card
+  shows its task id (e.g. `7ad4d`) at the right end of the agent/model row, also on cards without an agent/model.
+  Clicking it copies the id and shows a "Copied <id>" toast without opening or dragging the card.

@@ -6,6 +6,7 @@ import { AlertCircle, AlertTriangle, Bot, GitBranch, Pencil, Play, RotateCcw, Tr
 import type { KeyboardEvent, MouseEvent } from "react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { BoardCardTaskId } from "@/components/board-card-task-id";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
 import { Spinner } from "@/components/ui/spinner";
@@ -741,11 +742,11 @@ export const BoardCard = memo(function BoardCard({
 									) : null}
 								</div>
 							) : null}
-							{taskAgentSettingsLabel ? (
-								<div className="mt-1">
+							<div className="mt-1 flex items-center gap-2" data-testid="board-card-meta-row">
+								{taskAgentSettingsLabel ? (
 									<span
 										className={cn(
-											"inline-flex max-w-full items-center gap-1 rounded-md border px-1.5 py-0.5 text-xs",
+											"inline-flex min-w-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-xs",
 											isTrashCard
 												? "border-border text-text-tertiary bg-surface-1"
 												: "border-status-blue/30 bg-status-blue/10 text-status-blue",
@@ -754,8 +755,9 @@ export const BoardCard = memo(function BoardCard({
 										<Bot size={12} className="shrink-0" />
 										<span className="truncate">{taskAgentSettingsLabel}</span>
 									</span>
-								</div>
-							) : null}
+								) : null}
+								<BoardCardTaskId taskId={card.id} />
+							</div>
 							{sessionActivity ? (
 								<div
 									className="flex gap-1.5 items-start mt-[6px]"
