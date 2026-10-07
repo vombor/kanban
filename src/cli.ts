@@ -7,6 +7,7 @@ import { Command, Option } from "commander";
 import ora, { type Ora } from "ora";
 import packageJson from "../package.json" with { type: "json" };
 import { registerAgentsCommand } from "./commands/agents";
+import { registerHomeCommand } from "./commands/home";
 import { registerHooksCommand } from "./commands/hooks";
 import { registerTaskCommand } from "./commands/task";
 import { loadGlobalRuntimeConfig, loadRuntimeConfig } from "./config/runtime-config";
@@ -33,6 +34,7 @@ import { disablePasscode, generateInternalToken, generatePasscode } from "./secu
 import type { AutoReviewReconciler } from "./server/auto-review-reconciler";
 import type { RuntimeStateHub } from "./server/runtime-state-hub";
 import { setKanbanHomeOverride } from "./state/kanban-home";
+import { writeKanbanServerLock } from "./state/kanban-server-lock";
 import { captureNodeException, flushNodeTelemetry } from "./telemetry/sentry-node.js";
 import type { TerminalSessionManager } from "./terminal/session-manager";
 import { runOnDemandUpdate } from "./update/update";
@@ -578,6 +580,9 @@ async function runMainCommand(options: CliOptions, shouldAutoOpenBrowser: boolea
 		throw error;
 	}
 	console.log(`Cline Kanban running at ${runtime.url}`);
+	const releaseServerLock = writeKanbanServerLock(runtime.url, (message) => {
+		console.warn(`[kanban] ${message}`);
+	});
 	if (!options.noOpen && shouldAutoOpenBrowser) {
 		try {
 			openInBrowser(runtime.url, {
@@ -603,9 +608,13 @@ async function runMainCommand(options: CliOptions, shouldAutoOpenBrowser: boolea
 		if (options.skipShutdownCleanup) {
 			console.warn("Skipping shutdown task cleanup for this instance.");
 		}
-		await runtime.shutdown({
-			skipSessionCleanup: options.skipShutdownCleanup,
-		});
+		try {
+			await runtime.shutdown({
+				skipSessionCleanup: options.skipShutdownCleanup,
+			});
+		} finally {
+			releaseServerLock();
+		}
 	};
 
 	installGracefulShutdownHandlers({
@@ -693,6 +702,7 @@ function createProgram(invocationArgs: string[]): Command {
 	registerTaskCommand(program);
 	registerHooksCommand(program);
 	registerAgentsCommand(program);
+	registerHomeCommand(program);
 
 	program
 		.command("mcp")

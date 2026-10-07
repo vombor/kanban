@@ -29,8 +29,11 @@ const LEGACY_HOME_DIR = "kanban";
 const LEGACY_WORKTREES_DIR = "worktrees";
 const CLINE_DATA_DIR = "data";
 const CONFIG_FILENAME = "config.json";
-const WORKSPACES_DIR = "workspaces";
+/** Board state dir inside the home (`<home>/workspaces`). */
+export const KANBAN_HOME_WORKSPACES_DIR = "workspaces";
 const WORKTREES_DIR = "worktrees";
+const RUN_DIR = "run";
+const BACKUPS_DIR = "backups";
 const PROJECT_CONFIG_PARENT_DIR = ".cline";
 const PROJECT_CONFIG_DIR = "kanban";
 
@@ -92,7 +95,7 @@ function readHomeConfigFields(homePath: string): KanbanHomeConfigFields | null {
 }
 
 function isInitializedHome(homePath: string): boolean {
-	if (isDirectory(join(homePath, WORKSPACES_DIR))) {
+	if (isDirectory(join(homePath, KANBAN_HOME_WORKSPACES_DIR))) {
 		return true;
 	}
 	return readHomeConfigFields(homePath)?.home === KANBAN_HOME_MARKER_VERSION;
@@ -138,14 +141,30 @@ function uniquePaths(paths: string[]): string[] {
 	return [...new Set(paths)];
 }
 
-function computeResolution(): KanbanHomeResolution {
-	const { homePath, source } = resolveHomePath();
-	const config = readHomeConfigFields(homePath);
+export interface KanbanHomeLayoutOptions {
+	/** Use the legacy defaults (worktrees in ~/.cline/worktrees). */
+	legacy: boolean;
+	/** Let KANBAN_WORKTREES override the worktrees root, as it does for the running process. */
+	honorWorktreesEnv: boolean;
+	/** Resolve against this config instead of <homePath>/config.json (for a config not written yet). */
+	config?: Record<string, unknown> | null;
+}
 
-	const envWorktrees = readNonEmptyEnv(KANBAN_WORKTREES_ENV);
+/**
+ * Resolves the layout (config path, worktrees roots) of an explicit home directory, independent of
+ * which home this process uses. `kanban home migrate` uses it for its source and target homes.
+ */
+export function resolveKanbanHomeLayout(
+	homePath: string,
+	options: KanbanHomeLayoutOptions,
+): Omit<KanbanHomeResolution, "source"> {
+	const config: KanbanHomeConfigFields | null =
+		options.config !== undefined ? options.config : readHomeConfigFields(homePath);
+
+	const envWorktrees = options.honorWorktreesEnv ? readNonEmptyEnv(KANBAN_WORKTREES_ENV) : null;
 	const configWorktrees =
 		typeof config?.worktreesRoot === "string" && config.worktreesRoot.trim() ? config.worktreesRoot : null;
-	const defaultWorktreesRoot = source === "legacy" ? getLegacyTaskWorktreesRootPath() : join(homePath, WORKTREES_DIR);
+	const defaultWorktreesRoot = options.legacy ? getLegacyTaskWorktreesRootPath() : join(homePath, WORKTREES_DIR);
 	const worktreesRootPath = envWorktrees
 		? expandUserPath(envWorktrees, process.cwd())
 		: configWorktrees
@@ -161,10 +180,17 @@ function computeResolution(): KanbanHomeResolution {
 
 	return {
 		homePath,
-		source,
 		globalConfigPath: join(homePath, CONFIG_FILENAME),
 		worktreesRootPath,
 		legacyWorktreeRootPaths,
+	};
+}
+
+function computeResolution(): KanbanHomeResolution {
+	const { homePath, source } = resolveHomePath();
+	return {
+		...resolveKanbanHomeLayout(homePath, { legacy: source === "legacy", honorWorktreesEnv: true }),
+		source,
 	};
 }
 
@@ -217,8 +243,18 @@ export function shouldMarkKanbanHome(): boolean {
 	return resolveKanbanHome().source !== "legacy";
 }
 
-export function getKanbanWorkspacesRootPath(): string {
-	return join(getKanbanHomePath(), WORKSPACES_DIR);
+/** Locks and pid files (`<home>/run`). */
+export function getKanbanRunPath(homePath = getKanbanHomePath()): string {
+	return join(homePath, RUN_DIR);
+}
+
+/** Backups Kanban takes before it rewrites state (`<home>/backups`). */
+export function getKanbanBackupsPath(homePath = getKanbanHomePath()): string {
+	return join(homePath, BACKUPS_DIR);
+}
+
+export function getKanbanWorkspacesRootPath(homePath = getKanbanHomePath()): string {
+	return join(homePath, KANBAN_HOME_WORKSPACES_DIR);
 }
 
 export function getTaskWorktreesRootPath(): string {

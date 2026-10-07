@@ -15,7 +15,7 @@ import { listTurbopackNodeModulesSymlinkSkipPaths } from "./task-worktree-turbop
 
 const KANBAN_MANAGED_EXCLUDE_BLOCK_START = "# kanban-managed-symlinked-ignored-paths:start";
 const KANBAN_MANAGED_EXCLUDE_BLOCK_END = "# kanban-managed-symlinked-ignored-paths:end";
-const KANBAN_TRASHED_TASK_PATCHES_DIR_NAME = "trashed-task-patches";
+export const KANBAN_TRASHED_TASK_PATCHES_DIR_NAME = "trashed-task-patches";
 const KANBAN_TASK_WORKTREE_SETUP_LOCKFILE_NAME = "kanban-task-worktree-setup.lock";
 const TASK_PATCH_FILE_SUFFIX = ".patch";
 
