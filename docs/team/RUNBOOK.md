@@ -226,9 +226,22 @@ How to read the report:
   `resetAt`, or a REWORK on a new model). `checks-state.json` keeps only the newest `resetAt`, so a same-model
   restart-fresh before it can show as a DIFF. Check `kanban task handback`/`restart-fresh` history for that card.
 
-Then P5-2 switches foo: touch the legacy kit's `run/{autoland,review-watch}.disabled`, `kit stop`, set
-`pipeline.shadow: false` (and `pipeline.recovery.mode` / `watchdog.mode` to `on` with their doctor rows clean), and
-watch one full card cycle. Rollback: `pipeline.shadow: true` (or landing `off`), then re-enable the legacy services.
+Then P5-2 switches foo, in this order:
+
+1. Back up both data dirs. `kanban pipeline import-legacy --project foo --dry-run --force` shows what will be copied
+   while autoland still runs.
+2. Touch the legacy kit's `run/{autoland,review-watch}.disabled`, `kit stop`. Check that no `run/pid-pressure` or
+   `pid-brownout` is left in the legacy run dir (review-watch never removes them; Kanban ignores them once
+   review-watch is off).
+3. `kanban pipeline import-legacy --project foo` (still in shadow). It copies the open cards' checks-state.json
+   entries into pipeline-state.json, runoffs.json, the scoreboard (deduplicated) and qa-log.md, and refuses while
+   autoland owns foo or foo is not on landing `qa` in shadow. Running it again changes nothing.
+4. Set `pipeline.shadow: false`, and `pipeline.recovery.mode` / `watchdog.mode` to `on` with their doctor rows
+   clean. The server and worker read all three from config.json on the next sweep (within 30 s), no restart.
+5. Watch one full card cycle.
+
+Rollback: `pipeline.shadow: true` (or landing `off`), then re-enable the legacy services. The legacy files were
+only read, so the legacy kit carries on from where it stopped.
 
 ## Add a model
 

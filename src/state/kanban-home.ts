@@ -214,6 +214,14 @@ export function getLegacyKitAutolandLogPath(): string {
 	return join(getLegacyKitHomePath(), LOGS_DIR, "kanban-autoland.log");
 }
 
+/**
+ * The legacy kit's per-project data root (`<kit home>/data`, its default `dataRoot`; projects keep their files in
+ * `<dataRoot>/<workspaceId>`). Read-only: `kanban pipeline import-legacy` copies from it at the cutover.
+ */
+export function getLegacyKitDefaultDataRootPath(): string {
+	return join(getLegacyKitHomePath(), DATA_DIR);
+}
+
 /** Expands `~` and resolves relative paths against `baseDir`, as config values in the home are read. */
 export function expandKanbanConfigPath(path: string, baseDir: string): string {
 	return expandUserPath(path, baseDir);

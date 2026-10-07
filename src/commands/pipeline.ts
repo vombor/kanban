@@ -3,9 +3,10 @@ import type { Command } from "commander";
 
 import { getWorkspacePipelineSettings, readPipelineConfig } from "../config/pipeline-config";
 import { isPipelineWorkspace } from "../pipeline/engine";
+import { formatLegacyImportReport, runLegacyImport } from "../pipeline/legacy-import";
 import { runPipelineWorkerProcess } from "../pipeline/worker";
 import { getPipelineDecisionLogPath } from "../state/kanban-home";
-import { listWorkspaceIndexEntries } from "../state/workspace-state";
+import { listWorkspaceIndexEntries, loadWorkspaceBoardById } from "../state/workspace-state";
 import { resolveWorkspaceTarget } from "./workspace-target";
 
 function toErrorMessage(error: unknown): string {
@@ -81,6 +82,41 @@ export function registerPipelineCommand(program: Command): void {
 				);
 			} catch (error) {
 				process.stderr.write(`Pipeline status failed: ${toErrorMessage(error)}\n`);
+				process.exitCode = 1;
+			}
+		});
+
+	pipeline
+		.command("import-legacy")
+		.description(
+			"Copy the legacy kit's state of one workspace into Kanban's before its shadow goes off (cutover, plan §8.4): open cards' checks-state.json entries → pipeline-state.json, runoffs.json, the scoreboard (deduplicated) and qa-log.md. Reads the legacy files only; safe to run again. Refuses unless the workspace is on landing qa in shadow and the legacy autoland no longer owns it.",
+		)
+		.requiredOption("--project <workspace>", "Workspace id or project path.")
+		.option("--dry-run", "Print what would be copied; write nothing.", false)
+		.option("--force", "With --dry-run: plan even while a guard would refuse.", false)
+		.option("--json", "Print the report as JSON.", false)
+		.action(async (options: { project: string; dryRun: boolean; force: boolean; json: boolean }) => {
+			try {
+				const target = await resolveWorkspaceTarget(options.project, { allowUnregistered: false });
+				const report = await runLegacyImport(
+					{
+						workspaceId: target.workspaceId,
+						repoPath: target.repoPath,
+						dryRun: options.dryRun,
+						force: options.force,
+					},
+					{ loadBoard: loadWorkspaceBoardById },
+				);
+				process.stdout.write(
+					options.json
+						? `${JSON.stringify({ ok: report.refusals.length === 0, ...report }, null, 2)}\n`
+						: `${formatLegacyImportReport(report).join("\n")}\n`,
+				);
+				if (report.refusals.length > 0 && !options.force) {
+					process.exitCode = 1;
+				}
+			} catch (error) {
+				process.stderr.write(`Legacy import failed: ${toErrorMessage(error)}\n`);
 				process.exitCode = 1;
 			}
 		});

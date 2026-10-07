@@ -103,6 +103,70 @@ export function importLegacyChecksState(
 	return { version: PIPELINE_STATE_VERSION, since, importedFrom, cards };
 }
 
+export interface LegacyCardEntryChange {
+	taskId: string;
+	action: "added" | "updated";
+	/** The keys the legacy entry changed (`qaflow.<key>` inside qaflow). */
+	keys: string[];
+}
+
+export interface LegacyCardEntriesMerge {
+	state: PipelineWorkspaceState;
+	changes: LegacyCardEntryChange[];
+	unchanged: string[];
+	/** Legacy entries of cards that are Done, trashed or no longer on the board. */
+	skipped: string[];
+}
+
+/**
+ * The cutover's re-import (`kanban pipeline import-legacy`, P5-2): the legacy kit kept working on its
+ * checks-state.json after the first import, so the entries of the cards still open (`openTaskIds`) are copied
+ * again. The legacy kit owned those cards until now, so its keys win; keys only Kanban wrote are kept, inside
+ * `qaflow` too. Merging the same file again changes nothing.
+ */
+export function mergeLegacyCardEntries(
+	current: PipelineWorkspaceState,
+	legacyCards: Record<string, PipelineCardState>,
+	openTaskIds: ReadonlySet<string>,
+): LegacyCardEntriesMerge {
+	const cards = { ...current.cards };
+	const changes: LegacyCardEntryChange[] = [];
+	const unchanged: string[] = [];
+	const skipped: string[] = [];
+	for (const [taskId, legacy] of Object.entries(legacyCards)) {
+		if (!openTaskIds.has(taskId)) {
+			skipped.push(taskId);
+			continue;
+		}
+		const existing = cards[taskId];
+		const merged: PipelineCardState = { ...existing, ...structuredClone(legacy) };
+		if (isPlainObject(existing?.qaflow) && isPlainObject(legacy.qaflow)) {
+			merged.qaflow = { ...existing.qaflow, ...structuredClone(legacy.qaflow) };
+		}
+		const keys = changedKeys(existing ?? {}, merged);
+		if (existing && keys.length === 0) {
+			unchanged.push(taskId);
+			continue;
+		}
+		cards[taskId] = merged;
+		changes.push({ taskId, action: existing ? "updated" : "added", keys });
+	}
+	return { state: { ...current, cards }, changes, unchanged, skipped };
+}
+
+function changedKeys(before: PipelineCardState, after: PipelineCardState): string[] {
+	const keys: string[] = [];
+	for (const [key, value] of Object.entries(after)) {
+		const previous = before[key];
+		if (key === "qaflow" && isPlainObject(previous) && isPlainObject(value)) {
+			keys.push(...changedKeys(previous, value).map((inner) => `qaflow.${inner}`));
+		} else if (JSON.stringify(previous) !== JSON.stringify(value)) {
+			keys.push(key);
+		}
+	}
+	return keys;
+}
+
 export function createPipelineStateStore(options: CreatePipelineStateStoreOptions = {}): PipelineStateStore {
 	const now = options.now ?? Date.now;
 	const getStatePath = options.getStatePath ?? ((workspaceId: string) => getPipelineStatePath(workspaceId));

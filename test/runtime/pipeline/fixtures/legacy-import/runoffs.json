@@ -1,0 +1,49 @@
+{
+  "runoffs": [
+    {
+      "name": "tier2-coupons-v2-2026-10-06",
+      "cards": [
+        "aa1fe",
+        "f496b"
+      ],
+      "models": {
+        "aa1fe": "bedrock/us.moonshotai.kimi-k3",
+        "f496b": "bedrock/us.anthropic.claude-opus-5-5"
+      },
+      "base": "c8eb9be (master, tag bench/pre-runoff-tier2b-2026-10-06)",
+      "prompt": "/root/.kanban/data/foo/bench/runoff-tier2-2026-10-06/prompt.txt",
+      "createdAt": "2026-10-06T08:58:27.997Z",
+      "note": "card(s) moved to Done/trash outside autoland; no winner (no single card with a runoff PASS)",
+      "results": [
+        {
+          "id": "aa1fe",
+          "out": "escalated"
+        },
+        {
+          "id": "f496b",
+          "out": "pass",
+          "snapshot": "ecc487ae673d1fa2f9f751786ddf8d7e7c7f485e",
+          "round": 1,
+          "ts": "2026-10-06T15:44:57.200Z",
+          "model": "us.anthropic.claude-opus-5-5",
+          "score": 4.5,
+          "fails": 0,
+          "cost": 107.35
+        }
+      ],
+      "reopened": "2026-10-06T16:11:17.781Z: user chose resume kimi first; the 15:50Z close was a Kanban shutdown-trash, not a real result",
+      "decided": "2026-10-06T16:29:31.163Z",
+      "winner": "f496b"
+    },
+    {
+      "name": "tier2-coupons-kimi-k3-bench-2026-10-07",
+      "cards": [
+        "4eccc"
+      ],
+      "createdAt": "2026-10-07T09:46:35.771Z",
+      "decided": null,
+      "benchOnly": true,
+      "note": "Bench-only re-run of the coupon codes task on kimi-k3 (base c8eb9be, already on master): record the QA result, never land. Added by the orchestrator at the user's request."
+    }
+  ]
+}

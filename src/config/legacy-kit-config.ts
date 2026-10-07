@@ -1,6 +1,7 @@
-// Read-only view of the legacy dev-team kit (plan §1: its config `kit.config.json` and its services' pid files), for
-// `kanban doctor`'s "one owner" check (§8.2) and `kanban config import-kit` (§3.5). Kanban never writes any of it:
-// the legacy kit keeps running until the cutover card switches each of its services off.
+// Read-only view of the legacy dev-team kit (plan §1: its config `kit.config.json`, its services' pid files and its
+// per-project files), for `kanban doctor`'s "one owner" check (§8.2), `kanban config import-kit` (§3.5) and
+// `kanban pipeline import-legacy` (P5-2). Kanban never writes any of it: the legacy kit keeps running until the
+// cutover card switches each of its services off.
 import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -8,6 +9,7 @@ import { join } from "node:path";
 import {
 	expandKanbanConfigPath,
 	getLegacyKitConfigPath,
+	getLegacyKitDefaultDataRootPath,
 	getLegacyKitDefaultRunPath,
 	getLegacyKitHomePath,
 } from "../state/kanban-home";
@@ -100,6 +102,53 @@ export function findImplicitLegacyToggleWarnings(raw: LegacyKitRaw): string[] {
 		}
 	}
 	return warnings;
+}
+
+/** A project's files in the legacy kit (its resolved `dataDir`, `state`, `scoreboard`, `runoffs`, `qaLog`). */
+export interface LegacyKitProjectFiles {
+	dataDir: string;
+	/** checks-state.json */
+	state: string;
+	scoreboard: string;
+	runoffs: string;
+	qaLog: string;
+}
+
+const LEGACY_KIT_PROJECT_FILE_DEFAULTS: Record<Exclude<keyof LegacyKitProjectFiles, "dataDir">, string> = {
+	state: "<dataDir>/checks-state.json",
+	scoreboard: "<dataDir>/scoreboard.jsonl",
+	runoffs: "<dataDir>/runoffs.json",
+	qaLog: "<dataDir>/qa-log.md",
+};
+
+/**
+ * Where the legacy kit keeps a project's files: the project entry's own value (foo's `scoreboard` is
+ * `<dataDir>/bench/scoreboard.jsonl`), else the kit's default, with `<kitHome>`, `<dataRoot>`, `<dataDir>`,
+ * `<workspaceId>` and `~` filled in. A workspace the kit doesn't list gets the defaults. Ported from
+ * archive/devteam-kit:lib/config.cjs@a2b4695 (PROJECT_DEFAULTS, resolveProject, fill).
+ */
+export function resolveLegacyKitProjectFiles(raw: LegacyKitRaw, workspaceId: string): LegacyKitProjectFiles {
+	const kitHome = getLegacyKitHomePath();
+	const project = listLegacyKitProjects(raw).find((entry) => entry.workspaceId === workspaceId)?.raw ?? {};
+	const vars: Record<string, string> = { kitHome, workspaceId };
+	const fill = (template: string): string =>
+		expandKanbanConfigPath(
+			template.replace(/<(\w+)>/gu, (match, name: string) => vars[name] ?? match),
+			kitHome,
+		);
+	vars.dataRoot = typeof raw.dataRoot === "string" ? fill(raw.dataRoot) : getLegacyKitDefaultDataRootPath();
+	vars.dataDir = fill(typeof project.dataDir === "string" ? project.dataDir : "<dataRoot>/<workspaceId>");
+	const fileOf = (key: keyof typeof LEGACY_KIT_PROJECT_FILE_DEFAULTS): string => {
+		const value = project[key];
+		return fill(typeof value === "string" ? value : LEGACY_KIT_PROJECT_FILE_DEFAULTS[key]);
+	};
+	return {
+		dataDir: vars.dataDir,
+		state: fileOf("state"),
+		scoreboard: fileOf("scoreboard"),
+		runoffs: fileOf("runoffs"),
+		qaLog: fileOf("qaLog"),
+	};
 }
 
 export type LegacyKitServiceName = "autoland" | "column-sync" | "review-watch" | "model-lists";

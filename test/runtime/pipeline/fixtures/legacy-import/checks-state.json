@@ -1,0 +1,83 @@
+{
+  "66311": "8effd61aa5b1184e6c243165bb32604e3d2d1984",
+  "_qaflow": {
+    "since": "2026-10-05T03:01:03.576Z"
+  },
+  "f80db": {
+    "snapshot": "0f0386ce906813d7fc2b531c65d6028d29b20432",
+    "version": 2,
+    "harness": false,
+    "qaflow": {
+      "resetAt": "2026-10-05T05:15:44.105Z",
+      "note": "05:4x restarted fresh on luna; nova-2-lite dropped",
+      "nudges": [
+        {
+          "at": "2026-10-05T05:32:57.981Z",
+          "reason": "exit",
+          "poisoned": false,
+          "warn": ""
+        }
+      ],
+      "handled": [
+        "r5|FAIL|2026-10-05T05:40:06.431Z"
+      ],
+      "lastRound": 5,
+      "failRounds": [
+        5
+      ],
+      "reworks": [
+        {
+          "round": 5,
+          "next": 6,
+          "at": "2026-10-05T05:40:07.309Z",
+          "snapshot": "0f0386ce906813d7fc2b531c65d6028d29b20432",
+          "kind": "fail",
+          "via": "pending"
+        }
+      ],
+      "lastReworkAt": "2026-10-05T05:40:07.309Z",
+      "escalated": {
+        "at": "2026-10-05T05:40:08.453Z",
+        "round": 5,
+        "reason": "rework failed: could not restart the card (card f80db is in trash, not review)"
+      }
+    },
+    "qaCreated": "0f0386ce906813d7fc2b531c65d6028d29b20432",
+    "qaCard": "7641b"
+  },
+  "144da": {
+    "snapshot": "d8534f392c0605de36f12a98f8fab6ec7dc0a970",
+    "version": 2,
+    "harness": false,
+    "qaCreated": "d8534f392c0605de36f12a98f8fab6ec7dc0a970",
+    "qaCard": "4a471",
+    "qaflow": {
+      "handled": [
+        "r1|FAIL|2026-10-05T04:01:40.142Z",
+        "r2|PASS|2026-10-05T04:07:21.303Z"
+      ],
+      "lastRound": 2,
+      "failRounds": [
+        1
+      ],
+      "reworks": [
+        {
+          "round": 1,
+          "next": 2,
+          "at": "2026-10-05T04:01:41.160Z",
+          "snapshot": "eb060d63eb3a00ec8dff618e208ab3ea17843f8f",
+          "kind": "fail",
+          "via": "chat",
+          "returned": "2026-10-05T04:02:39.076Z",
+          "returnedSnapshot": "d8534f392c0605de36f12a98f8fab6ec7dc0a970"
+        }
+      ],
+      "lastReworkAt": "2026-10-05T04:01:41.160Z",
+      "doneAt": "2026-10-05T04:07:22.330Z",
+      "doneSnapshot": "d8534f392c0605de36f12a98f8fab6ec7dc0a970",
+      "doneBase": "2ca08828be2d4541bde32ee5e027848a962a0a87",
+      "landResult": "landed",
+      "landSha": "4f301ebdc451b800282558b1fd094678f5656a23"
+    }
+  }
+}

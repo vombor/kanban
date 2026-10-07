@@ -58,4 +58,28 @@ describe("readPidPressureFlags", () => {
 		writeFileSync(join(root, "elsewhere", "pid-brownout"), "");
 		expect(await readPidPressureFlags({ flagPaths: flagPaths() })).toEqual({ pressure: true, brownout: true });
 	});
+
+	it("stops reading the legacy flags once review-watch is switched off: it leaves them behind when it stops", async () => {
+		writeFileSync(join(kitHome, "kit.config.json"), JSON.stringify({}));
+		writeFileSync(join(kitHome, "run", "pid-pressure"), "");
+		writeFileSync(join(kitHome, "run", "review-watch.disabled"), "");
+		const stopped = {
+			readFile: (path: string) => (path.endsWith(".disabled") ? "" : null),
+			isAlive: () => false,
+			readCommandLine: () => null,
+		};
+		expect((await readPidPressureFlags({ flagPaths: flagPaths(), legacyProbe: stopped })).pressure).toBe(false);
+
+		// Disabled but still running (not stopped yet): its flags still count.
+		const running = {
+			readFile: (path: string) =>
+				path.endsWith(".disabled") ? "" : path.endsWith("review-watch.pid") ? "4242\n" : null,
+			isAlive: (pid: number) => pid === 4242,
+			readCommandLine: () => ["node", "/kit/services/review-watch.mjs"],
+		};
+		expect((await readPidPressureFlags({ flagPaths: flagPaths(), legacyProbe: running })).pressure).toBe(true);
+		// The watchdog's own flags count either way.
+		writeFileSync(flagPaths().pressure, "");
+		expect((await readPidPressureFlags({ flagPaths: flagPaths(), legacyProbe: stopped })).pressure).toBe(true);
+	});
 });

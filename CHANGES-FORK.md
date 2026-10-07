@@ -508,3 +508,15 @@ of this repository is the complete record of changes.
   with the CLI's entry shape plus `source: "browser"` (the CLI's lines now say `source: "cli"`), so the shadow diff
   compares them unchanged. Cards the CLI, pipeline, calibration or runoffs write are already stored and never logged
   as browser cards; non-dev roles and `default`-kit workspaces log nothing.
+- `src/pipeline/legacy-import.ts`, `src/kits/team/runoffs/runoffs-import.ts`, `src/kits/team/scoreboard/scoreboard-import.ts`
+  (new), `src/pipeline/pipeline-state.ts` (`mergeLegacyCardEntries`), `src/config/legacy-kit-config.ts`
+  (`resolveLegacyKitProjectFiles`), `src/state/kanban-home.ts`, `src/commands/pipeline.ts`, `src/state/pid-pressure-flags.ts`,
+  `test/utilities/vitest-setup.ts`, `docs/team/RUNBOOK.md`, tests (P5-2 foo switch): `kanban pipeline import-legacy
+  --project <ws> [--dry-run] [--force] [--json]` copies the legacy kit's per-project state before the shadow goes off:
+  checks-state.json entries of open cards into pipeline-state.json (legacy keys win, Kanban-only keys stay), runoffs.json
+  by group name (decided groups too), the scoreboard without duplicate lines (legacy lines first) and qa-log.md while
+  Kanban has none (the QA gate numbers rounds from it). Read-only on the legacy files, idempotent; refuses unless the
+  workspace is on landing `qa` in shadow and the legacy autoland no longer owns it (`--force` plans anyway, dry run
+  only). The PID-pressure reader ignores the legacy kit's flag files once review-watch is switched off (it never
+  removes them). The test setup replaces a HOME outside the temp dir with a temp one, after a run without it wrote
+  pipeline-worker test lines into foo's live scoreboard.
