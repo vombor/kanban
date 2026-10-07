@@ -15,12 +15,12 @@ only in the commit message. This file indexes those rules so the TypeScript port
 
 | | |
 |---|---|
-| Cut at | kit `main` `0a894c5a6e13e3f51ed38828b1c29dcd4262dcc1` (127 commits, 2026-10-06) |
-| Archive head | `archive/devteam-kit` = `6da7159739af896fd68eab3345c519860b63d0e6` (120 commits, root `16879d1`) |
+| Cut at | kit `main` `a2b46955` (138 commits, 2026-10-07, the kit repo's last commit before it was retired at P5-3). First cut: `0a894c5` (127 commits, 2026-10-06) |
+| Archive head | `archive/devteam-kit` = `devteam-kit-final` = `d2e3b3ef3b748e0a27fbba9965443a7a2611d7b2` (131 commits, root `16879d1`). The P5-3 refresh reran the same filter on a fresh clone: it reproduced the first cut's `6da7159` exactly, and the 11 later commits sit on top |
 | Removed | `bench/prices-aws.json`, `bench/prices.json`, `bench/model-prices.md` (price data; it goes to `data/prices/`), `kit.config*.json` (`kit.config.json` was never tracked; `kit.config.example.json` dropped). The 7 commits that only touched these files are gone. |
 | Moved | `forks/secret-guard.sh` → `scripts/secret-guard.sh` (all of its history) |
 | Not in the archive | the kit's other branch `bc84c`: its 2 commits are on main as rebased copies (same patches: `6626852`, `acf45dc`) |
-| Secret scans | Key shapes over every blob and commit message: clean. Exact values (`scripts/secret-guard.sh --scan archive/devteam-kit`): run by the user before any push. |
+| Secret scans | Key shapes over every blob and commit message: clean. Exact values (`scripts/secret-guard.sh --scan`) over the 11 commits added at P5-3: clean (2026-10-07). The first cut's 120 commits still need the user's exact-value scan (`scripts/secret-guard.sh --scan archive/devteam-kit`) before any push. |
 | Pushed | No. Push only after the user's exact-value scan is clean and the user OKs it. |
 
 The rewrite used `git filter-branch --index-filter --prune-empty` on a `git clone --no-local` copy
@@ -183,6 +183,17 @@ printf '#!/bin/sh\nexec scripts/secret-guard.sh "$@"\n' > .husky/pre-push && chm
 Keep `.husky/pre-push` out of commits (`echo .husky/pre-push >> .git/info/exclude`) unless the team decides
 to ship it. Each new worktree needs it again (`cb27ad9`).
 
+## Added at the P5-3 refresh (kit commits after the first cut)
+
+| Sha | Rule |
+|---|---|
+| `715c8a2`, `282507c` | No headless orchestrator run while an interactive session in the project is live (its transcript was written in the last 10 min), follow-up runs included. Issues stay queued and are re-woken after the cooldown (a second run started beside the live kanban-2uge sidebar, 23:51Z 10/06). |
+| `15d7fe5` | Retry git on someone else's `index.lock` for 20 s. A land that throws is a land error and escalates; it doesn't vanish in the queue's catch (4018c 10/07: a QA PASS never landed). |
+| `9716878` | Cards named in held orchestrator-plan steps (`[wait:]`, `[watch]`, `[user]`) don't count toward a "pipeline idle" wake (4189a 10/07). |
+| `3ddf550` | Orchestrator wakes go to one sidebar session, on Kanban's selected agent, with a headless fallback. |
+| `88bfd11`, `2b51172` | K-1/K-2: a project doesn't inherit QA_CREATE/AUTO_REWORK/AUTO_DONE; the toggles follow Kanban's `landing.mode: qa` and the kit's `qa.enabled`. Autoland decides on the effective agent. |
+| `663b092`, `d2e3b3e` | Restart recovery resumes Claude cards too, with the resume note as the launch prompt (`--continue`), not the card prompt again. |
+
 ## Kit sha → archive sha
 
 Kit (original) on the left, archive on the right, oldest first.
@@ -208,6 +219,8 @@ ce7b672 d648e67  e2eb93d afe88e3  8d56898 8a1bf34  6819ce9 6be16bc  ab84492 2000
 6ff9c53 2ffe609  60c5538 9101a29  bde015e 922b5b8  c637639 28b04a1  35b95ca acf45dc  2852764 6626852
 7d08918 ef523b2  cc6ef30 0782636  666a084 b9dd99b  f019c5b 0bc6387  94247a7 1be18d1  d15bfbc 8e2fb5c
 3b84abe 6698365  f9ed1c3 0261b20  7057bbd c8552ae  a01625e 1ce45df  d4834f8 cb27ad9  0a894c5 6da7159
+cc1eefe 715c8a2  6f4fa93 282507c  4554284 15d7fe5  f859cb6 9716878  00514f2 3ddf550  92101ca 88bfd11
+8ee0b1c c7e478a  ca9447e 114361e  9828540 2b51172  47d63ac 663b092  a2b4695 d2e3b3e
 ```
 
 Dropped (price data only): `9794135`, `d41befc`, `bd3077d`, `cfbf3f4`, `6d05e78`, `edb3342`, `dc7d223`.
