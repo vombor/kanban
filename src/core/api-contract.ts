@@ -876,7 +876,7 @@ export const runtimeAgentDefinitionSchema = z.object({
 });
 export type RuntimeAgentDefinition = z.infer<typeof runtimeAgentDefinitionSchema>;
 
-export const runtimeKanbanHomeSourceSchema = z.enum(["flag", "env", "initialized", "legacy", "default"]);
+export const runtimeKanbanHomeSourceSchema = z.enum(["flag", "env", "default"]);
 export type RuntimeKanbanHomeSource = z.infer<typeof runtimeKanbanHomeSourceSchema>;
 
 /** Paths resolved by src/state/kanban-home.ts. The web UI shows these instead of hard-coding them. */

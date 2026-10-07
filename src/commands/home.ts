@@ -1,11 +1,12 @@
 import type { Command } from "commander";
 
 import { setKanbanRuntimePort } from "../core/runtime-endpoint";
-import { getDefaultKanbanHomePath, getLegacyKanbanHomePath, resolveKanbanHome } from "../state/kanban-home";
+import { getDefaultKanbanHomePath, resolveKanbanHome } from "../state/kanban-home";
 import { type HomeMigratePlan, type HomeMigrateResult, runKanbanHomeMigration } from "../state/kanban-home-migrate";
 
 interface HomeMigrateCommandOptions {
-	from?: string;
+	from: string;
+	fromWorktrees?: string;
 	to?: string;
 	dryRun?: boolean;
 	worktrees?: boolean;
@@ -96,9 +97,13 @@ export function registerHomeCommand(program: Command): void {
 	home
 		.command("migrate")
 		.description(
-			"Copy board state from the legacy home into the Kanban home and mark it. Refuses while a Kanban server runs.",
+			"Copy board state from an old home into the Kanban home and mark it (a one-off move). Refuses while a Kanban server runs.",
 		)
-		.option("--from <dir>", `Source home (default: ${getLegacyKanbanHomePath()}).`)
+		.requiredOption("--from <dir>", "Source home (required; there is no default).")
+		.option(
+			"--from-worktrees <dir>",
+			"Where the source home's task worktrees are, if its config.json has no worktreesRoot (default: <from>/worktrees).",
+		)
 		.option("--to <dir>", "Target home (default: --home or KANBAN_HOME, else the fresh-install home).")
 		.option("--dry-run", "Print the plan only.")
 		.option("--worktrees", "Also move worktrees of idle (Backlog/Done) cards into the target's worktrees root.")
@@ -116,6 +121,7 @@ export function registerHomeCommand(program: Command): void {
 				}
 				const result = await runKanbanHomeMigration({
 					fromPath: options.from,
+					fromWorktreesPath: options.fromWorktrees,
 					toPath: options.to ?? getDefaultTargetPath(),
 					dryRun: options.dryRun === true,
 					moveWorktrees: options.worktrees === true,

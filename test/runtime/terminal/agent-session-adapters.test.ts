@@ -1427,9 +1427,9 @@ describe("prepareAgentLaunch copilot", () => {
 
 	it("maps a named BYOK profile to COPILOT_PROVIDER_* env without storing secrets", async () => {
 		const home = setupTempHome();
-		mkdirSync(join(home, ".cline", "kanban"), { recursive: true });
+		mkdirSync(join(home, ".kanban"), { recursive: true });
 		writeFileSync(
-			join(home, ".cline", "kanban", "copilot-providers.json"),
+			join(home, ".kanban", "copilot-providers.json"),
 			JSON.stringify({
 				providers: {
 					local: { baseUrl: "http://127.0.0.1:13305/v1", type: "openai", apiKeyEnv: "TEST_COPILOT_KEY" },

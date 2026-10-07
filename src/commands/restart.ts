@@ -76,8 +76,9 @@ async function prepareWorkspace(
 		for (const card of column.cards) {
 			const role = resolveCardRole(card);
 			const session = state.sessions[card.id];
-			// Only cards whose agent is mid-work: a Review card whose turn ended waits for QA, nothing to resume.
-			if (session?.state !== "running") {
+			// Only cards whose agent is mid-work: a Review card whose turn ended waits for QA, nothing to resume. An In
+			// Progress card without a summary was already left without a process (a restart before this one).
+			if (session ? session.state !== "running" : column.id !== "in_progress") {
 				print(`${card.id} (${role}, ${column.id}): session ${session?.state ?? "none"}, not running; not listed`);
 				continue;
 			}
@@ -98,7 +99,7 @@ async function prepareWorkspace(
 						: await tagRestartWip(info.path, card.id);
 				}
 			}
-			const model = card.agentSettings?.modelId ?? session.modelId ?? null;
+			const model = card.agentSettings?.modelId ?? session?.modelId ?? null;
 			cards.push({ id: card.id, column: column.id, model, wipTag, kind: role });
 			print(`${card.id} (${role}, ${column.id}, ${model ?? "default model"})${wipTag ? `: WIP tag ${wipTag}` : ""}`);
 		}

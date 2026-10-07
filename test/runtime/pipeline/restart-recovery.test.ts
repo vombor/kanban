@@ -124,6 +124,56 @@ describe("planRestartRecovery", () => {
 			}).orphans,
 		).toEqual([]);
 	});
+
+	it("resumes the cards of a manifest from the previous home, and In Progress cards without a summary (277f8)", () => {
+		const cards = [
+			{ card: card("listed"), column: "in_progress" },
+			{ card: card("277f8"), column: "in_progress" },
+			{ card: card("waiting"), column: "review" },
+			{ card: card("resumed"), column: "in_progress" },
+		];
+		const manifestAt = SERVER_START - 160_000;
+		const manifest = {
+			at: new Date(manifestAt).toISOString(),
+			kanbanStart: new Date(SERVER_START - 245_000).toISOString(),
+			cards: [
+				{ id: "listed", column: "in_progress", wipTag: "preserve/listed-wip-20261007T1803-restart" },
+				{ id: "resumed", column: "in_progress", wipTag: null },
+			],
+		};
+		// sessions.json had no summary for listed/277f8/waiting; "resumed" started again after the manifest.
+		const sessions = new Map([
+			["resumed", session("resumed", { state: "awaiting_review", startedAt: manifestAt + 10_000 })],
+		]);
+		const plan = planRestartRecovery({
+			cards,
+			sessions,
+			serverStartedAt: SERVER_START,
+			// The new home has no start record of the server that wrote the manifest.
+			previousServerStartedAt: null,
+			manifest,
+			turnEnded: () => false,
+		});
+		expect(plan.manifestAt).toBe(manifest.at);
+		expect(plan.orphans.map((orphan) => [orphan.taskId, orphan.reason, orphan.wipTag])).toEqual([
+			["listed", `in the restart manifest of ${manifest.at}`, "preserve/listed-wip-20261007T1803-restart"],
+			["277f8", "In Progress with no session summary and no process now", null],
+		]);
+		expect(Object.fromEntries(plan.skipped.map((entry) => [entry.taskId, entry.why]))).toEqual({
+			waiting: "no session summary",
+			resumed: "session awaiting_review before the restart: finished work",
+		});
+		// Without any manifest the In Progress card is still found.
+		const bare = planRestartRecovery({
+			cards,
+			sessions,
+			serverStartedAt: SERVER_START,
+			previousServerStartedAt: null,
+			manifest: null,
+			turnEnded: () => false,
+		});
+		expect(bare.orphans.map((orphan) => orphan.taskId)).toEqual(["listed", "277f8"]);
+	});
 });
 
 describe("restart manifest and recover requests", () => {
@@ -135,9 +185,11 @@ describe("restart manifest and recover requests", () => {
 		// Weeks old: written under a server two or more starts back (a landing-off workspace nothing planned).
 		const old = new Date(previous - 21 * 86_400_000).toISOString();
 		expect(isManifestForStart({ at: old, kanbanStart: old, cards: [] }, SERVER_START, previous)).toBe(false);
-		// No writing server, or no record of the previous start: never replayed.
+		// No writing server: never replayed.
 		expect(isManifestForStart({ at, kanbanStart: null, cards: [] }, SERVER_START, previous)).toBe(false);
-		expect(isManifestForStart({ at, kanbanStart: writer, cards: [] }, SERVER_START, null)).toBe(false);
+		// A later server on this home already had its start (the manifest is from two starts back).
+		expect(isManifestForStart({ at, kanbanStart: writer, cards: [] }, SERVER_START, previous + 1000)).toBe(false);
+		// Written under this very server (a prepare that no restart followed yet).
 		// Written under this very server (a prepare that no restart followed yet).
 		expect(
 			isManifestForStart(
@@ -147,6 +199,27 @@ describe("restart manifest and recover requests", () => {
 			),
 		).toBe(false);
 		expect(isManifestForStart(null, SERVER_START, previous)).toBe(false);
+	});
+
+	it("uses a manifest written under the previous home after a home move (P5-4, 10/07)", () => {
+		// The writer's start record stayed in the old home: this home has none, or only an older one.
+		const at = new Date(SERVER_START - 160_000).toISOString();
+		const writer = new Date(SERVER_START - 245_000).toISOString();
+		const manifest = { at, kanbanStart: writer, cards: [] };
+		expect(isManifestForStart(manifest, SERVER_START, null)).toBe(true);
+		expect(isManifestForStart(manifest, SERVER_START, SERVER_START - 30 * 86_400_000)).toBe(true);
+		// Days old with no start record to tie it to this start: stale.
+		const old = { at: new Date(SERVER_START - 3 * 86_400_000).toISOString(), kanbanStart: writer, cards: [] };
+		old.kanbanStart = new Date(Date.parse(old.at) - 60_000).toISOString();
+		expect(isManifestForStart(old, SERVER_START, null)).toBe(false);
+		// A writer start after its own manifest is not a server that wrote it.
+		expect(
+			isManifestForStart(
+				{ at, kanbanStart: new Date(SERVER_START - 1000).toISOString(), cards: [] },
+				SERVER_START,
+				null,
+			),
+		).toBe(false);
 	});
 
 	it("reads the previous server's start record whether or not that server still runs", async () => {

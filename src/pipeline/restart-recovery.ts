@@ -72,21 +72,36 @@ export interface PlanRestartRecoveryInput {
 
 const BLOCKED_TITLE = /^BLOCKED: /;
 
+/** How old a manifest whose writer has no start record in this home (a home move) may be when this server starts. */
+export const MANIFEST_FROM_OTHER_HOME_MAX_AGE_MS = 24 * 3_600_000;
+
 /**
  * A manifest is for the very next server start only: written before `serverStartedAt` by the server that ran just
- * before this one (`kanbanStart` equals `previousServerStartedAt`, from the start record this server replaced).
- * Anything else is stale (a manifest no start used, from weeks ago, or one written without a known server) and is
- * never replayed; recovery deletes it.
+ * before this one. Normally that server's start (`kanbanStart`) equals `previousServerStartedAt`, from the start
+ * record this server replaced. After a home move the writer's start record stayed in the old home (`run/` is not
+ * part of the move), so this home has no record (null) or only one older than the writer: no server started on this
+ * home after the writer, and the manifest counts if it is recent (MANIFEST_FROM_OTHER_HOME_MAX_AGE_MS; a home move
+ * happens in a restart window). Anything else is stale (a manifest no start used, from weeks ago, one written without
+ * a known server, or one a later server on this home already had) and is never replayed; recovery deletes it.
  */
 export function isManifestForStart(
 	manifest: RestartManifest | null,
 	serverStartedAt: number,
 	previousServerStartedAt: number | null,
 ): manifest is RestartManifest {
-	if (!manifest || previousServerStartedAt === null || !(Date.parse(manifest.at) < serverStartedAt)) {
+	if (!manifest?.kanbanStart) {
 		return false;
 	}
-	return Boolean(manifest.kanbanStart) && Date.parse(manifest.kanbanStart ?? "") === previousServerStartedAt;
+	const at = Date.parse(manifest.at);
+	const writerStartedAt = Date.parse(manifest.kanbanStart);
+	if (!(at < serverStartedAt) || !(writerStartedAt <= at)) {
+		return false;
+	}
+	if (previousServerStartedAt === writerStartedAt) {
+		return true;
+	}
+	const writerFromOtherHome = previousServerStartedAt === null || previousServerStartedAt < writerStartedAt;
+	return writerFromOtherHome && serverStartedAt - at <= MANIFEST_FROM_OTHER_HOME_MAX_AGE_MS;
 }
 const ORPHAN_STATES = new Set(["running", "interrupted"]);
 
@@ -125,12 +140,19 @@ export function planRestartRecovery(input: PlanRestartRecoveryInput): RestartRec
 		}
 		const orphan = (reason: string) =>
 			plan.orphans.push({ taskId: card.id, role, column, reason, wipTag: listed?.wipTag ?? null });
-		if (listed) {
+		// A listed card whose session started after the manifest was written has been resumed since.
+		if (listed && !(session?.startedAt && session.startedAt > Date.parse(manifestUsable?.at ?? ""))) {
 			orphan(`in the restart manifest of ${manifestUsable?.at}`);
 			continue;
 		}
 		if (!session) {
-			plan.skipped.push({ taskId: card.id, why: "no session summary" });
+			// Summaries reach sessions.json only with a board save that carries them (the browser's), so an In Progress
+			// card can have none on disk (277f8, 10/07). In Progress without a process is an agent stopped mid-work.
+			if (column === "in_progress") {
+				orphan("In Progress with no session summary and no process now");
+			} else {
+				plan.skipped.push({ taskId: card.id, why: "no session summary" });
+			}
 			continue;
 		}
 		if (!ORPHAN_STATES.has(session.state)) {

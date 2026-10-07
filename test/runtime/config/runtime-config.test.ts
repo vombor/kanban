@@ -213,7 +213,7 @@ describe.sequential("runtime-config auto agent selection", () => {
 			writeFakeCommand(tempBin, "claude");
 			writeFakeCommand(tempBin, "codex");
 
-			const runtimeConfigDir = join(tempHome, ".cline", "kanban");
+			const runtimeConfigDir = join(tempHome, ".kanban");
 			mkdirSync(runtimeConfigDir, { recursive: true });
 			writeFileSync(
 				join(runtimeConfigDir, "config.json"),
@@ -246,7 +246,7 @@ describe.sequential("runtime-config auto agent selection", () => {
 		try {
 			writeFakeCommand(tempBin, "codex");
 
-			const runtimeConfigDir = join(tempHome, ".cline", "kanban");
+			const runtimeConfigDir = join(tempHome, ".kanban");
 			mkdirSync(runtimeConfigDir, { recursive: true });
 			writeFileSync(
 				join(runtimeConfigDir, "config.json"),
@@ -279,7 +279,7 @@ describe.sequential("runtime-config auto agent selection", () => {
 		try {
 			writeFakeCommand(tempBin, "cline");
 
-			const runtimeConfigDir = join(tempHome, ".cline", "kanban");
+			const runtimeConfigDir = join(tempHome, ".kanban");
 			mkdirSync(runtimeConfigDir, { recursive: true });
 			writeFileSync(
 				join(runtimeConfigDir, "config.json"),
@@ -332,7 +332,7 @@ describe.sequential("runtime-config auto agent selection", () => {
 		);
 
 		try {
-			const runtimeConfigDir = join(tempHome, ".cline", "kanban");
+			const runtimeConfigDir = join(tempHome, ".kanban");
 			mkdirSync(runtimeConfigDir, { recursive: true });
 			writeFileSync(join(runtimeConfigDir, "config.json"), "{}", "utf8");
 
@@ -348,9 +348,7 @@ describe.sequential("runtime-config auto agent selection", () => {
 					openPrPromptTemplate: current.openPrPromptTemplateDefault,
 				});
 
-				const globalPayload = JSON.parse(
-					readFileSync(join(tempHome, ".cline", "kanban", "config.json"), "utf8"),
-				) as {
+				const globalPayload = JSON.parse(readFileSync(join(tempHome, ".kanban", "config.json"), "utf8")) as {
 					selectedAgentId?: string;
 					agentAutonomousModeEnabled?: boolean;
 					readyForReviewNotificationsEnabled?: boolean;
@@ -540,15 +538,18 @@ describe("runtime-config and the Kanban home", () => {
 		});
 	});
 
-	it("never stamps the home marker into the legacy ~/.cline/kanban", async () => {
+	it("stamps the home marker in a KANBAN_HOME home and writes nothing in ~/.kanban", async () => {
 		await withTemporaryKanbanHome(
 			async (home) => {
-				expect(home.source).toBe("legacy");
+				expect(home.source).toBe("env");
 				await updateGlobalRuntimeConfig(await loadGlobalRuntimeConfig(), { selectedAgentId: "codex" });
-				expect(JSON.parse(readFileSync(home.globalConfigPath, "utf8"))).toEqual({ selectedAgentId: "codex" });
+				expect(JSON.parse(readFileSync(home.globalConfigPath, "utf8"))).toEqual({
+					home: 1,
+					selectedAgentId: "codex",
+				});
 				expect(existsSync(join(home.userHomePath, ".kanban", "config.json"))).toBe(false);
 			},
-			{ layout: "legacy" },
+			{ env: { KANBAN_HOME: "~/custom-home" } },
 		);
 	});
 });

@@ -43,17 +43,24 @@ interface Homes {
 	legacyWorktrees: string;
 }
 
+/** `--from` (required) and the old home's worktrees root, which its config.json doesn't name. */
+function fromHome(userHomePath: string): Pick<HomeMigrateOptions, "fromPath" | "fromWorktreesPath"> {
+	const { legacyHome, legacyWorktrees } = getHomes(userHomePath);
+	return { fromPath: legacyHome, fromWorktreesPath: legacyWorktrees };
+}
+
 function getHomes(userHomePath: string): Homes {
 	return {
-		legacyHome: join(userHomePath, ".cline", "kanban"),
+		legacyHome: join(userHomePath, "old-home"),
 		targetHome: join(userHomePath, ".kanban"),
-		legacyWorktrees: join(userHomePath, ".cline", "worktrees"),
+		legacyWorktrees: join(userHomePath, "old-worktrees"),
 	};
 }
 
-/** A legacy home like the pod's: config, one board, hooks, a trashed patch, and lock leftovers. */
+/** An old home like the pod's before the home move (worktrees outside it, as ~/.cline/worktrees was): config, one board, hooks, a trashed patch, and lock leftovers. */
 function seedLegacyHome(userHomePath: string): void {
-	const { legacyHome } = getHomes(userHomePath);
+	const { legacyHome, legacyWorktrees } = getHomes(userHomePath);
+	mkdirSync(legacyWorktrees, { recursive: true });
 	writeJson(join(legacyHome, "config.json"), { selectedAgentId: "claude", readyForReviewNotificationsEnabled: false });
 	writeJson(join(legacyHome, "workspaces", "index.json"), {
 		version: 1,
@@ -96,6 +103,7 @@ describe("kanban home migrate", () => {
 				const sourceConfigBefore = readFileSync(join(legacyHome, "config.json"), "utf8");
 
 				const result = await runKanbanHomeMigration({
+					...fromHome(userHomePath),
 					toPath: targetHome,
 					probeRuntimeServer: noServer,
 					now: () => new Date("2026-10-07T01:02:03.456Z"),
@@ -127,18 +135,18 @@ describe("kanban home migrate", () => {
 
 				expect(result.backupPath).toBe(join(targetHome, "backups", "home-migrate-2026-10-07T01-02-03Z.tgz"));
 				const entries = listTarball(result.backupPath ?? "");
-				expect(entries.some((entry) => entry.endsWith(".cline/kanban/workspaces/foo/board.json"))).toBe(true);
-				expect(entries.some((entry) => entry.endsWith(".cline/kanban/config.json"))).toBe(true);
+				expect(entries.some((entry) => entry.endsWith("old-home/workspaces/foo/board.json"))).toBe(true);
+				expect(entries.some((entry) => entry.endsWith("old-home/config.json"))).toBe(true);
 
 				// The resolver now picks the migrated home and still finds the old worktrees.
 				resetKanbanHomeForTests();
 				const resolution = resolveKanbanHome();
-				expect(resolution.source).toBe("initialized");
+				expect(resolution.source).toBe("default");
 				expect(resolution.homePath).toBe(targetHome);
 				expect(resolution.worktreesRootPath).toBe(join(targetHome, "worktrees"));
 				expect(resolution.legacyWorktreeRootPaths).toEqual([legacyWorktrees]);
 			},
-			{ layout: "legacy", prepare: seedLegacyHome },
+			{ prepare: seedLegacyHome },
 		);
 	});
 
@@ -146,11 +154,16 @@ describe("kanban home migrate", () => {
 		await withTemporaryKanbanHome(
 			async ({ userHomePath }) => {
 				const { targetHome } = getHomes(userHomePath);
-				await runKanbanHomeMigration({ toPath: targetHome, probeRuntimeServer: noServer });
+				await runKanbanHomeMigration({
+					...fromHome(userHomePath),
+					toPath: targetHome,
+					probeRuntimeServer: noServer,
+				});
 				const configAfterFirst = readFileSync(join(targetHome, "config.json"), "utf8");
 				expect(listBackups(targetHome)).toHaveLength(1);
 
 				const second = await runKanbanHomeMigration({
+					...fromHome(userHomePath),
 					toPath: targetHome,
 					probeRuntimeServer: noServer,
 					now: () => new Date("2030-01-01T00:00:00Z"),
@@ -162,7 +175,7 @@ describe("kanban home migrate", () => {
 				expect(readFileSync(join(targetHome, "config.json"), "utf8")).toBe(configAfterFirst);
 				expect(listBackups(targetHome)).toHaveLength(1);
 			},
-			{ layout: "legacy", prepare: seedLegacyHome },
+			{ prepare: seedLegacyHome },
 		);
 	});
 
@@ -171,6 +184,7 @@ describe("kanban home migrate", () => {
 			async ({ userHomePath }) => {
 				const { targetHome } = getHomes(userHomePath);
 				const result = await runKanbanHomeMigration({
+					...fromHome(userHomePath),
 					toPath: targetHome,
 					dryRun: true,
 					probeRuntimeServer: noServer,
@@ -180,7 +194,7 @@ describe("kanban home migrate", () => {
 				expect(result.plan.files.filter((file) => file.action === "copy")).toHaveLength(6);
 				expect(existsSync(targetHome)).toBe(false);
 			},
-			{ layout: "legacy", prepare: seedLegacyHome },
+			{ prepare: seedLegacyHome },
 		);
 	});
 
@@ -192,7 +206,11 @@ describe("kanban home migrate", () => {
 				writeJson(join(targetHome, "workspaces", "foo", "board.json"), newerBoard);
 				writeJson(join(targetHome, "config.json"), { selectedAgentId: "codex", worktreesRoot: "/srv/worktrees" });
 
-				const result = await runKanbanHomeMigration({ toPath: targetHome, probeRuntimeServer: noServer });
+				const result = await runKanbanHomeMigration({
+					...fromHome(userHomePath),
+					toPath: targetHome,
+					probeRuntimeServer: noServer,
+				});
 
 				expect(result.executed).toBe(true);
 				expect(result.plan.files).toContainEqual({
@@ -215,7 +233,7 @@ describe("kanban home migrate", () => {
 				const entries = listTarball(result.backupPath ?? "");
 				expect(entries.some((entry) => entry.endsWith(".kanban/config.json"))).toBe(true);
 			},
-			{ layout: "legacy", prepare: seedLegacyHome },
+			{ prepare: seedLegacyHome },
 		);
 	});
 
@@ -225,7 +243,11 @@ describe("kanban home migrate", () => {
 				const { targetHome } = getHomes(userHomePath);
 				const before = readdirSync(targetHome).sort();
 
-				const result = await runKanbanHomeMigration({ toPath: targetHome, probeRuntimeServer: noServer });
+				const result = await runKanbanHomeMigration({
+					...fromHome(userHomePath),
+					toPath: targetHome,
+					probeRuntimeServer: noServer,
+				});
 
 				expect(result.executed).toBe(false);
 				expect(result.plan.blockers.join("\n")).toContain("is a git repository");
@@ -234,7 +256,6 @@ describe("kanban home migrate", () => {
 				expect(existsSync(join(targetHome, "workspaces"))).toBe(false);
 			},
 			{
-				layout: "legacy",
 				prepare: (userHomePath) => {
 					seedLegacyHome(userHomePath);
 					const kitRepo = join(userHomePath, ".kanban");
@@ -262,7 +283,11 @@ describe("kanban home migrate", () => {
 						processStartTime: readProcessStartTime(server.pid ?? 0),
 					});
 
-					const result = await runKanbanHomeMigration({ toPath: targetHome, probeRuntimeServer: noServer });
+					const result = await runKanbanHomeMigration({
+						...fromHome(userHomePath),
+						toPath: targetHome,
+						probeRuntimeServer: noServer,
+					});
 					expect(result.executed).toBe(false);
 					expect(result.plan.blockers).toHaveLength(1);
 					expect(result.plan.blockers[0]).toContain(
@@ -274,7 +299,7 @@ describe("kanban home migrate", () => {
 					expect(existsSync(getKanbanWorkspacesRootPath(targetHome))).toBe(false);
 					expect(existsSync(join(legacyHome, "run"))).toBe(false);
 				},
-				{ layout: "legacy", prepare: seedLegacyHome },
+				{ prepare: seedLegacyHome },
 			);
 		} finally {
 			server.kill();
@@ -291,25 +316,33 @@ describe("kanban home migrate", () => {
 					homePath: legacyHome,
 					startedAt: 1,
 				});
-				const result = await runKanbanHomeMigration({ toPath: targetHome, probeRuntimeServer: noServer });
+				const result = await runKanbanHomeMigration({
+					...fromHome(userHomePath),
+					toPath: targetHome,
+					probeRuntimeServer: noServer,
+				});
 				expect(result.plan.blockers).toEqual([]);
 				expect(result.executed).toBe(true);
 				// run/ is runtime state: not copied.
 				expect(result.plan.ignoredEntries).toContain("run/");
 				expect(existsSync(join(targetHome, "run"))).toBe(false);
 			},
-			{ layout: "legacy", prepare: seedLegacyHome },
+			{ prepare: seedLegacyHome },
 		);
 	});
 
 	it("does not leave a half-copied home the resolver would switch to (a file in the way of hooks/)", async () => {
 		await withTemporaryKanbanHome(
 			async ({ userHomePath }) => {
-				const { legacyHome, targetHome } = getHomes(userHomePath);
+				const { targetHome } = getHomes(userHomePath);
 				mkdirSync(targetHome, { recursive: true });
 				writeFileSync(join(targetHome, "hooks"), "", "utf8");
 
-				const result = await runKanbanHomeMigration({ toPath: targetHome, probeRuntimeServer: noServer });
+				const result = await runKanbanHomeMigration({
+					...fromHome(userHomePath),
+					toPath: targetHome,
+					probeRuntimeServer: noServer,
+				});
 
 				expect(result.executed).toBe(false);
 				expect(result.plan.blockers).toEqual([
@@ -317,9 +350,8 @@ describe("kanban home migrate", () => {
 				]);
 				expect(readdirSync(targetHome)).toEqual(["hooks"]);
 				resetKanbanHomeForTests();
-				expect(resolveKanbanHome()).toMatchObject({ source: "legacy", homePath: legacyHome });
 			},
-			{ layout: "legacy", prepare: seedLegacyHome },
+			{ prepare: seedLegacyHome },
 		);
 	});
 
@@ -332,9 +364,12 @@ describe("kanban home migrate", () => {
 				writeJson(join(staging, "workspaces", "foo", "board.json"), { partial: true });
 				writeFileSync(join(staging, "stray.txt"), "left over", "utf8");
 				resetKanbanHomeForTests();
-				expect(resolveKanbanHome().source).toBe("legacy");
 
-				const result = await runKanbanHomeMigration({ toPath: targetHome, probeRuntimeServer: noServer });
+				const result = await runKanbanHomeMigration({
+					...fromHome(userHomePath),
+					toPath: targetHome,
+					probeRuntimeServer: noServer,
+				});
 
 				expect(result.executed).toBe(true);
 				expect(existsSync(staging)).toBe(false);
@@ -344,7 +379,7 @@ describe("kanban home migrate", () => {
 				);
 				expect(readJson(join(targetHome, "config.json"))).toMatchObject({ home: 1 });
 			},
-			{ layout: "legacy", prepare: seedLegacyHome },
+			{ prepare: seedLegacyHome },
 		);
 	});
 
@@ -352,7 +387,11 @@ describe("kanban home migrate", () => {
 		await withTemporaryKanbanHome(
 			async ({ userHomePath }) => {
 				const { legacyHome, targetHome } = getHomes(userHomePath);
-				const result = await runKanbanHomeMigration({ toPath: targetHome, probeRuntimeServer: noServer });
+				const result = await runKanbanHomeMigration({
+					...fromHome(userHomePath),
+					toPath: targetHome,
+					probeRuntimeServer: noServer,
+				});
 
 				expect(result.executed).toBe(true);
 				expect(readJson(join(targetHome, "copilot-providers.json"))).toEqual({ providers: [{ id: "x" }] });
@@ -363,11 +402,14 @@ describe("kanban home migrate", () => {
 				expect(result.plan.ignoredEntries).toEqual(["run/"]);
 				expect(existsSync(join(legacyHome, "copilot-providers.json"))).toBe(true);
 
-				const again = await planKanbanHomeMigration({ toPath: targetHome, probeRuntimeServer: noServer });
+				const again = await planKanbanHomeMigration({
+					...fromHome(userHomePath),
+					toPath: targetHome,
+					probeRuntimeServer: noServer,
+				});
 				expect(again.upToDate).toBe(true);
 			},
 			{
-				layout: "legacy",
 				prepare: (userHomePath) => {
 					seedLegacyHome(userHomePath);
 					const { legacyHome } = getHomes(userHomePath);
@@ -388,6 +430,7 @@ describe("kanban home migrate", () => {
 				const origin = "http://127.0.0.1:3484";
 
 				const sameHome = await planKanbanHomeMigration({
+					...fromHome(userHomePath),
 					toPath: targetHome,
 					probeRuntimeServer: async () => ({ origin, homePath: legacyHome }),
 				});
@@ -396,6 +439,7 @@ describe("kanban home migrate", () => {
 				]);
 
 				const unknownHome = await planKanbanHomeMigration({
+					...fromHome(userHomePath),
 					toPath: targetHome,
 					probeRuntimeServer: async () => ({ origin, homePath: null }),
 				});
@@ -404,19 +448,33 @@ describe("kanban home migrate", () => {
 				]);
 
 				const otherHome = await planKanbanHomeMigration({
+					...fromHome(userHomePath),
 					toPath: targetHome,
 					probeRuntimeServer: async () => ({ origin, homePath: join(userHomePath, "other-home") }),
 				});
 				expect(otherHome.blockers).toEqual([]);
 			},
-			{ layout: "legacy", prepare: seedLegacyHome },
+			{ prepare: seedLegacyHome },
 		);
+	});
+
+	it("requires --from: there is no default source home", async () => {
+		await withTemporaryKanbanHome(async ({ userHomePath }) => {
+			const { targetHome } = getHomes(userHomePath);
+			await expect(
+				planKanbanHomeMigration({ fromPath: " ", toPath: targetHome, probeRuntimeServer: noServer }),
+			).rejects.toThrow("The source home is required (--from <dir>).");
+		});
 	});
 
 	it("refuses without legacy state, and when source and target overlap", async () => {
 		await withTemporaryKanbanHome(async ({ userHomePath }) => {
 			const { legacyHome, targetHome } = getHomes(userHomePath);
-			const empty = await planKanbanHomeMigration({ toPath: targetHome, probeRuntimeServer: noServer });
+			const empty = await planKanbanHomeMigration({
+				...fromHome(userHomePath),
+				toPath: targetHome,
+				probeRuntimeServer: noServer,
+			});
 			expect(empty.blockers).toEqual([`${legacyHome} has no Kanban state (no config.json, no workspaces/).`]);
 
 			const same = await planKanbanHomeMigration({
@@ -427,6 +485,7 @@ describe("kanban home migrate", () => {
 			expect(same.blockers[0]).toBe(`Source and target are the same directory (${targetHome}).`);
 
 			const nested = await planKanbanHomeMigration({
+				fromPath: legacyHome,
 				toPath: join(legacyHome, "nested"),
 				probeRuntimeServer: noServer,
 			});

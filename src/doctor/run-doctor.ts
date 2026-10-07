@@ -10,7 +10,7 @@ import { resolveProjectRoots } from "../projects/project-roots";
 import { buildLemonadeModelListUrl, planClineModelsSource } from "../setup/cline-models-source";
 import { planMachineSetup } from "../setup/machine-setup";
 import { getAgentTrustConfigPaths } from "../setup/workspace-trust-report";
-import { getClineModelsSettingsPath, resolveKanbanHome } from "../state/kanban-home";
+import { getClineHomeDirPath, getClineModelsSettingsPath, resolveKanbanHome } from "../state/kanban-home";
 import { readLiveKanbanServerLock } from "../state/kanban-server-lock";
 import { listWorkspaceIndexEntries, loadWorkspaceBoardById } from "../state/workspace-state";
 import { checkClineLemonadeContextWindows } from "./cline-models-checks";
@@ -28,6 +28,7 @@ import {
 } from "./doctor-checks";
 import type { DoctorFinding, DoctorFixOutcome, DoctorReport } from "./doctor-report";
 import { checkGuardrails, type GuardrailCheckDeps } from "./guardrail-checks";
+import { checkHomeLocation } from "./home-location-checks";
 import { checkOneOwner } from "./one-owner-checks";
 
 export interface DoctorOptions {
@@ -71,6 +72,14 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
 			catalog,
 			server: readLiveKanbanServerLock(home.homePath),
 		}),
+	);
+	findings.push(
+		...(await checkHomeLocation({
+			homePath: home.homePath,
+			configPath,
+			legacyWorktreeRootPaths: home.legacyWorktreeRootPaths,
+			clineDirPath: getClineHomeDirPath(),
+		})),
 	);
 	findings.push(...checkLegacyConfigKeys(await readRawGlobalConfig(configPath), configPath));
 	if (options.target) {

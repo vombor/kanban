@@ -713,7 +713,9 @@ export async function resolveTaskCwd(options: {
 	if (await pathExists(worktreePath)) {
 		return worktreePath;
 	}
-	throw new Error(`Task worktree not found for task "${options.taskId}".`);
+	throw new Error(
+		`Task worktree not found for task "${options.taskId}". Looked in: ${getTaskWorktreeCandidatePaths(context.repoPath, options.taskId).join(", ")}.`,
+	);
 }
 
 export async function getTaskWorkspacePathInfo(options: {

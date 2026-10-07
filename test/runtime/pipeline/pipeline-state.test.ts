@@ -94,7 +94,7 @@ describe("pipeline state store", () => {
 					join(userHomePath, ".kanban", "data", "foo", "checks-state.json"),
 				]);
 			},
-			{ layout: "legacy" },
+			{ env: { KANBAN_HOME: "~/custom-home" } },
 		);
 	});
 });

@@ -12,7 +12,7 @@ import { z } from "zod";
 
 import { type RuntimeLandingMode, runtimeLandingModeSchema } from "../core/api-contract";
 import { lockedFileSystem } from "../fs/locked-file-system";
-import { getKanbanGlobalConfigPath, KANBAN_HOME_MARKER_VERSION, shouldMarkKanbanHome } from "../state/kanban-home";
+import { getKanbanGlobalConfigPath, KANBAN_HOME_MARKER_VERSION } from "../state/kanban-home";
 import { clineTurnDetectorModeSchema, getDefaultClineTurnDetectorSettings } from "./cline-turn-detector-config";
 import { DEFAULT_LEMONADE_MODEL_LIST_SETTINGS } from "./model-lists-config";
 
@@ -603,9 +603,7 @@ export async function updatePipelineConfigFile(
 		if (added.length > 0) {
 			throw new Error(added.join("\n"));
 		}
-		if (shouldMarkKanbanHome()) {
-			payload.home = KANBAN_HOME_MARKER_VERSION;
-		}
+		payload.home = KANBAN_HOME_MARKER_VERSION;
 		await lockedFileSystem.writeJsonFileAtomic(configPath, payload, { lock: null });
 	});
 }

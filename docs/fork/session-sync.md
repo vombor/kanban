@@ -60,8 +60,8 @@ nothing next to them. `0` turns the wait off. It applies with session sync on or
 
 ## Setting
 
-`sessionSync.enabled` in the Kanban home's `config.json` (the global config path in Settings; on the pod today that
-is the legacy home, `~/.cline/kanban/config.json`):
+`sessionSync.enabled` in the Kanban home's `config.json` (the global config path in Settings; on the pod
+`/root/.kanban/config.json`):
 
 ```json
 { "sessionSync": { "enabled": false } }

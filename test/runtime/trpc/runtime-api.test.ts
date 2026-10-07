@@ -444,8 +444,8 @@ describe("createRuntimeApi resetAllState", () => {
 		mkdirSync(tempHome, { recursive: true });
 		const debugPaths = [
 			join(tempHome, ".cline", "data"),
-			join(tempHome, ".cline", "kanban"),
-			join(tempHome, ".cline", "worktrees"),
+			join(tempHome, ".kanban"),
+			join(tempHome, ".kanban", "worktrees"),
 		];
 		for (const path of debugPaths) {
 			mkdirSync(path, { recursive: true });
@@ -490,8 +490,8 @@ describe("createRuntimeApi resetAllState", () => {
 		mkdirSync(tempHome, { recursive: true });
 		const debugPaths = [
 			join(tempHome, ".cline", "data"),
-			join(tempHome, ".cline", "kanban"),
-			join(tempHome, ".cline", "worktrees"),
+			join(tempHome, ".kanban"),
+			join(tempHome, ".kanban", "worktrees"),
 		];
 		for (const path of debugPaths) {
 			mkdirSync(path, { recursive: true });

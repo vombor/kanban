@@ -435,10 +435,10 @@ describe.sequential("task-worktree integration", () => {
 			return repoPath;
 		}
 
-		it("creates worktrees in ~/.cline/worktrees while the legacy home is active", async () => {
+		it("creates worktrees under <home>/worktrees even when ~/.cline/worktrees exists", async () => {
 			await withTemporaryKanbanHome(
 				async (home) => {
-					const { path: sandboxRoot, cleanup } = createTempDir("kanban-task-worktree-legacy-home-");
+					const { path: sandboxRoot, cleanup } = createTempDir("kanban-task-worktree-home-root-");
 					try {
 						const repoPath = createRepo(sandboxRoot);
 						const ensured = await ensureTaskWorktreeIfDoesntExist({
@@ -447,14 +447,32 @@ describe.sequential("task-worktree integration", () => {
 							baseRef: "HEAD",
 						});
 						expect(ensured.ok).toBe(true);
-						expect(ensured.path).toBe(join(home.userHomePath, ".cline", "worktrees", "pod01", "repo"));
-						expect(existsSync(join(home.userHomePath, ".kanban"))).toBe(false);
+						expect(ensured.path).toBe(join(home.userHomePath, ".kanban", "worktrees", "pod01", "repo"));
+						expect(existsSync(join(home.userHomePath, ".cline", "worktrees", "pod01"))).toBe(false);
 					} finally {
 						cleanup();
 					}
 				},
-				{ layout: "legacy" },
+				{ prepare: (userHomePath) => mkdirSync(join(userHomePath, ".cline", "worktrees"), { recursive: true }) },
 			);
+		});
+
+		it("says where it looked when a task's worktree is not under the home", async () => {
+			await withTemporaryKanbanHome(async (home) => {
+				const { path: sandboxRoot, cleanup } = createTempDir("kanban-task-worktree-missing-");
+				try {
+					const repoPath = createRepo(sandboxRoot);
+					// A worktree in the old root, with no legacyWorktreeRoots entry: Kanban doesn't look there.
+					const oldPath = join(home.userHomePath, ".cline", "worktrees", "old02", "repo");
+					mkdirSync(join(home.userHomePath, ".cline", "worktrees", "old02"), { recursive: true });
+					runGit(repoPath, ["worktree", "add", "--detach", oldPath, "HEAD"]);
+					await expect(resolveTaskCwd({ cwd: repoPath, taskId: "old02", baseRef: "HEAD" })).rejects.toThrow(
+						`Task worktree not found for task "old02". Looked in: ${join(home.userHomePath, ".kanban", "worktrees", "old02", "repo")}.`,
+					);
+				} finally {
+					cleanup();
+				}
+			});
 		});
 
 		it("keeps using a live worktree from a legacy root and never creates new ones there", async () => {
@@ -495,7 +513,15 @@ describe.sequential("task-worktree integration", () => {
 						cleanup();
 					}
 				},
-				{ layout: "initialized" },
+				{
+					layout: "initialized",
+					prepare: (userHomePath) =>
+						writeFileSync(
+							join(userHomePath, ".kanban", "config.json"),
+							JSON.stringify({ home: 1, legacyWorktreeRoots: ["~/.cline/worktrees"] }),
+							"utf8",
+						),
+				},
 			);
 		});
 	});

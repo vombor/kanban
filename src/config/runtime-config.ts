@@ -11,7 +11,6 @@ import {
 	getKanbanGlobalConfigPath,
 	getProjectKanbanConfigPath,
 	KANBAN_HOME_MARKER_VERSION,
-	shouldMarkKanbanHome,
 } from "../state/kanban-home";
 import { detectInstalledCommands } from "../terminal/agent-registry";
 import { areRuntimeProjectShortcutsEqual } from "./shortcut-utils";
@@ -357,9 +356,7 @@ async function writeRuntimeGlobalConfigFile(
 			payload[key] = value;
 		}
 	}
-	if (shouldMarkKanbanHome()) {
-		payload.home = KANBAN_HOME_MARKER_VERSION;
-	}
+	payload.home = KANBAN_HOME_MARKER_VERSION;
 	if (selectedAgentId !== undefined) {
 		if (hasOwnKey(existing, "selectedAgentId") || selectedAgentId !== DEFAULT_AGENT_ID) {
 			payload.selectedAgentId = selectedAgentId;

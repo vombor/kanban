@@ -316,7 +316,7 @@ describe("BoardCard", () => {
 	it("reconstructs and shows trashed worktree path when workspace metadata is not tracked", async () => {
 		setKanbanPaths({
 			homePath: "/Users/alice/.kanban",
-			homeSource: "initialized",
+			homeSource: "default",
 			worktreesRootPath: "/Users/alice/.kanban/worktrees",
 			legacyWorktreeRootPaths: [],
 			debugResetTargetPaths: [],

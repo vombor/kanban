@@ -574,13 +574,17 @@ The split from §4.0 changes the worker in three ways:
 
 1. `kanban --home <dir>`
 2. `KANBAN_HOME`
-3. `~/.kanban`, if it has `config.json` with `"home": 1` or a `workspaces/` dir (an initialized home)
-4. `~/.cline/kanban`, if it exists (legacy; `kanban doctor` says "run `kanban home migrate`")
-5. `~/.kanban` (fresh installs)
+3. `~/.kanban` of the user running Kanban (root or node)
+
+There is no legacy step and no fallback (since P5-4, 10/07): `~/.cline` is the Cline CLI's, Kanban keeps nothing
+there and never switches homes because a directory exists. A path Kanban needs and can't find is an error that says
+where it looked.
 
 - Worktrees: `worktreesRoot` (config) or `KANBAN_WORKTREES`, default `<home>/worktrees`.
-- `legacyWorktreeRoots` (default `["~/.cline/worktrees"]` after a migration) is searched read-only when a task's
-  worktree is not in the new root. Live worktrees are never moved; they drain as their cards finish (§8.3).
+- `legacyWorktreeRoots` (default: none) is searched read-only when a task's worktree is not in the home's root, only
+  for roots config.json lists (`kanban home migrate` writes the old home's). Live worktrees are never moved; they
+  drain as their cards finish (§8.3), then the entry is removed. `kanban doctor` warns while an entry exists and
+  about any Kanban home, board, state file or task worktree under `~/.cline`.
 - Project-local `<repo>/.cline/kanban/config.json` (shortcuts) stays, since it is in the project.
 - Cline's own `~/.cline/data` stays: it belongs to Cline, not Kanban.
 - The 10 hard-coded sites that change: `workspace-state.ts:23-25,161-167`, `runtime-config.ts:50-55,115-117,206`
@@ -599,7 +603,7 @@ The split from §4.0 changes the worker in three ways:
   workspaces/<id>/{board,sessions,meta}.json
   hooks/<agent>/                   was ~/.cline/kanban/hooks
   trashed-task-patches/            was ~/.cline/kanban/trashed-task-patches
-  worktrees/<taskId>/<repo>/       new task worktrees (old ones stay in ~/.cline/worktrees until done)
+  worktrees/<taskId>/<repo>/       task worktrees (a home move's leftovers: legacyWorktreeRoots, until done)
   data/<id>/                       per-workspace pipeline data (path unchanged for foo):
      pipeline-state.json  qa-log.md  ATTENTION.md  scoreboard.jsonl/.md  runoffs.json  restart-manifest.json
      watchdog-state.json  qa-artifacts/  calibration/<name>/  bench/  orchestrator-{actions,plan,queue}.*
@@ -783,10 +787,15 @@ kanban from `/usr/local/lib/node_modules`).
    - `kanban setup` rewrites the CLAUDE.md managed section.
    - The user applies the printed `~/.claude/settings.json` permission changes.
 4. **Move the home** (in a restart window, Kanban stopped):
-   - `kanban home migrate --from ~/.cline/kanban --to ~/.kanban` copies config/workspaces/hooks/patches, writes
-     `backups/home-migrate-<ts>.tgz`, sets `legacyWorktreeRoots`, and writes the home marker.
-   - The pod spec gets `KANBAN_HOME=/root/.kanban` (explicit, so a rollback is just removing it).
-   - `~/.cline/kanban` is renamed to `~/.cline/kanban.migrated-<ts>`, not deleted.
+   - `kanban home migrate --from <old home> --to ~/.kanban` (`--from` is required, `--from-worktrees` names the old
+     worktrees root when the old config.json doesn't) copies config/workspaces/hooks/patches, writes
+     `backups/home-migrate-<ts>.tgz`, sets `legacyWorktreeRoots`, and writes the home marker. `data/` is copied
+     separately; `run/` is not, so restart recovery takes a restart manifest written under the old home if it is at
+     most 24 h old (`isManifestForStart`).
+   - No pod-spec change: the home is `~/.kanban` of the user running Kanban; `KANBAN_HOME` stays optional.
+   - The old home is renamed to `<old home>.migrated-<ts>`, not deleted, and later moved out of `~/.cline`.
+   - Done on 2026-10-07 (18:05Z): the old home is `/root/.cline/kanban.migrated-20261007T180526Z`; only card 277f8's
+     worktree is left in `/root/.cline/worktrees` (config.json `legacyWorktreeRoots` until it finishes).
 
 ### 8.5 Image
 
@@ -795,7 +804,8 @@ kanban from `/usr/local/lib/node_modules`).
   - add the Playwright Chromium system libs (apt; then `vendor/chromium-libs` goes);
   - keep the cline Bedrock cache patch step.
 - The CMD stays (with `--skip-shutdown-cleanup` until §4.5 lands, then harmless).
-- `ENV KANBAN_HOME` is **not** baked into the image. The pod sets it, so the same image runs on an unmigrated home.
+- `ENV KANBAN_HOME` is **not** baked into the image, and the pod doesn't set it: the home is `~/.kanban` of the user
+  running Kanban.
 - `.github/workflows/image.yml` needs no structural change. `npm test` picks up the ported tests, so their runtime
   matters: no real agent processes (AGENTS.md: Node 22 CI hang).
 - Releases stay on `fork/**` branches. `fork/stack` stays the `:latest` source.
@@ -808,7 +818,7 @@ kanban from `/usr/local/lib/node_modules`).
 | a release | the previous image digest (`podman image inspect … .Digest` is recorded in each release card) |
 | P5-2 (foo switch) | `workspaces.foo.pipeline.shadow: true` (or landing `off`), re-enable the kit services. `pipeline-state.json` → `checks-state.json` (same format; the kit ignores `version`) |
 | P5-3 (repo retired) | `tar -xzf backups/devteam-kit-final.tgz -C ~/.kanban`, restore the bashrc block from its backup, `kit start` |
-| P5-4 (home moved) | remove `KANBAN_HOME` from the pod, rename `~/.cline/kanban.migrated-<ts>` back. Worktrees never moved. Boards changed after the move are in `~/.kanban/workspaces` and can be copied back the same way |
+| P5-4 (home moved) | stop Kanban and point `KANBAN_HOME` at the renamed old home (`<old home>.migrated-<ts>`, wherever it was moved). Worktrees never moved. Boards changed after the move are in `~/.kanban/workspaces` and can be copied back the same way |
 
 ## 9. Tests
 
@@ -938,7 +948,7 @@ Each card is one agent's work, leaves the pod working (new behaviour off or in s
 
 | Card | Scope | Depends on | Status / where it fits |
 |---|---|---|---|
-| P1-1 ∥ | `src/state/kanban-home.ts` resolver, `--home`/`KANBAN_HOME`/`worktreesRoot`/`legacyWorktreeRoots`; replace the 10 hard-coded sites; UI shows paths from the API; grep-gate test; `withTemporaryKanbanHome`. On the pod it still resolves `~/.cline/kanban` (no change) | – | card d18bd, in review. Core; `kits/` lookup for user kits goes through it (P3-1) |
+| P1-1 ∥ | `src/state/kanban-home.ts` resolver, `--home`/`KANBAN_HOME`/`worktreesRoot`/`legacyWorktreeRoots`; replace the 10 hard-coded sites; UI shows paths from the API; grep-gate test; `withTemporaryKanbanHome`. On the pod it resolved `~/.cline/kanban` until P5-4 removed that step | – | card d18bd, in review. Core; `kits/` lookup for user kits goes through it (P3-1) |
 | P1-2 | `kanban home migrate [--dry-run] [--worktrees]` (refuses while the server runs; backup tarball; marker) | P1-1 | card 836b0. Core |
 | P1-3 ∥ | Claude/Codex pre-trust by main git root in `claude-workspace-trust.ts`/`codex-workspace-trust.ts` (port of d84bc's agent-trust), before every spawn; diagnose the missed TUI auto-confirm | P0-1 (d84bc landed) | card a85d2, in rework. Core (agent adapters) |
 | P1-4 ∥ | `task-trash-workflow.ts`: one server-side Done workflow used by CLI trash, the auto-review reconciler and the browser | – | card c1203, in rework. Core: the only path to Done for land (P4-4), the hold's discard, runoff losers |
@@ -1012,7 +1022,7 @@ Decided (2026-10-06), recorded here so later cards don't reopen them:
 2. **Landing model** (§4.2): landing mode `qa`, where Kanban itself squash-lands onto the base (stash +
    `merge --squash` in a checked-out base) **before** the card goes to Done, and a manual Done asks "land or
    discard?". `commit`/`pr` stay.
-3. **Home default and history** (§6.1, §10): `~/.kanban` with legacy `~/.cline/kanban` detection; running
+3. **Home default and history** (§6.1, §10): `~/.kanban` (the legacy `~/.cline/kanban` detection was removed at P5-4); running
    worktrees never moved; kit history as the orphan `archive/devteam-kit`, pushed only after the exact-value
    secret scan the user runs.
 4. **Core vs routing kits** (§4.0): the core does the mechanics and resolves the effective agent. A per-project

@@ -75,14 +75,6 @@ export function checkHome(input: {
 	const findings: DoctorFinding[] = [
 		{ level: "info", area: "home", message: `Kanban home ${input.homePath} (${input.homeSource})` },
 	];
-	if (input.homeSource === "legacy") {
-		findings.push({
-			level: "info",
-			area: "home",
-			message: "this is the legacy home; move it when Kanban is stopped",
-			hint: "kanban home migrate --dry-run",
-		});
-	}
 	for (const issue of input.configIssues) {
 		findings.push({
 			level: "warn",

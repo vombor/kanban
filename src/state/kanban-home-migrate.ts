@@ -1,4 +1,4 @@
-// `kanban home migrate`: copies Kanban's state from the legacy home into a new home,
+// `kanban home migrate --from <dir>`: copies Kanban's state from an old home into a new home,
 // marks the new home, and records where the old task worktrees live. Plan: docs/fork/kit-merge-plan.md §6, §8.3, §8.4.
 //
 // Rules:
@@ -43,7 +43,6 @@ import {
 import {
 	getKanbanBackupsPath,
 	getKanbanWorkspacesRootPath,
-	getLegacyKanbanHomePath,
 	KANBAN_HOME_MARKER_VERSION,
 	KANBAN_HOME_WORKSPACES_DIR,
 	resolveKanbanHomeLayout,
@@ -134,7 +133,9 @@ export interface RunningServerProbe {
 }
 
 export interface HomeMigrateOptions {
-	fromPath?: string;
+	fromPath: string;
+	/** Where the source home's task worktrees are, when its config.json doesn't say (`worktreesRoot`). */
+	fromWorktreesPath?: string;
 	toPath: string;
 	dryRun?: boolean;
 	moveWorktrees?: boolean;
@@ -313,13 +314,12 @@ interface PlannedConfig {
 	sourceWorktreeRootPaths: string[];
 }
 
-function planConfig(fromPath: string, toPath: string): PlannedConfig {
+function planConfig(fromPath: string, toPath: string, fromWorktreesPath: string | undefined): PlannedConfig {
 	const sourceConfig = readConfigObject(join(fromPath, CONFIG_FILENAME)) ?? {};
 	const targetConfig = readConfigObject(join(toPath, CONFIG_FILENAME));
 	const sourceLayout = resolveKanbanHomeLayout(fromPath, {
-		legacy: resolve(fromPath) === getLegacyKanbanHomePath(),
 		honorWorktreesEnv: false,
-		config: sourceConfig,
+		config: fromWorktreesPath ? { ...sourceConfig, worktreesRoot: resolve(fromWorktreesPath) } : sourceConfig,
 	});
 	const sourceWorktreeRootPaths = uniquePaths([
 		sourceLayout.worktreesRootPath,
@@ -330,7 +330,6 @@ function planConfig(fromPath: string, toPath: string): PlannedConfig {
 	const merged: Record<string, unknown> = { ...sourceConfig, ...(targetConfig ?? {}) };
 	merged.home = KANBAN_HOME_MARKER_VERSION;
 	const targetRootPath = resolveKanbanHomeLayout(toPath, {
-		legacy: false,
 		honorWorktreesEnv: true,
 		config: merged,
 	}).worktreesRootPath;
@@ -342,7 +341,7 @@ function planConfig(fromPath: string, toPath: string): PlannedConfig {
 	);
 	merged.legacyWorktreeRoots = [...existingLegacyRoots, ...addedLegacyRoots];
 
-	const targetLayout = resolveKanbanHomeLayout(toPath, { legacy: false, honorWorktreesEnv: true, config: merged });
+	const targetLayout = resolveKanbanHomeLayout(toPath, { honorWorktreesEnv: true, config: merged });
 	const keptTargetKeys = targetConfig
 		? Object.keys(sourceConfig).filter(
 				(key) => key in targetConfig && !isDeepStrictEqual(sourceConfig[key], targetConfig[key]),
@@ -556,10 +555,13 @@ function formatBackupTimestamp(date: Date): string {
 }
 
 export async function planKanbanHomeMigration(options: HomeMigrateOptions): Promise<HomeMigratePlan> {
-	const fromPath = resolve(options.fromPath ?? getLegacyKanbanHomePath());
+	if (!options.fromPath?.trim()) {
+		throw new Error("The source home is required (--from <dir>).");
+	}
+	const fromPath = resolve(options.fromPath);
 	const toPath = resolve(options.toPath);
 	const blockers = await findBlockers(fromPath, toPath, options.probeRuntimeServer ?? probeConfiguredRuntimeServer);
-	const config = planConfig(fromPath, toPath);
+	const config = planConfig(fromPath, toPath, options.fromWorktreesPath);
 	const files = planFiles(fromPath, toPath, config);
 	const worktrees = options.moveWorktrees ? await planWorktrees(fromPath, toPath, config) : [];
 	const timestamp = formatBackupTimestamp((options.now ?? (() => new Date()))());

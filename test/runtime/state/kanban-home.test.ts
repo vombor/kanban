@@ -24,108 +24,76 @@ describe("kanban home resolution", () => {
 		resetKanbanHomeForTests();
 	});
 
-	it("uses ~/.kanban on a fresh install", async () => {
+	it("uses ~/.kanban on a fresh install, with no legacy worktree roots", async () => {
 		await withTemporaryKanbanHome((home) => {
 			expect(home.source).toBe("default");
 			expect(home.homePath).toBe(join(home.userHomePath, ".kanban"));
 			expect(home.globalConfigPath).toBe(join(home.userHomePath, ".kanban", "config.json"));
 			expect(home.worktreesRootPath).toBe(join(home.userHomePath, ".kanban", "worktrees"));
-			expect(home.legacyWorktreeRootPaths).toEqual([join(home.userHomePath, ".cline", "worktrees")]);
+			expect(home.legacyWorktreeRootPaths).toEqual([]);
+			expect(getTaskWorktreeSearchRootPaths()).toEqual([join(home.userHomePath, ".kanban", "worktrees")]);
 		});
 	});
 
-	it("keeps the live pod on ~/.cline/kanban while ~/.kanban is the kit repo", async () => {
-		// The pod today: an existing legacy home with boards, and ~/.kanban holding the dev-team kit
-		// (a git repo with kit.config.json, data/ and logs/, but no config.json "home": 1 and no workspaces/).
+	it("never uses a home under ~/.cline, with or without an initialized ~/.kanban", async () => {
+		const prepareOldHome = (userHomePath: string) => {
+			const oldHome = join(userHomePath, ".cline", "kanban");
+			mkdirSync(join(oldHome, "workspaces", "foo"), { recursive: true });
+			writeJson(join(oldHome, "config.json"), { selectedAgentId: "claude" });
+			mkdirSync(join(userHomePath, ".cline", "worktrees", "d18bd", "kanban"), { recursive: true });
+		};
 		await withTemporaryKanbanHome(
 			(home) => {
-				const legacyHome = join(home.userHomePath, ".cline", "kanban");
-				const legacyWorktrees = join(home.userHomePath, ".cline", "worktrees");
-				expect(home.source).toBe("legacy");
-				expect(home.homePath).toBe(legacyHome);
-				expect(home.globalConfigPath).toBe(join(legacyHome, "config.json"));
-				expect(home.worktreesRootPath).toBe(legacyWorktrees);
+				const kanbanHome = join(home.userHomePath, ".kanban");
+				expect(home.source).toBe("default");
+				expect(home.homePath).toBe(kanbanHome);
 				expect(home.legacyWorktreeRootPaths).toEqual([]);
-				expect(getRuntimeGlobalConfigPath()).toBe(join(legacyHome, "config.json"));
-				expect(getWorkspacesRootPath()).toBe(join(legacyHome, "workspaces"));
-				expect(getTaskWorktreesHomePath()).toBe(legacyWorktrees);
-				expect(getTaskWorktreeSearchRootPaths()).toEqual([legacyWorktrees]);
-				expect(getDebugResetTargetPaths()).toEqual([
-					join(home.userHomePath, ".cline", "data"),
-					legacyHome,
-					legacyWorktrees,
+				expect(getRuntimeGlobalConfigPath()).toBe(join(kanbanHome, "config.json"));
+				expect(getWorkspacesRootPath()).toBe(join(kanbanHome, "workspaces"));
+				expect(getTaskWorktreesHomePath()).toBe(join(kanbanHome, "worktrees"));
+			},
+			{ prepare: prepareOldHome },
+		);
+		await withTemporaryKanbanHome(
+			(home) => {
+				expect(home.source).toBe("default");
+				expect(home.homePath).toBe(join(home.userHomePath, ".kanban"));
+			},
+			{ layout: "initialized", prepare: prepareOldHome },
+		);
+	});
+
+	it("honours an explicit legacyWorktreeRoots entry (a home move's leftovers) read-only", async () => {
+		await withTemporaryKanbanHome(
+			(home) => {
+				const oldRoot = join(home.userHomePath, "old-worktrees");
+				expect(home.worktreesRootPath).toBe(join(home.userHomePath, ".kanban", "worktrees"));
+				expect(home.legacyWorktreeRootPaths).toEqual([oldRoot]);
+				expect(getTaskWorktreeSearchRootPaths()).toEqual([
+					join(home.userHomePath, ".kanban", "worktrees"),
+					oldRoot,
 				]);
 			},
 			{
-				prepare: (userHomePath) => {
-					const legacyHome = join(userHomePath, ".cline", "kanban");
-					mkdirSync(join(legacyHome, "workspaces", "foo"), { recursive: true });
-					mkdirSync(join(legacyHome, "hooks"), { recursive: true });
-					writeJson(join(legacyHome, "config.json"), { selectedAgentId: "claude" });
-					mkdirSync(join(userHomePath, ".cline", "worktrees", "d18bd", "kanban"), { recursive: true });
-					mkdirSync(join(userHomePath, ".cline", "data"), { recursive: true });
-					const kitRepo = join(userHomePath, ".kanban");
-					for (const dir of [".git", "data/foo", "logs", "run", "services", "lib", "forks"]) {
-						mkdirSync(join(kitRepo, dir), { recursive: true });
-					}
-					writeJson(join(kitRepo, "kit.config.json"), { workspaces: {} });
-				},
+				layout: "initialized",
+				prepare: (userHomePath) =>
+					writeJson(join(userHomePath, ".kanban", "config.json"), {
+						home: 1,
+						legacyWorktreeRoots: ["~/old-worktrees"],
+					}),
 			},
 		);
 	});
 
-	it("does not treat a ~/.kanban/config.json without the home marker as an initialized home", async () => {
-		await withTemporaryKanbanHome(
-			(home) => {
-				expect(home.source).toBe("legacy");
-				expect(home.homePath).toBe(join(home.userHomePath, ".cline", "kanban"));
-			},
-			{
-				layout: "legacy",
-				prepare: (userHomePath) => {
-					mkdirSync(join(userHomePath, ".kanban"), { recursive: true });
-					writeJson(join(userHomePath, ".kanban", "config.json"), { home: 2, pipeline: {} });
-				},
-			},
-		);
-	});
-
-	it("prefers an initialized ~/.kanban over the legacy home", async () => {
-		await withTemporaryKanbanHome(
-			(home) => {
-				expect(home.source).toBe("initialized");
-				expect(home.homePath).toBe(join(home.userHomePath, ".kanban"));
-				expect(home.worktreesRootPath).toBe(join(home.userHomePath, ".kanban", "worktrees"));
-				expect(home.legacyWorktreeRootPaths).toEqual([join(home.userHomePath, ".cline", "worktrees")]);
-			},
-			{
-				layout: "legacy",
-				prepare: (userHomePath) => mkdirSync(join(userHomePath, ".kanban", "workspaces"), { recursive: true }),
-			},
-		);
-		await withTemporaryKanbanHome(
-			(home) => {
-				expect(home.source).toBe("initialized");
-				expect(home.homePath).toBe(join(home.userHomePath, ".kanban"));
-			},
-			{
-				layout: "legacy",
-				prepare: (userHomePath) => {
-					mkdirSync(join(userHomePath, ".kanban"), { recursive: true });
-					writeJson(join(userHomePath, ".kanban", "config.json"), { home: 1 });
-				},
-			},
-		);
-	});
-
-	it("lets KANBAN_HOME win over the user-home layouts", async () => {
+	it("lets KANBAN_HOME win over ~/.kanban", async () => {
 		await withTemporaryKanbanHome(
 			(home) => {
 				expect(home.source).toBe("env");
 				expect(home.homePath).toBe(join(home.userHomePath, "custom-home"));
 				expect(home.worktreesRootPath).toBe(join(home.userHomePath, "custom-home", "worktrees"));
+				expect(home.legacyWorktreeRootPaths).toEqual([]);
 			},
-			{ layout: "legacy", env: { KANBAN_HOME: "~/custom-home" } },
+			{ layout: "initialized", env: { KANBAN_HOME: "~/custom-home" } },
 		);
 	});
 
@@ -169,13 +137,11 @@ describe("kanban home resolution", () => {
 		);
 	});
 
-	it("keeps a resolution stable for the life of the process", async () => {
+	it("does not switch homes when a directory appears", async () => {
 		await withTemporaryKanbanHome((home) => {
-			expect(home.source).toBe("default");
-			mkdirSync(join(home.userHomePath, ".cline", "kanban"), { recursive: true });
-			expect(resolveKanbanHome().source).toBe("default");
+			mkdirSync(join(home.userHomePath, ".cline", "kanban", "workspaces"), { recursive: true });
 			resetKanbanHomeForTests();
-			expect(resolveKanbanHome().source).toBe("legacy");
+			expect(resolveKanbanHome()).toMatchObject({ source: "default", homePath: join(home.userHomePath, ".kanban") });
 		});
 	});
 

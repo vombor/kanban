@@ -2,8 +2,8 @@
 
 How to operate the team workflow day to day. The reasons behind the rules are in [WORKFLOW.md](WORKFLOW.md), the
 settings in [CONFIG.md](CONFIG.md), routing kits in [KITS.md](KITS.md). `<home>` is the Kanban home (`kanban
-doctor` prints it). On the pod it is still `~/.cline/kanban` until the home move (P5-4). The legacy kit is
-`/root/.kanban` until it is retired (P5-3).
+doctor` prints it): `KANBAN_HOME` if set, else `~/.kanban` of the user running Kanban (on the pod
+`/root/.kanban`; the pod spec sets no `KANBAN_HOME`). Kanban keeps nothing in `~/.cline`, which is the Cline CLI's.
 
 ## Where things live
 
@@ -17,7 +17,7 @@ doctor` prints it). On the pod it is still `~/.cline/kanban` until the home move
 | Board backups | `<home>/backups/boards/<ws>/board-latest.json` (every write) + `board-<time>.json` (every 10 min, 200 kept); prune-done backups in `prune-done-<time>/` |
 | Logs | the server's own output (the pipeline worker logs there too); `<home>/logs/` for orchestrator runs, `calibrate.log`, `price-sync.log` |
 | Locks, markers | `<home>/run/`: `server-start.json`, `orchestrator-<ws>.lock`, `pid-pressure`, `pid-brownout`, `restart-recover.now`, `qa-preview-<ws>.pid` |
-| Task worktrees | `<home>/worktrees/<id>/<repo>` (new home), `~/.cline/worktrees/<id>/<repo>` (legacy, searched read-only after a move) |
+| Task worktrees | `<home>/worktrees/<id>/<repo>`; after a home move also the roots config.json lists in `legacyWorktreeRoots` (read-only, until their cards finish; doctor warns while an entry exists) |
 | Scratch (throwaway) | `/tmp/kanban-qa/<dev>` (QA copies), `/tmp/kanban-qa-out/<qa>` (QA outboxes), `/tmp/kanban-checks/<dev>` (scripted checks) |
 
 ## At a glance
@@ -130,6 +130,15 @@ asks the worker to check now. Never restart the pod yourself: that is the user's
   a resume note as its next turn (the legacy kit since `a2b4695`; the runtime's `kanban task resume`, and recovery
   in mode `on`). Every other agent, Cline included, gets a new session with the card prompt (+ a WIP note).
 - A card that still shows "running" after a restart has no process. `kanban task resume <id>` brings it back.
+- Restart recovery finds every In Progress card without a process, with or without a manifest entry or a session
+  summary (`sessions.json` only gets summaries with a browser save, 277f8 on 10/07). The manifest adds the WIP tags
+  and the Review cards whose turn was still running.
+- **Home move** (Kanban stopped, a one-off): `kanban home migrate --from <old home> --to ~/.kanban` (`--from` is
+  required; `--from-worktrees <dir>` when the old home's config.json doesn't name its worktrees root). It copies
+  config/workspaces/hooks/patches; copy `data/` yourself, which carries `restart-manifest.json`. `run/` stays behind,
+  so the new home has no start record of the server that wrote the manifest: recovery takes such a manifest when it
+  is at most 24 h old. Rename the old home (`<old home>.migrated-<ts>`) and move it out of `~/.cline` once no rollback
+  needs it. Rollback: stop Kanban and point `KANBAN_HOME` at the renamed old home.
 
 **Stuck card.**
 

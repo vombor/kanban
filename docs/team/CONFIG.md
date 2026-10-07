@@ -26,14 +26,15 @@ or `web-ui/src/`.
 |---|---|
 | 1 | `kanban --home <dir>` (exported as `KANBAN_HOME` to child processes) |
 | 2 | `KANBAN_HOME` |
-| 3 | `~/.kanban`, if it is an initialized home (config.json with `"home": 1`, or a `workspaces/` dir) |
-| 4 | `~/.cline/kanban`, if it exists (the legacy home; the pod still runs on it until the home move, P5-4) |
-| 5 | `~/.kanban` (fresh install) |
+| 3 | `~/.kanban` of the user running Kanban (root or node) |
 
-- Task worktrees: `KANBAN_WORKTREES`, else `worktreesRoot` in config.json, else `<home>/worktrees`. The legacy home
-  keeps `~/.cline/worktrees`.
-- `legacyWorktreeRoots` (default `["~/.cline/worktrees"]`) are searched read-only for worktrees created before a
-  home move. Live worktrees are never moved.
+Nothing else: Kanban never switches to another directory because it exists, and keeps nothing in `~/.cline` (that
+is the Cline CLI's). A path Kanban needs and can't find is an error that says where it looked.
+
+- Task worktrees: `KANBAN_WORKTREES`, else `worktreesRoot` in config.json, else `<home>/worktrees`.
+- `legacyWorktreeRoots` (default: none) are searched read-only for worktrees created before a home move, only when
+  config.json lists them. Live worktrees are never moved; remove the entry once its worktrees are gone. `kanban
+  doctor` warns while an entry exists, and about any Kanban home, board, state file or task worktree under `~/.cline`.
 - Per-workspace data: `<home>/data/<workspace>/` (`pipeline-state.json`, `pipeline-decisions.jsonl`, `qa-log.md`,
   `qa-artifacts/`, `ATTENTION.md`, `watchdog-state.json`, `watchdog-decisions.jsonl`, `dev-assignment.jsonl`,
   `restart-manifest.json`, `runoffs.json`, `scoreboard.jsonl`, `calibration/`).

@@ -4,15 +4,14 @@
 // Home resolution order:
 //   1. `kanban --home <dir>` (also exported as KANBAN_HOME so child processes resolve the same home)
 //   2. KANBAN_HOME
-//   3. ~/.kanban, if it is an initialized home (config.json with "home": 1, or a workspaces/ dir)
-//   4. ~/.cline/kanban, if it exists (legacy home)
-//   5. ~/.kanban (fresh install)
+//   3. ~/.kanban of the user running Kanban
+// Nothing else, and no fallback: Kanban never switches to another directory because one exists (or is missing).
+// ~/.cline belongs to the Cline CLI; Kanban keeps none of its own state there.
 //
-// Worktrees root: KANBAN_WORKTREES, else `worktreesRoot` in <home>/config.json, else <home>/worktrees
-// (for the legacy home: ~/.cline/worktrees, where it always lived). `legacyWorktreeRoots` in config.json
-// (default ["~/.cline/worktrees"]) are searched read-only for worktrees created before a home move;
-// new worktrees are never created there.
-import { existsSync, readFileSync, statSync } from "node:fs";
+// Worktrees root: KANBAN_WORKTREES, else `worktreesRoot` in <home>/config.json, else <home>/worktrees. Only an
+// explicit `legacyWorktreeRoots` entry in config.json (default: none) is searched, read-only, for worktrees created
+// before a home move; new worktrees are never created there.
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, parse, relative, resolve } from "node:path";
 
@@ -24,9 +23,7 @@ export const KANBAN_WORKTREES_ENV = "KANBAN_WORKTREES";
 export const KANBAN_HOME_MARKER_VERSION = 1;
 
 const DEFAULT_HOME_DIR = ".kanban";
-const LEGACY_HOME_PARENT_DIR = ".cline";
-const LEGACY_HOME_DIR = "kanban";
-const LEGACY_WORKTREES_DIR = "worktrees";
+const CLINE_DIR = ".cline";
 const CLINE_DATA_DIR = "data";
 const CLINE_SETTINGS_DIR = "settings";
 const CONFIG_FILENAME = "config.json";
@@ -67,7 +64,6 @@ export interface KanbanHomeResolution {
 }
 
 interface KanbanHomeConfigFields {
-	home?: unknown;
 	worktreesRoot?: unknown;
 	legacyWorktreeRoots?: unknown;
 }
@@ -95,14 +91,6 @@ function readNonEmptyEnv(name: string): string | null {
 	return value ? value : null;
 }
 
-function isDirectory(path: string): boolean {
-	try {
-		return statSync(path).isDirectory();
-	} catch {
-		return false;
-	}
-}
-
 function readHomeConfigFields(homePath: string): KanbanHomeConfigFields | null {
 	try {
 		const parsed: unknown = JSON.parse(readFileSync(join(homePath, CONFIG_FILENAME), "utf8"));
@@ -112,33 +100,23 @@ function readHomeConfigFields(homePath: string): KanbanHomeConfigFields | null {
 	}
 }
 
-function isInitializedHome(homePath: string): boolean {
-	if (isDirectory(join(homePath, KANBAN_HOME_WORKSPACES_DIR))) {
-		return true;
-	}
-	return readHomeConfigFields(homePath)?.home === KANBAN_HOME_MARKER_VERSION;
-}
-
 export function getDefaultKanbanHomePath(): string {
 	return join(getUserHomePath(), DEFAULT_HOME_DIR);
 }
 
-export function getLegacyKanbanHomePath(): string {
-	return join(getUserHomePath(), LEGACY_HOME_PARENT_DIR, LEGACY_HOME_DIR);
-}
-
-export function getLegacyTaskWorktreesRootPath(): string {
-	return join(getUserHomePath(), LEGACY_HOME_PARENT_DIR, LEGACY_WORKTREES_DIR);
+/** The Cline CLI's own directory (~/.cline). Kanban keeps nothing there; `kanban doctor` warns about Kanban state in it. */
+export function getClineHomeDirPath(): string {
+	return join(getUserHomePath(), CLINE_DIR);
 }
 
 /** Cline's own data dir. It belongs to Cline, not Kanban: the debug reset clears it, the Cline turn detector reads its sessions. */
 export function getClineDataPath(): string {
-	return join(getUserHomePath(), LEGACY_HOME_PARENT_DIR, CLINE_DATA_DIR);
+	return join(getUserHomePath(), CLINE_DIR, CLINE_DATA_DIR);
 }
 
 /** Cline's config dir as the Cline CLI resolves it: CLINE_DIR, else ~/.cline. */
 function getClineConfigDirPath(): string {
-	return readNonEmptyEnv("CLINE_DIR") ?? join(getUserHomePath(), LEGACY_HOME_PARENT_DIR);
+	return readNonEmptyEnv("CLINE_DIR") ?? join(getUserHomePath(), CLINE_DIR);
 }
 
 /**
@@ -235,15 +213,7 @@ function resolveHomePath(): { homePath: string; source: KanbanHomeSource } {
 	if (envHome) {
 		return { homePath: expandUserPath(envHome, process.cwd()), source: "env" };
 	}
-	const defaultHome = getDefaultKanbanHomePath();
-	if (isInitializedHome(defaultHome)) {
-		return { homePath: defaultHome, source: "initialized" };
-	}
-	const legacyHome = getLegacyKanbanHomePath();
-	if (existsSync(legacyHome)) {
-		return { homePath: legacyHome, source: "legacy" };
-	}
-	return { homePath: defaultHome, source: "default" };
+	return { homePath: getDefaultKanbanHomePath(), source: "default" };
 }
 
 function uniquePaths(paths: string[]): string[] {
@@ -251,8 +221,6 @@ function uniquePaths(paths: string[]): string[] {
 }
 
 export interface KanbanHomeLayoutOptions {
-	/** Use the legacy defaults (worktrees in ~/.cline/worktrees). */
-	legacy: boolean;
 	/** Let KANBAN_WORKTREES override the worktrees root, as it does for the running process. */
 	honorWorktreesEnv: boolean;
 	/** Resolve against this config instead of <homePath>/config.json (for a config not written yet). */
@@ -273,18 +241,17 @@ export function resolveKanbanHomeLayout(
 	const envWorktrees = options.honorWorktreesEnv ? readNonEmptyEnv(KANBAN_WORKTREES_ENV) : null;
 	const configWorktrees =
 		typeof config?.worktreesRoot === "string" && config.worktreesRoot.trim() ? config.worktreesRoot : null;
-	const defaultWorktreesRoot = options.legacy ? getLegacyTaskWorktreesRootPath() : join(homePath, WORKTREES_DIR);
 	const worktreesRootPath = envWorktrees
 		? expandUserPath(envWorktrees, process.cwd())
 		: configWorktrees
 			? expandUserPath(configWorktrees, homePath)
-			: defaultWorktreesRoot;
+			: join(homePath, WORKTREES_DIR);
 
 	const configuredLegacyRoots = Array.isArray(config?.legacyWorktreeRoots)
 		? config.legacyWorktreeRoots.filter((root): root is string => typeof root === "string" && root.trim() !== "")
 		: null;
 	const legacyWorktreeRootPaths = uniquePaths(
-		(configuredLegacyRoots ?? ["~/.cline/worktrees"]).map((root) => expandUserPath(root, homePath)),
+		(configuredLegacyRoots ?? []).map((root) => expandUserPath(root, homePath)),
 	).filter((root) => root !== worktreesRootPath);
 
 	return {
@@ -298,7 +265,7 @@ export function resolveKanbanHomeLayout(
 function computeResolution(): KanbanHomeResolution {
 	const { homePath, source } = resolveHomePath();
 	return {
-		...resolveKanbanHomeLayout(homePath, { legacy: source === "legacy", honorWorktreesEnv: true }),
+		...resolveKanbanHomeLayout(homePath, { honorWorktreesEnv: true }),
 		source,
 	};
 }
@@ -354,11 +321,6 @@ export function getKanbanHomeDisplayPath(homePath = getKanbanHomePath()): string
 
 export function getKanbanGlobalConfigPath(): string {
 	return resolveKanbanHome().globalConfigPath;
-}
-
-/** True when config writes should stamp `"home": 1` (any home except the legacy ~/.cline/kanban). */
-export function shouldMarkKanbanHome(): boolean {
-	return resolveKanbanHome().source !== "legacy";
 }
 
 /** Locks and pid files (`<home>/run`). */

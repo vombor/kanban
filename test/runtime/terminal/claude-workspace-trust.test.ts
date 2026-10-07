@@ -330,7 +330,7 @@ describe("claude workspace trust dialog fallback", () => {
 });
 
 describe("shouldAutoConfirmClaudeWorkspaceTrust", () => {
-	it("trusts Claude task worktrees in the current and the legacy worktree roots", async () => {
+	it("trusts Claude task worktrees in the current root and a configured legacy worktree root", async () => {
 		await withTemporaryKanbanHome(
 			(home) => {
 				expect(shouldAutoConfirmClaudeWorkspaceTrust("claude", join(home.worktreesRootPath, "abc12", "repo"))).toBe(
@@ -349,21 +349,26 @@ describe("shouldAutoConfirmClaudeWorkspaceTrust", () => {
 					false,
 				);
 			},
-			{ layout: "initialized" },
+			{
+				layout: "initialized",
+				prepare: (userHomePath) =>
+					writeFileSync(
+						join(userHomePath, ".kanban", "config.json"),
+						JSON.stringify({ home: 1, legacyWorktreeRoots: ["~/.cline/worktrees"] }),
+						"utf8",
+					),
+			},
 		);
 	});
 
-	it("keeps trusting ~/.cline/worktrees on the legacy home", async () => {
-		await withTemporaryKanbanHome(
-			(home) => {
-				expect(
-					shouldAutoConfirmClaudeWorkspaceTrust(
-						"claude",
-						join(home.userHomePath, ".cline", "worktrees", "d18bd", "kanban"),
-					),
-				).toBe(true);
-			},
-			{ layout: "legacy" },
-		);
+	it("does not trust ~/.cline/worktrees without a legacyWorktreeRoots entry", async () => {
+		await withTemporaryKanbanHome((home) => {
+			expect(
+				shouldAutoConfirmClaudeWorkspaceTrust(
+					"claude",
+					join(home.userHomePath, ".cline", "worktrees", "d18bd", "kanban"),
+				),
+			).toBe(false);
+		});
 	});
 });

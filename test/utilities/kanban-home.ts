@@ -3,8 +3,6 @@ import { join } from "node:path";
 
 import {
 	getDefaultKanbanHomePath,
-	getLegacyKanbanHomePath,
-	getLegacyTaskWorktreesRootPath,
 	KANBAN_HOME_ENV,
 	KANBAN_WORKTREES_ENV,
 	type KanbanHomeResolution,
@@ -15,10 +13,9 @@ import { createTempDir } from "./temp-dir";
 
 /**
  * - `fresh`: empty user home (resolves `~/.kanban`).
- * - `legacy`: only `~/.cline/kanban` exists (resolves the legacy home and `~/.cline/worktrees`).
  * - `initialized`: `~/.kanban/workspaces` exists.
  */
-export type TemporaryKanbanHomeLayout = "fresh" | "legacy" | "initialized";
+export type TemporaryKanbanHomeLayout = "fresh" | "initialized";
 
 export interface TemporaryKanbanHome extends KanbanHomeResolution {
 	/** The temporary user home (`HOME` / `USERPROFILE`). */
@@ -57,10 +54,7 @@ export async function withTemporaryKanbanHome<T>(
 	resetKanbanHomeForTests();
 	try {
 		const layout = options.layout ?? "fresh";
-		if (layout === "legacy") {
-			mkdirSync(getLegacyKanbanHomePath(), { recursive: true });
-			mkdirSync(getLegacyTaskWorktreesRootPath(), { recursive: true });
-		} else if (layout === "initialized") {
+		if (layout === "initialized") {
 			mkdirSync(join(getDefaultKanbanHomePath(), "workspaces"), { recursive: true });
 		}
 		options.prepare?.(userHomePath);
