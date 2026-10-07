@@ -100,6 +100,7 @@ describe("createWorkspaceApi loadChanges", () => {
 			broadcastRuntimeWorkspaceStateUpdated: vi.fn(),
 			broadcastRuntimeProjectsUpdated: vi.fn(),
 			buildWorkspaceStateSnapshot: vi.fn(),
+			trashTask: vi.fn(),
 		});
 
 		await api.loadChanges(
@@ -148,6 +149,7 @@ describe("createWorkspaceApi loadChanges", () => {
 			broadcastRuntimeWorkspaceStateUpdated: vi.fn(),
 			broadcastRuntimeProjectsUpdated: vi.fn(),
 			buildWorkspaceStateSnapshot: vi.fn(),
+			trashTask: vi.fn(),
 		});
 
 		await api.loadChanges(
@@ -182,6 +184,7 @@ describe("createWorkspaceApi loadChanges", () => {
 			broadcastRuntimeWorkspaceStateUpdated: vi.fn(),
 			broadcastRuntimeProjectsUpdated: vi.fn(),
 			buildWorkspaceStateSnapshot: vi.fn(),
+			trashTask: vi.fn(),
 		});
 
 		const response = await api.loadChanges(

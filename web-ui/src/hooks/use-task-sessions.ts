@@ -10,6 +10,7 @@ import { estimateTaskSessionGeometry } from "@/runtime/task-session-geometry";
 import { getRuntimeTrpcClient } from "@/runtime/trpc-client";
 import type {
 	RuntimeTaskSessionSummary,
+	RuntimeTaskTrashResponse,
 	RuntimeTaskWorkspaceInfoResponse,
 	RuntimeWorktreeDeleteResponse,
 	RuntimeWorktreeEnsureResponse,
@@ -56,6 +57,8 @@ export interface UseTaskSessionsResult {
 		options?: SendTerminalInputOptions,
 	) => Promise<SendTaskSessionInputResult>;
 	cleanupTaskWorkspace: (taskId: string) => Promise<RuntimeWorktreeDeleteResponse | null>;
+	/** Runs the runtime's Done workflow for a card the browser moved to Done. */
+	trashTask: (taskId: string) => Promise<RuntimeTaskTrashResponse | null>;
 	fetchTaskWorkspaceInfo: (task: BoardCard) => Promise<RuntimeTaskWorkspaceInfoResponse | null>;
 }
 
@@ -243,6 +246,32 @@ export function useTaskSessions({ currentProjectId, setSessions }: UseTaskSessio
 		[currentProjectId],
 	);
 
+	const trashTask = useCallback(
+		async (taskId: string): Promise<RuntimeTaskTrashResponse | null> => {
+			if (!currentProjectId) {
+				return null;
+			}
+			try {
+				const trpcClient = getRuntimeTrpcClient(currentProjectId);
+				const payload = await trpcClient.workspace.trashTask.mutate({
+					taskId,
+					trigger: "browser",
+				});
+				if (!payload.ok) {
+					console.error(`[trashTask] ${payload.error ?? `Could not move task ${taskId} to done.`}`);
+				} else if (payload.worktreeDeleteError) {
+					console.error(`[cleanupTaskWorkspace] ${payload.worktreeDeleteError}`);
+				}
+				return payload;
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				console.error(`[trashTask] ${message}`);
+				return null;
+			}
+		},
+		[currentProjectId],
+	);
+
 	const fetchTaskWorkspaceInfo = useCallback(
 		async (task: BoardCard): Promise<RuntimeTaskWorkspaceInfoResponse | null> => {
 			if (!currentProjectId) {
@@ -270,6 +299,7 @@ export function useTaskSessions({ currentProjectId, setSessions }: UseTaskSessio
 		stopTaskSession,
 		sendTaskSessionInput,
 		cleanupTaskWorkspace,
+		trashTask,
 		fetchTaskWorkspaceInfo,
 	};
 }

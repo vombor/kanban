@@ -7,6 +7,7 @@ import type {
 	RuntimeBoardColumnId,
 	RuntimeBoardDependency,
 	RuntimeTaskAgentSettings,
+	RuntimeTaskTrashAutoStart,
 	RuntimeWorkspaceStateResponse,
 } from "../core/api-contract";
 import { runtimeAgentIdEnumSchema, runtimeAgentIdSchema } from "../core/api-contract";
@@ -20,7 +21,6 @@ import {
 	moveTaskToColumn,
 	type RuntimeAddTaskDependencyResult,
 	removeTaskDependency,
-	trashTaskAndGetReadyLinkedTaskIds,
 	updateTask,
 } from "../core/task-board-mutations";
 import { resolveProjectInputPath } from "../projects/project-path";
@@ -806,107 +806,64 @@ interface TrashTaskExecutionResult {
 	alreadyInTrash: boolean;
 }
 
-interface TrashTaskMutationValue {
-	task: JsonRecord;
-	previousColumnId: ListTaskColumn;
-	readyTaskIds: string[];
-	alreadyInTrash: boolean;
-}
-
 function columnCanHaveLiveTaskSession(columnId: ListTaskColumn): boolean {
 	return columnId === "in_progress" || columnId === "review";
 }
 
-async function trashTaskById(input: {
-	cwd: string;
-	taskId: string;
-	projectPath?: string;
-	workspaceRepoPath: string;
-	runtimeClient: ReturnType<typeof createRuntimeTrpcClient>;
-}): Promise<TrashTaskExecutionResult> {
-	const mutation = await mutateWorkspaceState<TrashTaskMutationValue>(input.workspaceRepoPath, (latestState) => {
-		const latestRecord = findTaskRecord(latestState, input.taskId);
-		if (!latestRecord) {
-			throw new Error(`Task "${input.taskId}" was not found in workspace ${input.workspaceRepoPath}.`);
-		}
-		if (latestRecord.columnId === "trash") {
-			return {
-				board: latestState.board,
-				value: {
-					task: formatTaskRecord(latestState, latestRecord.task, latestRecord.columnId),
-					previousColumnId: latestRecord.columnId,
-					readyTaskIds: [] as string[],
-					alreadyInTrash: true,
-				},
-				save: false,
-			};
-		}
-
-		const trashed = trashTaskAndGetReadyLinkedTaskIds(latestState.board, input.taskId);
-		if (!trashed.moved || !trashed.task) {
-			throw new Error(`Task "${input.taskId}" could not be moved to done.`);
-		}
-
-		const nextState: RuntimeWorkspaceStateResponse = {
-			...latestState,
-			board: trashed.board,
-		};
-		return {
-			board: trashed.board,
-			value: {
-				task: formatTaskRecord(nextState, trashed.task, "trash"),
-				previousColumnId: latestRecord.columnId,
-				readyTaskIds: trashed.readyTaskIds,
-				alreadyInTrash: false,
-			},
-		};
-	});
-
-	if (mutation.saved) {
-		await notifyRuntimeWorkspaceStateUpdated(input.runtimeClient);
-	}
-
-	if (mutation.value.alreadyInTrash) {
-		return {
-			task: mutation.value.task,
-			taskId: input.taskId,
-			previousColumnId: mutation.value.previousColumnId,
-			readyTaskIds: [],
-			autoStartedTasks: [],
-			worktreeDeleted: false,
-			alreadyInTrash: true,
-		};
-	}
-
-	if (columnCanHaveLiveTaskSession(mutation.value.previousColumnId)) {
-		await stopTaskRuntimeSession(input.runtimeClient, input.taskId);
-	}
-
-	const autoStartedTasks: JsonRecord[] = [];
-	for (const readyTaskId of mutation.value.readyTaskIds) {
-		const started = await startTask({
-			cwd: input.cwd,
-			taskId: readyTaskId,
-			projectPath: input.projectPath,
-		});
-		autoStartedTasks.push(started);
-	}
-
-	const deletedWorkspace = await deleteTaskWorkspace(input.runtimeClient, input.taskId);
-
+function formatAutoStartedTask(
+	state: RuntimeWorkspaceStateResponse,
+	workspaceRepoPath: string,
+	started: RuntimeTaskTrashAutoStart,
+): JsonRecord {
+	const record = findTaskRecord(state, started.taskId);
 	return {
-		task: mutation.value.task,
-		taskId: input.taskId,
-		previousColumnId: mutation.value.previousColumnId,
-		readyTaskIds: mutation.value.readyTaskIds,
-		autoStartedTasks,
-		worktreeDeleted: deletedWorkspace.removed,
-		worktreeDeleteError: deletedWorkspace.error,
-		alreadyInTrash: false,
+		ok: started.ok,
+		...(started.error ? { error: started.error } : {}),
+		task: {
+			id: started.taskId,
+			prompt: record?.task.prompt ?? null,
+			column: record?.columnId ?? null,
+			workspacePath: workspaceRepoPath,
+		},
 	};
 }
 
-async function trashTask(input: {
+// The Done steps (stop sessions, keep the patch, delete the worktree, start
+// linked backlog tasks) run in the runtime's shared workflow
+// (src/server/task-trash-workflow.ts); the CLI only formats the result.
+async function trashTaskById(input: {
+	taskId: string;
+	workspaceRepoPath: string;
+	runtimeClient: ReturnType<typeof createRuntimeTrpcClient>;
+}): Promise<TrashTaskExecutionResult> {
+	const result = await input.runtimeClient.workspace.trashTask.mutate({
+		taskId: input.taskId,
+		trigger: "cli",
+	});
+	if (result.status === "not_found" || result.status === "failed" || result.status === "blocked") {
+		throw new Error(result.error ?? `Task "${input.taskId}" could not be moved to done.`);
+	}
+	const state = await input.runtimeClient.workspace.getState.query();
+	const record = findTaskRecord(state, input.taskId);
+	if (!record) {
+		throw new Error(`Task "${input.taskId}" was not found in workspace ${input.workspaceRepoPath}.`);
+	}
+	const alreadyInTrash = result.status === "already_done";
+	return {
+		task: formatTaskRecord(state, record.task, record.columnId),
+		taskId: input.taskId,
+		previousColumnId: result.previousColumnId ?? record.columnId,
+		readyTaskIds: result.readyTaskIds,
+		autoStartedTasks: result.autoStartedTasks.map((started) =>
+			formatAutoStartedTask(state, input.workspaceRepoPath, started),
+		),
+		worktreeDeleted: result.worktreeDeleted,
+		worktreeDeleteError: result.worktreeDeleteError,
+		alreadyInTrash,
+	};
+}
+
+export async function trashTask(input: {
 	cwd: string;
 	taskId?: string;
 	column?: ListTaskColumn;
@@ -919,9 +876,7 @@ async function trashTask(input: {
 
 	if (target.kind === "task") {
 		const trashed = await trashTaskById({
-			cwd: input.cwd,
 			taskId: target.taskId,
-			projectPath: input.projectPath,
 			workspaceRepoPath,
 			runtimeClient,
 		});
@@ -966,9 +921,7 @@ async function trashTask(input: {
 	for (const { task } of targetTasks) {
 		results.push(
 			await trashTaskById({
-				cwd: input.cwd,
 				taskId: task.id,
-				projectPath: input.projectPath,
 				workspaceRepoPath,
 				runtimeClient,
 			}),

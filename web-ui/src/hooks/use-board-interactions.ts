@@ -7,6 +7,7 @@ import { useLinkedBacklogTaskActions } from "@/hooks/use-linked-backlog-task-act
 import { useProgrammaticCardMoves } from "@/hooks/use-programmatic-card-moves";
 import type { UseTaskSessionsResult } from "@/hooks/use-task-sessions";
 import type { RuntimeTaskSessionSummary, RuntimeTaskWorkspaceInfoResponse } from "@/runtime/types";
+import type { UseWorkspacePersistenceResult } from "@/runtime/use-workspace-persistence";
 import {
 	applyDragResult,
 	clearColumnTasks,
@@ -59,6 +60,8 @@ interface UseBoardInteractionsInput {
 	setIsGitHistoryOpen: Dispatch<SetStateAction<boolean>>;
 	stopTaskSession: (taskId: string) => Promise<void>;
 	cleanupTaskWorkspace: (taskId: string) => Promise<unknown>;
+	trashTask: UseTaskSessionsResult["trashTask"];
+	workspacePersistence: UseWorkspacePersistenceResult;
 	ensureTaskWorkspace: UseTaskSessionsResult["ensureTaskWorkspace"];
 	startTaskSession: UseTaskSessionsResult["startTaskSession"];
 	fetchTaskWorkspaceInfo: (task: BoardCard) => Promise<RuntimeTaskWorkspaceInfoResponse | null>;
@@ -105,6 +108,8 @@ export function useBoardInteractions({
 	setIsGitHistoryOpen,
 	stopTaskSession,
 	cleanupTaskWorkspace,
+	trashTask,
+	workspacePersistence,
 	ensureTaskWorkspace,
 	startTaskSession,
 	fetchTaskWorkspaceInfo,
@@ -495,12 +500,9 @@ export function useBoardInteractions({
 			board,
 			setBoard,
 			setSelectedTaskId,
-			stopTaskSession,
-			cleanupTaskWorkspace,
+			trashTask,
+			workspacePersistence,
 			maybeRequestNotificationPermissionForTaskStart,
-			kickoffTaskInProgress,
-			startBacklogTaskWithAnimation,
-			waitForBacklogStartAnimationAvailability: waitForProgrammaticCardMoveAvailability,
 		});
 
 	useEffect(() => {

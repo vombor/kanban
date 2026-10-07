@@ -1,15 +1,16 @@
 import type { Dispatch, SetStateAction } from "react";
 import { useCallback, useEffect, useRef } from "react";
 
-import { showAppToast } from "@/components/app-toaster";
-import { getDetailTerminalTaskId } from "@/hooks/use-terminal-panels";
+import { notifyError, showAppToast } from "@/components/app-toaster";
+import type { UseTaskSessionsResult } from "@/hooks/use-task-sessions";
+import type { UseWorkspacePersistenceResult } from "@/runtime/use-workspace-persistence";
 import {
 	addTaskDependency,
 	findCardSelection,
-	moveTaskToColumn,
 	removeTaskDependency,
 	trashTaskAndGetReadyLinkedTaskIds,
 } from "@/state/board-state";
+import { capturePendingDoneMove, withoutPendingDoneMoves } from "@/state/pending-done-moves";
 import { trackTaskDependencyCreated, trackTasksAutoStartedFromDependency } from "@/telemetry/events";
 import type { BoardCard, BoardColumnId, BoardData } from "@/types";
 import { getNextDetailTaskIdAfterTrashMove } from "@/utils/detail-view-task-order";
@@ -23,27 +24,17 @@ export function useLinkedBacklogTaskActions({
 	board,
 	setBoard,
 	setSelectedTaskId,
-	stopTaskSession,
-	cleanupTaskWorkspace,
+	trashTask,
+	workspacePersistence,
 	maybeRequestNotificationPermissionForTaskStart,
-	kickoffTaskInProgress,
-	startBacklogTaskWithAnimation,
-	waitForBacklogStartAnimationAvailability,
 }: {
 	board: BoardData;
 	setBoard: Dispatch<SetStateAction<BoardData>>;
 	setSelectedTaskId: Dispatch<SetStateAction<string | null>>;
-	stopTaskSession: (taskId: string) => Promise<void>;
-	cleanupTaskWorkspace: (taskId: string) => Promise<unknown>;
+	trashTask: UseTaskSessionsResult["trashTask"];
+	/** Keeps the optimistic Done move out of browser saves; the runtime writes it. */
+	workspacePersistence: UseWorkspacePersistenceResult;
 	maybeRequestNotificationPermissionForTaskStart: () => void;
-	kickoffTaskInProgress: (
-		task: BoardCard,
-		taskId: string,
-		fromColumnId: BoardColumnId,
-		options?: { optimisticMove?: boolean },
-	) => Promise<boolean>;
-	startBacklogTaskWithAnimation?: (task: BoardCard) => Promise<boolean>;
-	waitForBacklogStartAnimationAvailability?: () => Promise<void>;
 }): {
 	handleCreateDependency: (fromTaskId: string, toTaskId: string) => void;
 	handleDeleteDependency: (dependencyId: string) => void;
@@ -54,6 +45,8 @@ export function useLinkedBacklogTaskActions({
 		options?: RequestMoveTaskToTrashOptions,
 	) => Promise<void>;
 } {
+	const { flushWorkspaceState, holdPendingDoneMove, releasePendingDoneMove, awaitPendingDoneMoveSettled } =
+		workspacePersistence;
 	const boardRef = useRef(board);
 
 	useEffect(() => {
@@ -105,79 +98,72 @@ export function useLinkedBacklogTaskActions({
 	const performMoveTaskToTrash = useCallback(
 		async (task: BoardCard, currentBoard?: BoardData): Promise<void> => {
 			const boardBeforeTrash = currentBoard ?? boardRef.current;
+			// The runtime's Done workflow is the only writer of this move. The
+			// browser shows it now but keeps it out of its own saves until the
+			// runtime's board (broadcast or refetch) replaces the local one.
+			const pendingMove = capturePendingDoneMove(boardBeforeTrash, task.id);
+			if (pendingMove) {
+				holdPendingDoneMove(pendingMove);
+			}
 			const trashed = trashTaskAndGetReadyLinkedTaskIds(boardBeforeTrash, task.id);
-			if (!trashed.moved) {
-				await stopTaskSession(task.id);
-				await cleanupTaskWorkspace(task.id);
+			if (trashed.moved) {
+				setBoard((currentBoardState) => {
+					const latestTrashResult = trashTaskAndGetReadyLinkedTaskIds(currentBoardState, task.id);
+					return latestTrashResult.moved ? latestTrashResult.board : currentBoardState;
+				});
+				setSelectedTaskId((currentSelectedTaskId) =>
+					currentSelectedTaskId === task.id
+						? getNextDetailTaskIdAfterTrashMove(boardBeforeTrash, task.id)
+						: currentSelectedTaskId,
+				);
+				if (trashed.readyTaskIds.length > 0) {
+					maybeRequestNotificationPermissionForTaskStart();
+				}
+			}
+
+			// Unrelated local edits still waiting for the debounced save land
+			// first, so the runtime's write cannot make that save conflict.
+			await flushWorkspaceState();
+			const result = await trashTask(task.id);
+			if (!result?.ok) {
+				if (pendingMove) {
+					releasePendingDoneMove(task.id);
+					setBoard((currentBoardState) => withoutPendingDoneMoves(currentBoardState, [pendingMove]));
+				}
+				if (result?.error) {
+					notifyError(result.error);
+				}
 				return;
 			}
-
-			setBoard((currentBoardState) => {
-				const latestTrashResult = trashTaskAndGetReadyLinkedTaskIds(currentBoardState, task.id);
-				return latestTrashResult.moved ? latestTrashResult.board : currentBoardState;
-			});
-			setSelectedTaskId((currentSelectedTaskId) =>
-				currentSelectedTaskId === task.id
-					? getNextDetailTaskIdAfterTrashMove(boardBeforeTrash, task.id)
-					: currentSelectedTaskId,
-			);
-
-			const readyTasks = trashed.readyTaskIds
-				.map((readyTaskId) => findCardSelection(trashed.board, readyTaskId)?.card ?? null)
-				.filter((readyTask): readyTask is BoardCard => readyTask !== null);
-
-			if (readyTasks.length > 0) {
-				maybeRequestNotificationPermissionForTaskStart();
-				let startedTaskCount = 0;
-				if (startBacklogTaskWithAnimation) {
-					const startedTaskPromises: Promise<boolean>[] = [];
-					for (const [index, readyTask] of readyTasks.entries()) {
-						startedTaskPromises.push(startBacklogTaskWithAnimation(readyTask));
-						if (index < readyTasks.length - 1) {
-							await waitForBacklogStartAnimationAvailability?.();
-						}
-					}
-					const startedTasks = await Promise.all(startedTaskPromises);
-					startedTaskCount = startedTasks.filter(Boolean).length;
-				} else {
-					setBoard((currentBoardState) => {
-						let nextBoardState = currentBoardState;
-						for (const readyTask of readyTasks) {
-							const moved = moveTaskToColumn(nextBoardState, readyTask.id, "in_progress", {
-								insertAtTop: true,
-							});
-							if (moved.moved) {
-								nextBoardState = moved.board;
-							}
-						}
-						return nextBoardState;
+			if (pendingMove) {
+				awaitPendingDoneMoveSettled(task.id);
+			}
+			for (const started of result.autoStartedTasks) {
+				if (!started.ok) {
+					notifyError(started.error ?? "Could not start task session.");
+				} else if (started.warning) {
+					showAppToast({
+						intent: "warning",
+						icon: "warning-sign",
+						message: started.warning,
+						timeout: 7000,
 					});
-					for (const readyTask of readyTasks) {
-						const started = await kickoffTaskInProgress(readyTask, readyTask.id, "backlog", {
-							optimisticMove: true,
-						});
-						if (started) {
-							startedTaskCount += 1;
-						}
-					}
-				}
-				if (startedTaskCount > 0) {
-					trackTasksAutoStartedFromDependency(startedTaskCount);
 				}
 			}
-
-			await Promise.all([stopTaskSession(task.id), stopTaskSession(getDetailTerminalTaskId(task.id))]);
-			await cleanupTaskWorkspace(task.id);
+			const startedTaskCount = result.autoStartedTasks.filter((started) => started.ok).length;
+			if (startedTaskCount > 0) {
+				trackTasksAutoStartedFromDependency(startedTaskCount);
+			}
 		},
 		[
-			cleanupTaskWorkspace,
-			kickoffTaskInProgress,
+			awaitPendingDoneMoveSettled,
+			flushWorkspaceState,
+			holdPendingDoneMove,
 			maybeRequestNotificationPermissionForTaskStart,
+			releasePendingDoneMove,
 			setBoard,
 			setSelectedTaskId,
-			startBacklogTaskWithAnimation,
-			stopTaskSession,
-			waitForBacklogStartAnimationAvailability,
+			trashTask,
 		],
 	);
 

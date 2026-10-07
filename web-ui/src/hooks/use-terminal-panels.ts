@@ -1,5 +1,5 @@
+import { getDetailTerminalTaskId } from "@runtime-detail-terminal-session";
 import { useCallback, useEffect, useRef, useState } from "react";
-
 import { notifyError } from "@/components/app-toaster";
 import {
 	clampAtLeast,
@@ -15,7 +15,6 @@ import type { BoardCard, CardSelection } from "@/types";
 
 const HOME_TERMINAL_TASK_ID = "__home_terminal__";
 const HOME_TERMINAL_ROWS = 16;
-const DETAIL_TERMINAL_TASK_PREFIX = "__detail_terminal__:";
 const APPROX_TERMINAL_CELL_WIDTH_PX = 8;
 const MIN_TERMINAL_COLS = 40;
 const MIN_BOTTOM_TERMINAL_PANE_HEIGHT = 200;
@@ -33,10 +32,6 @@ function loadBottomTerminalPaneHeight(): number | undefined {
 		key: LocalStorageKey.BottomTerminalPaneHeight,
 		normalize: (value) => clampAtLeast(value, MIN_BOTTOM_TERMINAL_PANE_HEIGHT),
 	});
-}
-
-export function getDetailTerminalTaskId(taskId: string): string {
-	return `${DETAIL_TERMINAL_TASK_PREFIX}${taskId}`;
 }
 
 async function resolveShellTerminalGeometry(taskId: string): Promise<{ cols: number; rows: number }> {

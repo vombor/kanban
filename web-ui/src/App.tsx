@@ -184,6 +184,7 @@ export default function App(): ReactElement {
 		stopTaskSession,
 		sendTaskSessionInput,
 		cleanupTaskWorkspace,
+		trashTask,
 		fetchTaskWorkspaceInfo,
 	} = useTaskSessions({
 		currentProjectId,
@@ -445,7 +446,7 @@ export default function App(): ReactElement {
 		);
 	}, []);
 
-	useWorkspacePersistence({
+	const workspacePersistence = useWorkspacePersistence({
 		board,
 		sessions,
 		currentProjectId,
@@ -568,6 +569,8 @@ export default function App(): ReactElement {
 		setIsGitHistoryOpen,
 		stopTaskSession,
 		cleanupTaskWorkspace,
+		trashTask,
+		workspacePersistence,
 		ensureTaskWorkspace,
 		startTaskSession,
 		fetchTaskWorkspaceInfo,

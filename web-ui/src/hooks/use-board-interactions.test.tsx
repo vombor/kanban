@@ -57,6 +57,13 @@ function createBoard(): BoardData {
 
 const NOOP_STOP_SESSION = async (): Promise<void> => {};
 const NOOP_CLEANUP_WORKSPACE = async (): Promise<null> => null;
+const NOOP_TRASH_TASK = async (): Promise<null> => null;
+const NOOP_WORKSPACE_PERSISTENCE = {
+	flushWorkspaceState: async () => {},
+	holdPendingDoneMove: () => {},
+	releasePendingDoneMove: () => {},
+	awaitPendingDoneMoveSettled: () => {},
+};
 const NOOP_FETCH_WORKSPACE_INFO = async (): Promise<null> => null;
 const NOOP_SEND_TASK_INPUT = async (): Promise<{ ok: boolean }> => ({ ok: true });
 
@@ -88,6 +95,7 @@ function HookHarness({
 	startTaskSession,
 	stopTaskSession = NOOP_STOP_SESSION,
 	cleanupTaskWorkspace = NOOP_CLEANUP_WORKSPACE,
+	trashTask = NOOP_TRASH_TASK,
 	selectedCard = null,
 	setSelectedTaskIdOverride,
 	onSnapshot,
@@ -98,6 +106,7 @@ function HookHarness({
 	startTaskSession: UseTaskSessionsResult["startTaskSession"];
 	stopTaskSession?: (taskId: string) => Promise<void>;
 	cleanupTaskWorkspace?: (taskId: string) => Promise<unknown>;
+	trashTask?: UseTaskSessionsResult["trashTask"];
 	selectedCard?: { card: BoardCard; column: { id: "backlog" | "in_progress" | "review" | "trash" } } | null;
 	setSelectedTaskIdOverride?: Dispatch<SetStateAction<string | null>>;
 	onSnapshot?: (snapshot: HookSnapshot) => void;
@@ -120,6 +129,8 @@ function HookHarness({
 		setIsGitHistoryOpen,
 		stopTaskSession,
 		cleanupTaskWorkspace,
+		trashTask,
+		workspacePersistence: NOOP_WORKSPACE_PERSISTENCE,
 		ensureTaskWorkspace,
 		startTaskSession,
 		fetchTaskWorkspaceInfo: NOOP_FETCH_WORKSPACE_INFO,
@@ -188,9 +199,7 @@ describe("useBoardInteractions", () => {
 		}
 	});
 
-	it("starts dependency-unblocked tasks even when setBoard updater is deferred", async () => {
-		let startBacklogTaskWithAnimation: ((task: BoardCard) => Promise<boolean>) | null = null;
-
+	it("hands the runtime Done workflow to the linked-task actions instead of browser-side cleanup", async () => {
 		useProgrammaticCardMovesMock.mockReturnValue({
 			handleProgrammaticCardMoveReady: () => {},
 			setRequestMoveTaskToTrashHandler: () => {},
@@ -202,62 +211,31 @@ describe("useBoardInteractions", () => {
 			requestMoveTaskToTrashWithAnimation: async () => {},
 			programmaticCardMoveCycle: 0,
 		});
-
-		useLinkedBacklogTaskActionsMock.mockImplementation(
-			(input: { startBacklogTaskWithAnimation?: (task: BoardCard) => Promise<boolean> }) => {
-				startBacklogTaskWithAnimation = input.startBacklogTaskWithAnimation ?? null;
-				return {
-					handleCreateDependency: () => {},
-					handleDeleteDependency: () => {},
-					confirmMoveTaskToTrash: async () => {},
-					requestMoveTaskToTrash: async () => {},
-				};
-			},
-		);
-
-		const board = createBoard();
-		const setBoard = vi.fn<Dispatch<SetStateAction<BoardData>>>((_nextBoard) => {
-			// Simulate React deferring state updater execution.
+		useLinkedBacklogTaskActionsMock.mockReturnValue({
+			handleCreateDependency: () => {},
+			handleDeleteDependency: () => {},
+			confirmMoveTaskToTrash: async () => {},
+			requestMoveTaskToTrash: async () => {},
 		});
-		const ensureTaskWorkspace = vi.fn(async () => ({
-			ok: true as const,
-			response: {
-				ok: true as const,
-				path: "/tmp/task-1",
-				baseRef: "main",
-				baseCommit: "abc123",
-			},
-		}));
-		const startTaskSession = vi.fn(async () => ({ ok: true as const }));
+		const trashTask = vi.fn(async () => null);
 
 		await act(async () => {
 			root.render(
 				<HookHarness
-					board={board}
-					setBoard={setBoard}
-					ensureTaskWorkspace={ensureTaskWorkspace}
-					startTaskSession={startTaskSession}
+					board={createBoard()}
+					setBoard={vi.fn()}
+					ensureTaskWorkspace={vi.fn()}
+					startTaskSession={vi.fn()}
+					trashTask={trashTask}
 				/>,
 			);
 		});
 
-		if (!startBacklogTaskWithAnimation) {
-			throw new Error("Expected startBacklogTaskWithAnimation to be provided.");
-		}
-
-		const backlogTask = board.columns[0]?.cards[0];
-		if (!backlogTask) {
-			throw new Error("Expected a backlog task.");
-		}
-
-		let started = false;
-		await act(async () => {
-			started = await startBacklogTaskWithAnimation!(backlogTask);
-		});
-
-		expect(started).toBe(true);
-		expect(ensureTaskWorkspace).toHaveBeenCalledWith(backlogTask);
-		expect(startTaskSession).toHaveBeenCalledWith(backlogTask);
+		const linkedInput = useLinkedBacklogTaskActionsMock.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+		expect(linkedInput.trashTask).toBe(trashTask);
+		expect(linkedInput).not.toHaveProperty("stopTaskSession");
+		expect(linkedInput).not.toHaveProperty("cleanupTaskWorkspace");
+		expect(linkedInput).not.toHaveProperty("kickoffTaskInProgress");
 	});
 
 	it("waits for a new backlog card height to settle before starting animation", async () => {

@@ -19,15 +19,14 @@ import type {
 	RuntimeTaskPendingGitAction,
 	RuntimeWorkspaceStateResponse,
 } from "../core/api-contract";
-import { isPendingGitActionStale, moveTaskToColumn } from "../core/task-board-mutations";
-import type {
-	RuntimeWorkspaceAtomicMutationResponse,
-	RuntimeWorkspaceAtomicMutationResult,
-} from "../state/workspace-state";
+import { isPendingGitActionStale } from "../core/task-board-mutations";
 import { type DeliverTaskInputResult, deliverTaskInput } from "../terminal/deliver-task-input";
 import type { TerminalSessionManager } from "../terminal/session-manager";
 import { probeGitWorkspaceState } from "../workspace/git-sync";
 import { getTaskWorkspacePathInfo } from "../workspace/task-worktree";
+import type { MutateWorkspaceState, TaskTrashWorkflow } from "./task-trash-workflow";
+
+export type { MutateWorkspaceState } from "./task-trash-workflow";
 
 /**
  * Evaluation cadence. Nothing here is latency critical: a slower interval
@@ -57,11 +56,6 @@ export interface AutoReviewTaskProbe {
 	changedFiles: number;
 }
 
-export type MutateWorkspaceState = <T>(
-	workspacePath: string,
-	mutate: (state: RuntimeWorkspaceStateResponse) => RuntimeWorkspaceAtomicMutationResult<T>,
-) => Promise<RuntimeWorkspaceAtomicMutationResponse<T>>;
-
 export interface CreateAutoReviewReconcilerDependencies {
 	listWorkspaces: () => AutoReviewWorkspace[];
 	getWorkspaceState: (workspaceId: string, workspacePath: string) => Promise<RuntimeWorkspaceStateResponse>;
@@ -83,6 +77,8 @@ export interface CreateAutoReviewReconcilerDependencies {
 	 * observe the change later.
 	 */
 	onBoardMutated?: (workspaceId: string, workspacePath: string) => Promise<void> | void;
+	/** The shared Done workflow (src/server/task-trash-workflow.ts); completes armed cards. */
+	trashTask: TaskTrashWorkflow["trashTask"];
 	evaluationIntervalMs?: number;
 	now?: () => number;
 	warn?: (message: string) => void;
@@ -281,35 +277,25 @@ export function createAutoReviewReconciler(deps: CreateAutoReviewReconcilerDepen
 		}
 	};
 
+	// Completion goes through the shared Done workflow so the session stops, the
+	// worktree is cleaned up and linked backlog tasks start, with or without a
+	// browser open. The guard re-checks the arming inside the board mutation.
 	const completePendingGitAction = async (
+		workspace: AutoReviewWorkspace,
 		workspacePath: string,
 		taskId: string,
-		timestamp: number,
-	): Promise<boolean> => {
+	): Promise<void> => {
 		try {
-			const response = await deps.mutateWorkspaceState(workspacePath, (currentState) => {
-				const location = findCardLocation(currentState.board, taskId);
-				if (!location || location.columnId !== "review") {
-					return { board: currentState.board, value: false, save: false };
-				}
-				if (location.card.autoReviewEnabled !== true || !location.card.pendingGitAction) {
-					return { board: currentState.board, value: false, save: false };
-				}
-				const moved = moveTaskToColumn(currentState.board, taskId, "trash", timestamp);
-				if (!moved.moved || !moved.task) {
-					return { board: currentState.board, value: false, save: false };
-				}
-				return {
-					board: replaceBoardCard(moved.board, taskId, {
-						...moved.task,
-						pendingGitAction: null,
-					}),
-					value: true,
-				};
+			await deps.trashTask({
+				workspaceId: workspace.workspaceId,
+				workspacePath,
+				taskId,
+				trigger: "auto_review",
+				canTrash: (card, columnId) =>
+					columnId === "review" && card.autoReviewEnabled === true && Boolean(card.pendingGitAction),
 			});
-			return response.value;
-		} catch {
-			return false;
+		} catch (error) {
+			deps.warn?.(`Auto-review could not complete ${taskId}: ${String(error)}`);
 		}
 	};
 
@@ -467,8 +453,10 @@ export function createAutoReviewReconciler(deps: CreateAutoReviewReconcilerDepen
 						probe.headCommit !== null &&
 						probe.headCommit !== pendingGitAction.headCommitAtRequest
 					) {
-						if (stillTracked() && (await completePendingGitAction(workspacePath, card.id, timestamp))) {
-							boardMutated = true;
+						// The Done workflow broadcasts the board itself, so this does not
+						// mark the cycle as mutated (that would broadcast a second time).
+						if (stillTracked()) {
+							await completePendingGitAction(workspace, workspacePath, card.id);
 						}
 					}
 					continue;

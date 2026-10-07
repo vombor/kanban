@@ -1,8 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
 	RuntimeAgentId,
-	RuntimeBoardCard,
-	RuntimeBoardColumnId,
 	RuntimeBoardData,
 	RuntimeTaskSessionSummary,
 	RuntimeWorkspaceStateResponse,
@@ -13,84 +11,16 @@ import type {
 	TaskGitPromptTemplates,
 } from "../../../src/server/auto-review-reconciler";
 import { createAutoReviewReconciler } from "../../../src/server/auto-review-reconciler";
+import { createTaskTrashWorkflow } from "../../../src/server/task-trash-workflow";
 import type { DeliverTaskInputResult } from "../../../src/terminal/deliver-task-input";
 import type { TerminalSessionManager } from "../../../src/terminal/session-manager";
-
-interface StoredWorkspaceState {
-	board: RuntimeBoardData;
-	sessions: Record<string, RuntimeTaskSessionSummary>;
-	revision: number;
-}
-
-function createCard(overrides: Partial<RuntimeBoardCard> & { id: string }): RuntimeBoardCard {
-	return {
-		title: `Task ${overrides.id}`,
-		prompt: `Do work for ${overrides.id}`,
-		startInPlanMode: false,
-		baseRef: "main",
-		createdAt: 0,
-		updatedAt: 0,
-		...overrides,
-	};
-}
-
-function createBoard(cardsByColumn: Partial<Record<RuntimeBoardColumnId, RuntimeBoardCard[]>>): RuntimeBoardData {
-	const columnIds: RuntimeBoardColumnId[] = ["backlog", "in_progress", "review", "trash"];
-	return {
-		columns: columnIds.map((columnId) => ({
-			id: columnId,
-			title: columnId,
-			cards: cardsByColumn[columnId] ?? [],
-		})),
-		dependencies: [],
-	};
-}
-
-/**
- * In-memory stand-in for the workspace state files. `getWorkspaceState` and
- * `mutateWorkspaceState` mirror the read-modify-write semantics of
- * src/state/workspace-state.ts, including the revision bump on save and the
- * ability to refuse a save (`save: false`).
- */
-function createWorkspaceStateStore(initial: StoredWorkspaceState) {
-	const stored = initial;
-
-	const toResponse = (): RuntimeWorkspaceStateResponse =>
-		({
-			repoPath: "/repo",
-			statePath: "/repo/.cline",
-			git: { root: "/repo", currentBranch: "main", defaultBranch: "main" },
-			board: structuredClone(stored.board),
-			sessions: structuredClone(stored.sessions),
-			revision: stored.revision,
-		}) as unknown as RuntimeWorkspaceStateResponse;
-
-	return {
-		stored,
-		getWorkspaceState: async (): Promise<RuntimeWorkspaceStateResponse> => toResponse(),
-		mutateWorkspaceState: async <T>(
-			_cwd: string,
-			mutate: (state: RuntimeWorkspaceStateResponse) => {
-				board: RuntimeBoardData;
-				sessions?: Record<string, RuntimeTaskSessionSummary>;
-				value: T;
-				save?: boolean;
-			},
-		): Promise<{ value: T; state: RuntimeWorkspaceStateResponse; saved: boolean }> => {
-			const current = toResponse();
-			const result = mutate(current);
-			if (result.save === false) {
-				return { value: result.value, state: current, saved: false };
-			}
-			stored.board = result.board;
-			if (result.sessions) {
-				stored.sessions = result.sessions;
-			}
-			stored.revision += 1;
-			return { value: result.value, state: toResponse(), saved: true };
-		},
-	};
-}
+import {
+	createBoard,
+	createCard,
+	createFakeTaskTrashWorkflowDependencies,
+	createWorkspaceStateStore,
+	findCardInBoard,
+} from "../../utilities/workspace-state-store";
 
 function createFakeTerminalManager() {
 	const unavailableTaskIds = new Set<string>();
@@ -132,6 +62,12 @@ function createHarness(options: HarnessOptions) {
 	const onBoardMutated = vi.fn();
 	const warn = vi.fn();
 	let staleSnapshot: RuntimeWorkspaceStateResponse | null = null;
+	// Completion runs through the real Done workflow; only its side effects are faked.
+	const trashEffects = createFakeTaskTrashWorkflowDependencies(store);
+	const taskTrashWorkflow = createTaskTrashWorkflow({
+		...trashEffects.dependencies,
+		...(options.now ? { now: options.now } : {}),
+	});
 
 	const dependencies: CreateAutoReviewReconcilerDependencies = {
 		listWorkspaces: () => [
@@ -143,6 +79,7 @@ function createHarness(options: HarnessOptions) {
 		],
 		getWorkspaceState: async () => staleSnapshot ?? (await store.getWorkspaceState()),
 		mutateWorkspaceState: store.mutateWorkspaceState,
+		trashTask: taskTrashWorkflow.trashTask,
 		getPromptTemplates: async () =>
 			options.promptTemplates ?? {
 				commitPromptTemplate: "Commit the working changes onto {{base_ref}}.",
@@ -162,6 +99,7 @@ function createHarness(options: HarnessOptions) {
 
 	return {
 		reconciler,
+		trashEffects,
 		store,
 		terminal,
 		probeTaskWorkspace,
@@ -245,6 +183,41 @@ describe("auto-review reconciler", () => {
 		expect(completed?.columnId).toBe("trash");
 		expect(completed?.card.pendingGitAction ?? null).toBeNull();
 		expect(harness.terminal.writeInput).not.toHaveBeenCalled();
+		// One broadcast per completion: the Done workflow sends it, the reconciler does not repeat it.
+		expect(harness.trashEffects.onBoardMutated).toHaveBeenCalledTimes(1);
+		expect(harness.onBoardMutated).not.toHaveBeenCalled();
+	});
+
+	it("completes through the shared Done workflow: session stopped, worktree removed, linked task started", async () => {
+		const armedCard = createCard({
+			id: "task-1",
+			autoReviewEnabled: true,
+			pendingGitAction: {
+				action: "commit",
+				requestedAt: Date.now(),
+				headCommitAtRequest: "commit-1",
+				attempt: 0,
+			},
+		});
+		const linkedCard = createCard({ id: "task-linked" });
+		const harness = createHarness({
+			board: createBoard({ backlog: [linkedCard], review: [armedCard] }, [
+				{ id: "dep-1", fromTaskId: "task-linked", toTaskId: "task-1", createdAt: 0 },
+			]),
+		});
+		harness.setProbe("task-1", { exists: true, headCommit: "commit-2", changedFiles: 0 });
+
+		await harness.evaluate();
+
+		expect(findCardInBoard(harness.store.stored.board, "task-1")?.columnId).toBe("trash");
+		const stoppedIds = harness.trashEffects.stopTaskSession.mock.calls.map(([, taskId]) => taskId);
+		expect(stoppedIds).toEqual(expect.arrayContaining(["task-1", "__detail_terminal__:task-1"]));
+		expect(harness.trashEffects.deleteTaskWorktree).toHaveBeenCalledWith(expect.anything(), "task-1");
+		expect(harness.trashEffects.startTaskSession).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({ taskId: "task-linked", prompt: linkedCard.prompt, baseRef: "main" }),
+		);
+		expect(findCardInBoard(harness.store.stored.board, "task-linked")?.columnId).toBe("in_progress");
 	});
 
 	it("does not sweep interrupted tasks or worktrees on boot", async () => {
@@ -441,16 +414,3 @@ describe("auto-review reconciler", () => {
 		expect(harness.terminal.writeInput).not.toHaveBeenCalled();
 	});
 });
-
-function findCardInBoard(
-	board: RuntimeBoardData,
-	taskId: string,
-): { card: RuntimeBoardCard; columnId: RuntimeBoardColumnId } | null {
-	for (const column of board.columns) {
-		const card = column.cards.find((candidate) => candidate.id === taskId);
-		if (card) {
-			return { card, columnId: column.id };
-		}
-	}
-	return null;
-}

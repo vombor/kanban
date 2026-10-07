@@ -518,6 +518,7 @@ async function startServer(): Promise<{
 			return state;
 		},
 		mutateWorkspaceState,
+		trashTask: runtimeServer.taskTrashWorkflow.trashTask,
 		getPromptTemplates: async (workspaceId, workspacePath) => {
 			const config = await workspaceRegistry.loadScopedRuntimeConfig({ workspaceId, workspacePath });
 			return {

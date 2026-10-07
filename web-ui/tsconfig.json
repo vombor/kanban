@@ -17,6 +17,7 @@
       "@runtime-tool-call-display": ["../src/core/tool-call-display.ts"],
       "@runtime-contract": ["../src/core/api-contract.ts"],
       "@runtime-home-agent-session": ["../src/core/home-agent-session.ts"],
+      "@runtime-detail-terminal-session": ["../src/core/detail-terminal-session.ts"],
       "@runtime-trpc": ["../src/trpc/app-router.ts"],
       "@runtime-shortcuts": ["../src/config/shortcut-utils.ts"],
       "@runtime-task-id": ["../src/core/task-id.ts"],

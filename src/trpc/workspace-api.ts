@@ -5,12 +5,15 @@ import type {
 	RuntimeGitSummaryResponse,
 	RuntimeGitSyncAction,
 	RuntimeGitSyncResponse,
+	RuntimeTaskTrashRequest,
+	RuntimeTaskTrashResponse,
 	RuntimeWorkspaceChangesMode,
 	RuntimeWorkspaceFileSearchResponse,
 	RuntimeWorkspaceStateResponse,
 } from "../core/api-contract";
 import {
 	parseGitCheckoutRequest,
+	parseTaskTrashRequest,
 	parseWorktreeDeleteRequest,
 	parseWorktreeEnsureRequest,
 } from "../core/api-validation";
@@ -38,6 +41,11 @@ export interface CreateWorkspaceApiDependencies {
 	broadcastRuntimeWorkspaceStateUpdated: (workspaceId: string, workspacePath: string) => Promise<void> | void;
 	broadcastRuntimeProjectsUpdated: (preferredCurrentProjectId: string | null) => Promise<void> | void;
 	buildWorkspaceStateSnapshot: (workspaceId: string, workspacePath: string) => Promise<RuntimeWorkspaceStateResponse>;
+	/** The server-side Done workflow (src/server/task-trash-workflow.ts). */
+	trashTask: (
+		scope: { workspaceId: string; workspacePath: string },
+		input: RuntimeTaskTrashRequest,
+	) => Promise<RuntimeTaskTrashResponse>;
 }
 
 function normalizeOptionalTaskWorkspaceScopeInput(
@@ -294,6 +302,23 @@ export function createWorkspaceApi(deps: CreateWorkspaceApiDependencies): Runtim
 				repoPath: workspaceScope.workspacePath,
 				taskId: body.taskId,
 			});
+		},
+		trashTask: async (workspaceScope, input) => {
+			const body = parseTaskTrashRequest(input);
+			try {
+				return await deps.trashTask(workspaceScope, body);
+			} catch (error) {
+				return {
+					ok: false,
+					status: "failed",
+					taskId: body.taskId,
+					previousColumnId: null,
+					readyTaskIds: [],
+					autoStartedTasks: [],
+					worktreeDeleted: false,
+					error: error instanceof Error ? error.message : String(error),
+				} satisfies RuntimeTaskTrashResponse;
+			}
 		},
 		loadTaskContext: async (workspaceScope, input) => {
 			const normalizedInput = normalizeRequiredTaskWorkspaceScopeInput(input);

@@ -83,6 +83,7 @@ export default defineConfig({
 			"@runtime-agent-catalog": resolve(__dirname, "../src/core/agent-catalog.ts"),
 			"@runtime-tool-call-display": resolve(__dirname, "../src/core/tool-call-display.ts"),
 			"@runtime-home-agent-session": resolve(__dirname, "../src/core/home-agent-session.ts"),
+			"@runtime-detail-terminal-session": resolve(__dirname, "../src/core/detail-terminal-session.ts"),
 			"@runtime-shortcuts": resolve(__dirname, "../src/config/shortcut-utils.ts"),
 			"@runtime-task-id": resolve(__dirname, "../src/core/task-id.ts"),
 			"@runtime-task-title": resolve(__dirname, "../src/core/task-title.ts"),

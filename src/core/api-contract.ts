@@ -553,6 +553,48 @@ export const runtimeWorktreeDeleteResponseSchema = z.object({
 });
 export type RuntimeWorktreeDeleteResponse = z.infer<typeof runtimeWorktreeDeleteResponseSchema>;
 
+/** Who asked for the Done move. The reconciler calls the workflow in-process; the others come over tRPC. */
+export const runtimeTaskTrashTriggerSchema = z.enum(["cli", "auto_review", "browser"]);
+export type RuntimeTaskTrashTrigger = z.infer<typeof runtimeTaskTrashTriggerSchema>;
+
+export const runtimeTaskTrashRequestSchema = z.object({
+	taskId: z.string(),
+	trigger: runtimeTaskTrashTriggerSchema.optional(),
+});
+export type RuntimeTaskTrashRequest = z.infer<typeof runtimeTaskTrashRequestSchema>;
+
+export const runtimeTaskTrashStatusSchema = z.enum([
+	"trashed",
+	"already_done",
+	"not_found",
+	"skipped",
+	"blocked",
+	"failed",
+]);
+export type RuntimeTaskTrashStatus = z.infer<typeof runtimeTaskTrashStatusSchema>;
+
+export const runtimeTaskTrashAutoStartSchema = z.object({
+	taskId: z.string(),
+	ok: z.boolean(),
+	/** Worktree setup warning for the started task (e.g. a saved patch could not be reapplied). */
+	warning: z.string().optional(),
+	error: z.string().optional(),
+});
+export type RuntimeTaskTrashAutoStart = z.infer<typeof runtimeTaskTrashAutoStartSchema>;
+
+export const runtimeTaskTrashResponseSchema = z.object({
+	ok: z.boolean(),
+	status: runtimeTaskTrashStatusSchema,
+	taskId: z.string(),
+	previousColumnId: runtimeBoardColumnIdSchema.nullable(),
+	readyTaskIds: z.array(z.string()),
+	autoStartedTasks: z.array(runtimeTaskTrashAutoStartSchema),
+	worktreeDeleted: z.boolean(),
+	worktreeDeleteError: z.string().optional(),
+	error: z.string().optional(),
+});
+export type RuntimeTaskTrashResponse = z.infer<typeof runtimeTaskTrashResponseSchema>;
+
 export const runtimeTaskWorkspaceInfoRequestSchema = z.object({
 	taskId: z.string(),
 	baseRef: z.string(),
