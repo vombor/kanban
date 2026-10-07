@@ -642,6 +642,20 @@ export const runtimeAgentDefinitionSchema = z.object({
 });
 export type RuntimeAgentDefinition = z.infer<typeof runtimeAgentDefinitionSchema>;
 
+export const runtimeKanbanHomeSourceSchema = z.enum(["flag", "env", "initialized", "legacy", "default"]);
+export type RuntimeKanbanHomeSource = z.infer<typeof runtimeKanbanHomeSourceSchema>;
+
+/** Paths resolved by src/state/kanban-home.ts. The web UI shows these instead of hard-coding them. */
+export const runtimeKanbanPathsSchema = z.object({
+	homePath: z.string(),
+	homeSource: runtimeKanbanHomeSourceSchema,
+	worktreesRootPath: z.string(),
+	legacyWorktreeRootPaths: z.array(z.string()),
+	debugResetTargetPaths: z.array(z.string()),
+	projectConfigDisplayPath: z.string(),
+});
+export type RuntimeKanbanPaths = z.infer<typeof runtimeKanbanPathsSchema>;
+
 export const runtimeConfigResponseSchema = z.object({
 	selectedAgentId: runtimeAgentIdSchema,
 	selectedShortcutLabel: z.string().nullable(),
@@ -650,6 +664,7 @@ export const runtimeConfigResponseSchema = z.object({
 	effectiveCommand: z.string().nullable(),
 	globalConfigPath: z.string(),
 	projectConfigPath: z.string().nullable(),
+	kanbanPaths: runtimeKanbanPathsSchema,
 	readyForReviewNotificationsEnabled: z.boolean(),
 	detectedCommands: z.array(z.string()),
 	agents: z.array(runtimeAgentDefinitionSchema),

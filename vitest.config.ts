@@ -19,6 +19,8 @@ export default defineConfig({
 			"**/dist/**",
 			".worktrees/**",
 		],
+		// Clears KANBAN_HOME / KANBAN_WORKTREES so a developer's real home never leaks into tests.
+		setupFiles: ["test/utilities/vitest-setup.ts"],
 		testTimeout: 15_000,
 	},
 });

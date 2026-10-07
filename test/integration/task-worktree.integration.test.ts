@@ -4,8 +4,15 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { deleteTaskWorktree, ensureTaskWorktreeIfDoesntExist } from "../../src/workspace/task-worktree";
+import { getKanbanHomePath } from "../../src/state/kanban-home";
+import {
+	deleteTaskWorktree,
+	ensureTaskWorktreeIfDoesntExist,
+	getTaskWorkspaceInfo,
+	resolveTaskCwd,
+} from "../../src/workspace/task-worktree";
 import { createGitTestEnv } from "../utilities/git-env";
+import { withTemporaryKanbanHome } from "../utilities/kanban-home";
 import { createTempDir } from "../utilities/temp-dir";
 
 function expectMirroredPathBehavior(path: string): void {
@@ -36,32 +43,9 @@ function runGit(cwd: string, args: string[]): string {
 	return result.stdout.trim();
 }
 
-async function withTemporaryHome<T>(run: () => Promise<T>): Promise<T> {
-	const { path: tempHome, cleanup } = createTempDir("kanban-home-");
-	const previousHome = process.env.HOME;
-	const previousUserProfile = process.env.USERPROFILE;
-	process.env.HOME = tempHome;
-	process.env.USERPROFILE = tempHome;
-	try {
-		return await run();
-	} finally {
-		if (previousHome === undefined) {
-			delete process.env.HOME;
-		} else {
-			process.env.HOME = previousHome;
-		}
-		if (previousUserProfile === undefined) {
-			delete process.env.USERPROFILE;
-		} else {
-			process.env.USERPROFILE = previousUserProfile;
-		}
-		cleanup();
-	}
-}
-
 describe.sequential("task-worktree integration", () => {
 	it("returns a friendly error when the repository has no initial commit", async () => {
-		await withTemporaryHome(async () => {
+		await withTemporaryKanbanHome(async () => {
 			const { path: sandboxRoot, cleanup } = createTempDir("kanban-task-worktree-unborn-");
 			try {
 				const repoPath = join(sandboxRoot, "repo");
@@ -88,7 +72,7 @@ describe.sequential("task-worktree integration", () => {
 	});
 
 	it("keeps symlinked ignored paths ignored in task worktrees", async () => {
-		await withTemporaryHome(async () => {
+		await withTemporaryKanbanHome(async () => {
 			const { path: sandboxRoot, cleanup } = createTempDir("kanban-task-worktree-");
 			try {
 				const repoPath = join(sandboxRoot, "repo");
@@ -148,7 +132,7 @@ describe.sequential("task-worktree integration", () => {
 	});
 
 	it("keeps symlinked directory-only ignored paths ignored in task worktrees", async () => {
-		await withTemporaryHome(async () => {
+		await withTemporaryKanbanHome(async () => {
 			const { path: sandboxRoot, cleanup } = createTempDir("kanban-task-worktree-root-ignore-");
 			try {
 				const repoPath = join(sandboxRoot, "repo");
@@ -197,7 +181,7 @@ describe.sequential("task-worktree integration", () => {
 	});
 
 	it("skips symlinking root node_modules for root Next apps without a next config file", async () => {
-		await withTemporaryHome(async () => {
+		await withTemporaryKanbanHome(async () => {
 			const { path: sandboxRoot, cleanup } = createTempDir("kanban-task-worktree-root-turbopack-");
 			try {
 				const repoPath = join(sandboxRoot, "repo");
@@ -245,7 +229,7 @@ describe.sequential("task-worktree integration", () => {
 	});
 
 	it("skips only nested Turbopack app node_modules while keeping root node_modules symlinked", async () => {
-		await withTemporaryHome(async () => {
+		await withTemporaryKanbanHome(async () => {
 			const { path: sandboxRoot, cleanup } = createTempDir("kanban-task-worktree-nested-turbopack-");
 			try {
 				const repoPath = join(sandboxRoot, "repo");
@@ -298,7 +282,7 @@ describe.sequential("task-worktree integration", () => {
 	});
 
 	it("restores a trashed task patch onto the saved commit", async () => {
-		await withTemporaryHome(async () => {
+		await withTemporaryKanbanHome(async () => {
 			const { path: sandboxRoot, cleanup } = createTempDir("kanban-task-worktree-restore-");
 			try {
 				const repoPath = join(sandboxRoot, "repo");
@@ -335,13 +319,7 @@ describe.sequential("task-worktree integration", () => {
 				expect(deleted.ok).toBe(true);
 				expect(deleted.removed).toBe(true);
 
-				const patchPath = join(
-					process.env.HOME ?? sandboxRoot,
-					".cline",
-					"kanban",
-					"trashed-task-patches",
-					`${taskId}.${createdCommit}.patch`,
-				);
+				const patchPath = join(getKanbanHomePath(), "trashed-task-patches", `${taskId}.${createdCommit}.patch`);
 				expect(existsSync(patchPath)).toBe(true);
 				expect(readFileSync(patchPath, "utf8")).toContain("tracked.txt");
 				expect(readFileSync(patchPath, "utf8")).toContain("notes.txt");
@@ -374,7 +352,7 @@ describe.sequential("task-worktree integration", () => {
 	});
 
 	it("resumes a trashed task even when the saved patch is invalid", async () => {
-		await withTemporaryHome(async () => {
+		await withTemporaryKanbanHome(async () => {
 			const { path: sandboxRoot, cleanup } = createTempDir("kanban-task-worktree-invalid-patch-");
 			try {
 				const repoPath = join(sandboxRoot, "repo");
@@ -406,7 +384,7 @@ describe.sequential("task-worktree integration", () => {
 				});
 				expect(deleted.ok).toBe(true);
 
-				const patchesDir = join(process.env.HOME ?? sandboxRoot, ".cline", "kanban", "trashed-task-patches");
+				const patchesDir = join(getKanbanHomePath(), "trashed-task-patches");
 				mkdirSync(patchesDir, { recursive: true });
 				const patchPath = join(patchesDir, `${taskId}.${createdCommit}.patch`);
 				writeFileSync(
@@ -441,6 +419,84 @@ describe.sequential("task-worktree integration", () => {
 			} finally {
 				cleanup();
 			}
+		});
+	});
+
+	describe("kanban home worktree roots", () => {
+		function createRepo(sandboxRoot: string): string {
+			const repoPath = join(sandboxRoot, "repo");
+			mkdirSync(repoPath, { recursive: true });
+			runGit(repoPath, ["init"]);
+			runGit(repoPath, ["config", "user.name", "Kanban Test"]);
+			runGit(repoPath, ["config", "user.email", "kanban-test@example.com"]);
+			writeFileSync(join(repoPath, "README.md"), "hello\n", "utf8");
+			runGit(repoPath, ["add", "README.md"]);
+			runGit(repoPath, ["commit", "-m", "init"]);
+			return repoPath;
+		}
+
+		it("creates worktrees in ~/.cline/worktrees while the legacy home is active", async () => {
+			await withTemporaryKanbanHome(
+				async (home) => {
+					const { path: sandboxRoot, cleanup } = createTempDir("kanban-task-worktree-legacy-home-");
+					try {
+						const repoPath = createRepo(sandboxRoot);
+						const ensured = await ensureTaskWorktreeIfDoesntExist({
+							cwd: repoPath,
+							taskId: "pod01",
+							baseRef: "HEAD",
+						});
+						expect(ensured.ok).toBe(true);
+						expect(ensured.path).toBe(join(home.userHomePath, ".cline", "worktrees", "pod01", "repo"));
+						expect(existsSync(join(home.userHomePath, ".kanban"))).toBe(false);
+					} finally {
+						cleanup();
+					}
+				},
+				{ layout: "legacy" },
+			);
+		});
+
+		it("keeps using a live worktree from a legacy root and never creates new ones there", async () => {
+			await withTemporaryKanbanHome(
+				async (home) => {
+					const { path: sandboxRoot, cleanup } = createTempDir("kanban-task-worktree-legacy-root-");
+					try {
+						const repoPath = createRepo(sandboxRoot);
+						const legacyPath = join(home.userHomePath, ".cline", "worktrees", "old01", "repo");
+						mkdirSync(join(home.userHomePath, ".cline", "worktrees", "old01"), { recursive: true });
+						runGit(repoPath, ["worktree", "add", "--detach", legacyPath, "HEAD"]);
+						const newRootPath = join(home.userHomePath, ".kanban", "worktrees", "old01", "repo");
+
+						const ensured = await ensureTaskWorktreeIfDoesntExist({
+							cwd: repoPath,
+							taskId: "old01",
+							baseRef: "HEAD",
+						});
+						expect(ensured.ok).toBe(true);
+						expect(ensured.path).toBe(legacyPath);
+						expect(existsSync(newRootPath)).toBe(false);
+						expect(await resolveTaskCwd({ cwd: repoPath, taskId: "old01", baseRef: "HEAD" })).toBe(legacyPath);
+						const info = await getTaskWorkspaceInfo({ cwd: repoPath, taskId: "old01", baseRef: "HEAD" });
+						expect(info.path).toBe(legacyPath);
+						expect(info.exists).toBe(true);
+
+						const fresh = await ensureTaskWorktreeIfDoesntExist({
+							cwd: repoPath,
+							taskId: "new01",
+							baseRef: "HEAD",
+						});
+						expect(fresh.path).toBe(join(home.userHomePath, ".kanban", "worktrees", "new01", "repo"));
+
+						const deleted = await deleteTaskWorktree({ repoPath, taskId: "old01" });
+						expect(deleted).toEqual({ ok: true, removed: true });
+						expect(existsSync(legacyPath)).toBe(false);
+					} finally {
+						cleanup();
+					}
+				},
+				{ layout: "initialized" },
+			);
 		});
 	});
 });

@@ -86,6 +86,14 @@ function createRuntimeConfig(selectedAgentId: RuntimeConfigResponse["selectedAge
 		effectiveCommand: null,
 		globalConfigPath: "/tmp/global-config.json",
 		projectConfigPath: "/tmp/project-config.json",
+		kanbanPaths: {
+			homePath: "/tmp/home/.kanban",
+			homeSource: "default",
+			worktreesRootPath: "/tmp/home/.kanban/worktrees",
+			legacyWorktreeRootPaths: [],
+			debugResetTargetPaths: ["/tmp/home/.kanban", "/tmp/home/.kanban/worktrees"],
+			projectConfigDisplayPath: "<project>/.cline/kanban/config.json",
+		},
 		readyForReviewNotificationsEnabled: true,
 		detectedCommands: [],
 		agents: [

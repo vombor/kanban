@@ -960,7 +960,7 @@ export function RuntimeSettingsDialog({
 					>
 						{config?.projectConfigPath
 							? formatPathForDisplay(config.projectConfigPath)
-							: "<project>/.cline/kanban/config.json"}
+							: (config?.kanbanPaths.projectConfigDisplayPath ?? null)}
 						{config?.projectConfigPath ? <ExternalLink size={12} className="inline ml-1.5 align-middle" /> : null}
 					</p>
 					<div className="rounded-lg border border-border bg-surface-0 px-4 py-3 mb-4">

@@ -11,6 +11,7 @@ import { cn } from "@/components/ui/cn";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip } from "@/components/ui/tooltip";
 import type { RuntimeTaskSessionSummary } from "@/runtime/types";
+import { useKanbanPaths } from "@/stores/kanban-paths-store";
 import { useTaskWorkspaceSnapshotValue } from "@/stores/workspace-metadata-store";
 import type { BoardCard as BoardCardModel, BoardColumnId } from "@/types";
 import { getTaskAutoReviewCancelButtonLabel } from "@/types";
@@ -48,12 +49,16 @@ const DESCRIPTION_EXPANDED_SUFFIX = `… ${DESCRIPTION_COLLAPSE_LABEL}`;
 // Done cards use a CSS line clamp instead of measuring; past this length the clamp almost always cuts text.
 const TRASH_DESCRIPTION_TOGGLE_MIN_CHARS = 160;
 
-function reconstructTaskWorktreeDisplayPath(taskId: string, workspacePath: string | null | undefined): string | null {
-	if (!workspacePath) {
+function reconstructTaskWorktreeDisplayPath(
+	taskId: string,
+	workspacePath: string | null | undefined,
+	worktreesRootPath: string | null,
+): string | null {
+	if (!workspacePath || !worktreesRootPath) {
 		return null;
 	}
 	try {
-		return buildTaskWorktreeDisplayPath(taskId, workspacePath);
+		return formatPathForDisplay(buildTaskWorktreeDisplayPath(taskId, workspacePath, worktreesRootPath));
 	} catch {
 		return null;
 	}
@@ -267,6 +272,7 @@ export const BoardCard = memo(function BoardCard({
 	const isTrashCard = columnId === "trash";
 	// Done cards are static: they do not subscribe to workspace metadata or measure their description
 	// (a CSS line clamp is used instead), so a long Done column costs little to render and update.
+	const kanbanPaths = useKanbanPaths();
 	const reviewWorkspaceSnapshot = useTaskWorkspaceSnapshotValue(isTrashCard ? null : card.id);
 	const isCardInteractive = !isTrashCard;
 	const descriptionWidth = descriptionRect.width > 0 ? descriptionRect.width : descriptionWidthFallback;
@@ -424,7 +430,7 @@ export const BoardCard = memo(function BoardCard({
 	const reviewWorkspacePath = reviewWorkspaceSnapshot
 		? formatPathForDisplay(reviewWorkspaceSnapshot.path)
 		: isTrashCard
-			? reconstructTaskWorktreeDisplayPath(card.id, workspacePath)
+			? reconstructTaskWorktreeDisplayPath(card.id, workspacePath, kanbanPaths?.worktreesRootPath ?? null)
 			: null;
 	const reviewRefLabel = reviewWorkspaceSnapshot?.branch ?? reviewWorkspaceSnapshot?.headCommit?.slice(0, 8) ?? "HEAD";
 	const reviewChangeSummary = reviewWorkspaceSnapshot

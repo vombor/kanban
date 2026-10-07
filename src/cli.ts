@@ -34,6 +34,7 @@ import { disablePasscode, generateInternalToken, generatePasscode } from "./secu
 import type { AutoReviewReconciler } from "./server/auto-review-reconciler";
 import { terminateProcessForTimeout } from "./server/process-termination";
 import type { RuntimeStateHub } from "./server/runtime-state-hub";
+import { setKanbanHomeOverride } from "./state/kanban-home";
 import { captureNodeException, flushNodeTelemetry } from "./telemetry/sentry-node.js";
 import type { TerminalSessionManager } from "./terminal/session-manager";
 import { runOnDemandUpdate } from "./update/update";
@@ -67,6 +68,7 @@ function parseCliPortValue(rawValue: string): { mode: "fixed"; value: number } |
 }
 
 interface RootCommandOptions {
+	home?: string;
 	host?: string;
 	port?: { mode: "fixed"; value: number } | { mode: "auto" };
 	open?: boolean;
@@ -94,7 +96,7 @@ interface ShutdownIndicator {
  */
 function shouldAutoOpenBrowserTabForInvocation(argv: string[]): boolean {
 	const launchFlags = new Set(["--open", "--no-open", "--skip-shutdown-cleanup", "--https", "--no-passcode"]);
-	const launchOptionsWithValues = new Set(["--host", "--port", "--agent", "--cert", "--key"]);
+	const launchOptionsWithValues = new Set(["--home", "--host", "--port", "--agent", "--cert", "--key"]);
 
 	for (let index = 0; index < argv.length; index += 1) {
 		const arg = argv[index];
@@ -724,6 +726,7 @@ function createProgram(invocationArgs: string[]): Command {
 		.name("kanban")
 		.description("Local orchestration board for coding agents.")
 		.version(KANBAN_VERSION, "-v, --version", "Output the version number")
+		.option("--home <dir>", "Kanban home directory (board state, config, worktrees). Overrides KANBAN_HOME.")
 		.option("--host <ip>", "Host IP to bind the server to (default: 127.0.0.1).")
 		.option("--port <number|auto>", "Runtime port (1-65535) or auto.", parseCliPortValue)
 		.option("--no-open", "Do not open browser automatically.")
@@ -740,6 +743,13 @@ function createProgram(invocationArgs: string[]): Command {
 		.addHelpText("after", `\nRuntime URL: ${getKanbanRuntimeOrigin()}`);
 
 	program.addOption(new Option("--agent <id>", "Deprecated compatibility flag. Ignored.").hideHelp());
+	// Runs before the root action and every subcommand action, so `kanban --home <dir> task ...` works too.
+	program.hook("preAction", (rootCommand) => {
+		const { home } = rootCommand.opts<RootCommandOptions>();
+		if (home) {
+			setKanbanHomeOverride(home);
+		}
+	});
 
 	registerTaskCommand(program);
 	registerHooksCommand(program);

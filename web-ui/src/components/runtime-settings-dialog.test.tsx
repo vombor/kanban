@@ -142,6 +142,14 @@ const savedConfig = {
 	openPrPromptTemplateDefault: "",
 	globalConfigPath: null,
 	projectConfigPath: null,
+	kanbanPaths: {
+		homePath: "/tmp/home/.kanban",
+		homeSource: "default",
+		worktreesRootPath: "/tmp/home/.kanban/worktrees",
+		legacyWorktreeRootPaths: [],
+		debugResetTargetPaths: ["/tmp/home/.kanban", "/tmp/home/.kanban/worktrees"],
+		projectConfigDisplayPath: "<project>/.cline/kanban/config.json",
+	},
 	agents: [
 		{
 			id: "cline",

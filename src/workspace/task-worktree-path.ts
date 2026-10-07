@@ -1,9 +1,6 @@
+// Shared with web-ui, so it must not touch node APIs. The worktrees root comes from the runtime
+// (src/state/kanban-home.ts on the server, the runtime config response in the browser).
 const WORKTREE_TASK_ID_INVALID_MESSAGE = "Invalid task id for worktree path.";
-
-export const KANBAN_RUNTIME_HOME_DIR_NAME = ".cline/kanban";
-export const KANBAN_TASK_WORKTREES_HOME_DIR_NAME = ".cline/worktrees";
-export const KANBAN_TASK_WORKTREES_DIR_NAME = "worktrees";
-export const KANBAN_TASK_WORKTREES_DISPLAY_ROOT = `~/${KANBAN_TASK_WORKTREES_HOME_DIR_NAME}`;
 
 export function normalizeTaskIdForWorktreePath(taskId: string): string {
 	const normalized = taskId.trim();
@@ -30,8 +27,9 @@ export function getWorkspaceFolderLabelForWorktreePath(repoPath: string): string
 	return cleaned || "workspace";
 }
 
-export function buildTaskWorktreeDisplayPath(taskId: string, repoPath: string): string {
+export function buildTaskWorktreeDisplayPath(taskId: string, repoPath: string, worktreesRootPath: string): string {
 	const normalizedTaskId = normalizeTaskIdForWorktreePath(taskId);
 	const workspaceLabel = getWorkspaceFolderLabelForWorktreePath(repoPath);
-	return `${KANBAN_TASK_WORKTREES_DISPLAY_ROOT}/${normalizedTaskId}/${workspaceLabel}`;
+	const root = worktreesRootPath.replace(/[\\/]+$/g, "");
+	return `${root}/${normalizedTaskId}/${workspaceLabel}`;
 }

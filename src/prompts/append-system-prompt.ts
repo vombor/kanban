@@ -6,6 +6,7 @@ import type { RuntimeAgentId } from "../core/api-contract";
 import { isHomeAgentSessionId } from "../core/home-agent-session";
 import { resolveKanbanCommandParts } from "../core/kanban-command";
 import { buildShellCommandLine } from "../core/shell";
+import { getTaskWorktreeSearchRootPaths } from "../state/kanban-home";
 import { detectAutoUpdateInstallation, UpdatePackageManager } from "../update/update";
 
 const DEFAULT_COMMAND_PREFIX = "kanban";
@@ -22,6 +23,8 @@ export interface ResolveAppendSystemPromptCommandPrefixOptions {
 
 export interface RenderAppendSystemPromptOptions {
 	agentId?: RuntimeAgentId | null;
+	/** Roots that contain task worktrees. Defaults to the resolved Kanban home's roots. */
+	taskWorktreesRootPaths?: readonly string[];
 }
 
 const APPEND_PROMPT_AGENT_IDS: readonly RuntimeAgentId[] = [
@@ -129,6 +132,9 @@ export function resolveAppendSystemPromptCommandPrefix(
 export function renderAppendSystemPrompt(commandPrefix: string, options: RenderAppendSystemPromptOptions = {}): string {
 	const kanbanCommand = commandPrefix.trim() || DEFAULT_COMMAND_PREFIX;
 	const selectedAgentId = options.agentId ?? null;
+	const taskWorktreesRoots = (options.taskWorktreesRootPaths ?? getTaskWorktreeSearchRootPaths())
+		.map((root) => `\`${root.replace(/[\\/]+$/u, "")}/\``)
+		.join(" or ");
 	return `# Kanban Sidebar
 
 You are the Kanban sidebar agent for this workspace. Help the user interact with their Kanban board directly from this side panel. When the user asks to add tasks, create tasks, break work down, link tasks, or start tasks, prefer using the Kanban CLI yourself instead of describing manual steps.
@@ -147,7 +153,7 @@ If the user asks you to write code, fix a bug, implement a feature, refactor, or
 - Kanban also supports linking tasks. Linking is useful both for parallelization and for dependencies: when work is easy to decompose into multiple pieces that can be done in parallel, link multiple backlog tasks to the same dependency so they all become ready to start once that dependency finishes; when one piece of work depends on another, use links to represent that follow-on dependency. If both linked tasks are in backlog, Kanban preserves the order you pass to the command: \`--task-id\` waits on \`--linked-task-id\`, and on the board the arrow points into \`--linked-task-id\`. Once only one linked task remains in backlog, Kanban reorients the saved dependency so the backlog task is the waiting dependent task and the other task is the prerequisite. The board arrow points into the prerequisite task so the user can see what must finish first. A link requires at least one backlog task, and when the linked review task is moved to done, that backlog task becomes ready to start.
 - How linking works: when a task in the review column is moved to done, any linked backlog tasks automatically start. This is how you chain work so tasks kick off autonomously without manual intervention.
 - Tasks can also enable automatic review actions: auto-commit or auto-open-pr once completed, which then moves the task to done and kicks off any linked tasks. Combining auto-review with linking is how you can set up fully autonomous pipelines when the user wants it. For example, enabling auto-commit on each task in a chain: task A finishes, auto-commits and is moved to done, task B auto-starts from backlog, auto-commits and is moved to done, task C auto-starts, and so on.
-- If your current working directory is inside \`.cline/worktrees/\`, you are inside a Kanban task worktree. In that case, create or manage tasks against the main workspace path, not the task worktree path. Pass the main workspace with \`--project-path\`.
+- If your current working directory is inside ${taskWorktreesRoots}, you are inside a Kanban task worktree. In that case, create or manage tasks against the main workspace path, not the task worktree path. Pass the main workspace with \`--project-path\`.
 - If a task command fails because the runtime is unavailable, tell the user to start Kanban in that workspace first with \`${kanbanCommand}\`, then retry the task command.
 
 # Command Prefix

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BoardCard } from "@/components/board-card";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { RuntimeTaskSessionSummary } from "@/runtime/types";
+import { setKanbanPaths } from "@/stores/kanban-paths-store";
 import type { ReviewTaskWorkspaceSnapshot } from "@/types";
 
 let mockWorkspaceSnapshot: ReviewTaskWorkspaceSnapshot | undefined;
@@ -172,6 +173,7 @@ describe("BoardCard", () => {
 		act(() => {
 			root.unmount();
 		});
+		setKanbanPaths(null);
 		vi.restoreAllMocks();
 		container.remove();
 		if (previousActEnvironment === undefined) {
@@ -299,6 +301,14 @@ describe("BoardCard", () => {
 	});
 
 	it("reconstructs and shows trashed worktree path when workspace metadata is not tracked", async () => {
+		setKanbanPaths({
+			homePath: "/Users/alice/.kanban",
+			homeSource: "initialized",
+			worktreesRootPath: "/Users/alice/.kanban/worktrees",
+			legacyWorktreeRootPaths: [],
+			debugResetTargetPaths: [],
+			projectConfigDisplayPath: "<project>/.cline/kanban/config.json",
+		});
 		await act(async () => {
 			root.render(
 				<TooltipProvider>
@@ -312,7 +322,24 @@ describe("BoardCard", () => {
 			);
 		});
 
-		expect(container.textContent).toContain("~/.cline/worktrees/trash-task-1/kanban");
+		expect(container.textContent).toContain("~/.kanban/worktrees/trash-task-1/kanban");
+	});
+
+	it("does not guess a trashed worktree path before the runtime reports the worktrees root", async () => {
+		await act(async () => {
+			root.render(
+				<TooltipProvider>
+					<BoardCard
+						card={createCard({ id: "trash-task-1" })}
+						index={0}
+						columnId="trash"
+						workspacePath="/Users/alice/projects/kanban"
+					/>
+				</TooltipProvider>,
+			);
+		});
+
+		expect(container.textContent).not.toContain("trash-task-1/kanban");
 	});
 
 	it("shows agent override details with the model and effort verbatim", async () => {

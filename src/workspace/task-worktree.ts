@@ -7,6 +7,7 @@ import type {
 	RuntimeWorktreeEnsureResponse,
 } from "../core/api-contract";
 import { type LockRequest, lockedFileSystem } from "../fs/locked-file-system";
+import { getLegacyTaskWorktreeRootPaths } from "../state/kanban-home";
 import { getRuntimeHomePath, getTaskWorktreesHomePath, loadWorkspaceContext } from "../state/workspace-state";
 import { getGitCommandErrorMessage, getGitStdout, readGitHeadInfo, runGit } from "./git-utils";
 import { getWorkspaceFolderLabelForWorktreePath, normalizeTaskIdForWorktreePath } from "./task-worktree-path";
@@ -115,22 +116,44 @@ async function withTaskWorktreeSetupLock<T>(repoPath: string, operation: () => P
 	return await lockedFileSystem.withLock(await getTaskWorktreeSetupLock(repoPath), operation);
 }
 
-function getWorktreesRootPath(taskId: string): string {
+function getWorktreesRootPath(taskId: string, baseRootPath = getTaskWorktreesHomePath()): string {
 	const normalizedTaskId = normalizeTaskIdForWorktreePath(taskId);
-	return join(getTaskWorktreesHomePath(), normalizedTaskId);
-}
-
-function getWorktreesBaseRootPath(): string {
-	return getTaskWorktreesHomePath();
+	return join(baseRootPath, normalizedTaskId);
 }
 
 function getTrashedTaskPatchesRootPath(): string {
 	return join(getRuntimeHomePath(), KANBAN_TRASHED_TASK_PATCHES_DIR_NAME);
 }
 
-function getTaskWorktreePath(repoPath: string, taskId: string): string {
+function getTaskWorktreePath(repoPath: string, taskId: string, baseRootPath = getTaskWorktreesHomePath()): string {
 	const workspaceLabel = getWorkspaceFolderLabelForWorktreePath(repoPath);
-	return join(getWorktreesRootPath(taskId), workspaceLabel);
+	return join(getWorktreesRootPath(taskId, baseRootPath), workspaceLabel);
+}
+
+interface LocatedTaskWorktree {
+	path: string;
+	baseRootPath: string;
+}
+
+async function findLegacyTaskWorktree(repoPath: string, taskId: string): Promise<LocatedTaskWorktree | null> {
+	for (const baseRootPath of getLegacyTaskWorktreeRootPaths()) {
+		const path = getTaskWorktreePath(repoPath, taskId, baseRootPath);
+		if (await pathExists(path)) {
+			return { path, baseRootPath };
+		}
+	}
+	return null;
+}
+
+// Worktrees created before a home move stay in their legacy root until their card finishes.
+// Lookups fall back to those roots; new worktrees are only ever created in the current root.
+async function locateTaskWorktree(repoPath: string, taskId: string): Promise<LocatedTaskWorktree> {
+	const baseRootPath = getTaskWorktreesHomePath();
+	const path = getTaskWorktreePath(repoPath, taskId, baseRootPath);
+	if (await pathExists(path)) {
+		return { path, baseRootPath };
+	}
+	return (await findLegacyTaskWorktree(repoPath, taskId)) ?? { path, baseRootPath };
 }
 
 function getTaskPatchFilePrefix(taskId: string): string {
@@ -443,6 +466,21 @@ export async function ensureTaskWorktreeIfDoesntExist(options: {
 		const context = await loadWorkspaceContext(options.cwd);
 		const taskId = normalizeTaskIdForWorktreePath(options.taskId);
 		const worktreePath = getTaskWorktreePath(context.repoPath, taskId);
+		const located = await locateTaskWorktree(context.repoPath, taskId);
+		if (located.path !== worktreePath) {
+			// A live worktree in a legacy root is used as is. A broken one is not repaired there: the
+			// worktree is recreated in the current root below.
+			const legacyHead = await tryRunGit(located.path, ["rev-parse", "HEAD"]);
+			if (legacyHead) {
+				await syncIgnoredPathsIntoWorktree(context.repoPath, located.path);
+				return {
+					ok: true,
+					path: located.path,
+					baseRef: options.baseRef.trim(),
+					baseCommit: legacyHead,
+				};
+			}
+		}
 		// Investigation note: ensure is called on every task start. The previous implementation
 		// compared the worktree HEAD to the latest baseRef commit and recreated the worktree
 		// when the base branch advanced, which could destroy valid task progress. Existing
@@ -568,8 +606,7 @@ export async function deleteTaskWorktree(options: {
 }): Promise<RuntimeWorktreeDeleteResponse> {
 	try {
 		const taskId = normalizeTaskIdForWorktreePath(options.taskId);
-		const rootPath = getWorktreesBaseRootPath();
-		const worktreePath = getTaskWorktreePath(options.repoPath, taskId);
+		const { path: worktreePath, baseRootPath: rootPath } = await locateTaskWorktree(options.repoPath, taskId);
 		if (!(await pathExists(worktreePath))) {
 			await deleteTaskPatchFiles(taskId);
 			await pruneEmptyParents(rootPath, dirname(worktreePath));
@@ -631,7 +668,7 @@ export async function resolveTaskCwd(options: {
 		return ensured.path;
 	}
 
-	const worktreePath = getTaskWorktreePath(context.repoPath, options.taskId);
+	const { path: worktreePath } = await locateTaskWorktree(context.repoPath, options.taskId);
 	if (await pathExists(worktreePath)) {
 		return worktreePath;
 	}
@@ -655,7 +692,7 @@ export async function getTaskWorkspacePathInfo(options: {
 		throw new Error("Task base branch is required for task workspace info.");
 	}
 
-	const worktreePath = getTaskWorktreePath(repoPath, taskId);
+	const { path: worktreePath } = await locateTaskWorktree(repoPath, taskId);
 	return {
 		taskId,
 		path: worktreePath,

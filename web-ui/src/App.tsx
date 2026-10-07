@@ -62,6 +62,7 @@ import { useTerminalConnectionReady } from "@/runtime/use-terminal-connection-re
 import { useWorkspacePersistence } from "@/runtime/use-workspace-persistence";
 import { saveWorkspaceState } from "@/runtime/workspace-state-query";
 import { findCardSelection } from "@/state/board-state";
+import { setKanbanPaths } from "@/stores/kanban-paths-store";
 import {
 	getTaskWorkspaceInfo,
 	getTaskWorkspaceSnapshot,
@@ -124,6 +125,12 @@ export default function App(): ReactElement {
 		isLoading: isRuntimeProjectConfigLoading,
 		refresh: refreshRuntimeProjectConfig,
 	} = useRuntimeProjectConfig(currentProjectId);
+	useEffect(() => {
+		// Machine-wide paths: keep the last known value while a project switch reloads the config.
+		if (runtimeProjectConfig) {
+			setKanbanPaths(runtimeProjectConfig.kanbanPaths);
+		}
+	}, [runtimeProjectConfig]);
 	const isTaskAgentReady = isTaskAgentSetupSatisfied(runtimeProjectConfig);
 	const settingsWorkspaceId = navigationCurrentProjectId ?? currentProjectId;
 	const { config: settingsRuntimeProjectConfig, refresh: refreshSettingsRuntimeProjectConfig } =

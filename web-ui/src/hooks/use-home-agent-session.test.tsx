@@ -65,6 +65,14 @@ function createRuntimeConfig(overrides: Partial<RuntimeConfigResponse> = {}): Ru
 		effectiveCommand: "codex --dangerously-bypass-approvals-and-sandbox",
 		globalConfigPath: "/tmp/global-config.json",
 		projectConfigPath: "/tmp/project-config.json",
+		kanbanPaths: {
+			homePath: "/tmp/home/.kanban",
+			homeSource: "default",
+			worktreesRootPath: "/tmp/home/.kanban/worktrees",
+			legacyWorktreeRootPaths: [],
+			debugResetTargetPaths: ["/tmp/home/.kanban", "/tmp/home/.kanban/worktrees"],
+			projectConfigDisplayPath: "<project>/.cline/kanban/config.json",
+		},
 		readyForReviewNotificationsEnabled: true,
 		detectedCommands: ["codex", "claude", "cline"],
 		agents: [

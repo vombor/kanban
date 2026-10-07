@@ -4,8 +4,6 @@
 // should stay in focused services instead of accumulating here.
 
 import { rm } from "node:fs/promises";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { TRPCError } from "@trpc/server";
 import type { RuntimeConfigState } from "../config/runtime-config";
 import { updateGlobalRuntimeConfig, updateRuntimeConfig } from "../config/runtime-config";
@@ -25,6 +23,7 @@ import {
 } from "../core/api-validation";
 import { isHomeAgentSessionId } from "../core/home-agent-session";
 import { openInBrowser } from "../server/browser";
+import { getDebugResetTargetPaths } from "../state/kanban-home";
 import { buildRuntimeConfigResponse, resolveAgentCommand } from "../terminal/agent-registry";
 import { deliverTaskInput } from "../terminal/deliver-task-input";
 import type { TerminalSessionManager } from "../terminal/session-manager";
@@ -68,12 +67,6 @@ async function resolveExistingTaskCwdOrEnsure(options: {
 }
 
 export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrpcContext["runtimeApi"] {
-	const debugResetTargetPaths = [
-		join(homedir(), ".cline", "data"),
-		join(homedir(), ".cline", "kanban"),
-		join(homedir(), ".cline", "worktrees"),
-	] as const;
-
 	const buildConfigResponse = (runtimeConfig: RuntimeConfigState) => buildRuntimeConfigResponse(runtimeConfig);
 
 	return {
@@ -316,6 +309,7 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 		},
 		resetAllState: async (_workspaceScope) => {
 			await deps.prepareForStateReset?.();
+			const debugResetTargetPaths = getDebugResetTargetPaths();
 			await Promise.all(
 				debugResetTargetPaths.map(async (path) => {
 					await rm(path, { recursive: true, force: true });
@@ -323,7 +317,7 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 			);
 			return {
 				ok: true,
-				clearedPaths: [...debugResetTargetPaths],
+				clearedPaths: debugResetTargetPaths,
 			};
 		},
 		openFile: async (input) => {

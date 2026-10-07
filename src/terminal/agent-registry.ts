@@ -6,6 +6,7 @@ import {
 	RUNTIME_AGENT_CATALOG,
 } from "../core/agent-catalog";
 import type { RuntimeAgentDefinition, RuntimeAgentId, RuntimeConfigResponse } from "../core/api-contract";
+import { getKanbanPathsSummary } from "../state/kanban-home";
 import { isBinaryAvailableOnPath } from "./command-discovery";
 
 export interface ResolvedAgentCommand {
@@ -139,6 +140,7 @@ export function buildRuntimeConfigResponse(runtimeConfig: RuntimeConfigState): R
 		effectiveCommand,
 		globalConfigPath: runtimeConfig.globalConfigPath,
 		projectConfigPath: runtimeConfig.projectConfigPath,
+		kanbanPaths: getKanbanPathsSummary(),
 		readyForReviewNotificationsEnabled: runtimeConfig.readyForReviewNotificationsEnabled,
 		detectedCommands,
 		agents,

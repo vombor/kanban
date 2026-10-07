@@ -1,5 +1,5 @@
 import type { RuntimeAgentId } from "../core/api-contract";
-import { getTaskWorktreesHomePath } from "../state/workspace-state";
+import { getTaskWorktreeSearchRootPaths } from "../state/kanban-home";
 
 export const WORKSPACE_TRUST_CONFIRM_DELAY_MS = 100;
 
@@ -61,13 +61,14 @@ export function hasClaudeWorkspaceTrustPrompt(text: string): boolean {
 	return /yes,?\s*i\s*trust\s*this\s*folder/u.test(normalized) || /trust\s+this\s+folder/u.test(normalized);
 }
 
+function normalizeTrustPath(path: string): string {
+	const normalized = `${path.replace(/\\/gu, "/").replace(/\/+$/u, "")}/`;
+	return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
 function isTaskWorktreePath(path: string): boolean {
-	const worktreesRoot = `${getTaskWorktreesHomePath().replace(/\\/gu, "/").replace(/\/+$/u, "")}/`;
-	const normalizedPath = `${path.replace(/\\/gu, "/").replace(/\/+$/u, "")}/`;
-	if (process.platform === "win32") {
-		return normalizedPath.toLowerCase().startsWith(worktreesRoot.toLowerCase());
-	}
-	return normalizedPath.startsWith(worktreesRoot);
+	const normalizedPath = normalizeTrustPath(path);
+	return getTaskWorktreeSearchRootPaths().some((root) => normalizedPath.startsWith(normalizeTrustPath(root)));
 }
 
 export function shouldAutoConfirmClaudeWorkspaceTrust(agentId: RuntimeAgentId, cwd: string): boolean {

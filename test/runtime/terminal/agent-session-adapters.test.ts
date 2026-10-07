@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildTaskAgentSettingsForUpdate } from "../../../src/commands/task";
+import { getKanbanHomePath } from "../../../src/state/kanban-home";
 import { parseCopilotConfig, prepareAgentLaunch } from "../../../src/terminal/agent-session-adapters";
 
 const originalHome = process.env.HOME;
@@ -117,7 +118,7 @@ describe("prepareAgentLaunch hook strategies", () => {
 		expect(launchCommand).not.toContain("codex-wrapper");
 		expect(launchCommand).not.toContain("notify=");
 
-		const wrapperPath = join(homedir(), ".cline", "kanban", "hooks", "codex", "codex-wrapper.mjs");
+		const wrapperPath = join(getKanbanHomePath(), "hooks", "codex", "codex-wrapper.mjs");
 		expect(existsSync(wrapperPath)).toBe(false);
 	});
 
@@ -200,7 +201,7 @@ describe("prepareAgentLaunch hook strategies", () => {
 			workspaceId: "workspace-1",
 		});
 
-		const settingsPath = join(homedir(), ".cline", "kanban", "hooks", "claude", "settings.json");
+		const settingsPath = join(getKanbanHomePath(), "hooks", "claude", "settings.json");
 		const settings = JSON.parse(readFileSync(settingsPath, "utf8")) as {
 			hooks?: Record<string, unknown>;
 		};
@@ -222,14 +223,14 @@ describe("prepareAgentLaunch hook strategies", () => {
 			workspaceId: "workspace-1",
 		});
 
-		const settingsPath = join(homedir(), ".cline", "kanban", "hooks", "gemini", "settings.json");
+		const settingsPath = join(getKanbanHomePath(), "hooks", "gemini", "settings.json");
 		const settings = JSON.parse(readFileSync(settingsPath, "utf8")) as {
 			hooks?: Record<string, Array<{ hooks?: Array<{ command?: string }> }>>;
 		};
 		const afterToolCommand = settings.hooks?.AfterTool?.[0]?.hooks?.[0]?.command;
 		expect(afterToolCommand).toContain("hooks");
 		expect(afterToolCommand).toContain("gemini-hook");
-		const hookScriptPath = join(homedir(), ".cline", "kanban", "hooks", "gemini", "gemini-hook.mjs");
+		const hookScriptPath = join(getKanbanHomePath(), "hooks", "gemini", "gemini-hook.mjs");
 		expect(existsSync(hookScriptPath)).toBe(false);
 	});
 
@@ -245,7 +246,7 @@ describe("prepareAgentLaunch hook strategies", () => {
 			workspaceId: "workspace-1",
 		});
 
-		const pluginPath = join(homedir(), ".cline", "kanban", "hooks", "opencode", "kanban.js");
+		const pluginPath = join(getKanbanHomePath(), "hooks", "opencode", "kanban.js");
 		const plugin = readFileSync(pluginPath, "utf8");
 		expect(plugin).toContain("parentID");
 		expect(plugin).toContain('"permission.ask"');

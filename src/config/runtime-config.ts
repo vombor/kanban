@@ -3,14 +3,22 @@
 // shortcuts, and prompt templates, not SDK-owned Cline secrets or OAuth data.
 import { readFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { getRuntimeAgentCatalogEntry, isRuntimeAgentLaunchSupported } from "../core/agent-catalog";
 import type { RuntimeAgentId, RuntimeProjectShortcut } from "../core/api-contract";
 import { type LockRequest, lockedFileSystem } from "../fs/locked-file-system";
+import {
+	getKanbanGlobalConfigPath,
+	getProjectKanbanConfigPath,
+	KANBAN_HOME_MARKER_VERSION,
+	shouldMarkKanbanHome,
+} from "../state/kanban-home";
 import { detectInstalledCommands } from "../terminal/agent-registry";
 import { areRuntimeProjectShortcutsEqual } from "./shortcut-utils";
 
 interface RuntimeGlobalConfigFileShape {
+	/** Initialized-home marker, see kanban-home.ts. */
+	home?: number;
 	selectedAgentId?: RuntimeAgentId;
 	selectedShortcutLabel?: string;
 	agentAutonomousModeEnabled?: boolean;
@@ -47,12 +55,15 @@ export interface RuntimeConfigUpdateInput {
 	openPrPromptTemplate?: string;
 }
 
-const RUNTIME_HOME_PARENT_DIR = ".cline";
-const RUNTIME_HOME_DIR = "kanban";
-const CONFIG_FILENAME = "config.json";
-const PROJECT_CONFIG_PARENT_DIR = ".cline";
-const PROJECT_CONFIG_DIR = "kanban";
-const PROJECT_CONFIG_FILENAME = "config.json";
+// Keys this module rewrites. Every other key in the global config.json (home-resolver and team settings) is preserved.
+const MANAGED_GLOBAL_CONFIG_KEYS: ReadonlySet<string> = new Set([
+	"selectedAgentId",
+	"selectedShortcutLabel",
+	"agentAutonomousModeEnabled",
+	"readyForReviewNotificationsEnabled",
+	"commitPromptTemplate",
+	"openPrPromptTemplate",
+]);
 const DEFAULT_AGENT_ID: RuntimeAgentId = "cline";
 const AUTO_SELECT_AGENT_PRIORITY: readonly RuntimeAgentId[] = ["claude", "codex", "droid", "kiro"];
 const DEFAULT_AGENT_AUTONOMOUS_MODE_ENABLED = true;
@@ -110,10 +121,6 @@ export function pickBestInstalledAgentIdFromDetected(detectedCommands: readonly 
 		}
 	}
 	return null;
-}
-
-function getRuntimeHomePath(): string {
-	return join(homedir(), RUNTIME_HOME_PARENT_DIR, RUNTIME_HOME_DIR);
 }
 
 function normalizeAgentId(rawAgentId: RuntimeAgentId | string | null | undefined): RuntimeAgentId {
@@ -204,11 +211,11 @@ function hasOwnKey<T extends object>(value: T | null, key: keyof T): boolean {
 }
 
 export function getRuntimeGlobalConfigPath(): string {
-	return join(getRuntimeHomePath(), CONFIG_FILENAME);
+	return getKanbanGlobalConfigPath();
 }
 
 export function getRuntimeProjectConfigPath(cwd: string): string {
-	return join(resolve(cwd), PROJECT_CONFIG_PARENT_DIR, PROJECT_CONFIG_DIR, PROJECT_CONFIG_FILENAME);
+	return getProjectKanbanConfigPath(cwd);
 }
 
 interface RuntimeConfigPaths {
@@ -344,7 +351,15 @@ async function writeRuntimeGlobalConfigFile(
 			? DEFAULT_OPEN_PR_PROMPT_TEMPLATE
 			: normalizePromptTemplate(config.openPrPromptTemplate, DEFAULT_OPEN_PR_PROMPT_TEMPLATE);
 
-	const payload: RuntimeGlobalConfigFileShape = {};
+	const payload: RuntimeGlobalConfigFileShape & Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(existing ?? {})) {
+		if (!MANAGED_GLOBAL_CONFIG_KEYS.has(key)) {
+			payload[key] = value;
+		}
+	}
+	if (shouldMarkKanbanHome()) {
+		payload.home = KANBAN_HOME_MARKER_VERSION;
+	}
 	if (selectedAgentId !== undefined) {
 		if (hasOwnKey(existing, "selectedAgentId") || selectedAgentId !== DEFAULT_AGENT_ID) {
 			payload.selectedAgentId = selectedAgentId;

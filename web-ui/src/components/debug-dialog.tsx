@@ -1,5 +1,5 @@
 import { Bug, RotateCcw } from "lucide-react";
-import { type ReactElement, useEffect, useState } from "react";
+import { Fragment, type ReactElement, type ReactNode, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -17,6 +17,23 @@ import {
 	DialogHeader,
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
+import { useKanbanPaths } from "@/stores/kanban-paths-store";
+import { formatPathForDisplay } from "@/utils/path-display";
+
+function renderResetTargetPaths(paths: readonly string[] | null): ReactNode {
+	if (!paths || paths.length === 0) {
+		return "Kanban's state directories";
+	}
+	return paths.map((path, index) => {
+		const separator = index === 0 ? "" : index === paths.length - 1 ? (paths.length > 2 ? ", and " : " and ") : ", ";
+		return (
+			<Fragment key={path}>
+				{separator}
+				<code>{formatPathForDisplay(path)}</code>
+			</Fragment>
+		);
+	});
+}
 
 export function DebugDialog({
 	open,
@@ -31,6 +48,7 @@ export function DebugDialog({
 	onShowStartupOnboardingDialog: () => void;
 	onResetAllState: () => void;
 }): ReactElement {
+	const resetTargetPaths = useKanbanPaths()?.debugResetTargetPaths ?? null;
 	const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
 
 	useEffect(() => {
@@ -62,8 +80,8 @@ export function DebugDialog({
 					<div className="rounded-md border border-border bg-surface-2 p-3">
 						<p className="text-sm font-medium text-text-primary">Reset all state</p>
 						<p className="mt-1 text-xs text-text-secondary">
-							Clears browser local storage and removes <code>~/.cline/data</code>, <code>~/.cline/kanban</code>,
-							and <code>~/.cline/worktrees</code>. Kanban reloads after completion.
+							Clears browser local storage and removes {renderResetTargetPaths(resetTargetPaths)}. Kanban reloads
+							after completion.
 						</p>
 						<Button
 							variant="danger"
@@ -90,8 +108,7 @@ export function DebugDialog({
 				</AlertDialogHeader>
 				<AlertDialogBody>
 					<AlertDialogDescription>
-						This removes local browser storage and deletes <code>~/.cline/data</code>,{" "}
-						<code>~/.cline/kanban</code>, and <code>~/.cline/worktrees</code>.
+						This removes local browser storage and deletes {renderResetTargetPaths(resetTargetPaths)}.
 					</AlertDialogDescription>
 					<p className="text-text-primary">This action cannot be undone.</p>
 				</AlertDialogBody>
