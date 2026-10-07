@@ -267,6 +267,24 @@ describe("kanban task create", () => {
 		});
 	});
 
+	it("--role qa: a non-dev card gets no dev assignment and keeps the creator's agent", async () => {
+		await withTemporaryKanbanHome(async () => {
+			writeConfig(teamWorkspace());
+			const result = await create({ role: "qa", agentId: "codex" });
+			const [card] = backlogCards();
+			expect(card).toMatchObject({ role: "qa", agentId: "codex" });
+			expect(card?.agentSettings).toBeUndefined();
+			expect(result).not.toHaveProperty("devAssignment");
+			expect(result).toMatchObject({ task: { role: "qa", agentId: "codex" } });
+			expect(readLog()).toEqual([]);
+
+			// Without an agent it runs on the selected agent, not on the kit's dev routing.
+			await create({ title: "Triage", prompt: "Triage", role: "triage" });
+			expect(backlogCards().find((candidate) => candidate.role === "triage")?.agentId).toBeUndefined();
+			expect(readLog()).toEqual([]);
+		});
+	});
+
 	it("shadow: the proposal is logged, not applied", async () => {
 		await withTemporaryKanbanHome(async () => {
 			writeConfig(teamWorkspace({ pipeline: { shadow: true } }));

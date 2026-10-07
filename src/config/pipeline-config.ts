@@ -10,13 +10,14 @@
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
 
+import { type RuntimeLandingMode, runtimeLandingModeSchema } from "../core/api-contract";
 import { lockedFileSystem } from "../fs/locked-file-system";
 import { getKanbanGlobalConfigPath, KANBAN_HOME_MARKER_VERSION, shouldMarkKanbanHome } from "../state/kanban-home";
 import { clineTurnDetectorModeSchema, getDefaultClineTurnDetectorSettings } from "./cline-turn-detector-config";
 import { DEFAULT_LEMONADE_MODEL_LIST_SETTINGS } from "./model-lists-config";
 
-export const landingModeSchema = z.enum(["off", "commit", "pr", "qa"]);
-export type LandingMode = z.infer<typeof landingModeSchema>;
+export const landingModeSchema = runtimeLandingModeSchema;
+export type LandingMode = RuntimeLandingMode;
 
 /** The kit a workspace uses. Overrides are dotted kit keys (`"qa.blurb"`) → value (§3.4). */
 export const workspaceKitRefSchema = z

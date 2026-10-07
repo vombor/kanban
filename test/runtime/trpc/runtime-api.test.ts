@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { RuntimeConfigState } from "../../../src/config/runtime-config";
@@ -39,8 +39,10 @@ vi.mock("../../../src/server/browser.js", () => ({
 	openInBrowser: browserMocks.openInBrowser,
 }));
 
+import { getKanbanGlobalConfigPath } from "../../../src/state/kanban-home";
 import type { RuntimeTrpcContext } from "../../../src/trpc/app-router";
 import { type CreateRuntimeApiDependencies, createRuntimeApi } from "../../../src/trpc/runtime-api";
+import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
 
 type OptionalRuntimeApiDependency =
 	| "getUpdateStatus"
@@ -521,5 +523,37 @@ describe("createRuntimeApi deliverTaskInput", () => {
 
 		expect(response).toMatchObject({ ok: false, status: "error" });
 		expect(response.error).toMatch(/taskId cannot be empty/);
+	});
+});
+
+describe("createRuntimeApi loadConfig landing mode", () => {
+	beforeEach(() => {
+		agentRegistryMocks.buildRuntimeConfigResponse.mockReset();
+		agentRegistryMocks.buildRuntimeConfigResponse.mockReturnValue({ selectedAgentId: "claude" });
+	});
+
+	it("reports the scoped workspace's landing mode, `off` without an entry, and nothing without a workspace", async () => {
+		await withTemporaryKanbanHome(async () => {
+			const configPath = getKanbanGlobalConfigPath();
+			mkdirSync(dirname(configPath), { recursive: true });
+			writeFileSync(configPath, JSON.stringify({ workspaces: { foo: { landing: { mode: "qa" } } } }));
+			const runtimeConfig = createRuntimeConfigState();
+			const api = createTestRuntimeApi({
+				getActiveWorkspaceId: vi.fn(() => "foo"),
+				getActiveRuntimeConfig: vi.fn(() => runtimeConfig),
+				loadScopedRuntimeConfig: vi.fn(async () => runtimeConfig),
+				setActiveRuntimeConfig: vi.fn(),
+				getScopedTerminalManager: vi.fn(),
+				resolveInteractiveShellCommand: vi.fn(),
+			});
+
+			expect(await api.loadConfig({ workspaceId: "foo", workspacePath: "/repo/foo" })).toMatchObject({
+				landingMode: "qa",
+			});
+			expect(await api.loadConfig({ workspaceId: "bar", workspacePath: "/repo/bar" })).toMatchObject({
+				landingMode: "off",
+			});
+			expect(await api.loadConfig(null)).not.toHaveProperty("landingMode");
+		});
 	});
 });

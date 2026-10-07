@@ -342,6 +342,18 @@ describe("BoardCard", () => {
 		expect(container.textContent).not.toContain("trash-task-1/kanban");
 	});
 
+	it("shows a role badge on QA, TRIAGE and calibration cards and none on dev cards", async () => {
+		await act(async () => {
+			root.render(<BoardCard card={createCard({ role: "qa" })} index={0} columnId="review" />);
+		});
+		expect(container.querySelector('[data-testid="board-card-role-badge"]')?.textContent).toBe("QA");
+
+		await act(async () => {
+			root.render(<BoardCard card={createCard({})} index={0} columnId="review" />);
+		});
+		expect(container.querySelector('[data-testid="board-card-role-badge"]')).toBeNull();
+	});
+
 	it("shows agent override details with the model and effort verbatim", async () => {
 		await act(async () => {
 			root.render(

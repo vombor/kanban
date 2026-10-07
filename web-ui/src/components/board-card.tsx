@@ -14,7 +14,7 @@ import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import { useKanbanPaths } from "@/stores/kanban-paths-store";
 import { useTaskWorkspaceSnapshotValue } from "@/stores/workspace-metadata-store";
 import type { BoardCard as BoardCardModel, BoardColumnId } from "@/types";
-import { getTaskAutoReviewCancelButtonLabel } from "@/types";
+import { getTaskAutoReviewCancelButtonLabel, getTaskRoleBadgeLabel } from "@/types";
 import { formatPathForDisplay } from "@/utils/path-display";
 import { useMeasure } from "@/utils/react-use";
 import {
@@ -262,6 +262,7 @@ export const BoardCard = memo(function BoardCard({
 	const [isHovered, setIsHovered] = useState(false);
 	const [isEditingTitle, setIsEditingTitle] = useState(false);
 	const [draftTitle, setDraftTitle] = useState(card.title);
+	const roleBadgeLabel = getTaskRoleBadgeLabel(card.role);
 	const titleInputRef = useRef<HTMLInputElement | null>(null);
 	const titleEditCancelledRef = useRef(false);
 	const [descriptionContainerRef, descriptionRect] = useMeasure<HTMLDivElement>();
@@ -606,6 +607,14 @@ export const BoardCard = memo(function BoardCard({
 										</p>
 									)}
 								</div>
+								{roleBadgeLabel ? (
+									<span
+										data-testid="board-card-role-badge"
+										className="shrink-0 rounded-sm border border-border-bright px-1 text-[10px] font-medium text-status-purple"
+									>
+										{roleBadgeLabel}
+									</span>
+								) : null}
 								{columnId === "backlog" ? (
 									<Button
 										icon={<Play size={14} />}

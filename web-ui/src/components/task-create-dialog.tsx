@@ -29,14 +29,9 @@ import { Dialog, DialogBody, DialogFooter, DialogHeader } from "@/components/ui/
 import { NativeSelect } from "@/components/ui/native-select";
 import type { RuntimeAgentId, RuntimeDevAssignmentResponse, RuntimeTaskAgentSettings } from "@/runtime/types";
 import { LocalStorageKey } from "@/storage/local-storage-store";
-import type { TaskAutoReviewMode, TaskImage } from "@/types";
+import { getTaskAutoReviewModeOptions, type TaskAutoReviewMode, type TaskImage } from "@/types";
 import { isMacPlatform, pasteShortcutLabel } from "@/utils/platform";
 import { useRawLocalStorageValue } from "@/utils/react-use";
-
-const AUTO_REVIEW_MODE_OPTIONS: Array<{ value: TaskAutoReviewMode; label: string }> = [
-	{ value: "commit", label: "Make commit" },
-	{ value: "pr", label: "Make PR" },
-];
 
 type TaskCreateStartAction = "start" | "start_and_open";
 
@@ -114,6 +109,7 @@ export function TaskCreateDialog({
 	onAutoReviewEnabledChange,
 	autoReviewMode,
 	onAutoReviewModeChange,
+	qaLandingAvailable = false,
 	startInPlanModeDisabled = false,
 	workspaceId,
 	branchRef,
@@ -143,6 +139,8 @@ export function TaskCreateDialog({
 	onAutoReviewEnabledChange: (value: boolean) => void;
 	autoReviewMode: TaskAutoReviewMode;
 	onAutoReviewModeChange: (value: TaskAutoReviewMode) => void;
+	/** The workspace has landing mode qa, so a card may pick "QA, then land". */
+	qaLandingAvailable?: boolean;
 	startInPlanModeDisabled?: boolean;
 	workspaceId: string | null;
 	branchRef: string;
@@ -548,11 +546,13 @@ export function TaskCreateDialog({
 							onChange={(e) => onAutoReviewModeChange(e.currentTarget.value as TaskAutoReviewMode)}
 							style={{ width: "16ch", maxWidth: "100%" }}
 						>
-							{AUTO_REVIEW_MODE_OPTIONS.map((option) => (
-								<option key={option.value} value={option.value}>
-									{option.label}
-								</option>
-							))}
+							{getTaskAutoReviewModeOptions({ qaLandingAvailable, currentMode: autoReviewMode }).map(
+								(option) => (
+									<option key={option.value} value={option.value}>
+										{option.label}
+									</option>
+								),
+							)}
 						</NativeSelect>
 					</div>
 

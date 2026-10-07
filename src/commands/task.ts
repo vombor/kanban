@@ -6,10 +6,17 @@ import type {
 	RuntimeBoardColumnId,
 	RuntimeBoardDependency,
 	RuntimeTaskAgentSettings,
+	RuntimeTaskAutoReviewMode,
+	RuntimeTaskRole,
 	RuntimeTaskTrashAutoStart,
 	RuntimeWorkspaceStateResponse,
 } from "../core/api-contract";
-import { runtimeAgentIdEnumSchema, runtimeAgentIdSchema } from "../core/api-contract";
+import {
+	runtimeAgentIdEnumSchema,
+	runtimeAgentIdSchema,
+	runtimeTaskAutoReviewModeSchema,
+	runtimeTaskRoleSchema,
+} from "../core/api-contract";
 import { getKanbanRuntimeOrigin } from "../core/runtime-endpoint";
 import { cloneRuntimeTaskAgentSettings } from "../core/task-agent-settings";
 import {
@@ -76,14 +83,26 @@ function parseListColumn(value: string | undefined): ListTaskColumn | undefined 
 	throw new Error(`Invalid column "${value}". Expected one of: ${LIST_TASK_COLUMNS.join(", ")}, done.`);
 }
 
-function parseAutoReviewMode(value: string | undefined): "commit" | "pr" | undefined {
+function parseAutoReviewMode(value: string | undefined): RuntimeTaskAutoReviewMode | undefined {
 	if (value === undefined) {
 		return undefined;
 	}
-	if (value === "commit" || value === "pr") {
-		return value;
+	const parsed = runtimeTaskAutoReviewModeSchema.safeParse(value);
+	if (parsed.success) {
+		return parsed.data;
 	}
-	throw new Error(`Invalid auto review mode "${value}". Expected: commit, pr.`);
+	throw new Error(`Invalid auto review mode "${value}". Expected: commit, pr, qa.`);
+}
+
+function parseTaskRole(value: string | undefined): RuntimeTaskRole | undefined {
+	if (value === undefined) {
+		return undefined;
+	}
+	const parsed = runtimeTaskRoleSchema.safeParse(value);
+	if (parsed.success) {
+		return parsed.data;
+	}
+	throw new Error(`Invalid role "${value}". Expected: ${runtimeTaskRoleSchema.options.join(", ")}.`);
 }
 
 const VALID_AGENT_IDS = runtimeAgentIdEnumSchema.options;
@@ -361,6 +380,7 @@ function formatTaskRecord(
 		startInPlanMode: task.startInPlanMode,
 		autoReviewEnabled: task.autoReviewEnabled === true,
 		autoReviewMode: task.autoReviewMode ?? "commit",
+		...(task.role ? { role: task.role } : {}),
 		...(task.agentId ? { agentId: task.agentId } : {}),
 		...formatTaskAgentSettings(task.agentSettings),
 		createdAt: task.createdAt,
@@ -504,7 +524,8 @@ export async function createTask(input: {
 	baseRef?: string;
 	startInPlanMode?: boolean;
 	autoReviewEnabled?: boolean;
-	autoReviewMode?: "commit" | "pr";
+	autoReviewMode?: RuntimeTaskAutoReviewMode;
+	role?: RuntimeTaskRole;
 	/** null = explicitly the selected agent (`--agent-id default`); the kit's devAssignment is then not applied. */
 	agentId?: RuntimeAgentId | null;
 	agentSettings?: RuntimeTaskAgentSettings;
@@ -515,14 +536,20 @@ export async function createTask(input: {
 	if (shouldWarnOnExplicitAgentId(input.agentId)) {
 		warnOnAgentSettingsMechanismGaps(input.agentId, input.agentSettings);
 	}
-	const devAssignment = await resolveDevAssignment({
-		workspaceId,
-		title: input.title ?? "",
-		prompt: input.prompt,
-		agentId: input.agentId,
-		agentSettings: input.agentSettings,
-	});
-	reportDevAssignment(devAssignment);
+	// devAssignment answers for dev cards only: a QA, TRIAGE or calibration card is created as its creator set it.
+	const devAssignment =
+		(input.role ?? "dev") === "dev"
+			? await resolveDevAssignment({
+					workspaceId,
+					title: input.title ?? "",
+					prompt: input.prompt,
+					agentId: input.agentId,
+					agentSettings: input.agentSettings,
+				})
+			: null;
+	if (devAssignment) {
+		reportDevAssignment(devAssignment);
+	}
 	const created = await updateRuntimeWorkspaceState(runtimeClient, workspaceRepoPath, (state) => {
 		const resolvedBaseRef = (input.baseRef ?? "").trim() || resolveTaskBaseRef(state);
 		if (!resolvedBaseRef) {
@@ -537,8 +564,9 @@ export async function createTask(input: {
 				startInPlanMode: input.startInPlanMode,
 				autoReviewEnabled: input.autoReviewEnabled,
 				autoReviewMode: input.autoReviewMode,
-				agentId: devAssignment.agentId,
-				agentSettings: devAssignment.agentSettings,
+				role: input.role,
+				agentId: devAssignment ? devAssignment.agentId : (input.agentId ?? undefined),
+				agentSettings: devAssignment ? devAssignment.agentSettings : input.agentSettings,
 				baseRef: resolvedBaseRef,
 			},
 			() => globalThis.crypto.randomUUID(),
@@ -549,13 +577,17 @@ export async function createTask(input: {
 		};
 	});
 
-	await recordDevAssignment(devAssignment, created).catch((error: unknown) => {
-		process.stderr.write(`Warning: could not log the kit's agent proposal: ${toErrorMessage(error)}\n`);
-	});
+	if (devAssignment) {
+		await recordDevAssignment(devAssignment, created).catch((error: unknown) => {
+			process.stderr.write(`Warning: could not log the kit's agent proposal: ${toErrorMessage(error)}\n`);
+		});
+	}
 
 	return {
 		ok: true,
-		...(devAssignment.outcome === "none" ? {} : { devAssignment: formatDevAssignment(devAssignment) }),
+		...(!devAssignment || devAssignment.outcome === "none"
+			? {}
+			: { devAssignment: formatDevAssignment(devAssignment) }),
 		task: {
 			id: created.id,
 			column: "backlog",
@@ -566,6 +598,7 @@ export async function createTask(input: {
 			startInPlanMode: created.startInPlanMode,
 			autoReviewEnabled: created.autoReviewEnabled === true,
 			autoReviewMode: created.autoReviewMode ?? "commit",
+			...(created.role ? { role: created.role } : {}),
 			...(created.agentId ? { agentId: created.agentId } : {}),
 			...formatTaskAgentSettings(created.agentSettings),
 		},
@@ -581,7 +614,7 @@ async function updateTaskCommand(input: {
 	baseRef?: string;
 	startInPlanMode?: boolean;
 	autoReviewEnabled?: boolean;
-	autoReviewMode?: "commit" | "pr";
+	autoReviewMode?: RuntimeTaskAutoReviewMode;
 	agentId?: RuntimeAgentId | null;
 	providerId?: string | null;
 	modelId?: string | null;
@@ -1140,7 +1173,16 @@ export function registerTaskCommand(program: Command): void {
 		.option("--base-ref <branch>", "Task base branch/ref.")
 		.option("--start-in-plan-mode [value]", "Set plan mode (true|false). Flag-only implies true.")
 		.option("--auto-review-enabled [value]", "Enable auto-review behavior (true|false). Flag-only implies true.")
-		.option("--auto-review-mode <mode>", "Auto-review mode: commit | pr.", parseAutoReviewMode)
+		.option(
+			"--auto-review-mode <mode>",
+			"Auto-review mode: commit | pr | qa (qa: the pipeline QA-gates the card and Kanban lands it; for landing mode qa).",
+			parseAutoReviewMode,
+		)
+		.option(
+			"--role <role>",
+			"Card role: dev (default) | qa | triage | calibration. Only dev cards are QA'd or reworked.",
+			parseTaskRole,
+		)
 		.option(
 			"--agent-id <id>",
 			'Agent override: cline | claude | codex | copilot | droid | gemini | opencode | kiro | default. Without --agent-id, --provider or --model, the project\'s routing kit may choose the agent and model; "default" keeps the selected agent.',
@@ -1159,7 +1201,8 @@ export function registerTaskCommand(program: Command): void {
 				baseRef?: string;
 				startInPlanMode?: unknown;
 				autoReviewEnabled?: unknown;
-				autoReviewMode?: "commit" | "pr";
+				autoReviewMode?: RuntimeTaskAutoReviewMode;
+				role?: RuntimeTaskRole;
 				agentId?: string;
 				provider?: string;
 				model?: string;
@@ -1179,6 +1222,7 @@ export function registerTaskCommand(program: Command): void {
 							startInPlanMode: parseOptionalBooleanOption(options.startInPlanMode, "--start-in-plan-mode"),
 							autoReviewEnabled: parseOptionalBooleanOption(options.autoReviewEnabled, "--auto-review-enabled"),
 							autoReviewMode: options.autoReviewMode,
+							role: options.role,
 							agentId: parseAgentId(options.agentId),
 							agentSettings: buildTaskAgentSettingsForCreate({
 								providerId:
@@ -1218,7 +1262,11 @@ export function registerTaskCommand(program: Command): void {
 		.option("--base-ref <branch>", "Replacement base branch/ref.")
 		.option("--start-in-plan-mode [value]", "Set plan mode (true|false). Flag-only implies true.")
 		.option("--auto-review-enabled [value]", "Enable auto-review behavior (true|false). Flag-only implies true.")
-		.option("--auto-review-mode <mode>", "Auto-review mode: commit | pr.", parseAutoReviewMode)
+		.option(
+			"--auto-review-mode <mode>",
+			"Auto-review mode: commit | pr | qa (qa: the pipeline QA-gates the card and Kanban lands it; for landing mode qa).",
+			parseAutoReviewMode,
+		)
 		.option(
 			"--agent-id <id>",
 			'Agent override: cline | claude | codex | copilot | droid | gemini | opencode | kiro. Use "default" to clear.',
@@ -1247,7 +1295,7 @@ export function registerTaskCommand(program: Command): void {
 				baseRef?: string;
 				startInPlanMode?: unknown;
 				autoReviewEnabled?: unknown;
-				autoReviewMode?: "commit" | "pr";
+				autoReviewMode?: RuntimeTaskAutoReviewMode;
 				agentId?: string;
 				provider?: string;
 				model?: string;

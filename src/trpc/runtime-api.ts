@@ -5,9 +5,11 @@
 
 import { rm } from "node:fs/promises";
 import { TRPCError } from "@trpc/server";
+import { getWorkspacePipelineSettings, readPipelineConfig } from "../config/pipeline-config";
 import type { RuntimeConfigState } from "../config/runtime-config";
 import { updateGlobalRuntimeConfig, updateRuntimeConfig } from "../config/runtime-config";
 import type {
+	RuntimeConfigResponse,
 	RuntimeProcessSweepResponse,
 	RuntimeRunUpdateResponse,
 	RuntimeUpdateStatusResponse,
@@ -70,8 +72,20 @@ async function resolveExistingTaskCwdOrEnsure(options: {
 }
 
 export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrpcContext["runtimeApi"] {
-	const buildConfigResponse = (runtimeConfig: RuntimeConfigState) =>
-		buildRuntimeConfigResponse(runtimeConfig, { sessionSyncEnabled: deps.sessionSyncEnabled });
+	const buildConfigResponse = async (
+		runtimeConfig: RuntimeConfigState,
+		workspaceScope: RuntimeTrpcWorkspaceScope | null,
+	): Promise<RuntimeConfigResponse> => {
+		const response = buildRuntimeConfigResponse(runtimeConfig, { sessionSyncEnabled: deps.sessionSyncEnabled });
+		if (!workspaceScope) {
+			return response;
+		}
+		// The UI offers "qa" cards only on a workspace with landing mode qa. A config.json it can't read means `off`.
+		const landingMode = await readPipelineConfig()
+			.then(({ config }) => getWorkspacePipelineSettings(config, workspaceScope.workspaceId).landing.mode)
+			.catch(() => "off" as const);
+		return { ...response, landingMode };
+	};
 
 	return {
 		loadConfig: async (workspaceScope) => {
@@ -87,7 +101,7 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 			} else {
 				throw new Error("No active runtime config provider is available.");
 			}
-			return buildConfigResponse(scopedRuntimeConfig);
+			return await buildConfigResponse(scopedRuntimeConfig, workspaceScope);
 		},
 		saveConfig: async (workspaceScope, input) => {
 			const parsed = parseRuntimeConfigSaveRequest(input);
@@ -110,7 +124,7 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 			if (!workspaceScope) {
 				deps.setActiveRuntimeConfig(nextRuntimeConfig);
 			}
-			return buildConfigResponse(nextRuntimeConfig);
+			return await buildConfigResponse(nextRuntimeConfig, workspaceScope);
 		},
 		startTaskSession: async (workspaceScope, input) => {
 			try {

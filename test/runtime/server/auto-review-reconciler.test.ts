@@ -161,6 +161,87 @@ describe("auto-review reconciler", () => {
 		expect(harness.onBoardMutated).toHaveBeenCalled();
 	});
 
+	it("leaves qa-mode cards to the pipeline and never auto-reviews QA, TRIAGE or calibration cards", async () => {
+		const harness = createHarness({
+			board: createBoard({
+				review: [
+					createCard({ id: "qa-mode", autoReviewEnabled: true, autoReviewMode: "qa" }),
+					createCard({ id: "qa-card", autoReviewEnabled: true, role: "qa" }),
+					createCard({ id: "triage", autoReviewEnabled: true, role: "triage" }),
+					createCard({ id: "calibration", autoReviewEnabled: true, autoReviewMode: "pr", role: "calibration" }),
+				],
+			}),
+		});
+		for (const taskId of ["qa-mode", "qa-card", "triage", "calibration"]) {
+			harness.setProbe(taskId, { exists: true, headCommit: "commit-1", changedFiles: 3 });
+		}
+
+		await harness.evaluate();
+
+		expect(harness.probeTaskWorkspace).not.toHaveBeenCalled();
+		expect(harness.terminal.writeInput).not.toHaveBeenCalled();
+		expect(harness.store.stored.revision).toBe(1);
+	});
+
+	it("disarms an armed card whose mode switched to qa, and never completes it", async () => {
+		const harness = createHarness({
+			board: createBoard({
+				review: [
+					createCard({
+						id: "task-1",
+						autoReviewEnabled: true,
+						autoReviewMode: "qa",
+						pendingGitAction: {
+							action: "commit",
+							requestedAt: Date.now(),
+							headCommitAtRequest: "c1",
+							attempt: 0,
+						},
+					}),
+				],
+			}),
+		});
+		harness.setProbe("task-1", { exists: true, headCommit: "c2", changedFiles: 0 });
+
+		await harness.evaluate();
+
+		const card = findCardInBoard(harness.store.stored.board, "task-1");
+		expect(card?.columnId).toBe("review");
+		expect(card?.card.pendingGitAction ?? null).toBeNull();
+		expect(harness.trashEffects.stopTaskSession).not.toHaveBeenCalled();
+	});
+
+	it("delivers to the agent the session runs on, over card.agentId and the selected agent", async () => {
+		const deliver = vi.fn(
+			async (): Promise<DeliverTaskInputResult> => ({
+				ok: true,
+				status: "delivered",
+				evidence: "hook",
+				enterAttempts: 1,
+				summary: null,
+			}),
+		);
+		const harness = createHarness({
+			board: createBoard({ review: [createCard({ id: "task-1", autoReviewEnabled: true, agentId: "cline" })] }),
+			selectedAgentId: "codex",
+			deliverTaskInput: deliver,
+		});
+		harness.terminal.getSummary.mockImplementation(
+			(taskId: string) => ({ taskId, agentId: "claude" }) as unknown as RuntimeTaskSessionSummary,
+		);
+		harness.setProbe("task-1", { exists: true, headCommit: "commit-1", changedFiles: 3 });
+
+		await harness.evaluate();
+		await vi.runAllTimersAsync();
+
+		expect(deliver).toHaveBeenCalledWith(
+			harness.terminal.manager,
+			"task-1",
+			expect.any(String),
+			expect.objectContaining({ agentId: "claude" }),
+		);
+	});
+
 	it("completes an armed card from persisted state after a runtime restart", async () => {
 		const armedCard = createCard({
 			id: "task-1",

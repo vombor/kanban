@@ -8,6 +8,7 @@ import type {
 	RuntimeTaskAutoReviewMode,
 	RuntimeTaskImage,
 	RuntimeTaskPendingGitAction,
+	RuntimeTaskRole,
 } from "./api-contract";
 import { cloneRuntimeTaskAgentSettings } from "./task-agent-settings";
 import { createUniqueTaskId } from "./task-id";
@@ -32,6 +33,8 @@ export interface RuntimeCreateTaskInput {
 	startInPlanMode?: boolean;
 	autoReviewEnabled?: boolean;
 	autoReviewMode?: RuntimeTaskAutoReviewMode;
+	/** Omitted = a `dev` card. */
+	role?: RuntimeTaskRole;
 	images?: RuntimeTaskImage[];
 	agentId?: RuntimeAgentId;
 	agentSettings?: RuntimeTaskAgentSettings;
@@ -51,7 +54,7 @@ export interface RuntimeUpdateTaskInput {
 }
 
 function normalizeTaskAutoReviewMode(value: RuntimeTaskAutoReviewMode | null | undefined): RuntimeTaskAutoReviewMode {
-	if (value === "pr") {
+	if (value === "pr" || value === "qa") {
 		return value;
 	}
 	return "commit";
@@ -307,6 +310,7 @@ export function addTaskToColumn(
 		startInPlanMode: Boolean(input.startInPlanMode),
 		autoReviewEnabled: Boolean(input.autoReviewEnabled),
 		autoReviewMode: normalizeTaskAutoReviewMode(input.autoReviewMode),
+		...(input.role && input.role !== "dev" ? { role: input.role } : {}),
 		images: cloneTaskImages(input.images),
 		...(input.agentId ? { agentId: input.agentId } : {}),
 		...(input.agentSettings !== undefined

@@ -167,6 +167,7 @@ export default function App(): ReactElement {
 	const readyForReviewNotificationsEnabled = runtimeProjectConfig?.readyForReviewNotificationsEnabled ?? true;
 	// Defaults to the runtime's default until the config arrives, so the board never moves cards the runtime also moves.
 	const sessionSyncEnabled = runtimeProjectConfig?.sessionSyncEnabled ?? true;
+	const qaLandingAvailable = runtimeProjectConfig?.landingMode === "qa";
 	const shortcuts = runtimeProjectConfig?.shortcuts ?? [];
 	const selectedShortcutLabel = useMemo(() => {
 		if (shortcuts.length === 0) {
@@ -704,6 +705,7 @@ export default function App(): ReactElement {
 			onAutoReviewEnabledChange={setEditTaskAutoReviewEnabled}
 			autoReviewMode={editTaskAutoReviewMode}
 			onAutoReviewModeChange={setEditTaskAutoReviewMode}
+			qaLandingAvailable={qaLandingAvailable}
 			workspaceId={currentProjectId}
 			branchRef={editTaskBranchRef}
 			branchOptions={createTaskBranchOptions}
@@ -1026,6 +1028,7 @@ export default function App(): ReactElement {
 					onAutoReviewEnabledChange={setNewTaskAutoReviewEnabled}
 					autoReviewMode={newTaskAutoReviewMode}
 					onAutoReviewModeChange={setNewTaskAutoReviewMode}
+					qaLandingAvailable={qaLandingAvailable}
 					workspaceId={currentProjectId}
 					branchRef={newTaskBranchRef}
 					branchOptions={createTaskBranchOptions}

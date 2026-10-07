@@ -12,6 +12,7 @@ import { registerHomeCommand } from "./commands/home";
 import { registerHooksCommand } from "./commands/hooks";
 import { registerKitCommand } from "./commands/kit";
 import { registerModelsCommand } from "./commands/models";
+import { registerPipelineCommand } from "./commands/pipeline";
 import { registerSetupCommand } from "./commands/setup";
 import { registerTaskCommand } from "./commands/task";
 import { loadGlobalRuntimeConfig, loadRuntimeConfig } from "./config/runtime-config";
@@ -35,6 +36,7 @@ import {
 	setKanbanRuntimeTls,
 } from "./core/runtime-endpoint";
 import { lockedFileSystem } from "./fs/locked-file-system";
+import type { PipelineWorkerHost } from "./pipeline/worker-host";
 import { disablePasscode, generateInternalToken, generatePasscode } from "./security/passcode-manager";
 import type { AutoReviewReconciler } from "./server/auto-review-reconciler";
 import type { RuntimeStateHub } from "./server/runtime-state-hub";
@@ -342,6 +344,7 @@ async function startServer(): Promise<{
 		{ resolveProjectInputPath },
 		{ pickDirectoryPathFromSystemDialog },
 		{ createAutoReviewReconciler },
+		{ createPipelineWorkerHost },
 		{ createRuntimeServer },
 		{ createRuntimeStateHub },
 		{ createSessionColumnSync },
@@ -355,6 +358,7 @@ async function startServer(): Promise<{
 		import("./projects/project-path.js"),
 		import("./server/directory-picker.js"),
 		import("./server/auto-review-reconciler.js"),
+		import("./pipeline/worker-host.js"),
 		import("./server/runtime-server.js"),
 		import("./server/runtime-state-hub.js"),
 		import("./server/session-column-sync.js"),
@@ -367,6 +371,7 @@ async function startServer(): Promise<{
 	let runtimeStateHub: RuntimeStateHub | undefined;
 	let autoReviewReconciler: AutoReviewReconciler | undefined;
 	let sessionColumnSync: SessionColumnSync | undefined;
+	let pipelineWorkerHost: PipelineWorkerHost | undefined;
 	// Read once: the server's session sync and the browser (runtime config response) must agree on who moves cards.
 	const sessionSyncSetting = await readSessionSyncSetting();
 	if (sessionSyncSetting.warning) {
@@ -403,6 +408,7 @@ async function startServer(): Promise<{
 		runtimeHub.disposeWorkspace(workspaceId);
 		sessionColumnSync?.untrackWorkspace(workspaceId);
 		autoReviewReconciler?.untrackWorkspace(workspaceId);
+		pipelineWorkerHost?.forgetWorkspace(workspaceId);
 		return disposed;
 	};
 
@@ -519,9 +525,45 @@ async function startServer(): Promise<{
 	});
 	await autoReviewReconciler.start();
 
+	// The pipeline worker (src/pipeline/worker-host.ts): a supervised child process that runs only while some
+	// workspace has landing mode qa. Like auto-review, only the process that bound the server starts it.
+	const workerHost = createPipelineWorkerHost({
+		listWorkspaces: () => workspaceRegistry.listManagedWorkspaces(),
+		buildSnapshot: async (workspaceId, workspacePath) => {
+			const state = await loadWorkspaceStateById(workspaceId);
+			if (!state) {
+				return null;
+			}
+			const liveSummaries = workspaceRegistry.getTerminalManagerForWorkspace(workspaceId)?.listSummaries();
+			const config = await workspaceRegistry.loadScopedRuntimeConfig({ workspaceId, workspacePath });
+			return {
+				workspaceId,
+				workspacePath,
+				board: state.board,
+				sessions: (liveSummaries ?? Object.values(state.sessions)).map(({ taskId, agentId, modelId, state }) => ({
+					taskId,
+					agentId,
+					modelId,
+					state,
+				})),
+				selectedAgentId: config.selectedAgentId,
+			};
+		},
+		log: (message) => {
+			console.warn(`[kanban] ${message}`);
+		},
+	});
+	const unsubscribePipelineActivity = runtimeHub.onWorkspaceActivity((activity) =>
+		workerHost.notifyActivity(activity),
+	);
+	workerHost.start();
+	pipelineWorkerHost = workerHost;
+
 	const close = async () => {
 		sessionColumnSync?.close();
 		autoReviewReconciler?.close();
+		unsubscribePipelineActivity();
+		await pipelineWorkerHost?.close();
 		await runtimeServer.close();
 	};
 
@@ -531,6 +573,7 @@ async function startServer(): Promise<{
 		// writes the board itself.
 		sessionColumnSync?.close();
 		autoReviewReconciler?.close();
+		await pipelineWorkerHost?.close();
 		await shutdownRuntimeServer({
 			workspaceRegistry,
 			warn: (message) => {
@@ -752,6 +795,7 @@ function createProgram(invocationArgs: string[]): Command {
 	registerKitCommand(program);
 	registerConfigCommand(program);
 	registerModelsCommand(program);
+	registerPipelineCommand(program);
 
 	program
 		.command("mcp")

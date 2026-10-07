@@ -8,7 +8,7 @@
 import { z } from "zod";
 
 import { landingModeSchema } from "../config/pipeline-config";
-import { runtimeAgentIdSchema } from "../core/api-contract";
+import { runtimeAgentIdSchema, runtimeTaskRoleSchema } from "../core/api-contract";
 
 export const KIT_SCHEMA_VERSION = 1;
 
@@ -18,7 +18,7 @@ export const kitNameSchema = z
 	.regex(/^[a-z0-9][a-z0-9_-]*$/u, "must be lowercase letters, digits, '-' or '_' (it is a file name)");
 
 /** A card's role. `dev` cards are the work; QA, TRIAGE and calibration cards are never QA'd or reworked. */
-export const cardRoleSchema = z.enum(["dev", "qa", "triage", "calibration"]);
+export const cardRoleSchema = runtimeTaskRoleSchema;
 export type CardRole = z.infer<typeof cardRoleSchema>;
 
 /** The built-in features a kit can switch on (repo code in `src/kits/team/`, P4-T*). */

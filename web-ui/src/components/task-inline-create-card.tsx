@@ -10,7 +10,7 @@ import { TaskPromptComposer } from "@/components/task-prompt-composer";
 import { Button } from "@/components/ui/button";
 import { NativeSelect } from "@/components/ui/native-select";
 import type { RuntimeAgentId, RuntimeTaskAgentSettings } from "@/runtime/types";
-import type { TaskAutoReviewMode, TaskImage } from "@/types";
+import { getTaskAutoReviewModeOptions, type TaskAutoReviewMode, type TaskImage } from "@/types";
 import { pasteShortcutLabel } from "@/utils/platform";
 import { useDocumentEvent, useMeasure } from "@/utils/react-use";
 
@@ -18,10 +18,6 @@ export type TaskInlineCardMode = "create" | "edit";
 
 export type TaskBranchOption = BranchSelectOption;
 
-const AUTO_REVIEW_MODE_OPTIONS: Array<{ value: TaskAutoReviewMode; label: string }> = [
-	{ value: "commit", label: "Make commit" },
-	{ value: "pr", label: "Make PR" },
-];
 const AUTO_REVIEW_MODE_SELECT_WIDTH_CH = 16;
 const COMPACT_ACTIONS_WIDTH_THRESHOLD_PX = 280;
 
@@ -59,6 +55,7 @@ export function TaskInlineCreateCard({
 	onAutoReviewEnabledChange,
 	autoReviewMode,
 	onAutoReviewModeChange,
+	qaLandingAvailable = false,
 	startInPlanModeDisabled = false,
 	workspaceId,
 	branchRef,
@@ -88,6 +85,8 @@ export function TaskInlineCreateCard({
 	onAutoReviewEnabledChange: (value: boolean) => void;
 	autoReviewMode: TaskAutoReviewMode;
 	onAutoReviewModeChange: (value: TaskAutoReviewMode) => void;
+	/** The workspace has landing mode qa, so a card may pick "QA, then land". */
+	qaLandingAvailable?: boolean;
 	startInPlanModeDisabled?: boolean;
 	workspaceId: string | null;
 	branchRef: string;
@@ -276,7 +275,7 @@ export function TaskInlineCreateCard({
 							maxWidth: "100%",
 						}}
 					>
-						{AUTO_REVIEW_MODE_OPTIONS.map((option) => (
+						{getTaskAutoReviewModeOptions({ qaLandingAvailable, currentMode: autoReviewMode }).map((option) => (
 							<option key={option.value} value={option.value}>
 								{option.label}
 							</option>

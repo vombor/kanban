@@ -38,6 +38,10 @@ const BACKUPS_DIR = "backups";
 const KITS_DIR = "kits";
 const DATA_DIR = "data";
 const MODELS_DATA_DIR = "models";
+const PIPELINE_STATE_FILENAME = "pipeline-state.json";
+const PIPELINE_DECISIONS_FILENAME = "pipeline-decisions.jsonl";
+/** The legacy kit's per-card pipeline state (`checks-state.json` in its per-project data dir). */
+const LEGACY_KIT_CHECKS_STATE_FILENAME = "checks-state.json";
 const PROJECT_CONFIG_PARENT_DIR = ".cline";
 const PROJECT_CONFIG_DIR = "kanban";
 
@@ -297,6 +301,28 @@ export function getKanbanModelsDataPath(homePath = getKanbanHomePath()): string 
 /** Per-workspace pipeline data that people and agents read (`<home>/data/<workspaceId>`, plan §6.2). */
 export function getKanbanWorkspaceDataPath(workspaceId: string, homePath = getKanbanHomePath()): string {
 	return join(getKanbanDataPath(homePath), workspaceId);
+}
+
+/** The pipeline's per-card state (`<home>/data/<workspaceId>/pipeline-state.json`). */
+export function getPipelineStatePath(workspaceId: string, homePath = getKanbanHomePath()): string {
+	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), PIPELINE_STATE_FILENAME);
+}
+
+/** The pipeline's decision log, one JSON line per decision (`<home>/data/<workspaceId>/pipeline-decisions.jsonl`). */
+export function getPipelineDecisionLogPath(workspaceId: string, homePath = getKanbanHomePath()): string {
+	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), PIPELINE_DECISIONS_FILENAME);
+}
+
+/**
+ * Where the legacy kit may have kept a workspace's `checks-state.json`, newest home first: the Kanban home's data dir
+ * (the same file once the home is `~/.kanban`) and the legacy kit's own data dir (`~/.kanban/data/<workspaceId>`).
+ * Read-only: the pipeline imports it once and never writes it.
+ */
+export function getLegacyKitChecksStatePaths(workspaceId: string, homePath = getKanbanHomePath()): string[] {
+	return uniquePaths([
+		join(getKanbanWorkspaceDataPath(workspaceId, homePath), LEGACY_KIT_CHECKS_STATE_FILENAME),
+		join(getKanbanWorkspaceDataPath(workspaceId, getDefaultKanbanHomePath()), LEGACY_KIT_CHECKS_STATE_FILENAME),
+	]);
 }
 
 export function getKanbanWorkspacesRootPath(homePath = getKanbanHomePath()): string {

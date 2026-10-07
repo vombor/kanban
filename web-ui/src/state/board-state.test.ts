@@ -568,6 +568,33 @@ describe("board dependency state", () => {
 		]);
 	});
 
+	it("keeps a card's role and qa mode when the browser normalizes and edits the board", () => {
+		const normalized = normalizeBoardData({
+			columns: [
+				{ id: "backlog", cards: [] },
+				{ id: "in_progress", cards: [] },
+				{
+					id: "review",
+					cards: [
+						{ id: "qa-1", prompt: "QA dev-1", baseRef: "main", role: "qa", autoReviewMode: "qa" },
+						{ id: "dev-1", prompt: "Dev", baseRef: "main", role: "dev" },
+					],
+				},
+				{ id: "trash", cards: [] },
+			],
+			dependencies: [],
+		});
+		const review = normalized?.columns.find((column) => column.id === "review")?.cards ?? [];
+		expect(review[0]).toMatchObject({ role: "qa", autoReviewMode: "qa" });
+		expect(review[1]).not.toHaveProperty("role");
+
+		if (!normalized) {
+			throw new Error("Expected a board");
+		}
+		const edited = disableTaskAutoReview(normalized, "qa-1");
+		expect(edited.board.columns.find((column) => column.id === "review")?.cards[0]).toMatchObject({ role: "qa" });
+	});
+
 	it("disables auto-review settings for a task", () => {
 		let board = createInitialBoardData();
 		board = addTaskToColumn(board, "review", {

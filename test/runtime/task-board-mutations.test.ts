@@ -272,3 +272,31 @@ describe("per-task agent/model/provider overrides", () => {
 		});
 	});
 });
+
+describe("card role and the qa auto-review mode", () => {
+	it("stores a non-dev role on create, omits dev, and keeps both role and the qa mode through an update", () => {
+		const qa = addTaskToColumn(
+			createBoard(),
+			"backlog",
+			{ prompt: "QA dev-1", baseRef: "main", role: "qa", autoReviewEnabled: true, autoReviewMode: "qa" },
+			() => "qa000001",
+		);
+		expect(qa.task).toMatchObject({ role: "qa", autoReviewMode: "qa" });
+
+		const dev = addTaskToColumn(
+			qa.board,
+			"backlog",
+			{ prompt: "Dev", baseRef: "main", role: "dev" },
+			() => "dev00001",
+		);
+		expect(dev.task).not.toHaveProperty("role");
+
+		const updated = updateTask(dev.board, qa.task.id, {
+			prompt: "QA dev-1, round 2",
+			baseRef: "main",
+			autoReviewEnabled: true,
+			autoReviewMode: "qa",
+		});
+		expect(updated.task).toMatchObject({ role: "qa", autoReviewMode: "qa", prompt: "QA dev-1, round 2" });
+	});
+});

@@ -23,6 +23,10 @@
 //   would get the prompt typed again on every round trip. The reconciler owns the card until Done or until the
 //   arming goes stale and the reconciler clears it.
 //
+// Session sync makes no agent-dependent decision: a move depends only on the summary's state and the card's
+// column. A rule that ever needs the agent must take it from resolveEffectiveAgent() (src/core/effective-agent.ts),
+// never from card.agentId (the 2026-10-06 incident; test/runtime/pipeline/effective-agent-incident.test.ts gates it).
+//
 // It runs on every session state change, when a workspace's sessions are first tracked, and on a 10 s sweep
 // (the kit's interval) that catches a summary that got newer than its card without a state change. Each move is
 // one `mutateWorkspaceState` step (board lock, new revision) followed by a broadcast, as in the Done workflow.

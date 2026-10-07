@@ -141,3 +141,21 @@ of this repository is the complete record of changes.
   them (from tRPC `workspace.getDevAssignment`) with a "from kit `team`" hint. An explicit agent or model wins
   (`--agent-id default` too). No change on the `default` kit; with `workspaces.<id>.pipeline.shadow` the proposal
   is only logged. Proposals go to `data/<workspace>/dev-assignment.jsonl`.
+- `src/pipeline/` (new: `engine.ts`, `worker.ts`, `worker-host.ts`, `worker-protocol.ts`, `pipeline-state.ts`,
+  `decision-log.ts`, `events.ts`, `features.ts`, `work-probe.ts`), `src/commands/pipeline.ts` (new), `src/cli.ts`,
+  `src/server/runtime-state-hub.ts`, `src/server/auto-review-reconciler.ts`, `src/server/session-column-sync.ts`
+  (comment), `src/core/api-contract.ts`, `src/core/task-board-mutations.ts`, `src/commands/task.ts`,
+  `src/config/pipeline-config.ts`, `src/kits/kit-schema.ts`, `src/state/kanban-home.ts`, `src/trpc/runtime-api.ts`,
+  `web-ui/src/types/board.ts`, `web-ui/src/state/board-state.ts`, `web-ui/src/hooks/app-utils.tsx`,
+  `web-ui/src/components/{board-card,task-create-dialog,task-inline-create-card}.tsx`, `web-ui/src/App.tsx`:
+  pipeline skeleton (plan step P4-1). A supervised worker child process (`kanban pipeline worker`) runs only while
+  a workspace has landing mode `qa`; it gets workspace snapshots from the state hub, asks the workspace's resolved
+  kit (`qaPolicy`) about each submitted card's effective agent, and writes each decision to
+  `data/<ws>/pipeline-decisions.jsonl` (`pipeline.shadow` marks them shadow). It acts on nothing yet. Per-card
+  state is `data/<ws>/pipeline-state.json` (first load imports the legacy kit's `checks-state.json`, read-only).
+  Event bus (`verdictRecorded`, `landed`, `reworkSent`, `escalated`) and feature registry for kit features (none
+  registered yet). `kanban pipeline status`. Cards gain `role` (`dev` | `qa` | `triage` | `calibration`; `task create
+  --role`; a non-dev card gets no kit `devAssignment`) and `autoReviewMode: "qa"` (offered in the UI only on landing `qa`). **Behaviour change:** the
+  auto-review reconciler delivers its prompt to the agent the card's session runs on (`resolveEffectiveAgent`)
+  instead of `card.agentId`, and never arms `qa`-mode or non-dev cards. Nothing changes for workspaces on landing
+  `off` (every workspace without a config entry).

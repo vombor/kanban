@@ -35,7 +35,18 @@ export interface CreateRuntimeStateHubDependencies {
 	heartbeatIntervalMs?: number;
 }
 
+/** A workspace's board was written (`summary` absent) or one of its task sessions changed (`summary`). */
+export interface RuntimeWorkspaceActivity {
+	workspaceId: string;
+	summary?: RuntimeTaskSessionSummary;
+}
+
 export interface RuntimeStateHub {
+	/**
+	 * Server-side listeners (the pipeline worker host) for every board broadcast and session summary, whether or not
+	 * a browser is connected. Listeners must be cheap: summaries arrive many times a second while agents print.
+	 */
+	onWorkspaceActivity: (listener: (activity: RuntimeWorkspaceActivity) => void) => () => void;
 	trackTerminalManager: (workspaceId: string, manager: TerminalSessionManager) => void;
 	handleUpgrade: (
 		request: IncomingMessage,
@@ -58,6 +69,16 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 	const taskSessionBroadcastTimersByWorkspaceId = new Map<string, NodeJS.Timeout>();
 	const runtimeStateClientsByWorkspaceId = new Map<string, Set<WebSocket>>();
 	const runtimeStateClients = new Set<WebSocket>();
+	const activityListeners = new Set<(activity: RuntimeWorkspaceActivity) => void>();
+	const notifyActivity = (activity: RuntimeWorkspaceActivity): void => {
+		for (const listener of activityListeners) {
+			try {
+				listener(activity);
+			} catch {
+				// A failing server-side listener must not break the browser stream.
+			}
+		}
+	};
 	const runtimeStateWorkspaceIdByClient = new Map<WebSocket, string>();
 	const runtimeStateWebSocketServer = new WebSocketServer({ noServer: true });
 	// Tunnels drop idle websockets (Cloudflare after ~100 s); keep the board stream alive.
@@ -214,6 +235,7 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 	};
 
 	const broadcastRuntimeWorkspaceStateUpdated = async (workspaceId: string, workspacePath: string): Promise<void> => {
+		notifyActivity({ workspaceId });
 		const clients = runtimeStateClientsByWorkspaceId.get(workspaceId);
 		if (!clients || clients.size === 0) {
 			return;
@@ -398,11 +420,18 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 	});
 
 	return {
+		onWorkspaceActivity: (listener) => {
+			activityListeners.add(listener);
+			return () => {
+				activityListeners.delete(listener);
+			};
+		},
 		trackTerminalManager: (workspaceId: string, manager: TerminalSessionManager) => {
 			if (terminalSummaryUnsubscribeByWorkspaceId.has(workspaceId)) {
 				return;
 			}
 			const unsubscribe = manager.onSummary((summary) => {
+				notifyActivity({ workspaceId, summary });
 				queueTaskSessionSummaryBroadcast(workspaceId, summary);
 			});
 			terminalSummaryUnsubscribeByWorkspaceId.set(workspaceId, unsubscribe);
@@ -418,6 +447,7 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 		broadcastTaskReadyForReview,
 		close: async () => {
 			stopKeepalive();
+			activityListeners.clear();
 			for (const timer of taskSessionBroadcastTimersByWorkspaceId.values()) {
 				clearTimeout(timer);
 			}

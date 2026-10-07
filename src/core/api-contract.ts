@@ -85,12 +85,27 @@ export const runtimeBoardColumnIdSchema = z.preprocess(
 );
 export type RuntimeBoardColumnId = z.infer<typeof runtimeBoardColumnIdEnum>;
 
-const runtimeTaskAutoReviewModeEnum = z.enum(["commit", "pr"]);
+// "qa": the pipeline QA-gates the card and Kanban lands it (landing mode `qa`, docs/fork/kit-merge-plan.md §4.2);
+// the auto-review reconciler never types a commit/PR prompt into it.
+const runtimeTaskAutoReviewModeEnum = z.enum(["commit", "pr", "qa"]);
 export const runtimeTaskAutoReviewModeSchema = z.preprocess(
 	(val) => (val === "move_to_trash" || val === "move_to_done" ? "commit" : val),
 	runtimeTaskAutoReviewModeEnum,
 );
 export type RuntimeTaskAutoReviewMode = z.infer<typeof runtimeTaskAutoReviewModeEnum>;
+/** The git actions the auto-review reconciler types into a card (`pendingGitAction.action`). */
+const runtimeTaskGitActionEnum = z.enum(["commit", "pr"]);
+export const runtimeTaskGitActionSchema = z.preprocess(
+	(val) => (val === "move_to_trash" || val === "move_to_done" ? "commit" : val),
+	runtimeTaskGitActionEnum,
+);
+export type RuntimeTaskGitAction = z.infer<typeof runtimeTaskGitActionEnum>;
+/**
+ * What a card is for. A card without a role is a `dev` card (the work). QA, TRIAGE and calibration cards are never
+ * QA'd, reworked or auto-reviewed; the pipeline decides on the role, never on titles or prompts.
+ */
+export const runtimeTaskRoleSchema = z.enum(["dev", "qa", "triage", "calibration"]);
+export type RuntimeTaskRole = z.infer<typeof runtimeTaskRoleSchema>;
 // Opaque per-task agent settings. Kanban stores and carries these values verbatim; it never
 // validates model IDs or reasoning-effort vocabularies because those change per agent and over
 // time. Validity is the target agent's concern at launch, not Kanban's.
@@ -138,7 +153,7 @@ function normalizeRuntimeTaskAgentSettings(input: {
 }
 
 export const runtimeTaskPendingGitActionSchema = z.object({
-	action: runtimeTaskAutoReviewModeSchema,
+	action: runtimeTaskGitActionSchema,
 	requestedAt: z.number(),
 	headCommitAtRequest: z.string().nullable(),
 	attempt: z.number().int().nonnegative().default(0),
@@ -153,6 +168,7 @@ export const runtimeBoardCardSchema = z
 		startInPlanMode: z.boolean(),
 		autoReviewEnabled: z.boolean().optional(),
 		autoReviewMode: runtimeTaskAutoReviewModeSchema.optional(),
+		role: runtimeTaskRoleSchema.optional(),
 		images: z.array(runtimeTaskImageSchema).optional(),
 		agentId: runtimeAgentIdSchema.optional(),
 		agentSettings: runtimeAgentSettingsSchema.optional(),
@@ -797,6 +813,10 @@ export const runtimeKanbanPathsSchema = z.object({
 });
 export type RuntimeKanbanPaths = z.infer<typeof runtimeKanbanPathsSchema>;
 
+/** A workspace's landing mode (`workspaces.<id>.landing.mode` in config.json, src/config/pipeline-config.ts). */
+export const runtimeLandingModeSchema = z.enum(["off", "commit", "pr", "qa"]);
+export type RuntimeLandingMode = z.infer<typeof runtimeLandingModeSchema>;
+
 export const runtimeConfigResponseSchema = z.object({
 	selectedAgentId: runtimeAgentIdSchema,
 	selectedShortcutLabel: z.string().nullable(),
@@ -809,6 +829,8 @@ export const runtimeConfigResponseSchema = z.object({
 	readyForReviewNotificationsEnabled: z.boolean(),
 	/** Session sync is on: the runtime moves cards between In Progress and Review, so the browser must not. */
 	sessionSyncEnabled: z.boolean(),
+	/** The scoped workspace's landing mode; absent without a workspace. The UI offers "qa" cards only on `qa`. */
+	landingMode: runtimeLandingModeSchema.optional(),
 	detectedCommands: z.array(z.string()),
 	agents: z.array(runtimeAgentDefinitionSchema),
 	shortcuts: z.array(runtimeProjectShortcutSchema),

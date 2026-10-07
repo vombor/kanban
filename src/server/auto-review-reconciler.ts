@@ -15,10 +15,11 @@ import type {
 	RuntimeBoardCard,
 	RuntimeBoardColumnId,
 	RuntimeBoardData,
-	RuntimeTaskAutoReviewMode,
+	RuntimeTaskGitAction,
 	RuntimeTaskPendingGitAction,
 	RuntimeWorkspaceStateResponse,
 } from "../core/api-contract";
+import { resolveEffectiveAgent } from "../core/effective-agent";
 import { isPendingGitActionStale } from "../core/task-board-mutations";
 import { type DeliverTaskInputResult, deliverTaskInput } from "../terminal/deliver-task-input";
 import type { TerminalSessionManager } from "../terminal/session-manager";
@@ -112,11 +113,19 @@ function createWorkspaceRuntime(): ReconcilerWorkspaceRuntime {
 	};
 }
 
-function resolveAutoReviewMode(card: RuntimeBoardCard): RuntimeTaskAutoReviewMode {
+function resolveAutoReviewMode(card: RuntimeBoardCard): RuntimeTaskGitAction {
 	return card.autoReviewMode === "pr" ? "pr" : "commit";
 }
 
-function resolvePromptTemplate(action: RuntimeTaskAutoReviewMode, templates: TaskGitPromptTemplates | null): string {
+/**
+ * The cards this reconciler types a commit/PR prompt into. A `qa`-mode card belongs to the pipeline (it QA-gates
+ * the card and Kanban lands it), and QA, TRIAGE and calibration cards are never auto-reviewed (plan §3.6).
+ */
+function isGitActionCard(card: RuntimeBoardCard): boolean {
+	return card.autoReviewEnabled === true && card.autoReviewMode !== "qa" && (card.role ?? "dev") === "dev";
+}
+
+function resolvePromptTemplate(action: RuntimeTaskGitAction, templates: TaskGitPromptTemplates | null): string {
 	if (action === "commit") {
 		const template = templates?.commitPromptTemplate?.trim();
 		if (template) {
@@ -140,7 +149,7 @@ function resolvePromptTemplate(action: RuntimeTaskAutoReviewMode, templates: Tas
 }
 
 function buildGitActionPrompt(
-	action: RuntimeTaskAutoReviewMode,
+	action: RuntimeTaskGitAction,
 	baseRef: string,
 	templates: TaskGitPromptTemplates | null,
 ): string {
@@ -219,14 +228,14 @@ export function createAutoReviewReconciler(deps: CreateAutoReviewReconcilerDepen
 	const armPendingGitAction = async (
 		workspacePath: string,
 		taskId: string,
-		action: RuntimeTaskAutoReviewMode,
+		action: RuntimeTaskGitAction,
 		headCommitAtRequest: string | null,
 		timestamp: number,
 	): Promise<boolean> => {
 		try {
 			const response = await deps.mutateWorkspaceState(workspacePath, (currentState) => {
 				const location = findCardLocation(currentState.board, taskId);
-				if (!location || location.columnId !== "review" || location.card.autoReviewEnabled !== true) {
+				if (!location || location.columnId !== "review" || !isGitActionCard(location.card)) {
 					return { board: currentState.board, value: "unavailable" as const, save: false };
 				}
 				const existing = location.card.pendingGitAction ?? null;
@@ -292,7 +301,7 @@ export function createAutoReviewReconciler(deps: CreateAutoReviewReconcilerDepen
 				taskId,
 				trigger: "auto_review",
 				canTrash: (card, columnId) =>
-					columnId === "review" && card.autoReviewEnabled === true && Boolean(card.pendingGitAction),
+					columnId === "review" && isGitActionCard(card) && Boolean(card.pendingGitAction),
 			});
 		} catch (error) {
 			deps.warn?.(`Auto-review could not complete ${taskId}: ${String(error)}`);
@@ -377,7 +386,7 @@ export function createAutoReviewReconciler(deps: CreateAutoReviewReconcilerDepen
 		let boardMutated = false;
 
 		// Housekeeping pass first: armed cards that left review (or lost the
-		// auto-review toggle) are disarmed. This needs no git work.
+		// auto-review toggle, or became a pipeline card) are disarmed. This needs no git work.
 		const candidates: RuntimeBoardCard[] = [];
 		for (const column of state.board.columns) {
 			for (const card of column.cards) {
@@ -389,7 +398,7 @@ export function createAutoReviewReconciler(deps: CreateAutoReviewReconcilerDepen
 					}
 					continue;
 				}
-				if (card.autoReviewEnabled !== true) {
+				if (!isGitActionCard(card)) {
 					if (pendingGitAction && stillTracked() && (await clearPendingGitAction(workspacePath, card.id))) {
 						boardMutated = true;
 					}
@@ -436,7 +445,11 @@ export function createAutoReviewReconciler(deps: CreateAutoReviewReconcilerDepen
 					break;
 				}
 				const pendingGitAction = card.pendingGitAction ?? null;
-				const effectiveAgent = card.agentId ?? selectedAgentId;
+				// The agent the session actually runs on wins over card.agentId (plan §4.0, the 2026-10-06 incident).
+				const summary = workspace.terminalManager?.getSummary(card.id) ?? null;
+				const effectiveAgent = selectedAgentId
+					? resolveEffectiveAgent(card, summary, { selectedAgentId })
+					: (summary?.agentId ?? card.agentId ?? null);
 
 				if (pendingGitAction) {
 					if (isPendingGitActionStale(pendingGitAction, timestamp)) {
@@ -464,7 +477,7 @@ export function createAutoReviewReconciler(deps: CreateAutoReviewReconcilerDepen
 
 				// Never arm a card whose delivery channel is missing: it could only
 				// "complete" via the staleness timeout, which silently strands it.
-				if (!workspace.terminalManager || !workspace.terminalManager.getSummary(card.id)) {
+				if (!workspace.terminalManager || !summary) {
 					// No terminal session to deliver the prompt to.
 					continue;
 				}

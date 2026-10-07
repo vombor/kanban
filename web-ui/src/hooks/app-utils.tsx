@@ -8,7 +8,7 @@ export const TASK_AUTO_REVIEW_MODE_STORAGE_KEY = LocalStorageKey.TaskAutoReviewM
 const DETAIL_TASK_QUERY_PARAM = "task";
 
 export function normalizeStoredTaskAutoReviewMode(value: string): TaskAutoReviewMode | null {
-	if (value === "commit" || value === "pr") {
+	if (value === "commit" || value === "pr" || value === "qa") {
 		return value;
 	}
 	return null;
