@@ -18,6 +18,7 @@ import {
 import { ensureClaudeWorkspaceTrusted } from "../terminal/claude-workspace-trust";
 import { ensureCodexWorkspaceTrusted } from "../terminal/codex-workspace-trust";
 import { TerminalSessionManager } from "../terminal/session-manager";
+import type { BrokenGitRepository } from "../workspace/repo-health";
 
 export interface WorkspaceRegistryScope {
 	workspaceId: string;
@@ -29,7 +30,11 @@ export interface CreateWorkspaceRegistryDependencies {
 	loadGlobalRuntimeConfig: () => Promise<RuntimeConfigState>;
 	loadRuntimeConfig: (cwd: string) => Promise<RuntimeConfigState>;
 	hasGitRepository: (path: string) => boolean;
+	/** Asked when hasGitRepository says no for a project directory that exists (src/workspace/repo-health.ts). */
+	describeBrokenGitRepository: (path: string) => BrokenGitRepository | null;
 	pathIsDirectory: (path: string) => Promise<boolean>;
+	/** Loud problems the operator must act on (an unhealthy project). */
+	logError: (message: string) => void;
 	onTerminalManagerReady?: (workspaceId: string, manager: TerminalSessionManager) => void;
 }
 
@@ -41,6 +46,8 @@ export interface ResolvedWorkspaceStreamTarget {
 	workspaceId: string | null;
 	workspacePath: string | null;
 	removedRequestedWorkspacePath: string | null;
+	/** The requested project is kept but can't be opened: its repo is broken (e.g. core.bare=true). */
+	unhealthyRequestedWorkspaceMessage: string | null;
 	didPruneProjects: boolean;
 }
 
@@ -369,6 +376,19 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 		};
 	};
 
+	// A project whose directory still has a `.git` git can't use (core.bare=true from a leaked hook GIT_DIR on
+	// 2026-10-07) keeps its index entry and board: it is left out of the stream until it is repaired, and logged loudly
+	// once per problem. `kanban doctor` reports it too.
+	const unhealthyProblemsByWorkspaceId = new Map<string, string>();
+	const reportUnhealthyProject = (project: RuntimeWorkspaceIndexEntry, broken: BrokenGitRepository): string => {
+		const message = `Project ${project.repoPath} can't be opened: ${broken.problem}. Kanban keeps its board; repair it with: ${broken.hint}`;
+		if (unhealthyProblemsByWorkspaceId.get(project.workspaceId) !== broken.problem) {
+			unhealthyProblemsByWorkspaceId.set(project.workspaceId, broken.problem);
+			deps.logError(`UNHEALTHY PROJECT ${project.workspaceId}: ${message}`);
+		}
+		return message;
+	};
+
 	const resolveWorkspaceForStream = async (
 		requestedWorkspaceId: string | null,
 		options?: {
@@ -378,14 +398,21 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 		const allProjects = await listWorkspaceIndexEntries();
 		const existingProjects: RuntimeWorkspaceIndexEntry[] = [];
 		const removedProjects: RuntimeWorkspaceIndexEntry[] = [];
+		const unhealthyMessages = new Map<string, string>();
 
 		for (const project of allProjects) {
 			let removalMessage: string | null = null;
 			if (!(await deps.pathIsDirectory(project.repoPath))) {
 				removalMessage = `Project no longer exists on disk and was removed: ${project.repoPath}`;
 			} else if (!deps.hasGitRepository(project.repoPath)) {
+				const broken = deps.describeBrokenGitRepository(project.repoPath);
+				if (broken) {
+					unhealthyMessages.set(project.workspaceId, reportUnhealthyProject(project, broken));
+					continue;
+				}
 				removalMessage = `Project is not a git repository and was removed: ${project.repoPath}`;
 			}
+			unhealthyProblemsByWorkspaceId.delete(project.workspaceId);
 
 			if (!removalMessage) {
 				existingProjects.push(project);
@@ -405,6 +432,9 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 
 		const removedRequestedWorkspacePath = requestedWorkspaceId
 			? (removedProjects.find((project) => project.workspaceId === requestedWorkspaceId)?.repoPath ?? null)
+			: null;
+		const unhealthyRequestedWorkspaceMessage = requestedWorkspaceId
+			? (unhealthyMessages.get(requestedWorkspaceId) ?? null)
 			: null;
 
 		const activeWorkspaceMissing = !existingProjects.some((project) => project.workspaceId === activeWorkspaceId);
@@ -429,6 +459,7 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 					workspaceId: requestedWorkspace.workspaceId,
 					workspacePath: requestedWorkspace.repoPath,
 					removedRequestedWorkspacePath,
+					unhealthyRequestedWorkspaceMessage,
 					didPruneProjects: removedProjects.length > 0,
 				};
 			}
@@ -441,6 +472,7 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 				workspaceId: null,
 				workspacePath: null,
 				removedRequestedWorkspacePath,
+				unhealthyRequestedWorkspaceMessage,
 				didPruneProjects: removedProjects.length > 0,
 			};
 		}
@@ -448,6 +480,7 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 			workspaceId: fallbackWorkspace.workspaceId,
 			workspacePath: fallbackWorkspace.repoPath,
 			removedRequestedWorkspacePath,
+			unhealthyRequestedWorkspaceMessage,
 			didPruneProjects: removedProjects.length > 0,
 		};
 	};

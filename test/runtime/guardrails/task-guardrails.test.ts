@@ -12,9 +12,10 @@ import {
 	listMatcherDeniedCommands,
 	resolveTaskGuardrails,
 } from "../../../src/guardrails/task-guardrails";
+import { createGitTestEnv } from "../../utilities/git-env";
 
 function git(cwd: string, ...args: string[]): string {
-	return execFileSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null" } });
+	return execFileSync("git", args, { cwd, encoding: "utf8", env: createGitTestEnv() });
 }
 
 describe("task guardrails", () => {

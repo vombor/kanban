@@ -25,6 +25,7 @@ import type { KanbanHomeSource } from "../state/kanban-home";
 import type { KanbanServerLock } from "../state/kanban-server-lock";
 import type { RuntimeWorkspaceIndexEntry } from "../state/workspace-state";
 import { runGit } from "../workspace/git-utils";
+import { describeBrokenGitRepository, hasGitRepository } from "../workspace/repo-health";
 import type { DoctorFinding } from "./doctor-report";
 
 export interface DoctorProjectContext {
@@ -140,6 +141,16 @@ export async function checkProjects(context: DoctorProjectContext): Promise<Doct
 				hint: "restore the repo, or remove the project in Kanban",
 			});
 			continue;
+		}
+		// The server keeps such a project's board but won't open it (src/server/workspace-registry.ts).
+		const broken = hasGitRepository(entry.repoPath) ? null : describeBrokenGitRepository(entry.repoPath);
+		if (broken) {
+			findings.push({
+				level: "fail",
+				area: "project",
+				message: `${entry.workspaceId}: unhealthy, ${broken.problem}; Kanban keeps its board but can't open it`,
+				hint: broken.hint,
+			});
 		}
 		const settings = getWorkspacePipelineSettings(context.config, entry.workspaceId);
 		const resolution = resolveWorkspaceKit(context.config, entry.workspaceId, context.catalog);

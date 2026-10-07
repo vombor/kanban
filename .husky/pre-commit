@@ -9,8 +9,24 @@ if [ $? -ne 0 ]; then
 	exit 1
 fi
 
+# Git runs this hook with GIT_DIR, GIT_INDEX_FILE (and sometimes GIT_WORK_TREE, GIT_PREFIX, ...) set. Tests that
+# inherit them send their temp-repo git commands to this repo (2026-10-07: core.bare=true, stray commits and
+# worktrees). So typecheck and tests run in a subshell without them; biome --staged and git add above/below keep them.
+# Keep the list in step with src/core/git-process-env.ts.
+unset_git_environment() {
+	unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
+		GIT_NAMESPACE GIT_PREFIX GIT_QUARANTINE_PATH GIT_CEILING_DIRECTORIES GIT_DISCOVERY_ACROSS_FILESYSTEM \
+		GIT_CONFIG GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT
+	for name in $(env | sed -n -e 's/^\(GIT_CONFIG_KEY_[0-9][0-9]*\)=.*/\1/p' -e 's/^\(GIT_CONFIG_VALUE_[0-9][0-9]*\)=.*/\1/p'); do
+		unset "$name"
+	done
+}
+
 echo "Running type checking and fast tests..."
-npm run typecheck && npm run test:precommit
+(
+	unset_git_environment
+	npm run typecheck && npm run test:precommit
+)
 if [ $? -ne 0 ]; then
 	echo "Checks failed."
 	exit 1

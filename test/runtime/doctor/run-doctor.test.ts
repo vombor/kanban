@@ -164,6 +164,19 @@ describe("kanban doctor", () => {
 			expect(find((await runDoctor(DOCTOR)).findings, "hooks", worktree)).toBeUndefined();
 		});
 	});
+
+	it("fails a project whose git config says core.bare=true, and keeps it registered", async () => {
+		await withTemporaryKanbanHome(async ({ userHomePath }) => {
+			const repo = createRepo(join(userHomePath, "app"));
+			const { workspaceId } = await addProject({ repoPath: repo });
+			git(repo, ["config", "core.bare", "true"]);
+			const report = await runDoctor(DOCTOR);
+			expect(
+				find(report.findings, "project", `${workspaceId}: unhealthy, its git config says core.bare=true`),
+			).toEqual(expect.objectContaining({ level: "fail", hint: `git -C ${repo} config core.bare false` }));
+			expect((await listWorkspaceIndexEntries()).map((entry) => entry.workspaceId)).toEqual([workspaceId]);
+		});
+	});
 });
 
 describe("kanban doctor --deep", () => {

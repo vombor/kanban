@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { createServer as createNetServer } from "node:net";
@@ -23,7 +22,6 @@ import { registerRestartCommand } from "./commands/restart";
 import { registerSetupCommand } from "./commands/setup";
 import { registerTaskCommand } from "./commands/task";
 import { loadGlobalRuntimeConfig, loadRuntimeConfig } from "./config/runtime-config";
-import { createGitProcessEnv } from "./core/git-process-env";
 import {
 	installGracefulShutdownHandlers,
 	shouldSuppressImmediateDuplicateShutdownSignals,
@@ -53,6 +51,7 @@ import { writeKanbanServerLock } from "./state/kanban-server-lock";
 import { captureNodeException, flushNodeTelemetry } from "./telemetry/sentry-node.js";
 import type { TerminalSessionManager } from "./terminal/session-manager";
 import { runOnDemandUpdate } from "./update/update";
+import { describeBrokenGitRepository, hasGitRepository } from "./workspace/repo-health";
 
 interface CliOptions {
 	noOpen: boolean;
@@ -254,16 +253,6 @@ async function pathIsDirectory(path: string): Promise<boolean> {
 	}
 }
 
-function hasGitRepository(path: string): boolean {
-	const result = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], {
-		cwd: path,
-		encoding: "utf8",
-		stdio: ["ignore", "pipe", "ignore"],
-		env: createGitProcessEnv(),
-	});
-	return result.status === 0 && result.stdout.trim() === "true";
-}
-
 function isAddressInUseError(error: unknown): error is NodeJS.ErrnoException {
 	return (
 		typeof error === "object" &&
@@ -393,7 +382,11 @@ async function startServer(): Promise<{
 		loadGlobalRuntimeConfig,
 		loadRuntimeConfig,
 		hasGitRepository,
+		describeBrokenGitRepository,
 		pathIsDirectory,
+		logError: (message) => {
+			console.error(`[kanban] ${message}`);
+		},
 		onTerminalManagerReady: (workspaceId, manager) => {
 			runtimeStateHub?.trackTerminalManager(workspaceId, manager);
 			sessionColumnSync?.trackWorkspace(workspaceId, manager);

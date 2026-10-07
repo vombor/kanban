@@ -396,6 +396,12 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 						message: `Project no longer exists on disk and was removed: ${workspace.removedRequestedWorkspacePath}`,
 					} satisfies RuntimeStateStreamErrorMessage);
 				}
+				if (workspace.unhealthyRequestedWorkspaceMessage) {
+					sendRuntimeStateMessage(client, {
+						type: "error",
+						message: workspace.unhealthyRequestedWorkspaceMessage,
+					} satisfies RuntimeStateStreamErrorMessage);
+				}
 				if (workspace.didPruneProjects) {
 					void broadcastRuntimeProjectsUpdated(workspace.workspaceId);
 				}
