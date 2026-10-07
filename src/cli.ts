@@ -7,6 +7,7 @@ import { Command, Option } from "commander";
 import ora, { type Ora } from "ora";
 import packageJson from "../package.json" with { type: "json" };
 import { registerAgentsCommand } from "./commands/agents";
+import { registerBenchCommand } from "./commands/bench";
 import { registerBoardCommand } from "./commands/board";
 import { registerConfigCommand } from "./commands/config";
 import { registerDoctorCommand } from "./commands/doctor";
@@ -840,6 +841,7 @@ function createProgram(invocationArgs: string[]): Command {
 	registerKitCommand(program);
 	registerConfigCommand(program);
 	registerModelsCommand(program);
+	registerBenchCommand(program);
 	registerPipelineCommand(program);
 	registerOrchestratorCommand(program);
 	registerBoardCommand(program);

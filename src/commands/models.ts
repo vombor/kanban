@@ -1,6 +1,7 @@
 // `kanban models probe|providers`: the Bedrock tool-call probe and the one-provider policy for Cline models.
 // Ported from the legacy kit's `kit probe-models` (probes/bedrock-converse-probe.mjs, probes/mantle-probe.mjs for
 // `--list`) and `kit providers` (bin/providers.mjs). Both only read unless `--apply` is given.
+// `kanban models prices sync` (the team kit's price table) lives in model-prices.ts.
 import { join } from "node:path";
 import type { Command } from "commander";
 
@@ -22,6 +23,7 @@ import {
 import { LEMONADE_PROVIDER_ID, type ModelProbeOutcome, probeModel } from "../models/model-probe";
 import { getKanbanBackupsPath, getKanbanModelsDataPath } from "../state/kanban-home";
 import { listWorkspaceIndexEntries, loadWorkspaceBoardById, mutateWorkspaceState } from "../state/workspace-state";
+import { registerModelPricesCommand } from "./model-prices";
 import { createRuntimeTrpcClient, notifyRuntimeWorkspaceStateUpdated } from "./runtime-trpc-client";
 import { resolveWorkspaceTarget } from "./workspace-target";
 
@@ -332,4 +334,5 @@ export function registerModelsCommand(program: Command): void {
 				process.exitCode = 1;
 			}
 		});
+	registerModelPricesCommand(models);
 }

@@ -3,8 +3,8 @@
 // name built-in features. It runs for a workspace only while that workspace's resolved kit lists it, and it sees
 // only that workspace's pipeline events.
 //
-// No feature is registered yet; the team kit's features arrive with their own cards (P4-T2, P4-T3, P4-T4). A kit
-// that names a feature nobody registered is reported once per workspace, not refused.
+// The team kit registers its features in src/kits/team/features.ts (scoreboard from P4-T2; runoffs and calibration
+// come with P4-T3/P4-T4). A kit that names a feature nobody registered is reported once per workspace, not refused.
 import type { KitDocument, KitFeature } from "../kits/kit-schema";
 import type { PipelineEventBus, PipelineEventHandler, PipelineEventName } from "./events";
 import type { ReleaseHoldInput, ReleaseHoldResult } from "./hold";

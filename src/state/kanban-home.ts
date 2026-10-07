@@ -148,6 +148,11 @@ function resolveClineDataDir(dataDirOverride: string | null): string {
 	return readNonEmptyEnv("CLINE_DATA_DIR") ?? (clineDir ? join(clineDir, CLINE_DATA_DIR) : getClineDataPath());
 }
 
+/** Cline's data dir as the Cline CLI resolves it; `dataDirOverride` is `agents.cline.dataDir` (null = Cline's default). */
+export function getClineDataDirPath(dataDirOverride: string | null = null): string {
+	return resolveClineDataDir(dataDirOverride);
+}
+
 /** Cline's custom-provider file (`<data>/settings/models.json`). `kanban setup` edits its `modelsSourceUrl`s. */
 export function getClineModelsSettingsPath(dataDirOverride: string | null = null): string {
 	return join(resolveClineDataDir(dataDirOverride), CLINE_SETTINGS_DIR, "models.json");
@@ -354,6 +359,100 @@ export function getKanbanDataPath(homePath = getKanbanHomePath()): string {
 /** Model metadata caches, such as Bedrock's inference-profile list (`<home>/data/models`). */
 export function getKanbanModelsDataPath(homePath = getKanbanHomePath()): string {
 	return join(getKanbanDataPath(homePath), MODELS_DATA_DIR);
+}
+
+// The team kit's `bench` feature (plan §2.4, §6.2): model list prices and the AWS Price List cache, machine-wide.
+const PRICES_DATA_DIR = "prices";
+const PRICE_SYNC_LOG_FILENAME = "price-sync.log";
+const LEGACY_KIT_BENCH_DIR = "bench";
+
+export interface PricesDataPaths {
+	dir: string;
+	/** The price table card metrics use (`kanban models prices sync --apply` writes it). */
+	pricesJson: string;
+	/** Machine-generated normalized AWS rows (`kanban models prices sync` writes it). */
+	pricesAwsJson: string;
+	/** Hand-written price sources. */
+	modelPricesMd: string;
+	/** Downloaded AWS offer files. */
+	rawDir: string;
+	/** Offer versions and the last check. */
+	state: string;
+	/** The previous run's normalized rows, for change detection. */
+	rowsLast: string;
+	log: string;
+}
+
+/** `<home>/data/prices/…` and `<home>/logs/price-sync.log`. */
+export function getPricesDataPaths(homePath = getKanbanHomePath()): PricesDataPaths {
+	const dir = join(getKanbanDataPath(homePath), PRICES_DATA_DIR);
+	return {
+		dir,
+		pricesJson: join(dir, "prices.json"),
+		pricesAwsJson: join(dir, "prices-aws.json"),
+		modelPricesMd: join(dir, "model-prices.md"),
+		rawDir: join(dir, "raw"),
+		state: join(dir, "state.json"),
+		rowsLast: join(dir, "rows-last.json"),
+		log: join(getKanbanLogsPath(homePath), PRICE_SYNC_LOG_FILENAME),
+	};
+}
+
+/**
+ * Where a price table may be, first match wins: this home's `data/prices/prices.json`, then the legacy kit's
+ * `bench/prices.json` (its sync still keeps that one current until cutover moves it, plan §8.4 step 3). Read-only.
+ */
+export function getPriceTableCandidatePaths(homePath = getKanbanHomePath()): string[] {
+	return uniquePaths([
+		getPricesDataPaths(homePath).pricesJson,
+		join(getLegacyKitHomePath(), LEGACY_KIT_BENCH_DIR, "prices.json"),
+	]);
+}
+
+/** The team kit's per-workspace bench files (`<home>/data/<workspaceId>/…`; names kept from the legacy kit). */
+export interface TeamBenchWorkspacePaths {
+	dataDir: string;
+	scoreboardJsonl: string;
+	scoreboardMd: string;
+	qaLog: string;
+	attention: string;
+	/** `kanban bench reset <label>` archives into `<dir>/<label>/`. */
+	benchSnapshotsDir: string;
+}
+
+export function getTeamBenchWorkspacePaths(
+	workspaceId: string,
+	homePath = getKanbanHomePath(),
+): TeamBenchWorkspacePaths {
+	const { dataDir, qaLog, attention } = getWatchdogWorkspacePaths(workspaceId, homePath);
+	return {
+		dataDir,
+		scoreboardJsonl: join(dataDir, "scoreboard.jsonl"),
+		scoreboardMd: join(dataDir, "scoreboard.md"),
+		qaLog,
+		attention,
+		benchSnapshotsDir: join(dataDir, "bench", "snapshots"),
+	};
+}
+
+/**
+ * Directories with board backups of a workspace, newest home first: `<home>/backups/boards/<id>` and the legacy kit's
+ * `backups/board-backups/<id>` (autoland's). Card metrics look a deleted card up there. Read-only.
+ */
+export function getBoardBackupSearchDirs(workspaceId: string, homePath = getKanbanHomePath()): string[] {
+	return uniquePaths([
+		getBoardBackupsPath(workspaceId, homePath),
+		join(getLegacyKitHomePath(), BACKUPS_DIR, LEGACY_KIT_BOARD_BACKUPS_DIR, workspaceId),
+	]);
+}
+
+/** Codex's rollout files (`$CODEX_HOME/sessions`, else `~/.codex/sessions`); `homeOverride` is `agents.codex.home`. */
+export function getCodexSessionsPath(homeOverride: string | null = null): string {
+	const codexHome = homeOverride?.trim() || readNonEmptyEnv("CODEX_HOME");
+	return join(
+		codexHome ? expandUserPath(codexHome, getUserHomePath()) : join(getUserHomePath(), ".codex"),
+		"sessions",
+	);
 }
 
 /** Per-workspace pipeline data that people and agents read (`<home>/data/<workspaceId>`, plan §6.2). */

@@ -22,6 +22,7 @@ import type { RuntimeTaskTrashResponse } from "../core/api-contract";
 import { type EffectiveModelConfig, readClineDefaultModel } from "../core/effective-agent";
 import { createRoutingPolicy } from "../kits/policy";
 import { type KitCatalog, loadKitCatalog, resolveWorkspaceKit } from "../kits/resolve-kit";
+import { registerTeamKitFeatures } from "../kits/team/features";
 import { readClineProvidersFile } from "../models/cline-providers";
 import { getClineProvidersSettingsPath } from "../state/kanban-home";
 import { CHECKS_VERSION, type ChecksResult, type ChecksRunner, createChecksRunner, formatChecksReport } from "./checks";
@@ -100,6 +101,14 @@ async function loadDefaultAgentModels(
 	return providers ? { cline: readClineDefaultModel(providers) } : {};
 }
 
+function createDefaultFeatureRegistry(
+	deps: Parameters<typeof createPipelineFeatureRegistry>[0],
+): PipelineFeatureRegistry {
+	const registry = createPipelineFeatureRegistry(deps);
+	registerTeamKitFeatures(registry);
+	return registry;
+}
+
 function decisionKey(record: PipelineDecisionRecord): string {
 	const { at: _at, ...rest } = record;
 	return JSON.stringify(rest);
@@ -158,7 +167,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			);
 		},
 	};
-	const features = deps.features ?? createPipelineFeatureRegistry({ bus, actions, log });
+	const features = deps.features ?? createDefaultFeatureRegistry({ bus, actions, log });
 	const appendQaLog = deps.appendQaLog ?? createQaLogAppender();
 	const loadAgentDefaultModels = deps.loadAgentDefaultModels ?? loadDefaultAgentModels;
 	const now = deps.now ?? Date.now;

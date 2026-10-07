@@ -254,3 +254,18 @@ of this repository is the complete record of changes.
   doctor` fails `on` while review-watch runs. Workspaces on landing `off` (the `default` kit) get only the
   stuck-prompt check. Roles come from P4-T1's `resolveCardRole` (legacy kit cards by their markers), plus
   calibration-run ids from `data/<ws>/calibration/*/state.json`.
+- `src/kits/team/` (new: `bench/aws-prices.ts`, `prices.ts`, `price-sync.ts`, `price-sync-job.ts`, `card-metrics.ts`,
+  `card-locator.ts`, `bench-reset.ts`, `bench-feature.ts`, `scoreboard/*`, `features.ts`), `src/commands/bench.ts`,
+  `src/commands/model-prices.ts` (new), `src/commands/models.ts`, `src/cli.ts`, `src/pipeline/worker.ts`,
+  `src/pipeline/events.ts`, `src/pipeline/features.ts`, `src/state/kanban-home.ts`, `assets/prices.default.json`
+  (new): the team kit's scoreboard, bench and prices (plan step P4-T2, ported from the legacy kit's `bench/` and
+  `lib/aws-prices.cjs`). The `scoreboard` feature (registered in the pipeline worker; it runs only where a
+  workspace's kit lists it, so never on `default`) appends a line to `data/<ws>/scoreboard.jsonl` per
+  `verdictRecorded`, `escalated` and Approve & land event and rebuilds `scoreboard.md`; nothing emits those events
+  yet (P4-3/P4-4/P4-5), so it changes nothing today. `verdictRecorded` gains an optional `report` (the rest of the
+  QA outbox: scores, visual, benchmark) and `escalated` an optional `round`. New commands: `kanban bench
+  metrics|record-verdict|scoreboard|reset` and `kanban models prices sync [--apply|--check] [--offline]` (public AWS
+  Price List; writes only `data/prices/`). Card metrics read the price table from `data/prices/prices.json`, else the
+  legacy kit's `bench/prices.json`, else the seed. The `bench` feature registers the daily price check
+  (`--check`) as a feature job (`bench:prices-check`, once a day machine-wide); the watchdog runs it only in
+  `watchdog.mode: "on"`, which `kanban doctor` fails while the legacy kit's review-watch (its PRICE_SYNC) still runs.

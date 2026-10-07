@@ -15,6 +15,16 @@ interface PipelineCardEvent {
 	at: number;
 }
 
+/** verdict.json fields beyond the verdict itself, passed through as QA wrote them. */
+export interface QaVerdictReport {
+	/** 0-5 per dimension (spec, correctness, tests, ux, code, process), or null when not scored. */
+	scores?: unknown;
+	/** { status: "ok" | "blocked" | "n/a", artifacts, consoleErrors }. */
+	visual?: unknown;
+	/** Benchmark or runoff name, when the card is part of one. */
+	benchmark?: string | null;
+}
+
 export interface PipelineEventMap {
 	/** A QA verdict for a dev card was recorded (pipeline-state, qa-log). */
 	verdictRecorded: PipelineCardEvent & {
@@ -25,6 +35,8 @@ export interface PipelineEventMap {
 		devModel: EffectiveModel | null;
 		qaAgentId: RuntimeAgentId | null;
 		qaModel: EffectiveModel | null;
+		/** The rest of the QA outbox (verdict.json) for the team kit's scoreboard; the core doesn't read it. */
+		report?: QaVerdictReport;
 	};
 	/** Kanban landed the card's work onto its base. */
 	landed: PipelineCardEvent & {
@@ -36,7 +48,13 @@ export interface PipelineEventMap {
 	/** A FAIL was handed back to the same card and model. */
 	reworkSent: PipelineCardEvent & { round: number; clearedContext: boolean };
 	/** The card was escalated (to the orchestrator or to another model). */
-	escalated: PipelineCardEvent & { to: EscalationTarget; requireApproval: boolean; reason: string };
+	escalated: PipelineCardEvent & {
+		to: EscalationTarget;
+		requireApproval: boolean;
+		reason: string;
+		/** The FAIL round the card was escalated in, when it got that far. */
+		round?: number;
+	};
 }
 
 export type PipelineEventName = keyof PipelineEventMap;
