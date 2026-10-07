@@ -74,8 +74,19 @@ interface HookCommandMetadata {
 	notificationType?: string;
 }
 
+/** How typed input (follow-ups, auto-review prompts, nudges) has to be written into an agent's TUI. */
+export interface AgentInputDeliveryProfile {
+	/** The TUI ignores input while the terminal is unfocused, so a focus-in escape is written first. */
+	focusInBeforeInput: boolean;
+}
+
+const DEFAULT_INPUT_DELIVERY_PROFILE: AgentInputDeliveryProfile = {
+	focusInBeforeInput: false,
+};
+
 interface AgentSessionAdapter {
 	prepare(input: AgentAdapterLaunchInput): Promise<PreparedAgentLaunch>;
+	inputDelivery?: AgentInputDeliveryProfile;
 }
 
 function escapeForTemplateLiteral(value: string): string {
@@ -1870,6 +1881,8 @@ export function buildCopilotProviderEnv(
 // GitHub Copilot CLI (`copilot`, npm @github/copilot) as a PTY task agent. Based on upstream #286, ported
 // onto per-task agentSettings (#592): --model / --reasoning-effort / provider come from the card.
 const copilotAdapter: AgentSessionAdapter = {
+	// GitHub Copilot's TUI drops input while the terminal is unfocused (fork/copilot, from #286).
+	inputDelivery: { focusInBeforeInput: true },
 	async prepare(input) {
 		let args = [...input.args];
 		const env: Record<string, string | undefined> = {};
@@ -1991,6 +2004,10 @@ const ADAPTERS: Record<RuntimeAgentId, AgentSessionAdapter> = {
 	cline: clineCliAdapter,
 	copilot: copilotAdapter,
 };
+
+export function getAgentInputDeliveryProfile(agentId: RuntimeAgentId | null): AgentInputDeliveryProfile {
+	return (agentId ? ADAPTERS[agentId].inputDelivery : undefined) ?? DEFAULT_INPUT_DELIVERY_PROFILE;
+}
 
 export async function prepareAgentLaunch(input: AgentAdapterLaunchInput): Promise<PreparedAgentLaunch> {
 	const preparedPrompt = await prepareTaskPromptWithImages({

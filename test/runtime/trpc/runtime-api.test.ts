@@ -474,3 +474,46 @@ describe("createRuntimeApi update handlers", () => {
 		expect(runUpdateNow).toHaveBeenCalledTimes(1);
 	});
 });
+
+describe("createRuntimeApi deliverTaskInput", () => {
+	const scope = { workspaceId: "workspace-1", workspacePath: "/tmp/repo" };
+
+	function createApi(terminalManager: { getSummary: unknown; writeInput: unknown }) {
+		return createTestRuntimeApi({
+			getActiveWorkspaceId: vi.fn(() => "workspace-1"),
+			loadScopedRuntimeConfig: vi.fn(async () => createRuntimeConfigState()),
+			setActiveRuntimeConfig: vi.fn(),
+			getScopedTerminalManager: vi.fn(async () => terminalManager as never),
+			resolveInteractiveShellCommand: vi.fn(),
+			runCommand: vi.fn(),
+		});
+	}
+
+	it("types into the scoped task session and returns the typed delivery result", async () => {
+		const summary = createSummary();
+		const writeInput = vi.fn(() => summary);
+		const api = createApi({ getSummary: vi.fn(() => summary), writeInput });
+
+		const response = await api.deliverTaskInput(scope, { taskId: " task-1 ", text: "hello", confirm: false });
+
+		expect(response).toMatchObject({ ok: true, status: "sent", enterAttempts: 1 });
+		expect(writeInput.mock.calls.map((call: unknown[]) => String(call[1]))).toEqual(["hello", "\r"]);
+	});
+
+	it("reports no_session when the task has no session", async () => {
+		const api = createApi({ getSummary: vi.fn(() => null), writeInput: vi.fn(() => null) });
+
+		const response = await api.deliverTaskInput(scope, { taskId: "task-1", text: "hello" });
+
+		expect(response).toMatchObject({ ok: false, status: "no_session", summary: null });
+	});
+
+	it("reports an error for an empty taskId", async () => {
+		const api = createApi({ getSummary: vi.fn(), writeInput: vi.fn() });
+
+		const response = await api.deliverTaskInput(scope, { taskId: "  ", text: "hello" });
+
+		expect(response).toMatchObject({ ok: false, status: "error" });
+		expect(response.error).toMatch(/taskId cannot be empty/);
+	});
+});

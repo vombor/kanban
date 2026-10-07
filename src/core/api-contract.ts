@@ -722,6 +722,49 @@ export const runtimeTaskSessionInputResponseSchema = z.object({
 });
 export type RuntimeTaskSessionInputResponse = z.infer<typeof runtimeTaskSessionInputResponseSchema>;
 
+export const runtimeTaskInputDeliveryRequestSchema = z.object({
+	taskId: z.string(),
+	text: z.string(),
+	/** Press Enter after the text (default true). */
+	enter: z.boolean().optional(),
+	/** Wait for session activity after Enter, retrying Enter once (default true). Needs `enter`. */
+	confirm: z.boolean().optional(),
+});
+export type RuntimeTaskInputDeliveryRequest = z.infer<typeof runtimeTaskInputDeliveryRequestSchema>;
+
+/**
+ * - `delivered`: the session showed activity after Enter (`evidence` says which signal moved).
+ * - `sent`: written without confirmation (`enter` or `confirm` was false).
+ * - `undelivered`: typed and Enter pressed twice, but the session showed no activity.
+ * - `no_session`: the task has no running session; nothing was written.
+ * - `session_ended`: the session went away (or stopped) part-way through.
+ * - `aborted`: the caller cancelled before delivery finished.
+ * - `error`: the request was invalid or the runtime failed before writing.
+ */
+export const runtimeTaskInputDeliveryStatusSchema = z.enum([
+	"delivered",
+	"sent",
+	"undelivered",
+	"no_session",
+	"session_ended",
+	"aborted",
+	"error",
+]);
+export type RuntimeTaskInputDeliveryStatus = z.infer<typeof runtimeTaskInputDeliveryStatusSchema>;
+
+export const runtimeTaskInputDeliveryEvidenceSchema = z.enum(["state", "hook", "output"]);
+export type RuntimeTaskInputDeliveryEvidence = z.infer<typeof runtimeTaskInputDeliveryEvidenceSchema>;
+
+export const runtimeTaskInputDeliveryResponseSchema = z.object({
+	ok: z.boolean(),
+	status: runtimeTaskInputDeliveryStatusSchema,
+	evidence: runtimeTaskInputDeliveryEvidenceSchema.nullable(),
+	enterAttempts: z.number().int().nonnegative(),
+	summary: runtimeTaskSessionSummarySchema.nullable(),
+	error: z.string().optional(),
+});
+export type RuntimeTaskInputDeliveryResponse = z.infer<typeof runtimeTaskInputDeliveryResponseSchema>;
+
 export const runtimeShellSessionStartRequestSchema = z.object({
 	taskId: z.string(),
 	cols: z.number().int().positive().optional(),

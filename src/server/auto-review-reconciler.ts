@@ -17,7 +17,6 @@ import type {
 	RuntimeBoardData,
 	RuntimeTaskAutoReviewMode,
 	RuntimeTaskPendingGitAction,
-	RuntimeTaskSessionSummary,
 	RuntimeWorkspaceStateResponse,
 } from "../core/api-contract";
 import { isPendingGitActionStale, moveTaskToColumn } from "../core/task-board-mutations";
@@ -25,6 +24,7 @@ import type {
 	RuntimeWorkspaceAtomicMutationResponse,
 	RuntimeWorkspaceAtomicMutationResult,
 } from "../state/workspace-state";
+import { type DeliverTaskInputResult, deliverTaskInput } from "../terminal/deliver-task-input";
 import type { TerminalSessionManager } from "../terminal/session-manager";
 import { probeGitWorkspaceState } from "../workspace/git-sync";
 import { getTaskWorkspacePathInfo } from "../workspace/task-worktree";
@@ -34,12 +34,6 @@ import { getTaskWorkspacePathInfo } from "../workspace/task-worktree";
  * bounds the git-probe cost while still advancing cards promptly.
  */
 const AUTO_REVIEW_EVALUATION_INTERVAL_MS = 5_000;
-
-/**
- * Delay between pasting the git action prompt into the task terminal and
- * submitting it, matching the choreography the browser used.
- */
-const AUTO_REVIEW_INPUT_SUBMIT_DELAY_MS = 200;
 
 const AUTO_REVIEW_BASE_REF_TOKEN = "{{base_ref}}";
 
@@ -75,6 +69,8 @@ export interface CreateAutoReviewReconcilerDependencies {
 	getPromptTemplates: (workspaceId: string, workspacePath: string) => Promise<TaskGitPromptTemplates | null>;
 	/** Workspace-level default agent; cards may override it via `agentId`. */
 	getSelectedAgentId?: (workspaceId: string, workspacePath: string) => Promise<RuntimeAgentId | null>;
+	/** Types the git action prompt into the task session; injected in tests. */
+	deliverTaskInput?: typeof deliverTaskInput;
 	/** Probes one task worktree; injected in tests to count calls. */
 	probeTaskWorkspace?: (input: {
 		workspacePath: string;
@@ -108,7 +104,7 @@ interface ReconcilerWorkspaceRuntime {
 	evaluationPromise: Promise<void> | null;
 	pendingEvaluation: boolean;
 	gitActionInFlightTaskIds: Set<string>;
-	submitTimers: Set<NodeJS.Timeout>;
+	deliveryAborts: Set<AbortController>;
 }
 
 function createWorkspaceRuntime(): ReconcilerWorkspaceRuntime {
@@ -116,7 +112,7 @@ function createWorkspaceRuntime(): ReconcilerWorkspaceRuntime {
 		evaluationPromise: null,
 		pendingEvaluation: false,
 		gitActionInFlightTaskIds: new Set<string>(),
-		submitTimers: new Set<NodeJS.Timeout>(),
+		deliveryAborts: new Set<AbortController>(),
 	};
 }
 
@@ -210,6 +206,7 @@ async function defaultProbeTaskWorkspace(input: {
 export function createAutoReviewReconciler(deps: CreateAutoReviewReconcilerDependencies): AutoReviewReconciler {
 	const workspaceRuntimes = new Map<string, ReconcilerWorkspaceRuntime>();
 	const probeTaskWorkspace = deps.probeTaskWorkspace ?? defaultProbeTaskWorkspace;
+	const deliver = deps.deliverTaskInput ?? deliverTaskInput;
 	let disposed = false;
 	let evaluationTimer: NodeJS.Timeout | null = null;
 
@@ -316,48 +313,69 @@ export function createAutoReviewReconciler(deps: CreateAutoReviewReconcilerDepen
 		}
 	};
 
-	const triggerTerminalGitAction = (
-		terminalManager: TerminalSessionManager,
-		card: RuntimeBoardCard,
-		prompt: string,
-		runtime: ReconcilerWorkspaceRuntime,
-	): boolean => {
-		let accepted: RuntimeTaskSessionSummary | null = null;
-		try {
-			accepted = terminalManager.writeInput(card.id, Buffer.from(prompt, "utf8"));
-		} catch {
-			accepted = null;
+	const handleDeliveryResult = async (
+		workspace: AutoReviewWorkspace,
+		workspacePath: string,
+		taskId: string,
+		delivery: DeliverTaskInputResult,
+	): Promise<void> => {
+		if (delivery.ok || delivery.status === "aborted" || disposed || !workspaceRuntimes.has(workspace.workspaceId)) {
+			return;
 		}
-		if (!accepted) {
-			return false;
+		if (delivery.status === "undelivered") {
+			// The prompt is typed into the TUI, so re-arming would type it twice.
+			// Stay armed: a late pickup still completes on HEAD moving, and the
+			// staleness timeout re-arms the card otherwise.
+			deps.warn?.(`Auto-review prompt for task ${taskId} was not confirmed: ${delivery.error ?? delivery.status}`);
+			return;
 		}
-		// Submit after the paste settles, mirroring the browser choreography.
-		const submitTimer = setTimeout(() => {
-			runtime.submitTimers.delete(submitTimer);
+		// No session to deliver to: disarm so the card can be armed again later.
+		if (await clearPendingGitAction(workspacePath, taskId)) {
 			try {
-				terminalManager.writeInput(card.id, Buffer.from("\r", "utf8"));
+				await deps.onBoardMutated?.(workspace.workspaceId, workspacePath);
 			} catch {
-				// The session died between prompt and submit; the failed trigger disarms.
+				// Broadcast is best-effort; the persisted board is already correct.
 			}
-		}, AUTO_REVIEW_INPUT_SUBMIT_DELAY_MS);
-		submitTimer.unref();
-		runtime.submitTimers.add(submitTimer);
-		return true;
+		}
 	};
 
-	const triggerGitAction = async (input: {
+	// Delivery runs in the background: confirming it can take several seconds
+	// and must not hold up the other cards of the workspace. The armed
+	// `pendingGitAction` keeps the card from being armed again meanwhile.
+	const triggerGitAction = (input: {
 		workspace: AutoReviewWorkspace;
+		workspacePath: string;
+		terminalManager: TerminalSessionManager;
 		card: RuntimeBoardCard;
 		effectiveAgent: RuntimeAgentId | null;
 		templates: TaskGitPromptTemplates | null;
 		runtime: ReconcilerWorkspaceRuntime;
-	}): Promise<boolean> => {
+	}): void => {
 		const action = resolveAutoReviewMode(input.card);
 		const prompt = buildGitActionPrompt(action, input.card.baseRef, input.templates);
-		if (!input.workspace.terminalManager) {
-			return false;
-		}
-		return triggerTerminalGitAction(input.workspace.terminalManager, input.card, prompt, input.runtime);
+		const abort = new AbortController();
+		input.runtime.deliveryAborts.add(abort);
+		void deliver(input.terminalManager, input.card.id, prompt, {
+			agentId: input.effectiveAgent,
+			signal: abort.signal,
+		})
+			.catch(
+				(error): DeliverTaskInputResult => ({
+					ok: false,
+					status: "error",
+					evidence: null,
+					enterAttempts: 0,
+					summary: null,
+					error: String(error),
+				}),
+			)
+			.then((delivery) => handleDeliveryResult(input.workspace, input.workspacePath, input.card.id, delivery))
+			.catch((error) => {
+				deps.warn?.(`Auto-review could not settle delivery for task ${input.card.id}: ${String(error)}`);
+			})
+			.finally(() => {
+				input.runtime.deliveryAborts.delete(abort);
+			});
 	};
 
 	const reconcileWorkspace = async (
@@ -483,10 +501,15 @@ export function createAutoReviewReconciler(deps: CreateAutoReviewReconcilerDepen
 						continue;
 					}
 					boardMutated = true;
-					const triggered = await triggerGitAction({ workspace, card, effectiveAgent, templates, runtime });
-					if (!triggered && stillTracked() && (await clearPendingGitAction(workspacePath, card.id))) {
-						boardMutated = true;
-					}
+					triggerGitAction({
+						workspace,
+						workspacePath,
+						terminalManager: workspace.terminalManager,
+						card,
+						effectiveAgent,
+						templates,
+						runtime,
+					});
 				} finally {
 					runtime.gitActionInFlightTaskIds.delete(card.id);
 				}
@@ -586,8 +609,8 @@ export function createAutoReviewReconciler(deps: CreateAutoReviewReconcilerDepen
 		untrackWorkspace: (workspaceId: string) => {
 			const runtime = workspaceRuntimes.get(workspaceId);
 			if (runtime) {
-				for (const timer of runtime.submitTimers) {
-					clearTimeout(timer);
+				for (const abort of runtime.deliveryAborts) {
+					abort.abort();
 				}
 			}
 			workspaceRuntimes.delete(workspaceId);
@@ -600,10 +623,10 @@ export function createAutoReviewReconciler(deps: CreateAutoReviewReconcilerDepen
 				evaluationTimer = null;
 			}
 			for (const runtime of workspaceRuntimes.values()) {
-				for (const timer of runtime.submitTimers) {
-					clearTimeout(timer);
+				for (const abort of runtime.deliveryAborts) {
+					abort.abort();
 				}
-				runtime.submitTimers.clear();
+				runtime.deliveryAborts.clear();
 				runtime.gitActionInFlightTaskIds.clear();
 			}
 			workspaceRuntimes.clear();

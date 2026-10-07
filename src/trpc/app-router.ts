@@ -37,6 +37,8 @@ import type {
 	RuntimeRunUpdateResponse,
 	RuntimeShellSessionStartRequest,
 	RuntimeShellSessionStartResponse,
+	RuntimeTaskInputDeliveryRequest,
+	RuntimeTaskInputDeliveryResponse,
 	RuntimeTaskSessionInputRequest,
 	RuntimeTaskSessionInputResponse,
 	RuntimeTaskSessionStartRequest,
@@ -90,6 +92,8 @@ import {
 	runtimeRunUpdateResponseSchema,
 	runtimeShellSessionStartRequestSchema,
 	runtimeShellSessionStartResponseSchema,
+	runtimeTaskInputDeliveryRequestSchema,
+	runtimeTaskInputDeliveryResponseSchema,
 	runtimeTaskSessionInputRequestSchema,
 	runtimeTaskSessionInputResponseSchema,
 	runtimeTaskSessionStartRequestSchema,
@@ -138,6 +142,10 @@ export interface RuntimeTrpcContext {
 			scope: RuntimeTrpcWorkspaceScope,
 			input: RuntimeTaskSessionInputRequest,
 		) => Promise<RuntimeTaskSessionInputResponse>;
+		deliverTaskInput: (
+			scope: RuntimeTrpcWorkspaceScope,
+			input: RuntimeTaskInputDeliveryRequest,
+		) => Promise<RuntimeTaskInputDeliveryResponse>;
 		startShellSession: (
 			scope: RuntimeTrpcWorkspaceScope,
 			input: RuntimeShellSessionStartRequest,
@@ -308,6 +316,13 @@ export const runtimeAppRouter = t.router({
 			.output(runtimeTaskSessionInputResponseSchema)
 			.mutation(async ({ ctx, input }) => {
 				return await ctx.runtimeApi.sendTaskSessionInput(ctx.workspaceScope, input);
+			}),
+		// Typed input with delivery confirmation (focus-in, separate Enter, activity check and retry).
+		deliverTaskInput: workspaceProcedure
+			.input(runtimeTaskInputDeliveryRequestSchema)
+			.output(runtimeTaskInputDeliveryResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				return await ctx.runtimeApi.deliverTaskInput(ctx.workspaceScope, input);
 			}),
 		startShellSession: workspaceProcedure
 			.input(runtimeShellSessionStartRequestSchema)

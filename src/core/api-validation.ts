@@ -9,6 +9,7 @@ import {
 	type RuntimeProjectAddRequest,
 	type RuntimeProjectRemoveRequest,
 	type RuntimeShellSessionStartRequest,
+	type RuntimeTaskInputDeliveryRequest,
 	type RuntimeTaskSessionInputRequest,
 	type RuntimeTaskSessionStartRequest,
 	type RuntimeTaskSessionStopRequest,
@@ -27,6 +28,7 @@ import {
 	runtimeProjectAddRequestSchema,
 	runtimeProjectRemoveRequestSchema,
 	runtimeShellSessionStartRequestSchema,
+	runtimeTaskInputDeliveryRequestSchema,
 	runtimeTaskSessionInputRequestSchema,
 	runtimeTaskSessionStartRequestSchema,
 	runtimeTaskSessionStopRequestSchema,
@@ -223,6 +225,18 @@ export function parseTaskSessionInputRequest(value: unknown): RuntimeTaskSession
 	const taskId = parsed.taskId.trim();
 	if (!taskId) {
 		throw new Error("Task session taskId cannot be empty.");
+	}
+	return {
+		...parsed,
+		taskId,
+	};
+}
+
+export function parseTaskInputDeliveryRequest(value: unknown): RuntimeTaskInputDeliveryRequest {
+	const parsed = parseWithSchema(runtimeTaskInputDeliveryRequestSchema, value);
+	const taskId = parsed.taskId.trim();
+	if (!taskId) {
+		throw new Error("Task input delivery taskId cannot be empty.");
 	}
 	return {
 		...parsed,

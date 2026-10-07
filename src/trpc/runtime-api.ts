@@ -18,6 +18,7 @@ import {
 	parseCommandRunRequest,
 	parseRuntimeConfigSaveRequest,
 	parseShellSessionStartRequest,
+	parseTaskInputDeliveryRequest,
 	parseTaskSessionInputRequest,
 	parseTaskSessionStartRequest,
 	parseTaskSessionStopRequest,
@@ -25,6 +26,7 @@ import {
 import { isHomeAgentSessionId } from "../core/home-agent-session";
 import { openInBrowser } from "../server/browser";
 import { buildRuntimeConfigResponse, resolveAgentCommand } from "../terminal/agent-registry";
+import { deliverTaskInput } from "../terminal/deliver-task-input";
 import type { TerminalSessionManager } from "../terminal/session-manager";
 import { resolveTaskCwd } from "../workspace/task-worktree";
 import { captureTaskTurnCheckpoint } from "../workspace/turn-checkpoints";
@@ -239,6 +241,26 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 				const message = error instanceof Error ? error.message : String(error);
 				return {
 					ok: false,
+					summary: null,
+					error: message,
+				};
+			}
+		},
+		deliverTaskInput: async (workspaceScope, input) => {
+			try {
+				const body = parseTaskInputDeliveryRequest(input);
+				const terminalManager = await deps.getScopedTerminalManager(workspaceScope);
+				return await deliverTaskInput(terminalManager, body.taskId, body.text, {
+					enter: body.enter,
+					confirm: body.confirm,
+				});
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				return {
+					ok: false,
+					status: "error",
+					evidence: null,
+					enterAttempts: 0,
 					summary: null,
 					error: message,
 				};

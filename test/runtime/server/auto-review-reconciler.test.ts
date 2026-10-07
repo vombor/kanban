@@ -13,6 +13,7 @@ import type {
 	TaskGitPromptTemplates,
 } from "../../../src/server/auto-review-reconciler";
 import { createAutoReviewReconciler } from "../../../src/server/auto-review-reconciler";
+import type { DeliverTaskInputResult } from "../../../src/terminal/deliver-task-input";
 import type { TerminalSessionManager } from "../../../src/terminal/session-manager";
 
 interface StoredWorkspaceState {
@@ -113,6 +114,7 @@ interface HarnessOptions {
 	selectedAgentId?: RuntimeAgentId;
 	promptTemplates?: TaskGitPromptTemplates;
 	now?: () => number;
+	deliverTaskInput?: CreateAutoReviewReconcilerDependencies["deliverTaskInput"];
 }
 
 function createHarness(options: HarnessOptions) {
@@ -152,6 +154,7 @@ function createHarness(options: HarnessOptions) {
 		probeTaskWorkspace,
 		onBoardMutated,
 		...(options.now ? { now: options.now } : {}),
+		...(options.deliverTaskInput ? { deliverTaskInput: options.deliverTaskInput } : {}),
 		warn,
 	};
 
@@ -326,6 +329,86 @@ describe("auto-review reconciler", () => {
 		const armed = findCardInBoard(harness.store.stored.board, "task-1");
 		expect(armed?.card.pendingGitAction).not.toBeNull();
 		expect(armed?.card.pendingGitAction?.attempt).toBe(0);
+	});
+
+	describe("prompt delivery", () => {
+		function createDeliveryStub(result: Omit<DeliverTaskInputResult, "ok" | "evidence" | "summary">) {
+			return vi.fn(
+				async (): Promise<DeliverTaskInputResult> => ({
+					ok: result.status === "delivered" || result.status === "sent",
+					evidence: result.status === "delivered" ? "hook" : null,
+					summary: null,
+					...result,
+				}),
+			);
+		}
+
+		async function armWith(deliver: ReturnType<typeof createDeliveryStub>) {
+			const card = createCard({ id: "task-1", autoReviewEnabled: true, agentId: "copilot" });
+			const harness = createHarness({ board: createBoard({ review: [card] }), deliverTaskInput: deliver });
+			harness.setProbe("task-1", { exists: true, headCommit: "commit-1", changedFiles: 3 });
+			await harness.evaluate();
+			// Delivery settles in the background, after the cycle.
+			await vi.runAllTimersAsync();
+			return harness;
+		}
+
+		it("delivers the prompt through deliverTaskInput and stays armed once confirmed", async () => {
+			const deliver = createDeliveryStub({ status: "delivered", enterAttempts: 1 });
+			const harness = await armWith(deliver);
+
+			expect(deliver).toHaveBeenCalledTimes(1);
+			expect(deliver).toHaveBeenCalledWith(
+				harness.terminal.manager,
+				"task-1",
+				"Commit the working changes onto main.",
+				expect.objectContaining({ agentId: "copilot", signal: expect.any(AbortSignal) }),
+			);
+			expect(findCardInBoard(harness.store.stored.board, "task-1")?.card.pendingGitAction).not.toBeNull();
+			expect(harness.warn).not.toHaveBeenCalled();
+		});
+
+		it("stays armed and warns when the prompt was typed but not confirmed", async () => {
+			const deliver = createDeliveryStub({
+				status: "undelivered",
+				enterAttempts: 2,
+				error: "Typed input not picked up (no session activity after Enter, twice).",
+			});
+			const harness = await armWith(deliver);
+
+			// Re-arming would type the prompt into the TUI a second time.
+			expect(findCardInBoard(harness.store.stored.board, "task-1")?.card.pendingGitAction).not.toBeNull();
+			expect(harness.warn).toHaveBeenCalledWith(expect.stringContaining("was not confirmed"));
+
+			await harness.evaluate();
+			await vi.runAllTimersAsync();
+			expect(deliver).toHaveBeenCalledTimes(1);
+		});
+
+		it("disarms the card when there is no session to deliver to", async () => {
+			const deliver = createDeliveryStub({
+				status: "no_session",
+				enterAttempts: 0,
+				error: "Task session is not running.",
+			});
+			const harness = await armWith(deliver);
+
+			expect(findCardInBoard(harness.store.stored.board, "task-1")?.card.pendingGitAction ?? null).toBeNull();
+			expect(harness.onBoardMutated).toHaveBeenCalled();
+		});
+
+		it("disarms when the summary is left over but the PTY is gone (real delivery)", async () => {
+			const card = createCard({ id: "task-1", autoReviewEnabled: true });
+			const harness = createHarness({ board: createBoard({ review: [card] }) });
+			harness.setProbe("task-1", { exists: true, headCommit: "commit-1", changedFiles: 3 });
+			harness.terminal.writeInput.mockReturnValue(null as unknown as RuntimeTaskSessionSummary);
+
+			await harness.evaluate();
+			await vi.runAllTimersAsync();
+
+			expect(harness.terminal.writeInput).toHaveBeenCalledTimes(1);
+			expect(findCardInBoard(harness.store.stored.board, "task-1")?.card.pendingGitAction ?? null).toBeNull();
+		});
 	});
 
 	it("clears a pending git action once it goes stale", async () => {
