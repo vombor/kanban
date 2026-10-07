@@ -493,3 +493,10 @@ of this repository is the complete record of changes.
   "resume + launch prompt" behaviour isn't verified. The rework started-check's `replaceLive` restart stays a fresh
   session from the reworked card prompt. A `resumeFromTrash` start with a launch prompt now begins `running`, not
   `awaiting_review`.
+- `src/pipeline/shadow-diff/shadow-diff.ts`, `legacy-autoland-log.ts`, `docs/team/RUNBOOK.md` (P5-1 shadow day): the restart
+  comparison pairs the two sides' times for one Kanban start within 10 s (autoland reads /proc, the server records
+  `Date.now() - process.uptime()` after binding its port, ~0.5 s apart), reports autoland's phantom starts (a short-lived
+  `kanban --port` process it took for the server, which it leaves again 15 s later) as KNOWN, and counts a legacy start
+  without orphans as SAME while the pipeline worker was watching (the pipeline logs only starts with orphans).
+  Tests: the shadow-diff unit tests, the CLI create → `dev-assignment.jsonl` → shadow-diff path, and a second
+  `kanban --port` launch leaving `run/server-start.json` alone.

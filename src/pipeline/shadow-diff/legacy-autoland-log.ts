@@ -53,11 +53,13 @@ export interface LegacyCardEvent {
 	text: string;
 }
 
-/** `restart <workspace>: Kanban started <iso> (…): N orphaned card(s)[: id (kind), …]`. */
+/** `restart <workspace>: Kanban started <iso> (autoland last saw <iso|none>): N orphaned card(s)[: id (kind), …]`. */
 export interface LegacyRestartEvent {
 	at: string;
 	workspaceId: string;
 	serverStartedAt: string;
+	/** The start autoland had seen before this line; null for "none". */
+	lastSeenStartedAt: string | null;
 	orphans: string[];
 }
 
@@ -174,16 +176,18 @@ function parseRestartCardLine(text: string): LegacyAction | null {
 }
 
 function parseRestartWorkspaceLine(at: string, workspaceId: string, text: string): LegacyRestartEvent | null {
-	const match = /^Kanban started (\S+) \(.*?\): (\d+) orphaned card\(s\)(?:: (.*))?$/u.exec(text);
+	const match =
+		/^Kanban started (\S+) \((?:autoland last saw ([^\s)]+))?.*?\): (\d+) orphaned card\(s\)(?:: (.*))?$/u.exec(text);
 	if (!match) {
 		return null;
 	}
-	const orphans = (match[3] ?? "")
+	const orphans = (match[4] ?? "")
 		.split(",")
 		.map((entry) => /^\s*([0-9a-f]{5}) \((\w+)\)/u.exec(entry))
 		// Calibration orphans are left to the calibration runner by both sides.
 		.flatMap((entry) => (entry && entry[2] !== "cal" ? [entry[1] as string] : []));
-	return { at, workspaceId, serverStartedAt: match[1] as string, orphans };
+	const lastSeen = match[2] && match[2] !== "none" ? match[2] : null;
+	return { at, workspaceId, serverStartedAt: match[1] as string, lastSeenStartedAt: lastSeen, orphans };
 }
 
 export function parseLegacyAutolandLog(text: string): LegacyAutolandLog {

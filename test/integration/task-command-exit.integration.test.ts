@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { getServerStartRecordPath } from "../../src/state/kanban-home";
 import { createGitTestEnv } from "../utilities/git-env";
 import { createTempDir } from "../utilities/temp-dir";
 
@@ -347,9 +348,11 @@ describe("source task commands", () => {
 			const browserStubBinDir = join(homeDir, "browser-bin");
 			const browserOpenLogPath = join(homeDir, "browser-open.log");
 			installBrowserOpenStub(browserStubBinDir, browserOpenLogPath);
+			const kanbanHome = join(homeDir, "kanban-home");
 			const env = createGitTestEnv({
 				HOME: homeDir,
 				USERPROFILE: homeDir,
+				KANBAN_HOME: kanbanHome,
 				KANBAN_RUNTIME_PORT: port,
 				PATH: `${browserStubBinDir}:${process.env.PATH ?? ""}`,
 			});
@@ -390,6 +393,12 @@ describe("source task commands", () => {
 					await waitForBrowserOpenCount(browserOpenLogPath, expectedOpenCount);
 					expect(readBrowserOpenLog(browserOpenLogPath)).toHaveLength(expectedOpenCount);
 				}
+				// A second launch that finds the port taken never wrote the server start record: restart recovery reads it
+				// as "the server started then" (P5-1: the legacy kit's /proc scan took such a launch for a restart).
+				const startRecord = JSON.parse(readFileSync(getServerStartRecordPath(kanbanHome), "utf8")) as {
+					pid: number;
+				};
+				expect(startRecord.pid).toBe(serverProcess.pid);
 			} finally {
 				await requestGracefulShutdown(serverProcess);
 				const stopped = await waitForExit(serverProcess, 5_000);

@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createTask } from "../../../src/commands/task";
+import { readPipelineConfig } from "../../../src/config/pipeline-config";
 import type { RuntimeBoardCard } from "../../../src/core/api-contract";
 import {
 	DEV_ASSIGNMENT_LOG_FILENAME,
@@ -11,6 +12,10 @@ import {
 	recordDevAssignment,
 	resolveDevAssignment,
 } from "../../../src/kits/dev-assignment";
+import { loadKitCatalog } from "../../../src/kits/resolve-kit";
+import { parseLegacyAutolandLog } from "../../../src/pipeline/shadow-diff/legacy-autoland-log";
+import { loadShadowDiffInput } from "../../../src/pipeline/shadow-diff/load-shadow-diff-inputs";
+import { computeShadowDiff } from "../../../src/pipeline/shadow-diff/shadow-diff";
 import { getKanbanGlobalConfigPath, getKanbanWorkspaceDataPath } from "../../../src/state/kanban-home";
 import type * as WorkspaceStateModule from "../../../src/state/workspace-state";
 import { type RuntimeTrpcContext, runtimeAppRouter } from "../../../src/trpc/app-router";
@@ -301,6 +306,36 @@ describe("kanban task create", () => {
 				}),
 			]);
 			expect(stderr).toHaveBeenCalledWith(expect.stringContaining("Kit team (shadow) would assign cline"));
+		});
+	});
+
+	// P5-1 shadow day: the orchestrator picks every foo card's agent and model itself; the kit's proposal is logged
+	// next to that choice and the shadow diff compares the two.
+	it("shadow day: the orchestrator's own choices are logged next to the proposal and the shadow diff reads them", async () => {
+		await withTemporaryKanbanHome(async () => {
+			writeConfig(teamWorkspace({ landing: { mode: "qa" }, pipeline: { shadow: true } }));
+			const startedAt = Date.now();
+			await create({ title: "Wishlist", agentId: "cline", agentSettings: TEAM_TIER3 });
+			await create({ title: "Docs", agentId: "claude" });
+			expect(readLog().map((entry) => entry.outcome)).toEqual(["explicit", "explicit"]);
+
+			const { config } = await readPipelineConfig();
+			const input = await loadShadowDiffInput({
+				workspaceId: WORKSPACE_ID,
+				config,
+				catalog: await loadKitCatalog(),
+				legacy: parseLegacyAutolandLog(""),
+				since: startedAt - 60_000,
+				until: Date.now() + 60_000,
+				windowMs: 10 * 60_000,
+				selectedAgentId: "claude",
+			});
+			const items = computeShadowDiff(input).items.filter((item) => item.category === "dev_assignment");
+			expect(items.map((item) => [item.status, item.legacy])).toEqual([
+				["same", "created on cline with us.openai.gpt-6.1-sol (set by its creator)"],
+				["different", "created on claude with its default model (set by its creator)"],
+			]);
+			expect(items[0]?.pipeline).toBe('kit "team" proposes cline with us.openai.gpt-6.1-sol (tier3)');
 		});
 	});
 });

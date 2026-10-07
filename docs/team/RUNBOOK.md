@@ -195,14 +195,19 @@ What it compares, per category:
 | QA routing | `qa <id>: created QA card <qa>` (+ that card's agent and model on the board), `not a dev card` | the `qa_gate` answer for the card in the same window |
 | After a FAIL | the rework or escalation that followed a FAIL, STALLED or conflict | the kit's `onFail`, asked offline with the legacy FAIL history (in shadow the pipeline has no verdicts of its own), or the pipeline's `rework` record when there is one |
 | Recovery | crash / poisoned / premature / retry nudges, retry and outage holds | `recovery` decisions (nudge with its cause, hold, cancel, escalate) |
-| Restart recovery | the orphans found for each Kanban start | the `restart` records for the same start |
+| Restart recovery | the orphans found for each Kanban start (times within 10 s are one start) | the `restart` records for the same start; a start without orphans isn't logged, so a legacy start with none counts as SAME when the worker logged `watching` (recovery not off) soon after it |
 | Dev assignment | what each new card was created with | what the kit proposed (`dev-assignment.jsonl`) |
 
 How to read the report:
 
 - `SAME` items are only counted (`--verbose` lists them).
-- `KNOWN` items are differences the plan expects: Claude-built dev cards get QA on `team` (plan §12), and the
-  legacy kit reworks only Cline cards.
+- `KNOWN` items are differences the plan expects: Claude-built dev cards get QA on `team` (plan §12), the
+  legacy kit reworks only Cline cards, and phantom restarts. Autoland takes the newest `node …/kanban … --port`
+  process in /proc as the server, so a short-lived one (a second `kanban --port …` launch that finds the port taken
+  and exits) reads as a new start, and about 15 s later autoland logs the real start again with the phantom as
+  "last saw" (2026-10-07 09:08:25Z). The server's own `run/server-start.json` is written only after it has bound
+  its port, so the pipeline never sees those. A phantom with orphans stays `LEGACY ONLY`, since autoland may have
+  resumed cards that were never orphaned.
 - `UNVERIFIED` items mean both sides acted, but one side's details are gone (the card was pruned from the board).
 - `DIFF`, `LEGACY ONLY` and `PIPELINE ONLY` items are the ones to explain.
 - A whole column of `LEGACY ONLY` means the pipeline decided nothing: the workspace isn't on landing `qa`, the

@@ -82,6 +82,11 @@ export interface ShadowDiffReport {
 const REACTION_WINDOW_MS = 30 * 60_000;
 /** Restart orphan records are written in the same evaluation as the restart's summary record. */
 const RESTART_GROUP_MS = 60_000;
+/**
+ * How far apart the two sides' times for the same Kanban start may be. Autoland reads the server process's start
+ * from /proc; the server records `Date.now() - process.uptime()` once it has bound its port (~0.5 s later on the pod).
+ */
+const RESTART_START_MATCH_MS = 10_000;
 
 const time = (iso: string): number => Date.parse(iso);
 
@@ -579,18 +584,55 @@ function compareRecovery(input: ShadowDiffInput, events: readonly LegacyCardEven
 
 const RESTART_NOTE = /^Kanban started (\S+?):? .*?(\d+) orphaned card\(s\)/u;
 
-function compareRestarts(input: ShadowDiffInput): ShadowDiffItem[] {
-	const legacyByStart = new Map<string, { at: string; orphans: string[] }>();
-	for (const restart of input.legacy.restarts) {
-		if (restart.workspaceId === input.workspaceId && !legacyByStart.has(restart.serverStartedAt)) {
-			legacyByStart.set(restart.serverStartedAt, { at: restart.at, orphans: restart.orphans });
+interface RestartSide {
+	start: string;
+	at: string;
+	orphans: string[];
+}
+
+/**
+ * Autoland's Kanban starts, without the ones that were never a server. Autoland takes the newest `node …/kanban …
+ * --port` process in /proc as the server's start, so a short-lived one (a second `kanban --port …` that finds the
+ * port taken and exits) reads as a restart, and once it is gone the next line names the old start again with that
+ * phantom as "last saw" (09:08:25Z on 2026-10-07, 4 min after the real start at 09:04:23). Real starts only move
+ * forward, so a line whose start is older than the one it last saw is such a revert.
+ * Ported from archive/devteam-kit:lib/restart-recovery.mjs@a2b4695 (kanbanStartMs).
+ */
+function readLegacyStarts(input: ShadowDiffInput): {
+	starts: RestartSide[];
+	phantoms: Array<RestartSide & { revertAt: string; backTo: string }>;
+} {
+	const events = input.legacy.restarts.filter((restart) => restart.workspaceId === input.workspaceId);
+	const reverts = events.filter(
+		(event) => event.lastSeenStartedAt !== null && time(event.serverStartedAt) < time(event.lastSeenStartedAt),
+	);
+	const starts: RestartSide[] = [];
+	const phantoms: Array<RestartSide & { revertAt: string; backTo: string }> = [];
+	const seen = new Set<string>();
+	for (const event of events) {
+		if (reverts.includes(event) || seen.has(event.serverStartedAt)) {
+			continue;
+		}
+		seen.add(event.serverStartedAt);
+		const side = { start: event.serverStartedAt, at: event.at, orphans: event.orphans };
+		const revert = reverts.find(
+			(candidate) => candidate.lastSeenStartedAt === event.serverStartedAt && time(candidate.at) >= time(event.at),
+		);
+		if (revert) {
+			phantoms.push({ ...side, revertAt: revert.at, backTo: revert.serverStartedAt });
+		} else {
+			starts.push(side);
 		}
 	}
+	return { starts, phantoms };
+}
+
+function readPipelineStarts(input: ShadowDiffInput): RestartSide[] {
 	const restartRecords = input.decisions.filter((record) => record.stage === "restart");
-	const pipelineByStart = new Map<string, { at: string; orphans: string[] }>();
+	const starts: RestartSide[] = [];
 	for (const record of restartRecords) {
 		const match = record.taskId === null ? RESTART_NOTE.exec(record.note) : null;
-		if (!match || pipelineByStart.has(match[1] as string)) {
+		if (!match || starts.some((side) => side.start === match[1])) {
 			continue;
 		}
 		const at = time(record.at);
@@ -604,34 +646,85 @@ function compareRestarts(input: ShadowDiffInput): ShadowDiffItem[] {
 					time(orphan.at) - at <= RESTART_GROUP_MS,
 			)
 			.map((orphan) => orphan.taskId as string);
-		pipelineByStart.set(match[1] as string, { at: record.at, orphans: [...new Set(orphans)] });
+		starts.push({ start: match[1] as string, at: record.at, orphans: [...new Set(orphans)] });
 	}
-	const describe = (orphans: string[]) =>
-		orphans.length === 0 ? "no orphaned dev cards" : `resumes ${[...orphans].sort().join(", ")}`;
+	return starts;
+}
+
+function compareRestarts(input: ShadowDiffInput): ShadowDiffItem[] {
+	const legacy = readLegacyStarts(input);
+	const pipelineStarts = readPipelineStarts(input);
+	const describe = (side: RestartSide) =>
+		`Kanban start ${side.start}: ${side.orphans.length === 0 ? "no orphaned dev cards" : `resumes ${[...side.orphans].sort().join(", ")}`}`;
 	const items: ShadowDiffItem[] = [];
-	for (const start of new Set([...legacyByStart.keys(), ...pipelineByStart.keys()])) {
-		const legacy = legacyByStart.get(start);
-		const pipeline = pipelineByStart.get(start);
-		const base = { category: "restart" as const, taskId: null, at: (legacy ?? pipeline)?.at ?? start };
-		if (!legacy || !pipeline) {
-			items.push({
-				...base,
-				status: legacy ? "legacy_only" : "pipeline_only",
-				legacy: legacy ? `Kanban start ${start}: ${describe(legacy.orphans)}` : "not seen",
-				pipeline: pipeline ? `Kanban start ${start}: ${describe(pipeline.orphans)}` : "not seen",
-				note: null,
-			});
+	const matched = new Set<RestartSide>();
+	for (const side of legacy.starts) {
+		const pipeline = pipelineStarts
+			.filter((candidate) => !matched.has(candidate))
+			.map((candidate) => ({ candidate, gap: Math.abs(time(candidate.start) - time(side.start)) }))
+			.filter(({ gap }) => gap <= RESTART_START_MATCH_MS)
+			.sort((a, b) => a.gap - b.gap)[0]?.candidate;
+		const base = { category: "restart" as const, taskId: null, at: side.at };
+		if (!pipeline) {
+			// The pipeline logs a start only when it finds orphans (recovery-stage.ts). Its worker starts with the server
+			// and logs a `worker` record, which says it was there to see this one (unless its recovery was off).
+			const watched =
+				side.orphans.length === 0 &&
+				input.decisions.some(
+					(record) =>
+						record.stage === "worker" &&
+						!/\brecovery off\b/u.test(record.note) &&
+						time(record.at) >= time(side.start) &&
+						time(record.at) - time(side.start) <= input.windowMs,
+				);
+			items.push(
+				watched
+					? {
+							...base,
+							status: "same",
+							legacy: describe(side),
+							pipeline: "no orphaned dev cards (a start without orphans isn't logged)",
+							note: null,
+						}
+					: { ...base, status: "legacy_only", legacy: describe(side), pipeline: "not seen", note: null },
+			);
 			continue;
 		}
+		matched.add(pipeline);
 		const same =
-			legacy.orphans.length === pipeline.orphans.length &&
-			legacy.orphans.every((taskId) => pipeline.orphans.includes(taskId));
+			side.orphans.length === pipeline.orphans.length &&
+			side.orphans.every((taskId) => pipeline.orphans.includes(taskId));
 		items.push({
 			...base,
 			status: same ? "same" : "different",
-			legacy: `Kanban start ${start}: ${describe(legacy.orphans)}`,
-			pipeline: `Kanban start ${start}: ${describe(pipeline.orphans)}`,
+			legacy: describe(side),
+			pipeline: describe(pipeline),
 			note: null,
+		});
+	}
+	for (const side of pipelineStarts) {
+		if (!matched.has(side)) {
+			items.push({
+				category: "restart",
+				status: "pipeline_only",
+				taskId: null,
+				at: side.at,
+				legacy: "not seen",
+				pipeline: describe(side),
+				note: null,
+			});
+		}
+	}
+	for (const phantom of legacy.phantoms) {
+		// A phantom with orphans means autoland may have resumed cards that were never orphaned: that stays a difference.
+		items.push({
+			category: "restart",
+			status: phantom.orphans.length === 0 ? "known" : "legacy_only",
+			taskId: null,
+			at: phantom.at,
+			legacy: describe(phantom),
+			pipeline: "not seen",
+			note: `not a Kanban start: a short-lived \`kanban --port\` process autoland took for the server; at ${phantom.revertAt} it saw ${phantom.backTo} again`,
 		});
 	}
 	return items;

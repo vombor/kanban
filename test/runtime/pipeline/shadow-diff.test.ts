@@ -182,8 +182,24 @@ describe("parseLegacyAutolandLog", () => {
 		]);
 		// Calibration orphans are left to the calibration runner by both sides.
 		expect(log.restarts).toEqual([
-			{ at: at(5), workspaceId: "foo", serverStartedAt: "2026-10-07T10:04:00.000Z", orphans: ["d1111"] },
+			{
+				at: at(5),
+				workspaceId: "foo",
+				serverStartedAt: "2026-10-07T10:04:00.000Z",
+				lastSeenStartedAt: null,
+				orphans: ["d1111"],
+			},
 		]);
+	});
+
+	it("reads the start autoland last saw", () => {
+		const log = parseLegacyAutolandLog(
+			line(
+				5,
+				"restart foo: Kanban started 2026-10-07T09:04:23.480Z (autoland last saw 2026-10-07T09:08:25.610Z): 0 orphaned card(s)",
+			),
+		);
+		expect(log.restarts[0]?.lastSeenStartedAt).toBe("2026-10-07T09:08:25.610Z");
 	});
 });
 
@@ -369,6 +385,71 @@ describe("computeShadowDiff", () => {
 			}),
 		);
 		expect(only(report.items, "restart").map((item) => item.status)).toEqual(["same", "legacy_only"]);
+	});
+
+	// 2026-10-07 09:08:25Z: autoland took a short-lived `node …/kanban … --port` process for a new server, then went
+	// back to the real start 15 s later. Neither line is a restart.
+	it("reports a start autoland went back from as a known phantom, not a restart", () => {
+		const real = "2026-10-07T10:00:00.000Z";
+		const phantom = "2026-10-07T10:04:00.000Z";
+		const restart = (minutes: number, start: string, lastSeen: string, orphans = "0 orphaned card(s)") =>
+			line(minutes, `restart foo: Kanban started ${start} (autoland last saw ${lastSeen}): ${orphans}`);
+		const report = computeShadowDiff(
+			createInput({
+				log: [
+					restart(0, real, "none"),
+					restart(4, phantom, real),
+					restart(4.25, real, phantom),
+					restart(10, "2026-10-07T10:10:00.000Z", real, "1 orphaned card(s): d1111 (dev)"),
+					restart(10.25, real, "2026-10-07T10:10:00.000Z"),
+				],
+				decisions: [
+					decision(0.1, { stage: "worker", taskId: null, note: "watching: landing qa, recovery report" }),
+				],
+			}),
+		);
+		const restarts = only(report.items, "restart");
+		expect(restarts.map((item) => [item.legacy.slice(0, 37), item.status])).toEqual([
+			[`Kanban start ${real}`, "same"],
+			[`Kanban start ${phantom}`, "known"],
+			// A phantom autoland found orphans for may have resumed live cards: that stays a difference.
+			["Kanban start 2026-10-07T10:10:00.000Z", "legacy_only"],
+		]);
+		expect(restarts[1]?.note).toContain(`it saw ${real} again`);
+	});
+
+	it("pairs the two sides' times for one Kanban start, and counts a start without orphans only while the pipeline watched", () => {
+		const legacyStart = "2026-10-07T10:00:00.480Z";
+		const restart = (minutes: number, start: string, orphans: string) =>
+			line(minutes, `restart foo: Kanban started ${start} (autoland last saw none): ${orphans}`);
+		// The server's own record is ~0.5 s after the /proc start autoland reads.
+		const paired = computeShadowDiff(
+			createInput({
+				log: [restart(0.1, legacyStart, "1 orphaned card(s): d1111 (dev)")],
+				decisions: [
+					decision(0.1, {
+						stage: "restart",
+						taskId: null,
+						answer: null,
+						note: "Kanban started 2026-10-07T10:00:00.946Z: 1 orphaned card(s)",
+					}),
+					decision(0.1, { stage: "restart", answer: { kind: "resume" }, outcome: "report" }),
+				],
+			}),
+		);
+		expect(only(paired.items, "restart").map((item) => item.status)).toEqual(["same"]);
+
+		const clean = (decisions: PipelineDecisionRecord[]) =>
+			only(
+				computeShadowDiff(createInput({ log: [restart(0.1, legacyStart, "0 orphaned card(s)")], decisions })).items,
+				"restart",
+			).map((item) => item.status);
+		const worker = (note: string) => decision(0.2, { stage: "worker", taskId: null, note });
+		expect(clean([worker("watching: landing qa, kit team, shadow, recovery report (report only)")])).toEqual([
+			"same",
+		]);
+		expect(clean([worker("watching: landing qa, kit team, shadow, recovery off")])).toEqual(["legacy_only"]);
+		expect(clean([])).toEqual(["legacy_only"]);
 	});
 
 	it("compares the kit's dev assignment proposal with what the card was created with", () => {
