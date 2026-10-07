@@ -28,6 +28,7 @@ const LEGACY_HOME_PARENT_DIR = ".cline";
 const LEGACY_HOME_DIR = "kanban";
 const LEGACY_WORKTREES_DIR = "worktrees";
 const CLINE_DATA_DIR = "data";
+const CLINE_SETTINGS_DIR = "settings";
 const CONFIG_FILENAME = "config.json";
 /** Board state dir inside the home (`<home>/workspaces`). */
 export const KANBAN_HOME_WORKSPACES_DIR = "workspaces";
@@ -35,6 +36,8 @@ const WORKTREES_DIR = "worktrees";
 const RUN_DIR = "run";
 const BACKUPS_DIR = "backups";
 const KITS_DIR = "kits";
+const DATA_DIR = "data";
+const MODELS_DATA_DIR = "models";
 const PROJECT_CONFIG_PARENT_DIR = ".cline";
 const PROJECT_CONFIG_DIR = "kanban";
 
@@ -120,14 +123,25 @@ export function getClineDataPath(): string {
 }
 
 /**
- * Cline's custom-provider file (`<data>/settings/models.json`), resolved the way the Cline CLI resolves it:
- * CLINE_DATA_DIR, else CLINE_DIR/data, else ~/.cline/data. `kanban setup` edits its `modelsSourceUrl`s.
+ * Cline's data dir, resolved the way the Cline CLI resolves it: CLINE_DATA_DIR, else CLINE_DIR/data, else
+ * ~/.cline/data. `dataDirOverride` is `agents.cline.dataDir` from config.json (null = Cline's own default).
  */
-export function getClineModelsSettingsPath(): string {
+function resolveClineDataDir(dataDirOverride: string | null): string {
+	if (dataDirOverride?.trim()) {
+		return expandUserPath(dataDirOverride, getUserHomePath());
+	}
 	const clineDir = readNonEmptyEnv("CLINE_DIR");
-	const dataDir =
-		readNonEmptyEnv("CLINE_DATA_DIR") ?? (clineDir ? join(clineDir, CLINE_DATA_DIR) : getClineDataPath());
-	return join(dataDir, "settings", "models.json");
+	return readNonEmptyEnv("CLINE_DATA_DIR") ?? (clineDir ? join(clineDir, CLINE_DATA_DIR) : getClineDataPath());
+}
+
+/** Cline's custom-provider file (`<data>/settings/models.json`). `kanban setup` edits its `modelsSourceUrl`s. */
+export function getClineModelsSettingsPath(dataDirOverride: string | null = null): string {
+	return join(resolveClineDataDir(dataDirOverride), CLINE_SETTINGS_DIR, "models.json");
+}
+
+/** Cline's provider settings (`<data>/settings/providers.json`): API keys, `lastUsedProvider`. */
+export function getClineProvidersSettingsPath(dataDirOverride: string | null = null): string {
+	return join(resolveClineDataDir(dataDirOverride), CLINE_SETTINGS_DIR, "providers.json");
 }
 
 function resolveHomePath(): { homePath: string; source: KanbanHomeSource } {
@@ -268,6 +282,16 @@ export function getKanbanBackupsPath(homePath = getKanbanHomePath()): string {
 /** User routing kits (`<home>/kits/<name>.json`); the built-in kits ship in the package. */
 export function getKanbanKitsPath(homePath = getKanbanHomePath()): string {
 	return join(homePath, KITS_DIR);
+}
+
+/** Per-workspace pipeline data and machine-wide caches (`<home>/data`). */
+export function getKanbanDataPath(homePath = getKanbanHomePath()): string {
+	return join(homePath, DATA_DIR);
+}
+
+/** Model metadata caches, such as Bedrock's inference-profile list (`<home>/data/models`). */
+export function getKanbanModelsDataPath(homePath = getKanbanHomePath()): string {
+	return join(getKanbanDataPath(homePath), MODELS_DATA_DIR);
 }
 
 export function getKanbanWorkspacesRootPath(homePath = getKanbanHomePath()): string {

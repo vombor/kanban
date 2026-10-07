@@ -11,6 +11,7 @@ import { registerConfigCommand } from "./commands/config";
 import { registerHomeCommand } from "./commands/home";
 import { registerHooksCommand } from "./commands/hooks";
 import { registerKitCommand } from "./commands/kit";
+import { registerModelsCommand } from "./commands/models";
 import { registerSetupCommand } from "./commands/setup";
 import { registerTaskCommand } from "./commands/task";
 import { loadGlobalRuntimeConfig, loadRuntimeConfig } from "./config/runtime-config";
@@ -750,6 +751,7 @@ function createProgram(invocationArgs: string[]): Command {
 	registerSetupCommand(program);
 	registerKitCommand(program);
 	registerConfigCommand(program);
+	registerModelsCommand(program);
 
 	program
 		.command("mcp")

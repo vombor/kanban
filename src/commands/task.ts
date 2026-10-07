@@ -1,4 +1,3 @@
-import { createTRPCProxyClient, httpBatchLink } from "@trpc/client";
 import type { Command } from "commander";
 import { getRuntimeAgentCatalogEntry } from "../core/agent-catalog";
 import type {
@@ -11,7 +10,7 @@ import type {
 	RuntimeWorkspaceStateResponse,
 } from "../core/api-contract";
 import { runtimeAgentIdEnumSchema, runtimeAgentIdSchema } from "../core/api-contract";
-import { buildKanbanRuntimeUrl, getKanbanRuntimeOrigin, getRuntimeFetch } from "../core/runtime-endpoint";
+import { getKanbanRuntimeOrigin } from "../core/runtime-endpoint";
 import { cloneRuntimeTaskAgentSettings } from "../core/task-agent-settings";
 import {
 	addTaskDependency,
@@ -25,7 +24,11 @@ import {
 } from "../core/task-board-mutations";
 import { resolveProjectInputPath } from "../projects/project-path";
 import { loadWorkspaceContext, mutateWorkspaceState } from "../state/workspace-state";
-import type { RuntimeAppRouter } from "../trpc/app-router";
+import {
+	createRuntimeTrpcClient,
+	notifyRuntimeWorkspaceStateUpdated,
+	type RuntimeTrpcClient,
+} from "./runtime-trpc-client";
 
 const LIST_TASK_COLUMNS = ["backlog", "in_progress", "review", "trash"] as const;
 type ListTaskColumn = (typeof LIST_TASK_COLUMNS)[number];
@@ -271,21 +274,6 @@ function resolveTaskCommandTarget(input: TaskCommandTarget, commandName: string)
 	throw new Error(`${commandName} requires either --task-id or --column.`);
 }
 
-function createRuntimeTrpcClient(workspaceId: string | null) {
-	return createTRPCProxyClient<RuntimeAppRouter>({
-		links: [
-			httpBatchLink({
-				url: buildKanbanRuntimeUrl("/api/trpc"),
-				headers: () => (workspaceId ? { "x-kanban-workspace-id": workspaceId } : {}),
-				fetch: async (url, options) => {
-					const runtimeFetch = await getRuntimeFetch();
-					return runtimeFetch(url, options);
-				},
-			}),
-		],
-	});
-}
-
 async function resolveRuntimeWorkspace(
 	projectPath: string | undefined,
 	cwd: string,
@@ -318,14 +306,8 @@ async function ensureRuntimeWorkspace(workspaceRepoPath: string): Promise<string
 	return added.project.id;
 }
 
-async function notifyRuntimeWorkspaceStateUpdated(
-	runtimeClient: ReturnType<typeof createRuntimeTrpcClient>,
-): Promise<void> {
-	await runtimeClient.workspace.notifyStateUpdated.mutate().catch(() => null);
-}
-
 async function updateRuntimeWorkspaceState<T>(
-	runtimeClient: ReturnType<typeof createRuntimeTrpcClient>,
+	runtimeClient: RuntimeTrpcClient,
 	workspaceRepoPath: string,
 	mutate: (state: RuntimeWorkspaceStateResponse) => RuntimeWorkspaceMutationResult<T>,
 ): Promise<T> {
@@ -468,10 +450,7 @@ async function listTasks(input: { cwd: string; projectPath?: string; column?: Li
 	};
 }
 
-async function stopTaskRuntimeSession(
-	runtimeClient: ReturnType<typeof createRuntimeTrpcClient>,
-	taskId: string,
-): Promise<void> {
+async function stopTaskRuntimeSession(runtimeClient: RuntimeTrpcClient, taskId: string): Promise<void> {
 	await runtimeClient.runtime.stopTaskSession
 		.mutate({
 			taskId,
@@ -480,7 +459,7 @@ async function stopTaskRuntimeSession(
 }
 
 async function deleteTaskWorkspace(
-	runtimeClient: ReturnType<typeof createRuntimeTrpcClient>,
+	runtimeClient: RuntimeTrpcClient,
 	taskId: string,
 ): Promise<{ removed: boolean; error?: string }> {
 	try {
@@ -834,7 +813,7 @@ function formatAutoStartedTask(
 async function trashTaskById(input: {
 	taskId: string;
 	workspaceRepoPath: string;
-	runtimeClient: ReturnType<typeof createRuntimeTrpcClient>;
+	runtimeClient: RuntimeTrpcClient;
 }): Promise<TrashTaskExecutionResult> {
 	const result = await input.runtimeClient.workspace.trashTask.mutate({
 		taskId: input.taskId,

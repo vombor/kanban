@@ -122,3 +122,13 @@ of this repository is the complete record of changes.
   `STATUS:` line, a QA final line, a no-images rejection or bare provider error (2 min), or 5 quiet min after a
   bounce back to running. Ported from the legacy kit's column-sync. `agents.cline.turnDetector.mode` in config.json:
   `off` | `report` (default: log only, the legacy kit still does it) | `on`.
+- `src/models/` (`bedrock-probe.ts`, `model-probe.ts`, `cline-providers.ts`, `card-provider-migration.ts`),
+  `src/commands/models.ts`, `src/commands/runtime-trpc-client.ts` (new; the task command's tRPC client moved there),
+  `src/commands/task.ts`, `src/cli.ts`, `src/state/kanban-home.ts`: `kanban models probe|providers` (plan step P3-3).
+  `models probe <id…> [--list] [--refresh] [--provider bedrock|lemonade] [--region] [--json]` asks each model for a
+  tool call through Bedrock Converse (us.* inference profile when listed, profiles cached in
+  `<home>/data/models/bedrock-profiles.json`, xAI never probed; exit 1 unless all answer); `probeModel()` is the typed
+  probe outage recovery will call (Bedrock tool call, Lemonade `/health`). `models providers [--for M] [--cleanup]
+  [--migrate-cards] [--apply] [--workspace]` reports and removes deprecated provider workarounds in Cline's
+  providers.json/models.json (Mantle endpoints and `models.providers.deprecated`; backup first; Codex reported only)
+  and moves open cards off them with the same model. Read-only unless `--apply`; nothing runs on its own.
