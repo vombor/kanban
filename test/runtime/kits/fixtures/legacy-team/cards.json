@@ -1,0 +1,41 @@
+{
+	"clineProvidersJson": {
+		"lastUsedProvider": "bedrock",
+		"providers": { "bedrock": { "settings": { "model": "us.openai.gpt-6.1-sol" } } }
+	},
+	"routing": [
+		{ "name": "tier-3 default (sol 6.1)", "card": { "id": "d0001", "agentId": "cline", "agentSettings": { "providerId": "bedrock", "modelId": "us.openai.gpt-6.1-sol" } } },
+		{ "name": "luna (dropped, in-flight cards finish on it)", "card": { "id": "d0002", "agentId": "cline", "agentSettings": { "providerId": "openai-native", "modelId": "us.openai.gpt-6-luna" } } },
+		{ "name": "bare gpt- id", "card": { "id": "d0003", "agentId": "cline", "agentSettings": { "providerId": "bedrock", "modelId": "gpt-6.1-sol" } } },
+		{ "name": "gpt-oss (openai. without region)", "card": { "id": "d0004", "agentId": "cline", "agentSettings": { "providerId": "bedrock", "modelId": "openai.gpt-oss-120b-1:0" } } },
+		{ "name": "opus 5.5 (tier-2 candidate)", "card": { "id": "d0005", "agentId": "cline", "agentSettings": { "providerId": "bedrock", "modelId": "us.anthropic.claude-opus-5-5" } } },
+		{ "name": "kimi k3 (tier-2 candidate)", "card": { "id": "d0006", "agentId": "cline", "agentSettings": { "providerId": "bedrock", "modelId": "us.moonshotai.kimi-k3" } } },
+		{ "name": "nova 2 lite", "card": { "id": "d0007", "agentId": "cline", "agentSettings": { "providerId": "bedrock", "modelId": "us.amazon.nova-2-lite-v1:0" } } },
+		{ "name": "Cline card with no model: the Cline CLI default decides", "card": { "id": "d0008", "agentId": "cline" } },
+		{ "name": "Codex card with no model", "card": { "id": "d0009", "agentId": "codex" } }
+	],
+	"prompts": [
+		{
+			"name": "OpenAI-built card, round 1: Haiku route with the drive rule",
+			"card": { "id": "d1111", "agentId": "cline", "agentSettings": { "providerId": "bedrock", "modelId": "us.openai.gpt-6.1-sol" }, "prompt": "Add a wishlist page at /wishlist with add/remove buttons.\n\nFINAL STEP: reply STATUS: DONE" },
+			"round": 1,
+			"qaId": "q1111",
+			"short": "Add a wishlist page at /wishlist with add/remove b"
+		},
+		{
+			"name": "Opus-built card that names its project, round 1: Codex, no extra rules",
+			"card": { "id": "d2222", "agentId": "cline", "agentSettings": { "providerId": "bedrock", "modelId": "us.anthropic.claude-opus-5-5" }, "prompt": "Project: Pawsome.\nFix the cart total rounding." },
+			"round": 1,
+			"qaId": "q2222",
+			"short": "Project: Pawsome."
+		},
+		{
+			"name": "OpenAI-built card, round 2: the earlier QA section is quoted",
+			"card": { "id": "d3333", "agentId": "cline", "agentSettings": { "providerId": "bedrock", "modelId": "us.openai.gpt-6-luna" }, "prompt": "Add order history to /account.\n\nFINAL STEP: reply STATUS: DONE" },
+			"round": 2,
+			"qaId": "q3333",
+			"short": "Add order history to /account.",
+			"qaLog": "## Claude QA d3333: FAIL (round 1)\n- Blocking: /account/orders returns 500.\n\n## Claude QA d9999: PASS\n- other card\n"
+		}
+	]
+}

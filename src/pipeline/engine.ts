@@ -21,6 +21,7 @@ import type {
 	RuntimeBoardData,
 	RuntimeTaskSessionSummary,
 } from "../core/api-contract";
+import { resolveCardRole } from "../core/card-role";
 import {
 	type EffectiveModelConfig,
 	resolveEffectiveAgentWithSource,
@@ -84,7 +85,8 @@ export function toEffectiveCard(input: {
 		effective: {
 			card: input.card,
 			workspaceId: input.workspaceId,
-			role: input.card.role ?? "dev",
+			// A legacy-kit QA/TRIAGE/calibration card has no role; resolveCardRole reads its creation markers.
+			role: resolveCardRole(input.card),
 			agentId: agent.agentId,
 			model: resolveEffectiveModel(input.card, input.session, config),
 		},

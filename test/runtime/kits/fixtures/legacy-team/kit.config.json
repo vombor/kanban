@@ -1,0 +1,166 @@
+{
+  "//": "Live config for this machine (gitignored). Everything not listed uses the defaults in lib/config.cjs (data, logs, run, backups under ~/.kanban). See docs/CONFIG.md.",
+  "kanbanUrl": "http://127.0.0.1:3485",
+  "runtimeUrl": "http://127.0.0.1:3484",
+  "bedrockRegion": "us-west-2",
+  "syncIntervalSec": 10,
+  "thresholds": {
+    "REWORK_CLEAR_TURNS": 100,
+    "REWORK_CLEAR_TOKENS": 150000,
+    "NUDGE_MAX": 2,
+    "QAFLOW_MAX_FAILS": 3
+  },
+  "toggles": {
+    "AUTO_DONE": true,
+    "AUTO_REWORK": true,
+    "QA_CREATE": true,
+    "TRIAGE_CARDS": false,
+    "WAKE_ORCHESTRATOR": true
+  },
+  "benchmark": {
+    "tiers": {
+      "tier3": [
+        {
+          "provider": "openai-native",
+          "model": "us.openai.gpt-6.1-sol",
+          "default": true,
+          "note": "tier-3 default since 2026-10-06 (won runoff tier3-multiregion: 4.0 vs 3.67, ~21 min vs ~2h45); provider becomes bedrock after the fork switch (kit providers --for)"
+        }
+      ],
+      "tier2": [
+        {
+          "provider": "openai-native",
+          "model": "us.moonshotai.kimi-k3",
+          "note": "candidate, runoff tier2-coupons-2026-10-06 (096bd); provider becomes bedrock after the fork switch (kimi-k3 on bedrock untested: 503 outage 10/06)"
+        },
+        {
+          "provider": "bedrock",
+          "model": "us.anthropic.claude-opus-5-5",
+          "note": "candidate, runoff tier2-coupons-2026-10-06 (c9e97)"
+        }
+      ],
+      "tier1": [],
+      "qa": [
+        {
+          "provider": "bedrock",
+          "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+          "note": "candidate, calibration qa-models-v5"
+        },
+        {
+          "provider": "bedrock",
+          "model": "us.amazon.nova-2-lite-v1:0",
+          "note": "candidate, calibration qa-models-v5"
+        }
+      ]
+    },
+    "dropped": [
+      {
+        "provider": "bedrock",
+        "model": "qwen.qwen3-next-80b-a3b",
+        "at": "2026-10-05",
+        "why": "3 own QA FAILs on f80db and 58f74; broke large TSX files"
+      },
+      {
+        "provider": "bedrock",
+        "model": "us.amazon.nova-2-lite-v1:0",
+        "at": "2026-10-05",
+        "why": "ends turns narrating instead of calling tools; no Cline caching makes it ~$26 per 62a99-sized run vs luna ~$1"
+      },
+      {
+        "provider": "bedrock",
+        "model": "openai.gpt-oss-120b-1:0",
+        "at": "2026-10-05",
+        "why": "3 own QA FAILs on de30c (scores ~1/5), context-overflow crashes"
+      },
+      {
+        "provider": "bedrock",
+        "model": "nvidia.nemotron-super-3-120b",
+        "at": "2026-10-05",
+        "why": "3 own QA FAILs on 43360 (Docker/CI); user read its output: cannot perform. Card deleted, work kept as tag preserve/43360-nemotron-r3"
+      },
+      {
+        "provider": "openai-native",
+        "model": "us.openai.gpt-6-luna",
+        "at": "2026-10-06",
+        "why": "lost tier-3 runoff to gpt-6.1-sol (3.67 vs 4.0, ~2h45 vs ~21 min); user: tier 3 = sol 6.1. Not a failure: in-flight luna cards (8e891) finish on luna"
+      },
+      {
+        "provider": "bedrock",
+        "model": "us.anthropic.claude-sonnet-5-5",
+        "at": "2026-10-06",
+        "why": "not a tier-2 candidate (user: ~$20/run, no Sonnet)"
+      }
+    ],
+    "tierRules": {
+      "tier3": "< $20 per 62a99-sized run (86M input, 0.19M output) at list price",
+      "tier2": ">= $20 per run"
+    },
+    "tierNotes": {
+      "tier1": "none yet; user 10/06: not sure one is needed",
+      "qa": "user 10/06: QA = Haiku or Nova 2 Lite (on Cline), decided by calibration v5. Rule: QA vendor != dev vendor. Codex sol6 stays QA until the tier-2 runoff is decided"
+    }
+  },
+  "projects": [
+    {
+      "workspaceId": "foo",
+      "projectPath": "/projects/foo",
+      "toggles": { "QA_CREATE": true, "AUTO_REWORK": true, "AUTO_DONE": true },
+      "//toggles": "2026-10-07: K-1 (kit 92101ca) stopped projects inheriting these three from the top level; foo keeps QA, rework and landing explicitly.",
+      "baseBranch": "master",
+      "name": "Pawsome",
+      "projectBlurb": "Project: Pawsome, a full-stack e-commerce pet shop (food, toys, accessories). Stack: Next.js App Router + Tailwind CSS frontend (existing scaffold in src/), Node.js + Express backend API, Prisma ORM with SQLite, Zod validation, JWT auth, Vitest unit tests, Playwright e2e. Write clean modular TypeScript, comprehensive error handling, and Vitest tests for everything you add (project target: 80%+ coverage).",
+      "//": "bench data (scoreboard, results, models) kept together in data/foo/bench (~/bench links there)",
+      "scoreboard": "~/.kanban/data/foo/bench/scoreboard.jsonl",
+      "qaPrompt": {
+        "screenshotFallbackNote": "",
+        "knownBaseIssues": "",
+        "dbSetup": "DATABASE_URL=file:./dev.db npx prisma migrate deploy && DATABASE_URL=file:./dev.db npx tsx prisma/seed.ts"
+      },
+      "postLand": [
+        {
+          "paths": "^prisma/",
+          "run": "npx prisma generate && DATABASE_URL=file:./dev.db npx prisma migrate deploy",
+          "stopUnder": [
+            "server"
+          ]
+        }
+      ],
+      "qaPreview": null,
+      "//qaPreview": "removed 10/06 08:5xZ: since Preview A/B (master a700765/e1549e8) QA screenshots run on private per-worktree ports and agents must never start/stop the shared :3600 (AGENTS.md); 'npm run preview:start' failed with 'Unknown preview command: start' on every QA card"
+    },
+    {
+      "workspaceId": "kanban-2uge",
+      "projectPath": "/projects/kanban",
+      "baseBranch": "fork/stack",
+      "name": "kanban-fork",
+      "projectBlurb": "Project: the vombor/kanban fork of cline/kanban, a TypeScript CLI + local web server (src/, tRPC runtime API, agent adapters, worktree and session management) with a React/Vite web UI (web-ui/) and an Electron shell (packages/desktop). It is a board for orchestrating coding agents (Cline CLI, Claude Code, Codex, Copilot...) in per-card git worktrees. Base branch fork/stack = upstream main + the fork patches (fork.3: no embedded Cline SDK; runtime auto-review). Work in progress: folding the ~/.kanban dev-team kit into this repo (docs/fork/kit-merge-plan.md). Check with npm run check (lint, typecheck, runtime tests), npm run web:typecheck and npm run web:test. Keep upstream-shaped changes small and separate from fork-only ones, and never push.",
+      "toggles": {
+        "QA_CREATE": false,
+        "AUTO_REWORK": false,
+        "AUTO_DONE": false
+      },
+      "//toggles": "2026-10-06: user wants every card on this board to use the Kanban default agent (claude); the orchestrator reviews and lands. Autoland must not QA, rework or land here."
+    }
+  ],
+  "qaAgent": "codex",
+  "qaSlots": 2,
+  "wakeMode": "sidebar",
+  "wakeTarget": "kanban-2uge",
+  "devAgent": "cline",
+  "providers": {
+    "//": "Fork switch 10/06: ONE provider for Cline models, native bedrock (cline 3.x, sandbox-verified: luna, gpt-6-sol, gpt-6.1-sol, opus-5.5, haiku-4.5). Use `kit providers --for <model>` when creating cards. legacyUpstream applies only while Kanban is upstream 0.1.70 (its embedded SDK can't run OpenAI models on bedrock). fallback = models proven NOT to work on bedrock under cline 3.x (none yet; kimi-k3 untested: Bedrock 503 outage 10/06).",
+    "default": "bedrock",
+    "fallback": {},
+    "legacyUpstream": {
+      "^us\\.openai\\.": "openai-native",
+      "kimi-k3": "openai-native"
+    },
+    "deprecated": {
+      "openai-native": "Cline providers.json entry pointed at Bedrock /openai/v1 (Mantle). Broken under cline 3.x (sends OpenAI's image_generation tool). Keep until the switch, then remove (kit providers --cleanup).",
+      "models.json:mantle": "custom provider at bedrock-mantle.us-east-1.api.aws/v1 (experiment, unused)",
+      "models.json:bedrock-mantle": "custom provider at Bedrock /openai/v1, openai-responses (experiment, unused)",
+      "codex:bedrock-mantle": "~/.codex/config.toml model provider; goes away with the Codex retirement (after the tier-2 election)",
+      "kit probe-models --openai": "probes the deprecated openai-native path; use plain kit probe-models (bedrock Converse)"
+    }
+  }
+}

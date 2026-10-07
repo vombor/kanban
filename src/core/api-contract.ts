@@ -102,7 +102,8 @@ export const runtimeTaskGitActionSchema = z.preprocess(
 export type RuntimeTaskGitAction = z.infer<typeof runtimeTaskGitActionEnum>;
 /**
  * What a card is for. A card without a role is a `dev` card (the work). QA, TRIAGE and calibration cards are never
- * QA'd, reworked or auto-reviewed; the pipeline decides on the role, never on titles or prompts.
+ * QA'd, reworked or auto-reviewed; the pipeline decides on the role, never on titles or prompts (the one exception,
+ * role-less cards the legacy kit created, is `src/core/card-role.ts`).
  */
 export const runtimeTaskRoleSchema = z.enum(["dev", "qa", "triage", "calibration"]);
 export type RuntimeTaskRole = z.infer<typeof runtimeTaskRoleSchema>;

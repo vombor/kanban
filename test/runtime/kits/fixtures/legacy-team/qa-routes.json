@@ -1,0 +1,157 @@
+[
+	{
+		"name": "tier-3 default (sol 6.1)",
+		"card": {
+			"id": "d0001",
+			"agentId": "cline",
+			"agentSettings": {
+				"providerId": "bedrock",
+				"modelId": "us.openai.gpt-6.1-sol"
+			}
+		},
+		"devModel": "us.openai.gpt-6.1-sol",
+		"qaAgent": "cline",
+		"qaProvider": "bedrock",
+		"qaModel": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+		"route": 0,
+		"rules": [
+			"drive"
+		]
+	},
+	{
+		"name": "luna (dropped, in-flight cards finish on it)",
+		"card": {
+			"id": "d0002",
+			"agentId": "cline",
+			"agentSettings": {
+				"providerId": "openai-native",
+				"modelId": "us.openai.gpt-6-luna"
+			}
+		},
+		"devModel": "us.openai.gpt-6-luna",
+		"qaAgent": "cline",
+		"qaProvider": "bedrock",
+		"qaModel": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+		"route": 0,
+		"rules": [
+			"drive"
+		]
+	},
+	{
+		"name": "bare gpt- id",
+		"card": {
+			"id": "d0003",
+			"agentId": "cline",
+			"agentSettings": {
+				"providerId": "bedrock",
+				"modelId": "gpt-6.1-sol"
+			}
+		},
+		"devModel": "gpt-6.1-sol",
+		"qaAgent": "cline",
+		"qaProvider": "bedrock",
+		"qaModel": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+		"route": 0,
+		"rules": [
+			"drive"
+		]
+	},
+	{
+		"name": "gpt-oss (openai. without region)",
+		"card": {
+			"id": "d0004",
+			"agentId": "cline",
+			"agentSettings": {
+				"providerId": "bedrock",
+				"modelId": "openai.gpt-oss-120b-1:0"
+			}
+		},
+		"devModel": "openai.gpt-oss-120b-1:0",
+		"qaAgent": "cline",
+		"qaProvider": "bedrock",
+		"qaModel": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+		"route": 0,
+		"rules": [
+			"drive"
+		]
+	},
+	{
+		"name": "opus 5.5 (tier-2 candidate)",
+		"card": {
+			"id": "d0005",
+			"agentId": "cline",
+			"agentSettings": {
+				"providerId": "bedrock",
+				"modelId": "us.anthropic.claude-opus-5-5"
+			}
+		},
+		"devModel": "us.anthropic.claude-opus-5-5",
+		"qaAgent": "codex",
+		"qaProvider": null,
+		"qaModel": null,
+		"route": null,
+		"rules": []
+	},
+	{
+		"name": "kimi k3 (tier-2 candidate)",
+		"card": {
+			"id": "d0006",
+			"agentId": "cline",
+			"agentSettings": {
+				"providerId": "bedrock",
+				"modelId": "us.moonshotai.kimi-k3"
+			}
+		},
+		"devModel": "us.moonshotai.kimi-k3",
+		"qaAgent": "codex",
+		"qaProvider": null,
+		"qaModel": null,
+		"route": null,
+		"rules": []
+	},
+	{
+		"name": "nova 2 lite",
+		"card": {
+			"id": "d0007",
+			"agentId": "cline",
+			"agentSettings": {
+				"providerId": "bedrock",
+				"modelId": "us.amazon.nova-2-lite-v1:0"
+			}
+		},
+		"devModel": "us.amazon.nova-2-lite-v1:0",
+		"qaAgent": "codex",
+		"qaProvider": null,
+		"qaModel": null,
+		"route": null,
+		"rules": []
+	},
+	{
+		"name": "Cline card with no model: the Cline CLI default decides",
+		"card": {
+			"id": "d0008",
+			"agentId": "cline"
+		},
+		"devModel": "us.openai.gpt-6.1-sol",
+		"qaAgent": "cline",
+		"qaProvider": "bedrock",
+		"qaModel": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+		"route": 0,
+		"rules": [
+			"drive"
+		]
+	},
+	{
+		"name": "Codex card with no model",
+		"card": {
+			"id": "d0009",
+			"agentId": "codex"
+		},
+		"devModel": null,
+		"qaAgent": "codex",
+		"qaProvider": null,
+		"qaModel": null,
+		"route": null,
+		"rules": []
+	}
+]

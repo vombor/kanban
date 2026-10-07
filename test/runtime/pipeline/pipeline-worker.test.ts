@@ -83,6 +83,8 @@ describe("pipeline worker", () => {
 						createCard({ id: "auto-commit", autoReviewEnabled: true, autoReviewMode: "commit" }),
 						createCard({ id: "qa-mode", autoReviewEnabled: true, autoReviewMode: "qa" }),
 						createCard({ id: "qa-card", role: "qa" }),
+						// Made by the legacy kit before cutover: no role, only its "QA<n> <devId>:" title.
+						createCard({ id: "f00d1", title: "QA2 dead1: Add a wishlist page", agentId: "codex" }),
 					],
 				}),
 				selectedAgentId: "claude",
@@ -90,8 +92,9 @@ describe("pipeline worker", () => {
 		);
 
 		const decisions = harness.readCardDecisions("foo");
-		expect(decisions.map((decision) => decision.taskId)).toEqual(["qa-mode", "qa-card"]);
+		expect(decisions.map((decision) => decision.taskId)).toEqual(["qa-mode", "qa-card", "f00d1"]);
 		expect(decisions[1]).toMatchObject({ role: "qa", answer: { kind: "none" }, outcome: "none" });
+		expect(decisions[2]).toMatchObject({ role: "qa", answer: { kind: "none" }, outcome: "none" });
 	});
 
 	it("picks up a landing-mode or kit change on the next snapshot, with no restart", async () => {
