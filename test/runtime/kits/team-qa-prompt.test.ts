@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { buildQaChecksReport } from "../../../src/pipeline/qa-checks-report";
 import { getPreviousQaRounds } from "../../../src/pipeline/qa-log";
 import { buildQaPrompt, buildQaRequirements, getQaShortTitle } from "../../../src/pipeline/qa-prompt";
 import { getSnapshotRef } from "../../../src/pipeline/snapshots";
@@ -92,4 +93,43 @@ describe("team kit QA prompt parts for foo", () => {
 			expect(prompt).toBe(fixture.prompt);
 		});
 	}
+
+	// The one addition to the legacy prompt (QA waits for the scripted checks, 2026-10-07): the checks report goes
+	// after the requirements, and the legacy text before it stays word for word.
+	it("appends the scripted checks report after the legacy prompt, which stays unchanged", () => {
+		const [fixture] = readLegacyQaPrompts();
+		if (!fixture) {
+			throw new Error("no legacy QA prompt fixture");
+		}
+		const answer = createTeamPolicy(getFooImportedOverrides()).qaPolicy({
+			dev: toFooEffectiveCard(fixture.card),
+			round: fixture.round,
+			history: createCardHistory(),
+		});
+		if (answer.kind !== "qa") {
+			throw new Error(`expected a QA answer, got: ${answer.reason}`);
+		}
+		const checksReport = buildQaChecksReport({
+			status: { kind: "timed_out", since: 0, waitMin: 20 },
+			snapshot: "0123456789abcdef",
+			baseRef: "master",
+		});
+		const prompt = buildQaPrompt({
+			devTaskId: fixture.card.id,
+			round: fixture.round,
+			devTitle: fixture.card.title || fixture.card.prompt,
+			requirements: buildQaRequirements(fixture.card.prompt, answer.promptParts.blurb),
+			repoPath: "/projects/foo",
+			snapshotRef: getSnapshotRef(fixture.card.id),
+			baseRef: "master",
+			scratchDir: `${LEGACY_QA_SCRATCH_ROOT}/${fixture.card.id}`,
+			outboxDir: `${LEGACY_QA_OUT_ROOT}/${fixture.qaId}`,
+			previousRounds: getPreviousQaRounds(fixture.qaLog, fixture.card.id),
+			parts: answer.promptParts,
+			kanbanHome: "~/.kanban",
+			checksReport,
+		});
+		expect(prompt).toBe(`${fixture.prompt}\n\n${checksReport}`);
+		expect(checksReport).toMatch(/^SCRIPTED CHECKS of snapshot 01234567, .*\n- Result: TIMED OUT: /u);
+	});
 });

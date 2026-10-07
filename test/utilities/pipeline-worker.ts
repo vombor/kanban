@@ -51,6 +51,8 @@ export interface PipelineWorkerHarnessOptions {
 	appendQaLog?: AppendQaLog;
 	/** Legacy checks-state.json per workspace id, for the import. */
 	legacyChecksState?: Record<string, unknown>;
+	/** The check scripts a snapshot's package.json has, for the QA gate's checks wait. Default: none (no wait). */
+	checkScripts?: (snapshot: string) => string[];
 	/** The QA gate's snapshot commit of a card. Default: every card has the snapshot `snap-<id>`. */
 	snapshot?: (taskId: string) => string | null;
 	/** The server's answer to a QA gate action, a Done request or a nudge. Default: ok. */
@@ -143,6 +145,7 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 		bus,
 		preview,
 		readSnapshot: async (_repoPath, taskId) => snapshotOf(taskId),
+		readCheckScripts: async (_repoPath, snapshot) => options.checkScripts?.(snapshot) ?? [],
 		readVerdict: async (outboxDir) => verdicts.get(outboxDir) ?? { kind: "missing" },
 		stopScratchProcesses: async (dirs) => {
 			stoppedScratch.push(dirs);

@@ -34,6 +34,8 @@
 //   the turn recovery had redone);
 // - no QA card is created or started while the snapshot says `pidPressure` (pumpQa's pid-pressure hold: zombies
 //   filling pids.max wiped a board, 10/05), logged once per hold; ingest and PASS landing go on.
+// New since the legacy kit (user's choice "D", 2026-10-07): the QA card is created only once the scripted checks of
+// its snapshot have finished, or after `checksWaitMin`, and its prompt gets their report (qa-checks-report.ts).
 import { randomUUID } from "node:crypto";
 import { cp, mkdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -56,6 +58,7 @@ import type { EffectiveCard, KitVerdict, OnPassAnswer, QaPolicyAnswer, RoutingPo
 import { getKanbanHomeDisplayPath, getPipelineQaLogPath, getQaArtifactsPath } from "../state/kanban-home";
 import { isReviewSettled } from "../terminal/review-settle";
 import type { PipelineActions } from "./actions";
+import { readSnapshotCheckScripts, resolveChecksEnabled } from "./checks";
 import type { PipelineDecisionOutcome, PipelineDecisionRecord } from "./decision-log";
 import {
 	describeUnsettledReview,
@@ -67,6 +70,14 @@ import {
 import type { PipelineEventBus } from "./events";
 import { decideOnPass, readPipelineHold } from "./hold";
 import type { PipelineCardState, PipelineStateStore, PipelineWorkspaceState } from "./pipeline-state";
+import {
+	buildQaChecksReport,
+	decideQaChecks,
+	describeQaChecksOutcome,
+	type QaChecksOutcome,
+	readQaChecksWait,
+	toQaChecksOutcome,
+} from "./qa-checks-report";
 import { type AppendQaLog, countQaLogRounds, formatQaLogSection, getPreviousQaRounds, readQaLog } from "./qa-log";
 import type { QaPreviewController } from "./qa-preview";
 import { buildQaCardTitle, buildQaPrompt, buildQaRequirements } from "./qa-prompt";
@@ -110,6 +121,8 @@ export const qaGateEntrySchema = z.object({
 	verdict: z.string().nullable().default(null),
 	trashed: z.boolean().default(false),
 	supersededAt: z.number().nullable().default(null),
+	/** The scripted checks the QA prompt reported (`timed_out`: QA started without them); null: no checks. */
+	checks: z.enum(["PASS", "FAIL", "ERROR", "timed_out", "unknown"]).nullable().default(null),
 });
 export type QaGateEntry = z.infer<typeof qaGateEntrySchema>;
 
@@ -158,6 +171,8 @@ export interface QaGateContext {
 	featureOnPass?: (input: { dev: EffectiveCard; verdict: KitVerdict }) => Promise<OnPassAnswer | null>;
 	agentDefaultModels?: EffectiveModelConfig["agentDefaultModels"];
 	now: number;
+	/** Asks for another evaluation of the workspace at `at` (a QA card waiting for checks times out then). */
+	requestWake?: (at: number) => void;
 }
 
 export interface QaGateSubmitInput {
@@ -186,6 +201,8 @@ export interface QaGateDependencies {
 	preview: QaPreviewController;
 	/** The card's snapshot commit (`refs/kanban/snapshots/<id>`, written by the submission stage). Default: git. */
 	readSnapshot?: (repoPath: string, taskId: string) => Promise<string | null>;
+	/** The configured check scripts a snapshot's package.json has (none: QA doesn't wait). Default: git show. */
+	readCheckScripts?: (repoPath: string, snapshot: string, scripts: readonly string[]) => Promise<string[]>;
 	readVerdict: (outboxDir: string) => Promise<QaVerdictRead>;
 	stopScratchProcesses: (dirs: string[]) => Promise<number>;
 	copyArtifacts?: (from: string, to: string) => Promise<void>;
@@ -235,7 +252,8 @@ function describeModel(model: EffectiveModel | null): string {
 /** The same note on every evaluation, so the decision log has the creation once. */
 function describeCreated(qaTaskId: string, entry: QaGateEntry | null, shortSnapshot: string): string {
 	const details = entry ? ` (round ${entry.round}, ${entry.agentId} on ${describeModel(entry.model)})` : "";
-	return `QA card ${qaTaskId} was created for snapshot ${shortSnapshot}${details}`;
+	const checks = entry ? describeQaChecksOutcome(entry.checks) : null;
+	return `QA card ${qaTaskId} was created for snapshot ${shortSnapshot}${details}${checks ? ` with ${checks}` : ""}`;
 }
 
 function listCards(
@@ -259,6 +277,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 	const artifactsPathOf = deps.getArtifactsPath ?? ((workspaceId: string) => getQaArtifactsPath(workspaceId));
 	const randomUuid = deps.randomUuid ?? randomUUID;
 	const readSnapshot = deps.readSnapshot ?? readTaskSnapshot;
+	const readCheckScripts = deps.readCheckScripts ?? readSnapshotCheckScripts;
 	const kanbanHomeOf = deps.getKanbanHome ?? (() => getKanbanHomeDisplayPath());
 	/** workspaceId → QA cards running there, for the machine-wide slot count. */
 	const runningByWorkspace = new Map<string, number>();
@@ -338,6 +357,35 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		if (readQaVerdictRecords(devEntry).some((verdict) => verdict.snapshot === qaSnapshot.commit)) {
 			return { outcome: "none", note: `snapshot ${short} already has a QA verdict` };
 		}
+		// QA starts on finished checks (their report goes into the prompt), or without them after checksWaitMin. The
+		// same note on every evaluation of the wait, so the decision log has it once.
+		const checks = await decideQaChecks({
+			entry: devEntry,
+			snapshot: qaSnapshot.commit,
+			now: context.now,
+			waitMin: context.qa.checksWaitMin,
+			enabled: resolveChecksEnabled(context.settings, context.kitName),
+			readScripts: async () =>
+				await readCheckScripts(snapshot.workspacePath, qaSnapshot.commit, context.settings.checks.scripts).catch(
+					() => [],
+				),
+		});
+		if (checks.kind === "waiting") {
+			const wait = readQaChecksWait(devEntry);
+			if (wait?.snapshot !== qaSnapshot.commit || wait.since !== checks.since) {
+				await updateCard(workspaceId, card.id, (entry) => ({
+					...entry,
+					qaChecksWait: { snapshot: qaSnapshot.commit, since: checks.since },
+				}));
+				deps.log(`qa ${card.id}: QA waits for the checks of snapshot ${short}`);
+			}
+			context.requestWake?.(checks.deadline);
+			return {
+				outcome: "none",
+				note: `QA waits for checks on ${short} (up to ${context.qa.checksWaitMin} min, until ${new Date(checks.deadline).toISOString()})`,
+			};
+		}
+		const checksOutcome: QaChecksOutcome = toQaChecksOutcome(checks);
 		// The same note on every evaluation of the hold, so the decision log has it once; the creation follows it.
 		if (snapshot.pidPressure) {
 			return { outcome: "none", note: `PID pressure: no QA card for snapshot ${short} until it clears` };
@@ -362,6 +410,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			previousRounds: getPreviousQaRounds(qaLog, card.id),
 			parts: answer.promptParts,
 			kanbanHome: kanbanHomeOf(),
+			checksReport: buildQaChecksReport({ status: checks, snapshot: qaSnapshot.commit, baseRef: card.baseRef }),
 		});
 		const created = await deps.actions.run({
 			kind: "createTask",
@@ -404,16 +453,24 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			verdict: null,
 			trashed: false,
 			supersededAt: null,
+			checks: checksOutcome,
 		};
-		await deps.store.update(workspaceId, (current) => ({
-			...current,
-			cards: {
-				...current.cards,
-				[card.id]: { ...(current.cards[card.id] ?? {}), qaCreated: qaSnapshot.commit, qaCard: qaTaskId },
-				[qaTaskId]: { ...(current.cards[qaTaskId] ?? {}), qaGate: entry },
-			},
-		}));
-		deps.log(`qa ${card.id}: created QA card ${qaTaskId} (round ${round}) for snapshot ${short}; queued`);
+		await deps.store.update(workspaceId, (current) => {
+			// The wait is over; a later QA of the same snapshot (a redone turn) waits afresh if it has to.
+			const { qaChecksWait: _wait, ...dev } = current.cards[card.id] ?? {};
+			return {
+				...current,
+				cards: {
+					...current.cards,
+					[card.id]: { ...dev, qaCreated: qaSnapshot.commit, qaCard: qaTaskId },
+					[qaTaskId]: { ...(current.cards[qaTaskId] ?? {}), qaGate: entry },
+				},
+			};
+		});
+		const checksNote = describeQaChecksOutcome(checksOutcome);
+		deps.log(
+			`qa ${card.id}: created QA card ${qaTaskId} (round ${round}) for snapshot ${short}${checksNote ? ` with ${checksNote}` : ""}; queued`,
+		);
 		return { outcome: "acted", note: describeCreated(qaTaskId, entry, short) };
 	};
 

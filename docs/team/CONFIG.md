@@ -76,6 +76,7 @@ switching a workspace to landing `qa` starts the worker without a Kanban restart
 | `qa.timeoutMin` | 60 | a running QA card's slot is freed after this |
 | `qa.maxNudges` | 2 | nudges for a missing or invalid `verdict.json` before STALLED |
 | `qa.verdictGraceSec` | 20 | wait for `verdict.json` after the QA card stops (8495ed2) |
+| `qa.checksWaitMin` | 20 | how long a new QA card waits for the scripted checks of its snapshot; after that QA starts with "checks timed out" in its prompt |
 | `qa.scratchRoot` | `/tmp/kanban-qa` | QA's scratch copies |
 | `qa.outboxRoot` | `/tmp/kanban-qa-out` | `<outbox>/<qa id>/verdict.json` plus artifacts |
 | `qa.chromiumLibs` | null | extra libs for headless Chromium (null = the image's) |

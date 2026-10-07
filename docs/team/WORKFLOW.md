@@ -73,6 +73,7 @@ discard?". A Done with no answer is refused, so nothing lands silently and nothi
 
 ```
 dev card stops ─▶ Review (settled) ─▶ snapshot refs/kanban/snapshots/<id> ─▶ checks ─▶ kit qaPolicy
+                                                          QA card waits for the checks (or checksWaitMin) ┘
                                                                                     │ qa
                                                     QA card (role qa, reviewsTaskId) ─▶ verdict.json
                      ┌───────────────────────── PASS ──────────────────────────────┤
@@ -94,6 +95,14 @@ dev card stops ─▶ Review (settled) ─▶ snapshot refs/kanban/snapshots/<id
 - **Scripted checks** (`typecheck`, `lint`, `test`, `build` when the project has them) run on a clean export of the
   snapshot: one run at a time machine-wide, niced, test runners capped, no `KANBAN_*` variables. They are input for
   QA, not a gate, because the base itself may be red.
+- **QA waits for the checks.** The QA card is created only once the checks of the card's current snapshot have
+  finished (PASS, FAIL or ERROR), and its prompt ends with their report: per step the result, the command, the
+  duration and the last 60 lines of a failed step's output. An ERROR (the checker itself failed) says the checks did
+  not run, so QA runs the scripts itself. No QA slot is used while the checks run. After `pipeline.qa.checksWaitMin`
+  (20 min) QA starts anyway, with "checks timed out" in the report. A new snapshot while the checks run starts a new
+  wait and stops the old run, so the stale snapshot never gets QA. A project without checks, or a snapshot whose
+  package.json has none of the check scripts, gets its QA card right away. Why: QA used to start at the same moment
+  the checks were queued, never saw them, and foo 27549 landed with only a checks ERROR.
 - **QA only records.** A QA card reviews the snapshot (diffed against its merge-base, so work landed on the base since
   doesn't read as a revert), tests it in a scratch copy with the project's own tooling, and writes
   `<outbox>/<qa id>/verdict.json` plus artifacts. It never runs `kanban`, never moves cards and never writes the Kanban

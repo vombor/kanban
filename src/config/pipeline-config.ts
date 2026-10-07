@@ -91,6 +91,8 @@ const pipelineSectionSchema = z
 				timeoutMin: z.number().positive().default(60),
 				maxNudges: z.number().int().nonnegative().default(2),
 				verdictGraceSec: z.number().nonnegative().default(20),
+				// How long a QA card waits for the scripted checks of its snapshot before it starts without them.
+				checksWaitMin: z.number().positive().default(20),
 				scratchRoot: z.string().default("/tmp/kanban-qa"),
 				outboxRoot: z.string().default("/tmp/kanban-qa-out"),
 				chromiumLibs: z.string().nullable().default(null),
@@ -103,6 +105,7 @@ const pipelineSectionSchema = z
 				timeoutMin: 60,
 				maxNudges: 2,
 				verdictGraceSec: 20,
+				checksWaitMin: 20,
 				scratchRoot: "/tmp/kanban-qa",
 				outboxRoot: "/tmp/kanban-qa-out",
 				chromiumLibs: null,

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { getDefaultWorkspacePipelineSettings, parsePipelineConfig } from "../../../src/config/pipeline-config";
 import {
+	CHECKS_TAIL_LINES,
 	type ChecksRequest,
 	type ChecksResult,
 	type ChecksSettings,
@@ -15,6 +16,8 @@ import {
 	type RunCheckStepInput,
 	resolveChecksEnabled,
 	runCheckStep,
+	tailCheckOutput,
+	toStoredChecksResult,
 } from "../../../src/pipeline/checks";
 import { createRepoWithWorktree, git } from "../../utilities/git-repo";
 import { createTempDir } from "../../utilities/temp-dir";
@@ -241,6 +244,53 @@ describe("checks runner", () => {
 			["a", "aaaaaaaa11111111"],
 			["b", "b2"],
 		]);
+	});
+
+	it("a newer snapshot of the card being checked stops that run and drops its result", async () => {
+		const harness = createHarness({ holdFirst: true });
+		expect(harness.runner.enqueue(request({ taskId: "a", snapshot: "a1" }))).toBe("queued");
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(harness.runner.enqueue(request({ taskId: "a", snapshot: "a2" }))).toBe("superseded");
+		// The old snapshot is not "running" any more: asking for it again queues it.
+		expect(harness.runner.enqueue(request({ taskId: "a", snapshot: "a2" }))).toBe("already_queued");
+		harness.hold.resolve();
+		await harness.runner.idle();
+
+		expect(harness.exported).toEqual(["a1", "a2"]);
+		// a1 stopped after its install step; only a2's result is reported.
+		expect(harness.steps.map((step) => step.command)).toEqual([
+			"npm ci --no-audit --no-fund",
+			"npm ci --no-audit --no-fund",
+			"npm run -s typecheck",
+			"npm run -s test",
+		]);
+		expect(harness.results.map((result) => result.request.snapshot)).toEqual(["a2"]);
+	});
+
+	it("keeps each step's command and a bounded tail of a failed step's output for the QA prompt", async () => {
+		const harness = createHarness({ failing: ["typecheck"] });
+		harness.runner.enqueue(request());
+		await harness.runner.idle();
+		const stored = toStoredChecksResult(harness.results[0] as ChecksResult);
+		expect(stored.steps).toEqual([
+			{ name: "install", status: "ok", ms: 1000, command: "npm ci --no-audit --no-fund", harness: false, tail: [] },
+			{
+				name: "typecheck",
+				status: "fail",
+				ms: 1000,
+				command: "npm run -s typecheck",
+				harness: false,
+				tail: ["Error: boom", "failed"],
+			},
+			{ name: "test", status: "ok", ms: 1000, command: "npm run -s test", harness: false, tail: [] },
+		]);
+		const long = Array.from({ length: 100 }, (_, index) => `\x1b[31mline ${index}\x1b[0m ${"x".repeat(400)}`).join(
+			"\n",
+		);
+		const tail = tailCheckOutput(long);
+		expect(tail).toHaveLength(CHECKS_TAIL_LINES);
+		expect(tail[0]?.startsWith("line 40 ")).toBe(true);
+		expect(tail.every((line) => line.length <= 300)).toBe(true);
 	});
 
 	it("reports a failing script as FAIL with the cause first", async () => {

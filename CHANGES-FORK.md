@@ -540,3 +540,13 @@ of this repository is the complete record of changes.
 - `deploy/Containerfile`: the image installs the GitHub CLI (`gh`) from GitHub's apt repository
   (https://cli.github.com/packages, keyring in `/etc/apt/keyrings`). No token or gh config is baked in: run
   `gh auth login` once in the container; the config lives in `/root/.config/gh` on the persistent `/root` volume.
+- `src/pipeline/qa-checks-report.ts` (new), `src/pipeline/qa-gate.ts`, `src/pipeline/qa-prompt.ts`, `src/pipeline/checks.ts`,
+  `src/pipeline/worker.ts`, `src/pipeline/submission-stage.ts`, `src/config/pipeline-config.ts`, `docs/team/WORKFLOW.md`,
+  `docs/team/CONFIG.md`, `AGENTS.md`, tests (QA waits for the scripted checks, user's choice "D", 2026-10-07): the QA gate
+  creates a dev card's QA card only once the scripted checks of its current snapshot are recorded (PASS, FAIL or ERROR),
+  or after `pipeline.qa.checksWaitMin` (default 20) with "checks timed out", and appends a checks report to the QA prompt
+  (per step the result, command, duration and the last 60 lines of a failed step's output; an ERROR or a timeout says
+  the checks did not run). The legacy prompt text before it is unchanged. No QA slot is used while checks run; a
+  workspace without checks or a snapshot without check scripts gets QA right away. A newer snapshot of the card being
+  checked stops that run and drops its result. The worker evaluates the workspace again when a checks result is recorded
+  and when a wait times out. Before this, QA ran without the checks and foo 27549 landed with only a checks ERROR.

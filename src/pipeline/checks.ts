@@ -1,14 +1,16 @@
 // Scripted checks (plan §2.6): a submitted card's snapshot is exported to a scratch dir, its dependencies are
 // installed, and the workspace's check scripts (`workspaces.<id>.checks.scripts`, default typecheck, lint, test,
-// build) that exist in its package.json are run. The result goes to the QA log for QA and people to read; the QA
-// gate never waits on it.
+// build) that exist in its package.json are run. The result goes to the card's pipeline state, the QA log and the
+// decision log. The QA gate waits for the result of the card's current snapshot (or `pipeline.qa.checksWaitMin`)
+// before it creates the QA card, and puts it in the QA prompt (qa-checks-report.ts).
 //
 // A full install + test suite per Review card once pegged the shared pod, so checks are fenced in:
 //
 // - Per project: off unless `workspaces.<id>.checks.enabled` is true, or it is unset and the workspace has landing
 //   `qa` with a kit other than `default` (resolveChecksEnabled). A project on the `default` kit never runs any.
 // - Serialized: one queue for the whole worker, one step at a time. A newer snapshot of a queued card replaces the
-//   queued one instead of adding a run.
+//   queued one instead of adding a run; a newer snapshot of the card being checked stops that run, whose result is
+//   dropped (nobody QAs the stale snapshot).
 // - Resource-limited: every step runs under `nice` (`pipeline.checks.niceness`), test runners get
 //   `pipeline.checks.maxWorkers` workers, and a step is killed (its whole process group) after
 //   `pipeline.checks.timeoutMin`.
@@ -24,6 +26,7 @@ import { dirname, join, relative } from "node:path";
 import type { PipelineConfig, WorkspacePipelineSettings } from "../config/pipeline-config";
 import { createGitProcessEnv } from "../core/git-process-env";
 import { DEFAULT_KIT_NAME } from "../kits/resolve-kit";
+import { runGit } from "../workspace/git-utils";
 
 /** Bump when the checker changes so that old results are stale. 2 = the legacy kit's checker. */
 export const CHECKS_VERSION = 2;
@@ -33,6 +36,30 @@ export type ChecksSettings = PipelineConfig["pipeline"]["checks"];
 /** Whether a workspace runs scripted checks: its explicit setting, else only with landing `qa` on a real kit. */
 export function resolveChecksEnabled(settings: WorkspacePipelineSettings, kitName: string): boolean {
 	return settings.checks.enabled ?? (settings.landing.mode === "qa" && kitName !== DEFAULT_KIT_NAME);
+}
+
+/**
+ * The configured check scripts the snapshot's root package.json has (the runner runs only those). Empty when it has
+ * none or no package.json: such a snapshot gets no checks worth waiting for.
+ */
+export async function readSnapshotCheckScripts(
+	repoPath: string,
+	snapshot: string,
+	scripts: readonly string[],
+): Promise<string[]> {
+	const result = await runGit(repoPath, ["show", `${snapshot}:package.json`], { env: createGitProcessEnv() });
+	if (!result.ok) {
+		return [];
+	}
+	try {
+		const parsed: unknown = JSON.parse(result.stdout);
+		const defined = parsed && typeof parsed === "object" ? (parsed as { scripts?: unknown }).scripts : undefined;
+		return defined && typeof defined === "object"
+			? scripts.filter((name) => Boolean((defined as Record<string, unknown>)[name]))
+			: [];
+	} catch {
+		return [];
+	}
 }
 
 export interface ChecksRequest {
@@ -48,6 +75,8 @@ export interface ChecksRequest {
 
 export interface CheckStepResult {
 	name: string;
+	/** The shell command the step ran (or would have run, when skipped). */
+	command?: string;
 	ok: boolean;
 	/** `true`: not run (the install failed); `"harness"`: failed for a checker reason and not counted. */
 	skipped?: true | "harness";
@@ -71,7 +100,8 @@ export interface ChecksResult {
 	error: string | null;
 }
 
-export type ChecksEnqueueStatus = "queued" | "requeued" | "already_queued" | "running";
+/** `superseded`: queued, and the run on an older snapshot of the same card was stopped. */
+export type ChecksEnqueueStatus = "queued" | "requeued" | "already_queued" | "running" | "superseded";
 
 export interface ChecksQueue {
 	enqueue: (request: ChecksRequest) => ChecksEnqueueStatus;
@@ -339,8 +369,11 @@ export function createChecksRunner(options: CreateChecksRunnerOptions): ChecksRu
 	const queue: ChecksRequest[] = [];
 	let current: ChecksRequest | null = null;
 	let currentChild: ChildProcess | null = null;
+	/** The running request was superseded by a newer snapshot of its card: stop it and drop its result. */
+	let currentSuperseded = false;
 	let pumping: Promise<void> | null = null;
 	let closed = false;
+	const stopping = () => closed || currentSuperseded;
 
 	const sameCard = (a: ChecksRequest, b: ChecksRequest) => a.workspaceId === b.workspaceId && a.taskId === b.taskId;
 
@@ -379,11 +412,11 @@ export function createChecksRunner(options: CreateChecksRunnerOptions): ChecksRu
 					onSpawn: (child) => {
 						currentChild = child;
 					},
-				}).then((stepResult) => ({ name, ...stepResult }));
+				}).then((stepResult) => ({ name, command, ...stepResult }));
 
 			installDirs = findInstallDirs(dir);
 			for (const installDir of installDirs) {
-				if (closed) {
+				if (stopping()) {
 					break;
 				}
 				const cwd = join(dir, installDir);
@@ -408,7 +441,7 @@ export function createChecksRunner(options: CreateChecksRunnerOptions): ChecksRu
 			const installed = steps[0]?.ok ?? false;
 			if (installed) {
 				for (const schema of findPrismaSchemas(dir)) {
-					if (closed) {
+					if (stopping()) {
 						break;
 					}
 					const at = findPrismaDir(dir, schema) ?? ".";
@@ -423,11 +456,11 @@ export function createChecksRunner(options: CreateChecksRunnerOptions): ChecksRu
 			}
 			const scripts = await readScripts(dir);
 			for (const name of request.scripts) {
-				if (!scripts[name] || closed) {
+				if (!scripts[name] || stopping()) {
 					continue;
 				}
 				if (!installed) {
-					steps.push({ name, ok: false, skipped: true });
+					steps.push({ name, command: `npm run -s ${name}`, ok: false, skipped: true });
 					continue;
 				}
 				const stepResult = await step(name, `npm run -s ${name}`, dir, `${logName(name)}.log`);
@@ -460,11 +493,19 @@ export function createChecksRunner(options: CreateChecksRunnerOptions): ChecksRu
 			while (queue.length > 0 && !closed) {
 				const request = queue.shift() as ChecksRequest;
 				current = request;
+				currentSuperseded = false;
 				options.log(`checks ${request.taskId}: started on ${request.snapshot.slice(0, 8)}`);
 				const result = await run(request);
 				current = null;
 				if (closed) {
 					break;
+				}
+				if (currentSuperseded) {
+					currentSuperseded = false;
+					options.log(
+						`checks ${request.taskId}: run on ${request.snapshot.slice(0, 8)} stopped for a newer snapshot; result dropped`,
+					);
+					continue;
 				}
 				try {
 					await options.onResult(result);
@@ -485,17 +526,24 @@ export function createChecksRunner(options: CreateChecksRunnerOptions): ChecksRu
 			if (closed) {
 				return "already_queued";
 			}
-			if (current && sameCard(current, request) && current.snapshot === request.snapshot) {
+			if (current && sameCard(current, request) && current.snapshot === request.snapshot && !currentSuperseded) {
 				return "running";
 			}
 			const index = queue.findIndex((queued) => sameCard(queued, request));
 			let status: ChecksEnqueueStatus = "queued";
+			if (current && sameCard(current, request) && !currentSuperseded) {
+				currentSuperseded = true;
+				if (currentChild) {
+					killProcessGroup(currentChild);
+				}
+				status = "superseded";
+			}
 			if (index >= 0) {
 				if (queue[index]?.snapshot === request.snapshot) {
 					return "already_queued";
 				}
 				queue[index] = request;
-				status = "requeued";
+				status = status === "superseded" ? status : "requeued";
 			} else {
 				queue.push(request);
 			}
@@ -514,6 +562,63 @@ export function createChecksRunner(options: CreateChecksRunnerOptions): ChecksRu
 				killProcessGroup(currentChild);
 			}
 		},
+	};
+}
+
+/** How much of a failing step's output the card's state keeps for the QA prompt. */
+export const CHECKS_TAIL_LINES = 60;
+const CHECKS_TAIL_LINE_CHARS = 300;
+
+/** A step as the card's pipeline state keeps it (`cards[<id>].checks.steps[]`). */
+export interface StoredCheckStep {
+	name: string;
+	status: "ok" | "fail" | "timeout" | "skipped";
+	ms: number | null;
+	command: string | null;
+	/** Harness problem: the checker's environment failed, not the code. */
+	harness: boolean;
+	/** The last CHECKS_TAIL_LINES lines of a failed step's output (no colour codes); empty otherwise. */
+	tail: string[];
+}
+
+/** A result as the card's pipeline state keeps it (`cards[<id>].checks`); the QA prompt's checks report reads it. */
+export interface StoredChecksResult {
+	verdict: ChecksResult["verdict"];
+	at: string;
+	logs: string;
+	steps: StoredCheckStep[];
+	error: string | null;
+	startedAt?: string;
+	timeoutMin?: number;
+}
+
+/** The last `lines` lines of a step's output, colour codes stripped and each line capped. */
+export function tailCheckOutput(text: string, lines = CHECKS_TAIL_LINES): string[] {
+	const all = text.trimEnd().split("\n");
+	return (all.length === 1 && all[0] === "" ? [] : all.slice(-lines)).map((line) =>
+		line.replace(ANSI, "").slice(0, CHECKS_TAIL_LINE_CHARS),
+	);
+}
+
+export function toStoredChecksResult(result: ChecksResult): StoredChecksResult {
+	return {
+		verdict: result.verdict,
+		at: new Date(result.finishedAt).toISOString(),
+		logs: result.logsDir,
+		steps: result.steps.map((step) => {
+			const status = step.skipped ? "skipped" : step.ok ? "ok" : step.timedOut ? "timeout" : "fail";
+			return {
+				name: step.name,
+				status,
+				ms: step.ms ?? null,
+				command: step.command ?? null,
+				harness: step.harness === true || step.skipped === "harness",
+				tail: status === "fail" || status === "timeout" ? tailCheckOutput(step.text ?? "") : [],
+			};
+		}),
+		error: result.error,
+		startedAt: new Date(result.startedAt).toISOString(),
+		timeoutMin: result.timeoutMin,
 	};
 }
 

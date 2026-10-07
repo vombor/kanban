@@ -6,7 +6,10 @@
 //
 // Each Review card goes through the submission stage first (snapshot, scripted checks; submission-stage.ts). The
 // checks run in this process, one at a time for the whole worker (checks.ts), and their results go to the card's
-// pipeline-state entry, the QA log and the decision log.
+// pipeline state, the QA log and the decision log. The QA gate creates a card's QA card only once the checks of its
+// snapshot are recorded (qa-checks-report.ts), so a recorded result re-evaluates its workspace with the newest
+// snapshot, and so does the end of a QA card's checks wait (`requestWake`): neither changes the board, so no new
+// snapshot would come.
 //
 // Acting goes through the server: `finishTask()` sends a `finishTask` request (the Done workflow with its landing
 // step) and resolves with the server's answer; features release holds through it (src/pipeline/hold.ts). Outside
@@ -33,7 +36,14 @@ import { readClineProvidersFile } from "../models/cline-providers";
 import { getClineProvidersSettingsPath } from "../state/kanban-home";
 import { getAgentClearCommand, readAgentSessionSize } from "../terminal/orchestrator-agents";
 import type { PipelineActions } from "./actions";
-import { CHECKS_VERSION, type ChecksResult, type ChecksRunner, createChecksRunner, formatChecksReport } from "./checks";
+import {
+	CHECKS_VERSION,
+	type ChecksResult,
+	type ChecksRunner,
+	createChecksRunner,
+	formatChecksReport,
+	toStoredChecksResult,
+} from "./checks";
 import { createPipelineDecisionLog, type PipelineDecisionLog, type PipelineDecisionRecord } from "./decision-log";
 import {
 	evaluatePipelineWorkspace,
@@ -214,11 +224,8 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 		const parsed = await readConfig();
 		const settings = getWorkspacePipelineSettings(parsed.config, request.workspaceId);
 		const resolution = resolveWorkspaceKit(parsed.config, request.workspaceId, await loadCatalog());
-		const steps = result.steps.map((step) => ({
-			name: step.name,
-			status: step.skipped ? "skipped" : step.ok ? "ok" : step.timedOut ? "timeout" : "fail",
-			ms: step.ms ?? null,
-		}));
+		const stored = toStoredChecksResult(result);
+		const { steps } = stored;
 		// The legacy checks-state fields (`snapshot`, `version`, `harness`: the checked snapshot) plus the result.
 		await store.update(request.workspaceId, (state) => {
 			state.cards[request.taskId] = {
@@ -226,13 +233,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 				snapshot: request.snapshot,
 				version: CHECKS_VERSION,
 				harness: result.harness,
-				checks: {
-					verdict: result.verdict,
-					at: new Date(result.finishedAt).toISOString(),
-					logs: result.logsDir,
-					steps,
-					error: result.error,
-				},
+				checks: stored,
 			};
 			return state;
 		});
@@ -258,6 +259,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			},
 		]);
 		log(`checks ${request.taskId}: ${result.verdict} (${summary})`);
+		reevaluate(request.workspaceId);
 	};
 	const checks =
 		deps.createChecks?.(recordChecksResult) ??
@@ -419,6 +421,10 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 	};
 
 	const queues = new Map<string, WorkspaceQueue>();
+	// workspaceId → the newest snapshot the server sent, for evaluations nothing on the board triggers.
+	const lastSnapshots = new Map<string, PipelineWorkspaceSnapshot>();
+	// workspaceId → the earliest wake the QA gate asked for.
+	const wakes = new Map<string, { at: number; timer: NodeJS.Timeout }>();
 	// "<workspaceId>:<taskId>:<stage>" → the last logged decision, so an unchanged one is logged once.
 	const lastDecisionKeys = new Map<string, string>();
 	// workspaceId → the settings/kit line last logged for it.
@@ -426,7 +432,16 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 	const reportedIssues = new Set<string>();
 	let closed = false;
 
+	const clearWake = (workspaceId: string): void => {
+		const wake = wakes.get(workspaceId);
+		if (wake) {
+			clearTimeout(wake.timer);
+			wakes.delete(workspaceId);
+		}
+	};
+
 	const forget = (workspaceId: string): void => {
+		clearWake(workspaceId);
 		features.removeWorkspace(workspaceId);
 		submissionStage.forgetWorkspace(workspaceId);
 		workspacePaths.delete(workspaceId);
@@ -518,6 +533,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 		// clock taken after recovery acted.
 		const gateState = recoveryScope.act ? await store.load(workspaceId) : state;
 		const gateContext = {
+			requestWake: (at: number) => requestWake(workspaceId, at),
 			snapshot,
 			settings,
 			qa: parsed.config.pipeline.qa,
@@ -596,7 +612,32 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 		deps.send({ type: "evaluated", workspaceId, decisions: decisions.length, logged: records.length });
 	};
 
-	const schedule = (snapshot: PipelineWorkspaceSnapshot): Promise<void> => {
+	/** Evaluates the workspace again with its newest snapshot, if it is still watched. */
+	function reevaluate(workspaceId: string): void {
+		const snapshot = lastSnapshots.get(workspaceId);
+		if (snapshot && !closed) {
+			void schedule(snapshot);
+		}
+	}
+
+	function requestWake(workspaceId: string, at: number): void {
+		const existing = wakes.get(workspaceId);
+		if (closed || (existing && existing.at <= at)) {
+			return;
+		}
+		clearWake(workspaceId);
+		const timer = setTimeout(
+			() => {
+				wakes.delete(workspaceId);
+				reevaluate(workspaceId);
+			},
+			Math.max(0, at - now()),
+		);
+		timer.unref();
+		wakes.set(workspaceId, { at, timer });
+	}
+
+	function schedule(snapshot: PipelineWorkspaceSnapshot): Promise<void> {
 		const queue = queues.get(snapshot.workspaceId) ?? { running: null, pending: null };
 		queues.set(snapshot.workspaceId, queue);
 		// One evaluation per workspace at a time; snapshots that arrive meanwhile collapse into the newest.
@@ -620,7 +661,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			queue.running = null;
 		});
 		return queue.running;
-	};
+	}
 
 	return {
 		handle: async (message) => {
@@ -628,9 +669,11 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 				return;
 			}
 			if (message.type === "snapshot") {
+				lastSnapshots.set(message.snapshot.workspaceId, message.snapshot);
 				watchdog.observe(message.snapshot);
 				await schedule(message.snapshot);
 			} else if (message.type === "forget") {
+				lastSnapshots.delete(message.workspaceId);
 				watchdog.forget(message.workspaceId);
 				forget(message.workspaceId);
 			} else if (message.type === "landed") {
@@ -678,6 +721,9 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 		},
 		close: () => {
 			closed = true;
+			for (const workspaceId of [...wakes.keys()]) {
+				clearWake(workspaceId);
+			}
 			checks.close();
 			recovery.close();
 			for (const pending of pendingFinishes.values()) {

@@ -166,7 +166,14 @@ export function createSubmissionStage(options: CreateSubmissionStageOptions): Su
 					snapshot: snapshot.commit,
 					scripts: context.settings.checks.scripts,
 				});
-				records.push({ stage: "checks", outcome: "acted", note: `checks ${status} on ${short(snapshot.commit)}` });
+				records.push({
+					stage: "checks",
+					outcome: "acted",
+					note:
+						status === "superseded"
+							? `checks queued on ${short(snapshot.commit)}; the run on the card's older snapshot was stopped`
+							: `checks ${status} on ${short(snapshot.commit)}`,
+				});
 			}
 		}
 		return { inspection: { hasWork: true, records }, cache: true };

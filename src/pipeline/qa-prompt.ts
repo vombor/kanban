@@ -13,6 +13,8 @@
 //   --target <scratch>, never preview/preview:stop (66797d9: preview:stop stopped the user's shared preview).
 // - Blocking issues need quoted evidence and one rerun (6db784f: a false blocker in calibration v5).
 // - Route rules (ef523b2, the `drive` rule for Haiku) are extra step-3 items lettered from h.
+// The one addition is the scripted checks report (qa-checks-report.ts), appended after the requirements only when
+// the snapshot had checks, so a prompt without one is still the legacy prompt.
 import type { QaPromptParts } from "../kits/policy";
 
 /** Where a rule text names the QA card's outbox. */
@@ -41,6 +43,8 @@ export interface QaPromptInput {
 	kanbanHome: string;
 	/** Replaces the default intro sentence (calibration runs, P4-T4). */
 	intro?: string;
+	/** The scripted checks section (buildQaChecksReport), appended after the requirements; none = the legacy prompt. */
+	checksReport?: string | null;
 }
 
 /** The first line of a card title, as the QA intro and the QA card title quote it. */
@@ -124,7 +128,7 @@ ${prev}
 Dev card ${input.devTaskId} requirements:
 """
 ${input.requirements}
-"""`;
+"""${input.checksReport ? `\n\n${input.checksReport}` : ""}`;
 }
 
 /** The QA card's title: `QA <dev>: …` for round 1, `QA<n> <dev>: …` after (the legacy kit's titles). */
