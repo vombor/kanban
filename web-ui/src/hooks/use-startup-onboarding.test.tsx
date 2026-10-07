@@ -31,6 +31,7 @@ function createRuntimeConfigResponse(selectedAgentId: RuntimeConfigResponse["sel
 			projectConfigDisplayPath: "<project>/.cline/kanban/config.json",
 		},
 		readyForReviewNotificationsEnabled: true,
+		sessionSyncEnabled: true,
 		detectedCommands: ["codex"],
 		agents: [
 			{

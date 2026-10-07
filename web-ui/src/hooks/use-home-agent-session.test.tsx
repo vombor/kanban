@@ -74,6 +74,7 @@ function createRuntimeConfig(overrides: Partial<RuntimeConfigResponse> = {}): Ru
 			projectConfigDisplayPath: "<project>/.cline/kanban/config.json",
 		},
 		readyForReviewNotificationsEnabled: true,
+		sessionSyncEnabled: true,
 		detectedCommands: ["codex", "claude", "cline"],
 		agents: [
 			{

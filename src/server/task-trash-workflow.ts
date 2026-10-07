@@ -33,7 +33,11 @@ import type {
 	RuntimeWorktreeEnsureResponse,
 } from "../core/api-contract";
 import { getDetailTerminalTaskId } from "../core/detail-terminal-session";
-import { getTaskColumnId, moveTaskToColumn, trashTaskAndGetReadyLinkedTaskIds } from "../core/task-board-mutations";
+import {
+	getTaskColumnId,
+	moveTaskToTopOfColumn,
+	trashTaskAndGetReadyLinkedTaskIds,
+} from "../core/task-board-mutations";
 import type {
 	RuntimeWorkspaceAtomicMutationResponse,
 	RuntimeWorkspaceAtomicMutationResult,
@@ -145,31 +149,6 @@ function clearPendingGitAction(board: RuntimeBoardData, taskId: string): Runtime
 				cards: column.cards.map((card) => (card.id === taskId ? { ...card, pendingGitAction: null } : card)),
 			};
 		}),
-	};
-}
-
-/** Puts a just-started card at the top of In Progress, as the browser's start animation does. */
-function moveTaskToTopOfInProgress(
-	board: RuntimeBoardData,
-	taskId: string,
-	now: number,
-): { board: RuntimeBoardData; moved: boolean } {
-	const moved = moveTaskToColumn(board, taskId, "in_progress", now);
-	if (!moved.moved) {
-		return { board, moved: false };
-	}
-	return {
-		moved: true,
-		board: {
-			...moved.board,
-			columns: moved.board.columns.map((column) => {
-				if (column.id !== "in_progress") {
-					return column;
-				}
-				const card = column.cards.find((candidate) => candidate.id === taskId);
-				return card ? { ...column, cards: [card, ...column.cards.filter((other) => other.id !== taskId)] } : column;
-			}),
-		},
 	};
 }
 
@@ -349,7 +328,8 @@ export function createTaskTrashWorkflow(deps: CreateTaskTrashWorkflowDependencie
 			if (!card) {
 				return { board: state.board, value: null, save: false };
 			}
-			const moved = moveTaskToTopOfInProgress(state.board, taskId, now());
+			// Top of In Progress, as the browser's start animation does.
+			const moved = moveTaskToTopOfColumn(state.board, taskId, "in_progress", now());
 			if (!moved.moved) {
 				return { board: state.board, value: null, save: false };
 			}

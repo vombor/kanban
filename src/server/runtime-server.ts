@@ -85,6 +85,8 @@ export interface CreateRuntimeServerDependencies {
 	pickDirectoryPathFromSystemDialog: () => string | null;
 	getUpdateStatus: () => RuntimeUpdateStatusResponse;
 	runUpdateNow: () => Promise<RuntimeRunUpdateResponse>;
+	/** The `sessionSync` setting read at startup; reported to the browser in the runtime config. */
+	sessionSyncEnabled: boolean;
 }
 
 export interface RuntimeServer {
@@ -230,6 +232,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			await orphanProcessSweeper.sweep();
 			return await orphanProcessSweeper.getStatus();
 		},
+		sessionSyncEnabled: deps.sessionSyncEnabled,
 	});
 
 	const taskTrashWorkflow = createTaskTrashWorkflow({

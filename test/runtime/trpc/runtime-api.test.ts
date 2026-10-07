@@ -42,7 +42,12 @@ vi.mock("../../../src/server/browser.js", () => ({
 import type { RuntimeTrpcContext } from "../../../src/trpc/app-router";
 import { type CreateRuntimeApiDependencies, createRuntimeApi } from "../../../src/trpc/runtime-api";
 
-type OptionalRuntimeApiDependency = "getUpdateStatus" | "runUpdateNow" | "getProcessSweep" | "runProcessSweep";
+type OptionalRuntimeApiDependency =
+	| "getUpdateStatus"
+	| "runUpdateNow"
+	| "getProcessSweep"
+	| "runProcessSweep"
+	| "sessionSyncEnabled";
 
 const PROCESS_SWEEP_RESPONSE = {
 	supported: true,
@@ -75,6 +80,7 @@ function createTestRuntimeApi(
 			})),
 		getProcessSweep: deps.getProcessSweep ?? vi.fn(async () => PROCESS_SWEEP_RESPONSE),
 		runProcessSweep: deps.runProcessSweep ?? vi.fn(async () => PROCESS_SWEEP_RESPONSE),
+		sessionSyncEnabled: deps.sessionSyncEnabled ?? true,
 	});
 }
 

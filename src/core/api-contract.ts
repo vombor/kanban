@@ -786,6 +786,8 @@ export const runtimeConfigResponseSchema = z.object({
 	projectConfigPath: z.string().nullable(),
 	kanbanPaths: runtimeKanbanPathsSchema,
 	readyForReviewNotificationsEnabled: z.boolean(),
+	/** Session sync is on: the runtime moves cards between In Progress and Review, so the browser must not. */
+	sessionSyncEnabled: z.boolean(),
 	detectedCommands: z.array(z.string()),
 	agents: z.array(runtimeAgentDefinitionSchema),
 	shortcuts: z.array(runtimeProjectShortcutSchema),

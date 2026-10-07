@@ -29,6 +29,7 @@ function createRuntimeConfigResponse(
 			projectConfigDisplayPath: "<project>/.cline/kanban/config.json",
 		},
 		readyForReviewNotificationsEnabled: true,
+		sessionSyncEnabled: true,
 		detectedCommands: agents.filter((agent) => agent.installed).map((agent) => agent.binary),
 		agents,
 		shortcuts: [],

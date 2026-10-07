@@ -99,6 +99,8 @@ function HookHarness({
 	selectedCard = null,
 	setSelectedTaskIdOverride,
 	onSnapshot,
+	initialSessions = {},
+	sessionSyncEnabled = false,
 }: {
 	board: BoardData;
 	setBoard: Dispatch<SetStateAction<BoardData>>;
@@ -110,8 +112,10 @@ function HookHarness({
 	selectedCard?: { card: BoardCard; column: { id: "backlog" | "in_progress" | "review" | "trash" } } | null;
 	setSelectedTaskIdOverride?: Dispatch<SetStateAction<string | null>>;
 	onSnapshot?: (snapshot: HookSnapshot) => void;
+	initialSessions?: Record<string, RuntimeTaskSessionSummary>;
+	sessionSyncEnabled?: boolean;
 }): null {
-	const [sessions, setSessions] = useState<Record<string, RuntimeTaskSessionSummary>>({});
+	const [sessions, setSessions] = useState<Record<string, RuntimeTaskSessionSummary>>(initialSessions);
 	const [, setSelectedTaskId] = useState<string | null>(null);
 	const [, setIsClearTrashDialogOpen] = useState(false);
 	const [, setIsGitHistoryOpen] = useState(false);
@@ -136,6 +140,7 @@ function HookHarness({
 		fetchTaskWorkspaceInfo: NOOP_FETCH_WORKSPACE_INFO,
 		sendTaskSessionInput: NOOP_SEND_TASK_INPUT,
 		readyForReviewNotificationsEnabled: false,
+		sessionSyncEnabled,
 	});
 
 	useEffect(() => {
@@ -154,6 +159,79 @@ function HookHarness({
 	]);
 
 	return null;
+}
+
+function createSessionSummary(
+	taskId: string,
+	state: RuntimeTaskSessionSummary["state"],
+	updatedAt: number,
+): RuntimeTaskSessionSummary {
+	return {
+		taskId,
+		state,
+		agentId: "claude",
+		workspacePath: null,
+		pid: null,
+		startedAt: null,
+		updatedAt,
+		lastOutputAt: null,
+		reviewReason: state === "awaiting_review" ? "hook" : state === "interrupted" ? "interrupted" : null,
+		exitCode: null,
+		lastHookAt: null,
+		latestHookActivity: null,
+		warningMessage: null,
+		modelId: null,
+		reasoningEffort: null,
+		latestTurnCheckpoint: null,
+		previousTurnCheckpoint: null,
+	};
+}
+
+function createSessionBoard(): BoardData {
+	return {
+		columns: [
+			{ id: "backlog", title: "Backlog", cards: [] },
+			{
+				id: "in_progress",
+				title: "In Progress",
+				cards: [createTask("task-done-turn", "Finished turn", 1), createTask("task-interrupted", "Interrupted", 1)],
+			},
+			{ id: "review", title: "Review", cards: [] },
+			{ id: "trash", title: "Done", cards: [] },
+		],
+		dependencies: [],
+	};
+}
+
+function StatefulBoardHarness({
+	initialBoard,
+	sessions,
+	sessionSyncEnabled,
+	onBoard,
+}: {
+	initialBoard: BoardData;
+	sessions: Record<string, RuntimeTaskSessionSummary>;
+	sessionSyncEnabled: boolean;
+	onBoard: (board: BoardData) => void;
+}): JSX.Element {
+	const [board, setBoard] = useState(initialBoard);
+	useEffect(() => {
+		onBoard(board);
+	}, [board, onBoard]);
+	return (
+		<HookHarness
+			board={board}
+			setBoard={setBoard}
+			ensureTaskWorkspace={vi.fn()}
+			startTaskSession={vi.fn()}
+			initialSessions={sessions}
+			sessionSyncEnabled={sessionSyncEnabled}
+		/>
+	);
+}
+
+function columnOf(board: BoardData | null, taskId: string): string | null {
+	return board?.columns.find((column) => column.cards.some((card) => card.id === taskId))?.id ?? null;
 }
 
 describe("useBoardInteractions", () => {
@@ -236,6 +314,71 @@ describe("useBoardInteractions", () => {
 		expect(linkedInput).not.toHaveProperty("stopTaskSession");
 		expect(linkedInput).not.toHaveProperty("cleanupTaskWorkspace");
 		expect(linkedInput).not.toHaveProperty("kickoffTaskInProgress");
+	});
+
+	describe("session-driven column moves", () => {
+		const sessions = {
+			"task-done-turn": createSessionSummary("task-done-turn", "awaiting_review", 10),
+			"task-interrupted": createSessionSummary("task-interrupted", "interrupted", 10),
+		};
+
+		function mockProgrammaticMovesUnavailable(): void {
+			useProgrammaticCardMovesMock.mockReturnValue({
+				handleProgrammaticCardMoveReady: () => {},
+				setRequestMoveTaskToTrashHandler: () => {},
+				tryProgrammaticCardMove: () => "unavailable",
+				consumeProgrammaticCardMove: () => ({}),
+				resolvePendingProgrammaticTrashMove: () => {},
+				waitForProgrammaticCardMoveAvailability: async () => {},
+				resetProgrammaticCardMoves: () => {},
+				requestMoveTaskToTrashWithAnimation: async () => {},
+				programmaticCardMoveCycle: 0,
+			});
+			useLinkedBacklogTaskActionsMock.mockReturnValue({
+				handleCreateDependency: () => {},
+				handleDeleteDependency: () => {},
+				confirmMoveTaskToTrash: async () => {},
+				requestMoveTaskToTrash: async () => {},
+			});
+		}
+
+		it("leaves the moves to the runtime when session sync is on", async () => {
+			mockProgrammaticMovesUnavailable();
+			let latestBoard: BoardData | null = null;
+			await act(async () => {
+				root.render(
+					<StatefulBoardHarness
+						initialBoard={createSessionBoard()}
+						sessions={sessions}
+						sessionSyncEnabled
+						onBoard={(board) => {
+							latestBoard = board;
+						}}
+					/>,
+				);
+			});
+			expect(columnOf(latestBoard, "task-done-turn")).toBe("in_progress");
+			expect(columnOf(latestBoard, "task-interrupted")).toBe("in_progress");
+		});
+
+		it("moves cards itself when session sync is off (upstream behaviour)", async () => {
+			mockProgrammaticMovesUnavailable();
+			let latestBoard: BoardData | null = null;
+			await act(async () => {
+				root.render(
+					<StatefulBoardHarness
+						initialBoard={createSessionBoard()}
+						sessions={sessions}
+						sessionSyncEnabled={false}
+						onBoard={(board) => {
+							latestBoard = board;
+						}}
+					/>,
+				);
+			});
+			expect(columnOf(latestBoard, "task-done-turn")).toBe("review");
+			expect(columnOf(latestBoard, "task-interrupted")).toBe("trash");
+		});
 	});
 
 	it("waits for a new backlog card height to settle before starting animation", async () => {

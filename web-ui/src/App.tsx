@@ -165,6 +165,8 @@ export default function App(): ReactElement {
 		prepareWaitForConnection: prepareWaitForTerminalConnectionReady,
 	} = useTerminalConnectionReady();
 	const readyForReviewNotificationsEnabled = runtimeProjectConfig?.readyForReviewNotificationsEnabled ?? true;
+	// Defaults to the runtime's default until the config arrives, so the board never moves cards the runtime also moves.
+	const sessionSyncEnabled = runtimeProjectConfig?.sessionSyncEnabled ?? true;
 	const shortcuts = runtimeProjectConfig?.shortcuts ?? [];
 	const selectedShortcutLabel = useMemo(() => {
 		if (shortcuts.length === 0) {
@@ -574,6 +576,7 @@ export default function App(): ReactElement {
 		fetchTaskWorkspaceInfo,
 		sendTaskSessionInput,
 		readyForReviewNotificationsEnabled,
+		sessionSyncEnabled,
 	});
 
 	const {

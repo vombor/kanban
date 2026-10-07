@@ -43,6 +43,8 @@ export interface CreateRuntimeApiDependencies {
 	/** The orphan process sweeper (src/server/orphan-process-sweeper.ts). */
 	getProcessSweep: () => Promise<RuntimeProcessSweepResponse>;
 	runProcessSweep: () => Promise<RuntimeProcessSweepResponse>;
+	/** The `sessionSync` setting as read at startup (src/config/session-sync-config.ts); the browser follows it. */
+	sessionSyncEnabled: boolean;
 }
 
 async function resolveExistingTaskCwdOrEnsure(options: {
@@ -68,7 +70,8 @@ async function resolveExistingTaskCwdOrEnsure(options: {
 }
 
 export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrpcContext["runtimeApi"] {
-	const buildConfigResponse = (runtimeConfig: RuntimeConfigState) => buildRuntimeConfigResponse(runtimeConfig);
+	const buildConfigResponse = (runtimeConfig: RuntimeConfigState) =>
+		buildRuntimeConfigResponse(runtimeConfig, { sessionSyncEnabled: deps.sessionSyncEnabled });
 
 	return {
 		loadConfig: async (workspaceScope) => {

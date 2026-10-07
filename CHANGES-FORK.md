@@ -102,3 +102,15 @@ of this repository is the complete record of changes.
   nothing inherited from another workspace); `resolveEffectiveAgent`/`resolveEffectiveModel`; the routing-policy
   evaluator with the tier → model lookup; `kanban kit list|show|apply` and `kanban config show`. No behaviour
   change: nothing acts on these settings yet, and only `kanban kit show` calls the evaluator.
+- `src/server/session-column-sync.ts` (new), `src/config/session-sync-config.ts` (new), `docs/fork/session-sync.md`
+  (new), `src/cli.ts`, `src/server/runtime-server.ts`, `src/trpc/runtime-api.ts`, `src/core/api-contract.ts`,
+  `src/terminal/agent-registry.ts`, `src/core/task-board-mutations.ts`, `src/server/task-trash-workflow.ts`,
+  `web-ui/src/hooks/use-board-interactions.ts`, `web-ui/src/App.tsx`: session sync. The runtime, not the browser,
+  moves a card between In Progress and Review when its session changes state (awaiting_review → Review, running →
+  In Progress), with or without a browser open. Only a session summary newer than the card moves it. A Review
+  card armed by auto-review stays in Review while its agent runs the commit/PR prompt. An interrupted session no
+  longer moves its card to Done. `"sessionSync": false` in config.json (default on; read once at startup, so a
+  restart applies it) brings back the browser's upstream moves. The runtime config response has
+  `sessionSyncEnabled`.
+- `.gitattributes` (new): `CHANGES-FORK.md` and `AGENTS.md` use `merge=union` (both are append-only), so two branches
+  that both append an entry merge without a conflict.

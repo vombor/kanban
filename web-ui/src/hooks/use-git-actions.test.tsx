@@ -95,6 +95,7 @@ function createRuntimeConfig(selectedAgentId: RuntimeConfigResponse["selectedAge
 			projectConfigDisplayPath: "<project>/.cline/kanban/config.json",
 		},
 		readyForReviewNotificationsEnabled: true,
+		sessionSyncEnabled: true,
 		detectedCommands: [],
 		agents: [
 			{

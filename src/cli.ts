@@ -37,6 +37,7 @@ import { lockedFileSystem } from "./fs/locked-file-system";
 import { disablePasscode, generateInternalToken, generatePasscode } from "./security/passcode-manager";
 import type { AutoReviewReconciler } from "./server/auto-review-reconciler";
 import type { RuntimeStateHub } from "./server/runtime-state-hub";
+import type { SessionColumnSync } from "./server/session-column-sync";
 import { setKanbanHomeOverride } from "./state/kanban-home";
 import { writeKanbanServerLock } from "./state/kanban-server-lock";
 import { captureNodeException, flushNodeTelemetry } from "./telemetry/sentry-node.js";
@@ -336,22 +337,26 @@ async function startServer(): Promise<{
 		lightweight path and only load the server stack when we actually start Kanban.
 	*/
 	const [
+		{ readSessionSyncSetting },
 		{ resolveProjectInputPath },
 		{ pickDirectoryPathFromSystemDialog },
 		{ createAutoReviewReconciler },
 		{ createRuntimeServer },
 		{ createRuntimeStateHub },
+		{ createSessionColumnSync },
 		{ resolveInteractiveShellCommand },
 		{ shutdownRuntimeServer },
 		{ loadWorkspaceStateById, mutateWorkspaceState },
 		{ collectProjectWorktreeTaskIdsForRemoval, createWorkspaceRegistry },
 		{ clearPendingUpdateNotification, getPendingUpdateNotification },
 	] = await Promise.all([
+		import("./config/session-sync-config.js"),
 		import("./projects/project-path.js"),
 		import("./server/directory-picker.js"),
 		import("./server/auto-review-reconciler.js"),
 		import("./server/runtime-server.js"),
 		import("./server/runtime-state-hub.js"),
+		import("./server/session-column-sync.js"),
 		import("./server/shell.js"),
 		import("./server/shutdown-coordinator.js"),
 		import("./state/workspace-state.js"),
@@ -360,6 +365,12 @@ async function startServer(): Promise<{
 	]);
 	let runtimeStateHub: RuntimeStateHub | undefined;
 	let autoReviewReconciler: AutoReviewReconciler | undefined;
+	let sessionColumnSync: SessionColumnSync | undefined;
+	// Read once: the server's session sync and the browser (runtime config response) must agree on who moves cards.
+	const sessionSyncSetting = await readSessionSyncSetting();
+	if (sessionSyncSetting.warning) {
+		console.warn(`[kanban] ${sessionSyncSetting.warning}`);
+	}
 	const workspaceRegistry = await createWorkspaceRegistry({
 		cwd: process.cwd(),
 		loadGlobalRuntimeConfig,
@@ -368,6 +379,7 @@ async function startServer(): Promise<{
 		pathIsDirectory,
 		onTerminalManagerReady: (workspaceId, manager) => {
 			runtimeStateHub?.trackTerminalManager(workspaceId, manager);
+			sessionColumnSync?.trackWorkspace(workspaceId, manager);
 			autoReviewReconciler?.trackWorkspace(workspaceId);
 		},
 	});
@@ -388,12 +400,14 @@ async function startServer(): Promise<{
 			stopTerminalSessions: options?.stopTerminalSessions,
 		});
 		runtimeHub.disposeWorkspace(workspaceId);
+		sessionColumnSync?.untrackWorkspace(workspaceId);
 		autoReviewReconciler?.untrackWorkspace(workspaceId);
 		return disposed;
 	};
 
 	const runtimeServer = await createRuntimeServer({
 		workspaceRegistry,
+		sessionSyncEnabled: sessionSyncSetting.enabled,
 		runtimeStateHub: runtimeHub,
 		warn: (message) => {
 			console.warn(`[kanban] ${message}`);
@@ -448,6 +462,26 @@ async function startServer(): Promise<{
 		},
 	});
 
+	// Session sync moves cards between In Progress and Review on session state changes, with or without a
+	// browser open (src/server/session-column-sync.ts). Like auto-review, only the process that bound the server
+	// runs it. With `sessionSync: false` it is never created and the browser makes the moves.
+	if (sessionSyncSetting.enabled) {
+		const sync = createSessionColumnSync({
+			listWorkspaces: () => workspaceRegistry.listManagedWorkspaces(),
+			mutateWorkspaceState,
+			onBoardMutated: (workspaceId, workspacePath) =>
+				void runtimeHub.broadcastRuntimeWorkspaceStateUpdated(workspaceId, workspacePath),
+			warn: (message) => {
+				console.warn(`[kanban] ${message}`);
+			},
+		});
+		for (const { workspaceId, terminalManager } of workspaceRegistry.listManagedWorkspaces()) {
+			sync.trackWorkspace(workspaceId, terminalManager);
+		}
+		sync.start();
+		sessionColumnSync = sync;
+	}
+
 	// Auto-review runs here in the runtime so it keeps advancing review cards
 	// with no browser tab open and recovers armed cards after a restart. It is
 	// started only after the server has bound: processes that merely attach to an
@@ -485,13 +519,16 @@ async function startServer(): Promise<{
 	await autoReviewReconciler.start();
 
 	const close = async () => {
+		sessionColumnSync?.close();
 		autoReviewReconciler?.close();
 		await runtimeServer.close();
 	};
 
 	const shutdown = async (options?: { skipSessionCleanup?: boolean }) => {
 		// Stop auto-review before session cleanup so it cannot arm or trigger git
-		// actions while shutdown is interrupting sessions and sweeping the board.
+		// actions while shutdown is interrupting sessions and sweeping the board. Session sync stops too: shutdown
+		// writes the board itself.
+		sessionColumnSync?.close();
 		autoReviewReconciler?.close();
 		await shutdownRuntimeServer({
 			workspaceRegistry,

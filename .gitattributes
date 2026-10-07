@@ -1,0 +1,6 @@
+# Append-only files: every card adds an entry at the end, and the union driver keeps both sides' lines instead
+# of conflicting. Union is only safe for append-only files: it never reports a conflict, so two edits of the
+# same lines would both be kept silently (duplicated or garbled text). Don't add files that get edited in place.
+# Applies to merges/rebases in a checkout that contains this file; `git merge-tree` needs `--attr-source=<rev>`.
+CHANGES-FORK.md merge=union
+AGENTS.md merge=union

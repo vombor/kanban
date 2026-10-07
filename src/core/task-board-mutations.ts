@@ -577,6 +577,31 @@ export function moveTaskToColumn(
 	};
 }
 
+/** Moves a task to the top of a column, where a just-started or just-finished card is shown. */
+export function moveTaskToTopOfColumn(
+	board: RuntimeBoardData,
+	taskId: string,
+	targetColumnId: RuntimeBoardColumnId,
+	now: number = Date.now(),
+): RuntimeMoveTaskResult {
+	const moved = moveTaskToColumn(board, taskId, targetColumnId, now);
+	const movedTask = moved.task;
+	if (!moved.moved || !movedTask) {
+		return moved;
+	}
+	return {
+		...moved,
+		board: {
+			...moved.board,
+			columns: moved.board.columns.map((column) =>
+				column.id === targetColumnId
+					? { ...column, cards: [movedTask, ...column.cards.filter((card) => card.id !== movedTask.id)] }
+					: column,
+			),
+		},
+	};
+}
+
 export function updateTask(
 	board: RuntimeBoardData,
 	taskId: string,

@@ -126,7 +126,15 @@ export function resolveAgentCommand(runtimeConfig: RuntimeConfigState): Resolved
 	return null;
 }
 
-export function buildRuntimeConfigResponse(runtimeConfig: RuntimeConfigState): RuntimeConfigResponse {
+/** Server-wide settings read once at startup, not part of the per-workspace config state. */
+export interface RuntimeConfigResponseServerSettings {
+	sessionSyncEnabled: boolean;
+}
+
+export function buildRuntimeConfigResponse(
+	runtimeConfig: RuntimeConfigState,
+	serverSettings: RuntimeConfigResponseServerSettings,
+): RuntimeConfigResponse {
 	const detectedCommands = detectInstalledCommands();
 	const agents = getCuratedDefinitions(runtimeConfig, detectedCommands);
 	const resolved = resolveAgentCommand(runtimeConfig);
@@ -142,6 +150,7 @@ export function buildRuntimeConfigResponse(runtimeConfig: RuntimeConfigState): R
 		projectConfigPath: runtimeConfig.projectConfigPath,
 		kanbanPaths: getKanbanPathsSummary(),
 		readyForReviewNotificationsEnabled: runtimeConfig.readyForReviewNotificationsEnabled,
+		sessionSyncEnabled: serverSettings.sessionSyncEnabled,
 		detectedCommands,
 		agents,
 		shortcuts: runtimeConfig.shortcuts,

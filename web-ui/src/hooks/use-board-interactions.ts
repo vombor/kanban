@@ -71,6 +71,11 @@ interface UseBoardInteractionsInput {
 		options?: SendTerminalInputOptions,
 	) => Promise<{ ok: boolean; message?: string }>;
 	readyForReviewNotificationsEnabled: boolean;
+	/**
+	 * The runtime moves cards between In Progress and Review (src/server/session-column-sync.ts). The board
+	 * then only shows those moves; it makes no session-driven moves of its own.
+	 */
+	sessionSyncEnabled: boolean;
 }
 
 export interface UseBoardInteractionsResult {
@@ -115,6 +120,7 @@ export function useBoardInteractions({
 	fetchTaskWorkspaceInfo,
 	sendTaskSessionInput,
 	readyForReviewNotificationsEnabled,
+	sessionSyncEnabled,
 }: UseBoardInteractionsInput): UseBoardInteractionsResult {
 	const previousSessionsRef = useRef<Record<string, RuntimeTaskSessionSummary>>({});
 	const notificationPermissionPromptInFlightRef = useRef(false);
@@ -419,6 +425,12 @@ export function useBoardInteractions({
 	);
 
 	useEffect(() => {
+		if (sessionSyncEnabled) {
+			// Two writers of the same moves bounced cards between columns. The runtime's copy also drops the
+			// "interrupted → trash" move below: an interrupted card stays where it is.
+			previousSessionsRef.current = sessions;
+			return;
+		}
 		setBoard((currentBoard) => {
 			let nextBoard = currentBoard;
 			const previousSessions = previousSessionsRef.current;
@@ -493,7 +505,7 @@ export function useBoardInteractions({
 			previousSessionsRef.current = nextPreviousSessions;
 			return nextBoard;
 		});
-	}, [programmaticCardMoveCycle, sessions, setBoard, setSelectedTaskId, tryProgrammaticCardMove]);
+	}, [programmaticCardMoveCycle, sessionSyncEnabled, sessions, setBoard, setSelectedTaskId, tryProgrammaticCardMove]);
 
 	const { confirmMoveTaskToTrash, handleCreateDependency, handleDeleteDependency, requestMoveTaskToTrash } =
 		useLinkedBacklogTaskActions({
