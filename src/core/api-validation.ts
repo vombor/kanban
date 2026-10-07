@@ -157,6 +157,7 @@ export function parseTaskTrashRequest(value: unknown): RuntimeTaskTrashRequest {
 	return {
 		taskId,
 		...(parsed.trigger ? { trigger: parsed.trigger } : {}),
+		...(parsed.landing ? { landing: parsed.landing } : {}),
 	};
 }
 

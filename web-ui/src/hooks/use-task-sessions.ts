@@ -9,6 +9,7 @@ import { selectNewestTaskSessionSummary } from "@/hooks/home-sidebar-agent-panel
 import { estimateTaskSessionGeometry } from "@/runtime/task-session-geometry";
 import { getRuntimeTrpcClient } from "@/runtime/trpc-client";
 import type {
+	RuntimeTaskLandingChoice,
 	RuntimeTaskSessionSummary,
 	RuntimeTaskTrashResponse,
 	RuntimeTaskWorkspaceInfoResponse,
@@ -41,6 +42,12 @@ interface StartTaskSessionResult {
 	message?: string;
 }
 
+export interface TaskTrashOptions {
+	landing?: RuntimeTaskLandingChoice;
+	/** `approve`: Approve & land (recorded as HUMAN_APPROVED). */
+	trigger?: "browser" | "approve";
+}
+
 interface StartTaskSessionOptions {
 	resumeFromTrash?: boolean;
 }
@@ -57,7 +64,8 @@ export interface UseTaskSessionsResult {
 	) => Promise<SendTaskSessionInputResult>;
 	cleanupTaskWorkspace: (taskId: string) => Promise<RuntimeWorktreeDeleteResponse | null>;
 	/** Runs the runtime's Done workflow for a card the browser moved to Done. */
-	trashTask: (taskId: string) => Promise<RuntimeTaskTrashResponse | null>;
+	/** The runtime's Done workflow. `landing`: land or discard a landing-mode-qa card's work (Approve & land). */
+	trashTask: (taskId: string, options?: TaskTrashOptions) => Promise<RuntimeTaskTrashResponse | null>;
 	fetchTaskWorkspaceInfo: (task: BoardCard) => Promise<RuntimeTaskWorkspaceInfoResponse | null>;
 }
 
@@ -243,7 +251,7 @@ export function useTaskSessions({ currentProjectId, setSessions }: UseTaskSessio
 	);
 
 	const trashTask = useCallback(
-		async (taskId: string): Promise<RuntimeTaskTrashResponse | null> => {
+		async (taskId: string, options?: TaskTrashOptions): Promise<RuntimeTaskTrashResponse | null> => {
 			if (!currentProjectId) {
 				return null;
 			}
@@ -251,9 +259,11 @@ export function useTaskSessions({ currentProjectId, setSessions }: UseTaskSessio
 				const trpcClient = getRuntimeTrpcClient(currentProjectId);
 				const payload = await trpcClient.workspace.trashTask.mutate({
 					taskId,
-					trigger: "browser",
+					trigger: options?.trigger ?? "browser",
+					...(options?.landing ? { landing: options.landing } : {}),
 				});
-				if (!payload.ok) {
+				// "Land or discard?" is a question for the user, not an error.
+				if (!payload.ok && payload.landing?.decision !== "required") {
 					console.error(`[trashTask] ${payload.error ?? `Could not move task ${taskId} to done.`}`);
 				} else if (payload.worktreeDeleteError) {
 					console.error(`[cleanupTaskWorkspace] ${payload.worktreeDeleteError}`);

@@ -201,7 +201,7 @@ describe("one-owner check", () => {
 		const findings = await checkOneOwner(
 			context({
 				kit: { projects: [{ workspaceId: "foo", toggles: { QA_CREATE: false, AUTO_DONE: false } }] },
-				kanbanConfig: { workspaces: { foo: { landing: { mode: "qa" } } } },
+				kanbanConfig: { workspaces: { foo: { landing: { mode: "commit" } } } },
 				loadBoard: async () => {
 					loaded = true;
 					return board([]);
@@ -212,6 +212,34 @@ describe("one-owner check", () => {
 			[],
 		);
 		expect(loaded).toBe(false);
+	});
+
+	it("fails when Kanban lands before Done on a project autoland still watches, whatever its toggles", async () => {
+		// Autoland lands every Review → Done of a configured project from the trashed-task patch.
+		const kit = {
+			projects: [{ workspaceId: "foo", toggles: { QA_CREATE: false, AUTO_REWORK: false, AUTO_DONE: false } }],
+		};
+		const qa = await checkOneOwner(
+			context({ kit, kanbanConfig: { workspaces: { foo: { landing: { mode: "qa" } } } } }),
+		);
+		expect(qa.find((finding) => finding.level === "fail")?.message).toBe(
+			"two owners for landing on foo: Kanban lands before Done (landing qa) and the legacy kit's autoland lands every Review → Done of a configured project",
+		);
+		const shadow = await checkOneOwner(
+			context({
+				kit,
+				kanbanConfig: { workspaces: { foo: { landing: { mode: "qa" }, pipeline: { shadow: true } } } },
+			}),
+		);
+		expect(shadow.some((finding) => finding.level === "fail")).toBe(false);
+		const stopped = await checkOneOwner(
+			context({
+				kit,
+				services: services({ autoland: { pid: null, disabled: true } }),
+				kanbanConfig: { workspaces: { foo: { landing: { mode: "qa" } } } },
+			}),
+		);
+		expect(stopped.some((finding) => finding.level === "fail")).toBe(false);
 	});
 
 	it("reports K-1 toggles a project used to inherit from the top level", async () => {

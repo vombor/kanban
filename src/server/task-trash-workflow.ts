@@ -15,13 +15,16 @@
 // session trees and everything running inside its worktree, including detached
 // dev servers) → delete the worktree (deleteTaskWorktree captures the patch first).
 // Dependents start before the slow worktree removal, as both earlier copies
-// did. The gate is the hook point for the `qa` landing step (land on the base
-// before Done, kit-merge plan §4.2); nothing installs one yet.
+// did. The gate is the `qa` landing step (src/server/task-landing-gate.ts:
+// land on the base before Done, kit-merge plan §4.2); it decides on the
+// request's `landing` choice and acts only on landing-mode-`qa` workspaces.
 
 import type {
 	RuntimeBoardCard,
 	RuntimeBoardColumnId,
 	RuntimeBoardData,
+	RuntimeTaskLandingChoice,
+	RuntimeTaskLandingOutcome,
 	RuntimeTaskSessionStartRequest,
 	RuntimeTaskSessionStartResponse,
 	RuntimeTaskTrashAutoStart,
@@ -53,6 +56,8 @@ export interface TaskTrashWorkspaceScope {
 export interface TaskTrashRequest extends TaskTrashWorkspaceScope {
 	taskId: string;
 	trigger: TaskTrashTrigger;
+	/** Land or discard the work of a landing-mode-`qa` card (the done gate decides what it means). */
+	landing?: RuntimeTaskLandingChoice;
 	/**
 	 * Re-checked inside the atomic board mutation. When it returns false the
 	 * card is left alone and the result is `skipped` (the reconciler only
@@ -67,14 +72,17 @@ export interface TaskDoneGateInput extends TaskTrashWorkspaceScope {
 	card: RuntimeBoardCard;
 	fromColumnId: RuntimeBoardColumnId;
 	trigger: TaskTrashTrigger;
+	landing?: RuntimeTaskLandingChoice;
 }
 
-export type TaskDoneGateDecision = { proceed: true } | { proceed: false; reason: string };
+export type TaskDoneGateDecision =
+	| { proceed: true; landing?: RuntimeTaskLandingOutcome }
+	| { proceed: false; reason: string; landing?: RuntimeTaskLandingOutcome };
 
 /**
- * Runs before a card enters Done. This is where `autoReviewMode: "qa"` will
- * squash-land the task onto its base (decision 2: land first, then Done), so a
- * land conflict can keep the card in Review instead. Not installed by default.
+ * Runs before a card enters Done. The `qa` landing step squash-lands the task
+ * onto its base here (decision 2: land first, then Done), so a land conflict
+ * keeps the card in Review instead.
  */
 export type TaskDoneGate = (input: TaskDoneGateInput) => Promise<TaskDoneGateDecision>;
 
@@ -210,9 +218,12 @@ export function createTaskTrashWorkflow(deps: CreateTaskTrashWorkflowDependencie
 	// double click) share one run, so cleanup and dependents happen once.
 	const inFlight = new Map<string, Promise<TaskTrashResult>>();
 
-	const runDoneGate = async (request: TaskTrashRequest): Promise<TaskTrashResult | null> => {
+	/** A blocked result, or the landing outcome to report once the card is Done. */
+	const runDoneGate = async (
+		request: TaskTrashRequest,
+	): Promise<{ blocked: TaskTrashResult } | { landing?: RuntimeTaskLandingOutcome }> => {
 		if (!deps.doneGate) {
-			return null;
+			return {};
 		}
 		const snapshot = await deps.mutateWorkspaceState(request.workspacePath, (state) => ({
 			board: state.board,
@@ -221,10 +232,10 @@ export function createTaskTrashWorkflow(deps: CreateTaskTrashWorkflowDependencie
 		}));
 		const location = snapshot.value;
 		if (!location || location.columnId === "trash") {
-			return null;
+			return {};
 		}
 		if (request.canTrash && !request.canTrash(location.card, location.columnId)) {
-			return null;
+			return {};
 		}
 		const decision = await deps.doneGate({
 			workspaceId: request.workspaceId,
@@ -232,14 +243,18 @@ export function createTaskTrashWorkflow(deps: CreateTaskTrashWorkflowDependencie
 			card: location.card,
 			fromColumnId: location.columnId,
 			trigger: request.trigger,
+			landing: request.landing,
 		});
 		if (decision.proceed) {
-			return null;
+			return { landing: decision.landing };
 		}
-		return createResult(request, "blocked", {
-			previousColumnId: location.columnId,
-			error: decision.reason,
-		});
+		return {
+			blocked: createResult(request, "blocked", {
+				previousColumnId: location.columnId,
+				error: decision.reason,
+				...(decision.landing ? { landing: decision.landing } : {}),
+			}),
+		};
 	};
 
 	const moveCardToDone = async (request: TaskTrashRequest): Promise<BoardStepValue> => {
@@ -395,19 +410,21 @@ export function createTaskTrashWorkflow(deps: CreateTaskTrashWorkflowDependencie
 	};
 
 	const runTrashTask = async (request: TaskTrashRequest): Promise<TaskTrashResult> => {
-		const blocked = await runDoneGate(request);
-		if (blocked) {
-			return blocked;
+		const gate = await runDoneGate(request);
+		if ("blocked" in gate) {
+			return gate.blocked;
 		}
+		const landing = gate.landing ? { landing: gate.landing } : {};
 
 		const boardStep = await moveCardToDone(request);
 		if (boardStep.kind === "not_found") {
 			return createResult(request, "not_found", {
+				...landing,
 				error: `Task "${request.taskId}" was not found in workspace ${request.workspacePath}.`,
 			});
 		}
 		if (boardStep.kind === "skipped") {
-			return createResult(request, "skipped", { previousColumnId: boardStep.columnId });
+			return createResult(request, "skipped", { ...landing, previousColumnId: boardStep.columnId });
 		}
 		if (boardStep.kind === "already_done") {
 			return createResult(request, "already_done", { previousColumnId: "trash" });
@@ -437,6 +454,7 @@ export function createTaskTrashWorkflow(deps: CreateTaskTrashWorkflowDependencie
 			autoStartedTasks,
 			worktreeDeleted: worktree.removed,
 			worktreeDeleteError: worktree.error,
+			...landing,
 		});
 	};
 
@@ -466,5 +484,6 @@ export function createTrashTaskRequestHandler(
 			workspacePath: scope.workspacePath,
 			taskId: input.taskId,
 			trigger: input.trigger ?? "cli",
+			landing: input.landing,
 		});
 }

@@ -6,7 +6,7 @@
 // would ask the kit to QA a QA card. So a role-less card gets one of the legacy kit's own creation markers checked:
 // the exact title and prompt shapes its scripts wrote, never a loose "starts with QA" (a dev card titled "QA gate: …"
 // stays a dev card). This bridge goes when the legacy cards are gone (P5-4).
-import type { RuntimeTaskRole } from "./api-contract";
+import type { RuntimeBoardCard, RuntimeLandingMode, RuntimeTaskRole } from "./api-contract";
 
 /** A board card, or a card-shaped record from the legacy kit (whose title may be missing). */
 export interface CardRoleInput {
@@ -56,4 +56,20 @@ export function resolveCardRoleWithSource(card: CardRoleInput): { role: RuntimeT
 /** `card.role`, else the legacy kit's markers, else `dev`. */
 export function resolveCardRole(card: CardRoleInput): RuntimeTaskRole {
 	return resolveCardRoleWithSource(card).role;
+}
+
+/**
+ * Whether Kanban itself lands this card (the `qa` landing step, src/server/task-landing-gate.ts): a dev card on a
+ * landing-mode-`qa` workspace that the auto-review reconciler doesn't own (auto-review on with `commit`/`pr`).
+ * Its Commit / Open PR buttons become Approve & land, and its Done asks "land or discard?".
+ */
+export function isKanbanLandedCard(
+	card: CardRoleInput & Pick<RuntimeBoardCard, "autoReviewEnabled" | "autoReviewMode">,
+	landingMode: RuntimeLandingMode | null | undefined,
+): boolean {
+	return (
+		landingMode === "qa" &&
+		resolveCardRole(card) === "dev" &&
+		!(card.autoReviewEnabled === true && card.autoReviewMode !== "qa")
+	);
 }

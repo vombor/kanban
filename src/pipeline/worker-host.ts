@@ -8,14 +8,26 @@
 // - Between sweeps, board writes and session state changes from the state hub send a snapshot of that workspace
 //   after a short coalescing delay. Session summaries that don't change the state (output, hook activity) are
 //   ignored.
+// - The worker asks the server to finish a card (the Done workflow, with its landing step) with a `finishTask`
+//   request; the host runs it and answers `finishTaskResult`. Lands from any trigger reach the worker as `landed`.
 // - A worker that exits on its own is restarted after a growing delay. `pipeline.workerEntry` points the child at
 //   another build's CLI (the dev pod's "fix it live" loop): the host runs `<workerEntry> pipeline worker`.
 import { type ChildProcess, fork } from "node:child_process";
 
 import { getWorkspacePipelineSettings, type ParsedPipelineConfig, readPipelineConfig } from "../config/pipeline-config";
-import type { RuntimeTaskSessionState, RuntimeTaskSessionSummary } from "../core/api-contract";
+import type {
+	RuntimeTaskSessionState,
+	RuntimeTaskSessionSummary,
+	RuntimeTaskTrashResponse,
+} from "../core/api-contract";
 import { isPipelineWorkspace, type PipelineWorkspaceSnapshot } from "./engine";
-import { isPipelineWorkerMessage, type PipelineHostMessage, type PipelineWorkerMessage } from "./worker-protocol";
+import type { PipelineEventMap } from "./events";
+import {
+	isPipelineWorkerMessage,
+	type PipelineFinishTaskRequest,
+	type PipelineHostMessage,
+	type PipelineWorkerMessage,
+} from "./worker-protocol";
 
 const DEFAULT_SWEEP_INTERVAL_MS = 30_000;
 const DEFAULT_COALESCE_MS = 2_000;
@@ -44,6 +56,8 @@ export interface CreatePipelineWorkerHostDependencies {
 	/** `entry`: `pipeline.workerEntry`, or null for this build. */
 	spawnWorker?: (entry: string | null) => PipelineWorkerChild;
 	onWorkerMessage?: (message: PipelineWorkerMessage) => void;
+	/** Runs the Done workflow for a worker `finishTask` request (in-process triggers `pipeline`/`hold_release`). */
+	finishTask?: (request: PipelineFinishTaskRequest) => Promise<RuntimeTaskTrashResponse>;
 	sweepIntervalMs?: number;
 	coalesceMs?: number;
 	restartDelaysMs?: number[];
@@ -64,6 +78,8 @@ export interface PipelineWorkerHost {
 	notifyActivity: (activity: { workspaceId: string; summary?: RuntimeTaskSessionSummary }) => void;
 	/** The workspace left the server. */
 	forgetWorkspace: (workspaceId: string) => void;
+	/** Kanban landed a card: tells the worker, which emits `landed` for kit features. */
+	notifyLanded: (event: PipelineEventMap["landed"]) => void;
 	/** Re-reads the config, starts or stops the worker, and sends every pipeline workspace's snapshot. */
 	sweep: () => Promise<void>;
 	getStatus: () => PipelineWorkerHostStatus;
@@ -150,6 +166,35 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 		}
 	};
 
+	const answerFinishTask = async (
+		from: PipelineWorkerChild,
+		requestId: number,
+		request: PipelineFinishTaskRequest,
+	): Promise<void> => {
+		let result: RuntimeTaskTrashResponse;
+		try {
+			if (!deps.finishTask) {
+				throw new Error("this server does not finish pipeline tasks");
+			}
+			result = await deps.finishTask(request);
+		} catch (error) {
+			result = {
+				ok: false,
+				status: "failed",
+				taskId: request.taskId,
+				previousColumnId: null,
+				readyTaskIds: [],
+				autoStartedTasks: [],
+				worktreeDeleted: false,
+				error: error instanceof Error ? error.message : String(error),
+			};
+		}
+		// A worker that restarted meanwhile has forgotten the request.
+		if (child === from) {
+			from.send({ type: "finishTaskResult", requestId, result });
+		}
+	};
+
 	const startChild = (): void => {
 		if (child || closed) {
 			return;
@@ -170,6 +215,8 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 			}
 			if (message.type === "log") {
 				deps.log(message.message);
+			} else if (message.type === "finishTask") {
+				void answerFinishTask(started, message.requestId, message.request);
 			} else if (message.type === "ready") {
 				// Snapshots sent before the worker listened would be lost; send them all now.
 				for (const [workspaceId, workspacePath] of pipelineWorkspaces) {
@@ -320,6 +367,9 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 			if (pipelineWorkspaces.delete(workspaceId)) {
 				child?.send({ type: "forget", workspaceId });
 			}
+		},
+		notifyLanded: (event) => {
+			child?.send({ type: "landed", event });
 		},
 		sweep,
 		getStatus: () => ({

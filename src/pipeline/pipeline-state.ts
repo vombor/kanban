@@ -37,6 +37,8 @@ export type PipelineWorkspaceState = z.infer<typeof pipelineWorkspaceStateSchema
 export interface PipelineStateStore {
 	/** The workspace's state; imported from the legacy checks-state.json (or created) and saved on first use. */
 	load: (workspaceId: string) => Promise<PipelineWorkspaceState>;
+	/** The saved state, or null when there is none yet. Read-only: never creates or imports the file. */
+	peek: (workspaceId: string) => Promise<PipelineWorkspaceState | null>;
 	/** Read-modify-write under the state file's lock. */
 	update: (
 		workspaceId: string,
@@ -156,6 +158,7 @@ export function createPipelineStateStore(options: CreatePipelineStateStoreOption
 
 	return {
 		load: async (workspaceId) => (await readState(workspaceId)) ?? (await update(workspaceId, (state) => state)),
+		peek: readState,
 		update,
 	};
 }

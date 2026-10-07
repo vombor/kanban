@@ -21,6 +21,7 @@ import {
 	getKanbanRuntimeTls,
 	isKanbanRemoteHost,
 } from "../core/runtime-endpoint";
+import type { PipelineEventMap } from "../pipeline/events";
 import {
 	checkRateLimit,
 	clearRateLimit,
@@ -60,6 +61,7 @@ import { createOrphanProcessSweeper } from "./orphan-process-sweeper";
 import { createProcessReaper, type PreparedWorktreeReap } from "./process-reaper";
 import { createProcProcessTableReader, isProcessTableSupported } from "./process-table";
 import type { RuntimeStateHub } from "./runtime-state-hub";
+import { createTaskLandingGate } from "./task-landing-gate";
 import { createTaskTrashWorkflow, createTrashTaskRequestHandler, type TaskTrashWorkflow } from "./task-trash-workflow";
 import type { WorkspaceRegistry } from "./workspace-registry";
 
@@ -89,6 +91,8 @@ export interface CreateRuntimeServerDependencies {
 	runUpdateNow: () => Promise<RuntimeRunUpdateResponse>;
 	/** The `sessionSync` setting read at startup; reported to the browser in the runtime config. */
 	sessionSyncEnabled: boolean;
+	/** Kanban landed a card (the `qa` landing step); the pipeline worker host passes it to the worker. */
+	onTaskLanded?: (event: PipelineEventMap["landed"]) => void;
 }
 
 export interface RuntimeServer {
@@ -281,6 +285,19 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		startTaskSession: async (scope, input) => await runtimeApi.startTaskSession(scope, input),
 		onBoardMutated: async (scope) =>
 			await deps.runtimeStateHub.broadcastRuntimeWorkspaceStateUpdated(scope.workspaceId, scope.workspacePath),
+		// Landing mode `qa`: land before Done, or ask "land or discard?". Passes every other workspace through.
+		doneGate: createTaskLandingGate({
+			stopProcessesUnder: async (directories) => {
+				const prepared = await processReaper.prepareWorktreeReap({
+					taskId: "post-land",
+					worktreePaths: directories,
+					sessionPids: [],
+				});
+				await prepared.reap();
+			},
+			onLanded: deps.onTaskLanded,
+			log: deps.warn,
+		}),
 		warn: deps.warn,
 	});
 	const handleTrashTaskRequest = createTrashTaskRequestHandler(taskTrashWorkflow);

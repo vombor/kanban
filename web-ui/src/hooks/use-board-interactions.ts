@@ -3,10 +3,14 @@ import pLimit from "p-limit";
 import type { Dispatch, SetStateAction } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { notifyError, showAppToast } from "@/components/app-toaster";
-import { useLinkedBacklogTaskActions } from "@/hooks/use-linked-backlog-task-actions";
+import { type LandingDecisionRequest, useLinkedBacklogTaskActions } from "@/hooks/use-linked-backlog-task-actions";
 import { useProgrammaticCardMoves } from "@/hooks/use-programmatic-card-moves";
 import type { UseTaskSessionsResult } from "@/hooks/use-task-sessions";
-import type { RuntimeTaskSessionSummary, RuntimeTaskWorkspaceInfoResponse } from "@/runtime/types";
+import type {
+	RuntimeTaskLandingChoice,
+	RuntimeTaskSessionSummary,
+	RuntimeTaskWorkspaceInfoResponse,
+} from "@/runtime/types";
 import type { UseWorkspacePersistenceResult } from "@/runtime/use-workspace-persistence";
 import {
 	applyDragResult,
@@ -98,6 +102,10 @@ export interface UseBoardInteractionsResult {
 	handleSendReviewComments: (taskId: string, text: string) => Promise<void>;
 	moveToTrashLoadingById: Record<string, boolean>;
 	trashTaskCount: number;
+	/** Approve & land (landing mode qa): land without QA, then Done. */
+	approveAndLandTask: (taskId: string) => Promise<void>;
+	landingDecisionRequest: LandingDecisionRequest | null;
+	resolveLandingDecision: (choice: RuntimeTaskLandingChoice | null) => void;
 }
 
 export function useBoardInteractions({
@@ -507,15 +515,22 @@ export function useBoardInteractions({
 		});
 	}, [programmaticCardMoveCycle, sessionSyncEnabled, sessions, setBoard, setSelectedTaskId, tryProgrammaticCardMove]);
 
-	const { confirmMoveTaskToTrash, handleCreateDependency, handleDeleteDependency, requestMoveTaskToTrash } =
-		useLinkedBacklogTaskActions({
-			board,
-			setBoard,
-			setSelectedTaskId,
-			trashTask,
-			workspacePersistence,
-			maybeRequestNotificationPermissionForTaskStart,
-		});
+	const {
+		confirmMoveTaskToTrash,
+		handleCreateDependency,
+		handleDeleteDependency,
+		requestMoveTaskToTrash,
+		approveAndLandTask,
+		landingDecisionRequest,
+		resolveLandingDecision,
+	} = useLinkedBacklogTaskActions({
+		board,
+		setBoard,
+		setSelectedTaskId,
+		trashTask,
+		workspacePersistence,
+		maybeRequestNotificationPermissionForTaskStart,
+	});
 
 	useEffect(() => {
 		setRequestMoveTaskToTrashHandler(requestMoveTaskToTrash);
@@ -894,5 +909,8 @@ export function useBoardInteractions({
 		handleSendReviewComments,
 		moveToTrashLoadingById,
 		trashTaskCount,
+		approveAndLandTask,
+		landingDecisionRequest,
+		resolveLandingDecision,
 	};
 }

@@ -7,6 +7,7 @@ import { BoardCard } from "@/components/board-card";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import { setKanbanPaths } from "@/stores/kanban-paths-store";
+import { setLandingMode } from "@/stores/landing-mode-store";
 import type { ReviewTaskWorkspaceSnapshot } from "@/types";
 
 let mockWorkspaceSnapshot: ReviewTaskWorkspaceSnapshot | undefined;
@@ -185,6 +186,7 @@ describe("BoardCard", () => {
 			root.unmount();
 		});
 		setKanbanPaths(null);
+		setLandingMode(null);
 		vi.restoreAllMocks();
 		container.remove();
 		if (previousActEnvironment === undefined) {
@@ -351,6 +353,54 @@ describe("BoardCard", () => {
 		});
 
 		expect(container.textContent).not.toContain("trash-task-1/kanban");
+	});
+
+	it("shows Approve & land instead of Commit / Open PR on a card Kanban lands (landing mode qa)", async () => {
+		mockWorkspaceSnapshot = {
+			taskId: "task-1",
+			path: "/tmp/worktree",
+			branch: null,
+			isDetached: true,
+			headCommit: "abc",
+			changedFiles: 2,
+			additions: 3,
+			deletions: 1,
+		};
+		const onCommit = vi.fn();
+		const buttonLabels = () =>
+			Array.from(container.querySelectorAll("button")).map((button) => button.textContent?.trim());
+		const render = async (card: ReturnType<typeof createCard>) => {
+			await act(async () => {
+				root.render(
+					<TooltipProvider>
+						<BoardCard card={card} index={0} columnId="review" onCommit={onCommit} />
+					</TooltipProvider>,
+				);
+			});
+		};
+
+		await render(createCard());
+		expect(buttonLabels()).toEqual(expect.arrayContaining(["Commit", "Open PR"]));
+
+		await act(async () => {
+			setLandingMode("qa");
+		});
+		await render(createCard());
+		expect(buttonLabels()).toContain("Approve & land");
+		expect(buttonLabels()).not.toContain("Commit");
+		const approve = Array.from(container.querySelectorAll("button")).find(
+			(button) => button.textContent?.trim() === "Approve & land",
+		);
+		await act(async () => {
+			approve?.click();
+		});
+		expect(onCommit).toHaveBeenCalledWith("task-1");
+
+		// A commit-mode auto-review card and a legacy QA card keep the upstream buttons.
+		await render(createCard({ autoReviewEnabled: true, autoReviewMode: "commit" }));
+		expect(buttonLabels()).toContain("Commit");
+		await render(createCard({ title: "QA1 bbbbb: check the form" }));
+		expect(buttonLabels()).not.toContain("Approve & land");
 	});
 
 	it("shows a role badge on QA, TRIAGE and calibration cards and none on dev cards", async () => {

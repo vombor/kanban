@@ -1,6 +1,7 @@
 // Main React composition root for the browser app.
 // Keep this file focused on wiring top-level hooks and surfaces together, and
 // push runtime-specific orchestration down into hooks and service modules.
+import { isKanbanLandedCard } from "@runtime-card-role";
 import { FolderOpen } from "lucide-react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -13,6 +14,7 @@ import { DebugDialog } from "@/components/debug-dialog";
 import { AgentTerminalPanel } from "@/components/detail-panels/agent-terminal-panel";
 import { GitHistoryView } from "@/components/git-history-view";
 import { KanbanBoard } from "@/components/kanban-board";
+import { LandOrDiscardDialog } from "@/components/land-or-discard-dialog";
 import { ProjectNavigationPanel } from "@/components/project-navigation-panel";
 import { RuntimeSettingsDialog, type RuntimeSettingsSection } from "@/components/runtime-settings-dialog";
 import { StartupOnboardingDialog } from "@/components/startup-onboarding-dialog";
@@ -62,6 +64,7 @@ import { useWorkspacePersistence } from "@/runtime/use-workspace-persistence";
 import { saveWorkspaceState } from "@/runtime/workspace-state-query";
 import { findCardSelection } from "@/state/board-state";
 import { setKanbanPaths } from "@/stores/kanban-paths-store";
+import { setLandingMode } from "@/stores/landing-mode-store";
 import {
 	getTaskWorkspaceInfo,
 	getTaskWorkspaceSnapshot,
@@ -129,6 +132,7 @@ export default function App(): ReactElement {
 		if (runtimeProjectConfig) {
 			setKanbanPaths(runtimeProjectConfig.kanbanPaths);
 		}
+		setLandingMode(runtimeProjectConfig?.landingMode ?? null);
 	}, [runtimeProjectConfig]);
 	const isTaskAgentReady = isTaskAgentSetupSatisfied(runtimeProjectConfig);
 	const settingsWorkspaceId = navigationCurrentProjectId ?? currentProjectId;
@@ -558,6 +562,9 @@ export default function App(): ReactElement {
 		handleSendReviewComments,
 		moveToTrashLoadingById,
 		trashTaskCount,
+		approveAndLandTask,
+		landingDecisionRequest,
+		resolveLandingDecision,
 	} = useBoardInteractions({
 		board,
 		setBoard,
@@ -580,6 +587,19 @@ export default function App(): ReactElement {
 		readyForReviewNotificationsEnabled,
 		sessionSyncEnabled,
 	});
+
+	// Landing mode qa: a card Kanban lands itself shows Approve & land in place of Commit (src/core/card-role.ts).
+	const handleCommitOrApproveTask = useCallback(
+		(taskId: string) => {
+			const selection = findCardSelection(board, taskId);
+			if (selection && isKanbanLandedCard(selection.card, runtimeProjectConfig?.landingMode)) {
+				void approveAndLandTask(taskId);
+				return;
+			}
+			handleCommitTask(taskId);
+		},
+		[approveAndLandTask, board, handleCommitTask, runtimeProjectConfig?.landingMode],
+	);
 
 	const {
 		handleCreateAndStartTask,
@@ -859,7 +879,7 @@ export default function App(): ReactElement {
 												inlineTaskEditor={inlineTaskEditor}
 												onEditTask={handleOpenEditTask}
 												onSaveTaskTitle={handleSaveTaskTitle}
-												onCommitTask={handleCommitTask}
+												onCommitTask={handleCommitOrApproveTask}
 												onOpenPrTask={handleOpenPrTask}
 												onCancelAutomaticTaskAction={handleCancelAutomaticTaskAction}
 												commitTaskLoadingById={commitTaskLoadingById}
@@ -941,7 +961,7 @@ export default function App(): ReactElement {
 										handleOpenEditTask(task, { preserveDetailSelection: true });
 									}}
 									onSaveTaskTitle={handleSaveTaskTitle}
-									onCommitTask={handleCommitTask}
+									onCommitTask={handleCommitOrApproveTask}
 									onOpenPrTask={handleOpenPrTask}
 									onAgentCommitTask={handleAgentCommitTask}
 									onAgentOpenPrTask={handleAgentOpenPrTask}
@@ -1045,6 +1065,12 @@ export default function App(): ReactElement {
 					taskCount={trashTaskCount}
 					onCancel={() => setIsClearTrashDialogOpen(false)}
 					onConfirm={handleConfirmClearTrash}
+				/>
+				<LandOrDiscardDialog
+					open={landingDecisionRequest !== null}
+					taskTitle={landingDecisionRequest?.task.title || landingDecisionRequest?.task.id || ""}
+					baseRef={landingDecisionRequest?.baseRef ?? ""}
+					onChoose={resolveLandingDecision}
 				/>
 				<StartupOnboardingDialog
 					open={isStartupOnboardingDialogOpen}

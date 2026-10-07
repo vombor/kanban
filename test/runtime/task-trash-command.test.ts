@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { trashTask } from "../../src/commands/task";
+import { approveTask, trashTask } from "../../src/commands/task";
 import type { RuntimeWorkspaceStateResponse } from "../../src/core/api-contract";
-import { createTaskTrashWorkflow, createTrashTaskRequestHandler } from "../../src/server/task-trash-workflow";
+import {
+	createTaskTrashWorkflow,
+	createTrashTaskRequestHandler,
+	type TaskDoneGate,
+} from "../../src/server/task-trash-workflow";
 import type * as WorkspaceStateModule from "../../src/state/workspace-state";
 import { type RuntimeTrpcContext, runtimeAppRouter } from "../../src/trpc/app-router";
 import { createWorkspaceApi } from "../../src/trpc/workspace-api";
@@ -41,9 +45,9 @@ vi.mock("../../src/state/workspace-state", async (importOriginal) => {
 
 const SCOPE = { workspaceId: "ws-1", workspacePath: "/repo" };
 
-function installRuntime(store: WorkspaceStateStore) {
+function installRuntime(store: WorkspaceStateStore, doneGate?: TaskDoneGate) {
 	const effects = createFakeTaskTrashWorkflowDependencies(store);
-	const workflow = createTaskTrashWorkflow(effects.dependencies);
+	const workflow = createTaskTrashWorkflow({ ...effects.dependencies, doneGate });
 	const trashTaskSpy = vi.spyOn(workflow, "trashTask");
 	const context = {
 		requestedWorkspaceId: SCOPE.workspaceId,
@@ -121,5 +125,43 @@ describe("kanban task done", () => {
 		installRuntime(store);
 
 		await expect(trashTask({ cwd: "/repo", taskId: "missing" })).rejects.toThrow(/missing/);
+	});
+
+	it("passes --land/--discard and Approve & land to the Done workflow's landing step", async () => {
+		const store = createWorkspaceStateStore({
+			board: createBoard({ review: [createCard({ id: "task-1" }), createCard({ id: "task-2" })] }),
+			sessions: {},
+			revision: 1,
+		});
+		const doneGate = vi.fn<TaskDoneGate>(async (input) =>
+			input.landing === "land"
+				? { proceed: true, landing: { decision: "landed", baseRef: "main", commit: "abc123" } }
+				: { proceed: true, landing: { decision: "discarded", baseRef: "main" } },
+		);
+		const { trashTaskSpy } = installRuntime(store, doneGate);
+
+		const approved = await approveTask({ cwd: "/repo", taskId: "task-1" });
+		const discarded = await trashTask({ cwd: "/repo", taskId: "task-2", landing: "discard" });
+
+		expect(trashTaskSpy).toHaveBeenNthCalledWith(1, expect.objectContaining({ trigger: "approve", landing: "land" }));
+		expect(trashTaskSpy).toHaveBeenNthCalledWith(2, expect.objectContaining({ trigger: "cli", landing: "discard" }));
+		expect(approved).toMatchObject({ ok: true, landing: { decision: "landed", commit: "abc123" } });
+		expect(discarded).toMatchObject({ ok: true, landing: { decision: "discarded" } });
+	});
+
+	it("fails with the land-or-discard question when the landing step needs a choice", async () => {
+		const store = createWorkspaceStateStore({
+			board: createBoard({ review: [createCard({ id: "task-1" })] }),
+			sessions: {},
+			revision: 1,
+		});
+		installRuntime(store, async () => ({
+			proceed: false,
+			reason: "Task task-1 has work that is not on main. Land or discard it",
+			landing: { decision: "required", baseRef: "main" },
+		}));
+
+		await expect(trashTask({ cwd: "/repo", taskId: "task-1" })).rejects.toThrow(/Land or discard it/u);
+		expect(findCardInBoard(store.stored.board, "task-1")?.columnId).toBe("review");
 	});
 });

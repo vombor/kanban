@@ -7,6 +7,8 @@ import type {
 	RuntimeBoardDependency,
 	RuntimeTaskAgentSettings,
 	RuntimeTaskAutoReviewMode,
+	RuntimeTaskLandingChoice,
+	RuntimeTaskLandingOutcome,
 	RuntimeTaskRole,
 	RuntimeTaskTrashAutoStart,
 	RuntimeWorkspaceStateResponse,
@@ -847,6 +849,7 @@ interface TrashTaskExecutionResult {
 	autoStartedTasks: JsonRecord[];
 	worktreeDeleted: boolean;
 	worktreeDeleteError?: string;
+	landing?: RuntimeTaskLandingOutcome;
 	alreadyInTrash: boolean;
 }
 
@@ -872,17 +875,20 @@ function formatAutoStartedTask(
 	};
 }
 
-// The Done steps (stop sessions, keep the patch, delete the worktree, start
-// linked backlog tasks) run in the runtime's shared workflow
-// (src/server/task-trash-workflow.ts); the CLI only formats the result.
+// The Done steps (land on landing mode qa, stop sessions, keep the patch,
+// delete the worktree, start linked backlog tasks) run in the runtime's shared
+// workflow (src/server/task-trash-workflow.ts); the CLI only formats the result.
 async function trashTaskById(input: {
 	taskId: string;
 	workspaceRepoPath: string;
 	runtimeClient: RuntimeTrpcClient;
+	landing?: RuntimeTaskLandingChoice;
+	trigger?: "cli" | "approve";
 }): Promise<TrashTaskExecutionResult> {
 	const result = await input.runtimeClient.workspace.trashTask.mutate({
 		taskId: input.taskId,
-		trigger: "cli",
+		trigger: input.trigger ?? "cli",
+		...(input.landing ? { landing: input.landing } : {}),
 	});
 	if (result.status === "not_found" || result.status === "failed" || result.status === "blocked") {
 		throw new Error(result.error ?? `Task "${input.taskId}" could not be moved to done.`);
@@ -903,8 +909,16 @@ async function trashTaskById(input: {
 		),
 		worktreeDeleted: result.worktreeDeleted,
 		worktreeDeleteError: result.worktreeDeleteError,
+		...(result.landing ? { landing: result.landing } : {}),
 		alreadyInTrash,
 	};
+}
+
+function parseLandingChoice(options: { land?: boolean; discard?: boolean }): RuntimeTaskLandingChoice | undefined {
+	if (options.land && options.discard) {
+		throw new Error("Use --land or --discard, not both.");
+	}
+	return options.land ? "land" : options.discard ? "discard" : undefined;
 }
 
 export async function trashTask(input: {
@@ -912,6 +926,7 @@ export async function trashTask(input: {
 	taskId?: string;
 	column?: ListTaskColumn;
 	projectPath?: string;
+	landing?: RuntimeTaskLandingChoice;
 }): Promise<JsonRecord> {
 	const target = resolveTaskCommandTarget(input, "task done");
 	const workspaceRepoPath = await resolveWorkspaceRepoPath(input.projectPath, input.cwd);
@@ -923,6 +938,7 @@ export async function trashTask(input: {
 			taskId: target.taskId,
 			workspaceRepoPath,
 			runtimeClient,
+			landing: input.landing,
 		});
 		if (trashed.alreadyInTrash) {
 			return {
@@ -942,6 +958,7 @@ export async function trashTask(input: {
 			autoStartedTasks: trashed.autoStartedTasks,
 			worktreeDeleted: trashed.worktreeDeleted,
 			worktreeDeleteError: trashed.worktreeDeleteError,
+			...(trashed.landing ? { landing: trashed.landing } : {}),
 		};
 	}
 
@@ -968,6 +985,7 @@ export async function trashTask(input: {
 				taskId: task.id,
 				workspaceRepoPath,
 				runtimeClient,
+				landing: input.landing,
 			}),
 		);
 	}
@@ -989,6 +1007,35 @@ export async function trashTask(input: {
 			error: result.worktreeDeleteError,
 		})),
 		count: trashedTasks.length,
+	};
+}
+
+/**
+ * `kanban task approve`: Approve & land. On landing mode qa, Kanban squash-lands the task onto its base (no QA,
+ * recorded as HUMAN_APPROVED in the decision log) and moves it to Done; a conflict leaves it where it is. On any
+ * other landing mode it is the same as `task done`.
+ */
+export async function approveTask(input: { cwd: string; taskId: string; projectPath?: string }): Promise<JsonRecord> {
+	const workspaceRepoPath = await resolveWorkspaceRepoPath(input.projectPath, input.cwd);
+	const workspaceId = await ensureRuntimeWorkspace(workspaceRepoPath);
+	const runtimeClient = createRuntimeTrpcClient(workspaceId);
+	const approved = await trashTaskById({
+		taskId: input.taskId,
+		workspaceRepoPath,
+		runtimeClient,
+		landing: "land",
+		trigger: "approve",
+	});
+	return {
+		ok: true,
+		...(approved.alreadyInTrash ? { message: `Task "${input.taskId}" is already done.` } : {}),
+		task: approved.task,
+		workspacePath: workspaceRepoPath,
+		landing: approved.landing ?? null,
+		readyTaskIds: approved.readyTaskIds,
+		autoStartedTasks: approved.autoStartedTasks,
+		worktreeDeleted: approved.worktreeDeleted,
+		worktreeDeleteError: approved.worktreeDeleteError,
 	};
 }
 
@@ -1346,14 +1393,46 @@ export function registerTaskCommand(program: Command): void {
 			"Column to move to done: backlog | in_progress | review | done. trash is also accepted.",
 			parseListColumn,
 		)
+		.option(
+			"--land",
+			"Landing mode qa: squash-land the work onto its base first (same as task approve). Required, or --discard, when the task has work not on its base.",
+		)
+		.option("--discard", "Landing mode qa: move to done without landing the work (its patch is still saved).")
 		.option("--project-path <path>", "Workspace path. Defaults to current directory workspace.")
-		.action(async (options: { taskId?: string; column?: ListTaskColumn; projectPath?: string }) => {
+		.action(
+			async (options: {
+				taskId?: string;
+				column?: ListTaskColumn;
+				projectPath?: string;
+				land?: boolean;
+				discard?: boolean;
+			}) => {
+				await runTaskCommand(
+					async () =>
+						await trashTask({
+							cwd: process.cwd(),
+							taskId: options.taskId,
+							column: options.column,
+							projectPath: options.projectPath,
+							landing: parseLandingChoice(options),
+						}),
+				);
+			},
+		);
+
+	task
+		.command("approve")
+		.description(
+			"Approve & land: on landing mode qa, squash-land the task onto its base without QA, then move it to done.",
+		)
+		.requiredOption("--task-id <id>", "Task ID.")
+		.option("--project-path <path>", "Workspace path. Defaults to current directory workspace.")
+		.action(async (options: { taskId: string; projectPath?: string }) => {
 			await runTaskCommand(
 				async () =>
-					await trashTask({
+					await approveTask({
 						cwd: process.cwd(),
 						taskId: options.taskId,
-						column: options.column,
 						projectPath: options.projectPath,
 					}),
 			);

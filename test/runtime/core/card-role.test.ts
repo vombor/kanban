@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { inferLegacyCardRole, resolveCardRoleWithSource } from "../../../src/core/card-role";
+import { runtimeTaskTrashRequestSchema } from "../../../src/core/api-contract";
+import { inferLegacyCardRole, isKanbanLandedCard, resolveCardRoleWithSource } from "../../../src/core/card-role";
+import { createCard } from "../../utilities/workspace-state-store";
 
 describe("resolveCardRole", () => {
 	it("takes the card's own role, whatever its title says", () => {
@@ -46,5 +48,32 @@ describe("resolveCardRole", () => {
 				role ? { role, source: "legacy" } : { role: "dev", source: "default" },
 			);
 		}
+	});
+});
+
+describe("isKanbanLandedCard", () => {
+	it("only landing mode qa dev cards that auto-review doesn't own are landed by Kanban", () => {
+		const dev = createCard({ id: "a" });
+		expect(isKanbanLandedCard(dev, "qa")).toBe(true);
+		expect(isKanbanLandedCard({ ...dev, autoReviewEnabled: true, autoReviewMode: "qa" }, "qa")).toBe(true);
+		expect(isKanbanLandedCard({ ...dev, autoReviewEnabled: true, autoReviewMode: "commit" }, "qa")).toBe(false);
+		expect(isKanbanLandedCard({ ...dev, role: "triage" }, "qa")).toBe(false);
+		expect(isKanbanLandedCard({ ...dev, title: "QA1 b0b0b: check" }, "qa")).toBe(false);
+		for (const mode of ["off", "commit", "pr", null, undefined] as const) {
+			expect(isKanbanLandedCard(dev, mode)).toBe(false);
+		}
+	});
+});
+
+describe("Done request schema", () => {
+	it("accepts land/discard and the API triggers, never the in-process ones", () => {
+		expect(runtimeTaskTrashRequestSchema.parse({ taskId: "a", trigger: "approve", landing: "land" })).toEqual({
+			taskId: "a",
+			trigger: "approve",
+			landing: "land",
+		});
+		expect(runtimeTaskTrashRequestSchema.safeParse({ taskId: "a", trigger: "hold_release" }).success).toBe(false);
+		expect(runtimeTaskTrashRequestSchema.safeParse({ taskId: "a", trigger: "pipeline" }).success).toBe(false);
+		expect(runtimeTaskTrashRequestSchema.safeParse({ taskId: "a", landing: "maybe" }).success).toBe(false);
 	});
 });

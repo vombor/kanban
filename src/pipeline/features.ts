@@ -7,6 +7,16 @@
 // that names a feature nobody registered is reported once per workspace, not refused.
 import type { KitDocument, KitFeature } from "../kits/kit-schema";
 import type { PipelineEventBus, PipelineEventHandler, PipelineEventName } from "./events";
+import type { ReleaseHoldInput, ReleaseHoldResult } from "./hold";
+
+/** What a feature may ask the core to do for its workspace. */
+export interface PipelineFeatureActions {
+	/** Lands or discards a held card (src/pipeline/hold.ts), through the server's Done workflow. */
+	releaseHold: (
+		workspaceId: string,
+		input: Omit<ReleaseHoldInput, "workspaceId" | "workspacePath">,
+	) => Promise<ReleaseHoldResult>;
+}
 
 export interface PipelineFeatureContext {
 	workspaceId: string;
@@ -14,6 +24,8 @@ export interface PipelineFeatureContext {
 	kit: KitDocument;
 	/** Subscribes to this workspace's events only; the registry unsubscribes on deactivation. */
 	on: <Name extends PipelineEventName>(name: Name, handler: PipelineEventHandler<Name>) => void;
+	/** The only way out of a hold (`onPass → hold`): land or discard the card, optionally tagging its work first. */
+	releaseHold: (input: Omit<ReleaseHoldInput, "workspaceId" | "workspacePath">) => Promise<ReleaseHoldResult>;
 	log: (message: string) => void;
 }
 
@@ -44,6 +56,7 @@ interface ActiveFeature {
 
 export function createPipelineFeatureRegistry(deps: {
 	bus: PipelineEventBus;
+	actions?: PipelineFeatureActions;
 	log?: (message: string) => void;
 }): PipelineFeatureRegistry {
 	const features = new Map<KitFeature, PipelineFeature>();
@@ -73,6 +86,10 @@ export function createPipelineFeatureRegistry(deps: {
 					}),
 				);
 			},
+			releaseHold: async (input) =>
+				deps.actions
+					? await deps.actions.releaseHold(workspaceId, input)
+					: { ok: false, error: "this pipeline cannot release holds" },
 			log: (message) => log(`pipeline ${workspaceId} [${feature.name}]: ${message}`),
 		};
 		let stop: (() => void) | undefined;

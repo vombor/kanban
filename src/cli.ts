@@ -419,6 +419,7 @@ async function startServer(): Promise<{
 	const runtimeServer = await createRuntimeServer({
 		workspaceRegistry,
 		sessionSyncEnabled: sessionSyncSetting.enabled,
+		onTaskLanded: (event) => pipelineWorkerHost?.notifyLanded(event),
 		runtimeStateHub: runtimeHub,
 		warn: (message) => {
 			console.warn(`[kanban] ${message}`);
@@ -564,6 +565,19 @@ async function startServer(): Promise<{
 				})),
 				selectedAgentId: config.selectedAgentId,
 			};
+		},
+		finishTask: async (request) => {
+			const workspacePath = workspaceRegistry.getWorkspacePathById(request.workspaceId);
+			if (!workspacePath) {
+				throw new Error(`Workspace ${request.workspaceId} is no longer registered.`);
+			}
+			return await runtimeServer.taskTrashWorkflow.trashTask({
+				workspaceId: request.workspaceId,
+				workspacePath,
+				taskId: request.taskId,
+				trigger: request.trigger,
+				landing: request.landing,
+			});
 		},
 		log: (message) => {
 			console.warn(`[kanban] ${message}`);

@@ -214,3 +214,22 @@ of this repository is the complete record of changes.
 - `web-ui/src/components/board-card.tsx`, `web-ui/src/components/board-card-task-id.tsx` (new): every board card
   shows its task id (e.g. `7ad4d`) at the right end of the agent/model row, also on cards without an agent/model.
   Clicking it copies the id and shows a "Copied <id>" toast without opening or dragging the card.
+- `src/workspace/land.ts`, `src/server/task-landing-gate.ts`, `src/pipeline/hold.ts` (new), `src/core/card-role.ts`,
+  `src/server/task-trash-workflow.ts`, `src/server/runtime-server.ts`, `src/cli.ts`, `src/core/api-contract.ts`,
+  `src/core/api-validation.ts`, `src/commands/task.ts`, `src/pipeline/{engine,worker,worker-host,worker-protocol,features,pipeline-state,decision-log}.ts`,
+  `src/doctor/one-owner-checks.ts`, `web-ui/src/components/{board-card,land-or-discard-dialog}.tsx`,
+  `web-ui/src/hooks/{use-linked-backlog-task-actions,use-board-interactions,use-task-sessions}.ts`,
+  `web-ui/src/stores/landing-mode-store.ts` (new), `web-ui/src/App.tsx`, `web-ui/{vite,vitest}.config.ts`,
+  `web-ui/tsconfig.json`, tests: Kanban lands cards itself on landing mode `qa` (plan step P4-4). The Done workflow's
+  done gate squash-lands a dev card's pre-land snapshot (P4-2's `refs/kanban/snapshots`) onto its base before Done
+  (merge-tree pre-check; commit-tree + update-ref when the base isn't checked out, else `merge --squash` there with the
+  user's edits stashed and restored by sha; postLand rules from the kit; index.lock retries). Done on such a card
+  with work not on its base needs a choice: Approve & land (the Commit / Open PR buttons on those cards,
+  `kanban task approve`, `task done --land`) or discard (`task done --discard`); without one the move is refused and
+  the board asks "land or discard?". A conflict keeps the card where it is. The hold (`onPass → hold`, recorded in
+  pipeline-state) blocks Done until `releaseHold()` lands or discards it (optional `preserve/*` tag); the pipeline
+  worker asks the server to finish cards over a new `finishTask` IPC request, and lands reach kit features as the
+  `landed` event. Legacy kit QA/calibration/TRIAGE cards without a `role` (P4-T1's `resolveCardRole` markers) are
+  never gated. Shadow workspaces only log what would happen; landing `off`/`commit`/`pr` and workspaces without a
+  config entry are unchanged. `kanban doctor` fails when Kanban lands a project the legacy autoland still
+  watches.

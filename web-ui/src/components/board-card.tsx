@@ -1,5 +1,6 @@
 import { Draggable } from "@hello-pangea/dnd";
 import { getRuntimeAgentCatalogEntry } from "@runtime-agent-catalog";
+import { isKanbanLandedCard } from "@runtime-card-role";
 import { buildTaskWorktreeDisplayPath } from "@runtime-task-worktree-path";
 import { formatToolCallLabel } from "@runtime-tool-call-display";
 import { AlertCircle, AlertTriangle, Bot, GitBranch, Pencil, Play, RotateCcw, Trash2 } from "lucide-react";
@@ -13,6 +14,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Tooltip } from "@/components/ui/tooltip";
 import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import { useKanbanPaths } from "@/stores/kanban-paths-store";
+import { useLandingMode } from "@/stores/landing-mode-store";
 import { useTaskWorkspaceSnapshotValue } from "@/stores/workspace-metadata-store";
 import type { BoardCard as BoardCardModel, BoardColumnId } from "@/types";
 import { getTaskAutoReviewCancelButtonLabel, getTaskRoleBadgeLabel } from "@/types";
@@ -445,6 +447,9 @@ export const BoardCard = memo(function BoardCard({
 				}
 		: null;
 	const showReviewGitActions = columnId === "review" && (reviewWorkspaceSnapshot?.changedFiles ?? 0) > 0;
+	// Landing mode qa: Kanban lands the card itself, so Commit / Open PR become one Approve & land (onCommit).
+	const landingMode = useLandingMode();
+	const showApproveAndLand = isKanbanLandedCard(card, landingMode);
 	const isAnyGitActionLoading = isCommitLoading || isOpenPrLoading;
 	const cancelAutomaticActionLabel =
 		!isTrashCard && card.autoReviewEnabled ? getTaskAutoReviewCancelButtonLabel(card.autoReviewMode) : null;
@@ -830,7 +835,25 @@ export const BoardCard = memo(function BoardCard({
 									) : null}
 								</p>
 							) : null}
-							{showReviewGitActions ? (
+							{showReviewGitActions && showApproveAndLand ? (
+								<div className="flex gap-1.5 mt-1.5">
+									<Tooltip content="Squash-land onto the base branch without QA, then move to Done">
+										<Button
+											variant="primary"
+											size="sm"
+											disabled={isAnyGitActionLoading}
+											fill
+											onMouseDown={stopEvent}
+											onClick={(event) => {
+												stopEvent(event);
+												onCommit?.(card.id);
+											}}
+										>
+											Approve & land
+										</Button>
+									</Tooltip>
+								</div>
+							) : showReviewGitActions ? (
 								<div className="flex gap-1.5 mt-1.5">
 									<Button
 										variant="primary"

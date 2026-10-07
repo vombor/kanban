@@ -2,8 +2,9 @@ import { act, useEffect, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 
-import { useLinkedBacklogTaskActions } from "@/hooks/use-linked-backlog-task-actions";
-import type { RuntimeTaskTrashResponse } from "@/runtime/types";
+import { type LandingDecisionRequest, useLinkedBacklogTaskActions } from "@/hooks/use-linked-backlog-task-actions";
+import type { TaskTrashOptions } from "@/hooks/use-task-sessions";
+import type { RuntimeTaskLandingChoice, RuntimeTaskTrashResponse } from "@/runtime/types";
 import type { UseWorkspacePersistenceResult } from "@/runtime/use-workspace-persistence";
 import type { BoardCard, BoardData, BoardDependency } from "@/types";
 
@@ -57,9 +58,12 @@ interface HookSnapshot {
 		taskId: string,
 		fromColumnId: "backlog" | "in_progress" | "review" | "trash",
 	) => Promise<void>;
+	approveAndLandTask: (taskId: string) => Promise<void>;
+	landingDecisionRequest: LandingDecisionRequest | null;
+	resolveLandingDecision: (choice: RuntimeTaskLandingChoice | null) => void;
 }
 
-type TrashTaskMock = Mock<(taskId: string) => Promise<RuntimeTaskTrashResponse | null>>;
+type TrashTaskMock = Mock<(taskId: string, options?: TaskTrashOptions) => Promise<RuntimeTaskTrashResponse | null>>;
 
 function createTrashResponse(overrides: Partial<RuntimeTaskTrashResponse> = {}): RuntimeTaskTrashResponse {
 	return {
@@ -113,11 +117,17 @@ function HookHarness({
 			handleCreateDependency: actions.handleCreateDependency,
 			confirmMoveTaskToTrash: actions.confirmMoveTaskToTrash,
 			requestMoveTaskToTrash: actions.requestMoveTaskToTrash,
+			approveAndLandTask: actions.approveAndLandTask,
+			landingDecisionRequest: actions.landingDecisionRequest,
+			resolveLandingDecision: actions.resolveLandingDecision,
 		});
 	}, [
 		actions.confirmMoveTaskToTrash,
 		actions.handleCreateDependency,
 		actions.requestMoveTaskToTrash,
+		actions.approveAndLandTask,
+		actions.landingDecisionRequest,
+		actions.resolveLandingDecision,
 		board,
 		onSnapshot,
 	]);
@@ -222,7 +232,7 @@ describe("useLinkedBacklogTaskActions", () => {
 		// The browser no longer stops sessions, removes worktrees or starts
 		// dependents itself, and never saves the Done move: the runtime does.
 		expect(order).toEqual(["hold", "flush", "trashTask"]);
-		expect(trashTask).toHaveBeenCalledWith("task-2");
+		expect(trashTask).toHaveBeenCalledWith("task-2", undefined);
 		expect(workspacePersistence.holdPendingDoneMove).toHaveBeenCalledWith(
 			expect.objectContaining({ taskId: "task-2", columnId: "review", index: 0, card: reviewTask }),
 		);
@@ -257,6 +267,75 @@ describe("useLinkedBacklogTaskActions", () => {
 		expect(board.columns.find((column) => column.id === "review")?.cards.map((card) => card.id)).toEqual(["task-2"]);
 		expect(board.columns.find((column) => column.id === "trash")?.cards).toHaveLength(0);
 		expect(board.dependencies.map((dependency) => dependency.id)).toEqual(["dep-1"]);
+	});
+
+	it('asks "land or discard?" when the runtime needs a choice, and retries with the answer', async () => {
+		const trashTask: TrashTaskMock = vi.fn(async (_taskId, options) =>
+			options?.landing
+				? createTrashResponse({
+						landing: {
+							decision: options.landing === "land" ? "landed" : "discarded",
+							baseRef: "main",
+							commit: "abcdef1234",
+						},
+					})
+				: createTrashResponse({
+						ok: false,
+						status: "blocked",
+						error: "Task task-2 has work that is not on main.",
+						landing: { decision: "required", baseRef: "main" },
+					}),
+		);
+		const harness = await renderHarness({ trashTask });
+		const reviewTask = findReviewTask(harness.current());
+
+		await act(async () => {
+			await harness.current().confirmMoveTaskToTrash(reviewTask, harness.current().board);
+		});
+
+		// Not an error: the card is back in Review and the question is open.
+		expect(notifyErrorMock).not.toHaveBeenCalled();
+		expect(harness.current().landingDecisionRequest).toMatchObject({ task: { id: "task-2" }, baseRef: "main" });
+		expect(findReviewTask(harness.current()).id).toBe("task-2");
+
+		await act(async () => {
+			harness.current().resolveLandingDecision("land");
+		});
+
+		expect(harness.current().landingDecisionRequest).toBeNull();
+		expect(trashTask).toHaveBeenLastCalledWith("task-2", { landing: "land" });
+		expect(showAppToastMock).toHaveBeenCalledWith(
+			expect.objectContaining({ intent: "success", message: "Landed on main (abcdef12)" }),
+		);
+	});
+
+	it("cancelling the question leaves the card where it was", async () => {
+		const trashTask: TrashTaskMock = vi.fn(async () =>
+			createTrashResponse({ ok: false, status: "blocked", landing: { decision: "required", baseRef: "main" } }),
+		);
+		const harness = await renderHarness({ trashTask });
+		await act(async () => {
+			await harness.current().confirmMoveTaskToTrash(findReviewTask(harness.current()), harness.current().board);
+		});
+
+		await act(async () => {
+			harness.current().resolveLandingDecision(null);
+		});
+
+		expect(trashTask).toHaveBeenCalledTimes(1);
+		expect(harness.current().landingDecisionRequest).toBeNull();
+		expect(findReviewTask(harness.current()).id).toBe("task-2");
+	});
+
+	it("Approve & land asks the runtime to land with the approve trigger", async () => {
+		const trashTask: TrashTaskMock = vi.fn(async () => createTrashResponse());
+		const harness = await renderHarness({ trashTask });
+
+		await act(async () => {
+			await harness.current().approveAndLandTask("task-2");
+		});
+
+		expect(trashTask).toHaveBeenCalledWith("task-2", { landing: "land", trigger: "approve" });
 	});
 
 	it("requests notification permission when the runtime auto-starts linked tasks", async () => {
@@ -322,6 +401,6 @@ describe("useLinkedBacklogTaskActions", () => {
 		const nextSnapshot = harness.current();
 		expect(nextSnapshot.board.columns.find((column) => column.id === "review")?.cards).toHaveLength(0);
 		expect(nextSnapshot.board.columns.find((column) => column.id === "trash")?.cards[0]?.id).toBe("task-2");
-		expect(trashTask).toHaveBeenCalledWith("task-2");
+		expect(trashTask).toHaveBeenCalledWith("task-2", undefined);
 	});
 });

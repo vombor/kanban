@@ -3,7 +3,8 @@
 // switches the kit's service or toggle off. This reports a responsibility both own (FAIL), and where the two
 // configs disagree about who owns it. Rows exist only for runtime features that exist: landing (vs autoland),
 // column moves (session sync vs column-sync), ending Cline CLI turns (the turn detector vs column-sync) and the
-// Lemonade model list. The pipeline (P4-x) and the watchdog (P4-7) add theirs when they land.
+// Lemonade model list. Kanban's landing step (P4-4) is in the landing rows. The rest of the pipeline (P4-x) and the
+// watchdog (P4-7) add theirs when they land.
 
 import {
 	findImplicitLegacyToggleWarnings,
@@ -187,6 +188,16 @@ async function checkLegacyKitOwners(
 				level: "info",
 				area: "owner",
 				message: `${project.workspaceId}: the legacy kit lands; Kanban shadows it (landing ${kanbanMode}, kit ${kanbanKit}, pipeline.shadow)`,
+			});
+		} else if (autolandOwns && kanbanMode === "qa" && !settings.pipeline.shadow) {
+			// Autoland lands every Review → Done of a configured project whatever its toggles, from the trashed
+			// task patch (archive/devteam-kit:services/kanban-autoland.mjs@6da71597, onReviewToDone). Kanban's
+			// landing step (src/server/task-landing-gate.ts) lands before that Done, so the work would land twice.
+			findings.push({
+				level: "fail",
+				area: "owner",
+				message: `two owners for landing on ${project.workspaceId}: Kanban lands before Done (landing qa) and the legacy kit's autoland lands every Review → Done of a configured project`,
+				hint: `remove ${project.workspaceId} from the legacy kit's projects in ${legacyKit.path}, or kanban kit apply ${kanbanKit} --project ${project.workspaceId} --landing off`,
 			});
 		} else if (kitLands) {
 			findings.push({

@@ -8,9 +8,13 @@
 // checks run in this process, one at a time for the whole worker (checks.ts), and their results go to the card's
 // pipeline-state entry, the QA log and the decision log.
 //
+// Acting goes through the server: `finishTask()` sends a `finishTask` request (the Done workflow with its landing
+// step) and resolves with the server's answer; features release holds through it (src/pipeline/hold.ts).
+//
 // A workspace is evaluated only with landing mode `qa`. Everything else (`off`, `commit`, `pr`, no entry = `off`
 // on the `default` kit) is forgotten: no state file, no log, no kit question.
 import { getWorkspacePipelineSettings, type ParsedPipelineConfig, readPipelineConfig } from "../config/pipeline-config";
+import type { RuntimeTaskTrashResponse } from "../core/api-contract";
 import { type EffectiveModelConfig, readClineDefaultModel } from "../core/effective-agent";
 import { createRoutingPolicy } from "../kits/policy";
 import { type KitCatalog, loadKitCatalog, resolveWorkspaceKit } from "../kits/resolve-kit";
@@ -20,11 +24,17 @@ import { CHECKS_VERSION, type ChecksResult, type ChecksRunner, createChecksRunne
 import { createPipelineDecisionLog, type PipelineDecisionLog, type PipelineDecisionRecord } from "./decision-log";
 import { evaluatePipelineWorkspace, isPipelineWorkspace, type PipelineWorkspaceSnapshot } from "./engine";
 import { createPipelineEventBus, type PipelineEventBus } from "./events";
-import { createPipelineFeatureRegistry, type PipelineFeatureRegistry } from "./features";
+import { createPipelineFeatureRegistry, type PipelineFeatureActions, type PipelineFeatureRegistry } from "./features";
+import { preserveTaskWork, releaseHold } from "./hold";
 import { createPipelineStateStore, type PipelineStateStore } from "./pipeline-state";
 import { type AppendQaLog, createQaLogAppender } from "./qa-log";
 import { createSubmissionStage, type SubmissionInspector } from "./submission-stage";
-import { isPipelineHostMessage, type PipelineHostMessage, type PipelineWorkerMessage } from "./worker-protocol";
+import {
+	isPipelineHostMessage,
+	type PipelineFinishTaskRequest,
+	type PipelineHostMessage,
+	type PipelineWorkerMessage,
+} from "./worker-protocol";
 
 export interface PipelineWorkerDependencies {
 	send: (message: PipelineWorkerMessage) => void;
@@ -40,11 +50,17 @@ export interface PipelineWorkerDependencies {
 	createChecks?: (onResult: (result: ChecksResult) => Promise<void>) => ChecksRunner;
 	appendQaLog?: AppendQaLog;
 	loadAgentDefaultModels?: (config: ParsedPipelineConfig) => Promise<EffectiveModelConfig["agentDefaultModels"]>;
+	/** Tags a card's work for releaseHold (preserveTaskWork in src/pipeline/hold.ts). */
+	preserveWork?: (input: { workspacePath: string; taskId: string; tag: string }) => Promise<unknown>;
 	now?: () => number;
 }
 
 export interface PipelineWorker {
 	handle: (message: PipelineHostMessage) => Promise<void>;
+	/** Asks the server to run the Done workflow (landing included) for a card; resolves with its answer. */
+	finishTask: (request: PipelineFinishTaskRequest) => Promise<RuntimeTaskTrashResponse>;
+	/** Lands or discards a held card of a watched workspace (what features get as `context.releaseHold`). */
+	releaseHold: PipelineFeatureActions["releaseHold"];
 	/** Resolves once every queued evaluation has settled. */
 	idle: () => Promise<void>;
 	close: () => void;
@@ -74,7 +90,53 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 	const store = deps.store ?? createPipelineStateStore({ log });
 	const decisionLog = deps.decisionLog ?? createPipelineDecisionLog();
 	const bus = deps.bus ?? createPipelineEventBus({ log });
-	const features = deps.features ?? createPipelineFeatureRegistry({ bus, log });
+	const preserveWork = deps.preserveWork ?? preserveTaskWork;
+
+	let nextRequestId = 1;
+	const pendingFinishes = new Map<
+		number,
+		{ resolve: (result: RuntimeTaskTrashResponse) => void; reject: (error: Error) => void }
+	>();
+	// workspaceId → its path, from the newest snapshot (features only know the workspace id).
+	const workspacePaths = new Map<string, string>();
+
+	const finishTask = (request: PipelineFinishTaskRequest): Promise<RuntimeTaskTrashResponse> =>
+		new Promise((resolve, reject) => {
+			if (closed) {
+				reject(new Error("the pipeline worker is shutting down"));
+				return;
+			}
+			const requestId = nextRequestId++;
+			pendingFinishes.set(requestId, { resolve, reject });
+			deps.send({ type: "finishTask", requestId, request });
+		});
+
+	const actions: PipelineFeatureActions = {
+		releaseHold: async (workspaceId, input) => {
+			const workspacePath = workspacePaths.get(workspaceId);
+			if (!workspacePath) {
+				return { ok: false, error: `workspace ${workspaceId} is not watched by the pipeline` };
+			}
+			return await releaseHold(
+				{
+					store,
+					finishTask: async (request) =>
+						await finishTask({
+							workspaceId: request.workspaceId,
+							taskId: request.taskId,
+							landing: request.landing,
+							trigger: "hold_release",
+						}),
+					preserveWork: async (target) => {
+						await preserveWork(target);
+					},
+					now,
+				},
+				{ ...input, workspaceId, workspacePath },
+			);
+		},
+	};
+	const features = deps.features ?? createPipelineFeatureRegistry({ bus, actions, log });
 	const appendQaLog = deps.appendQaLog ?? createQaLogAppender();
 	const loadAgentDefaultModels = deps.loadAgentDefaultModels ?? loadDefaultAgentModels;
 	const now = deps.now ?? Date.now;
@@ -150,6 +212,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 	const forget = (workspaceId: string): void => {
 		features.removeWorkspace(workspaceId);
 		submissionStage.forgetWorkspace(workspaceId);
+		workspacePaths.delete(workspaceId);
 		if (lastWatchKeys.delete(workspaceId)) {
 			log(`pipeline ${workspaceId}: not watched any more`);
 		}
@@ -187,6 +250,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 		for (const issue of resolution.issues) {
 			reportOnce(`ws:${workspaceId}:${issue}`, `pipeline ${workspaceId}: ${issue}`);
 		}
+		workspacePaths.set(workspaceId, snapshot.workspacePath);
 		features.syncWorkspace(workspaceId, resolution.kit);
 		const state = await store.load(workspaceId);
 
@@ -289,14 +353,26 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 				await schedule(message.snapshot);
 			} else if (message.type === "forget") {
 				forget(message.workspaceId);
+			} else if (message.type === "landed") {
+				await bus.emit("landed", message.event);
+			} else if (message.type === "finishTaskResult") {
+				const pending = pendingFinishes.get(message.requestId);
+				pendingFinishes.delete(message.requestId);
+				pending?.resolve(message.result);
 			}
 		},
+		finishTask,
+		releaseHold: actions.releaseHold,
 		idle: async () => {
 			await Promise.all([...queues.values()].map(async (queue) => await queue.running));
 		},
 		close: () => {
 			closed = true;
 			checks.close();
+			for (const pending of pendingFinishes.values()) {
+				pending.reject(new Error("the pipeline worker is shutting down"));
+			}
+			pendingFinishes.clear();
 			features.close();
 		},
 	};

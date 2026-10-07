@@ -570,13 +570,34 @@ export const runtimeWorktreeDeleteResponseSchema = z.object({
 });
 export type RuntimeWorktreeDeleteResponse = z.infer<typeof runtimeWorktreeDeleteResponseSchema>;
 
-/** Who asked for the Done move. The reconciler calls the workflow in-process; the others come over tRPC. */
-export const runtimeTaskTrashTriggerSchema = z.enum(["cli", "auto_review", "browser"]);
+/**
+ * Who asked for the Done move. The reconciler and the pipeline (`pipeline`: a QA PASS; `hold_release`: a held
+ * PASS released) call the workflow in-process; the others come over tRPC. `approve` is Approve & land.
+ */
+export const runtimeTaskTrashTriggerSchema = z.enum([
+	"cli",
+	"auto_review",
+	"browser",
+	"approve",
+	"pipeline",
+	"hold_release",
+]);
 export type RuntimeTaskTrashTrigger = z.infer<typeof runtimeTaskTrashTriggerSchema>;
+/** The triggers a tRPC caller may send; the in-process ones are not accepted over the API. */
+export const runtimeTaskTrashRequestTriggerSchema = z.enum(["cli", "browser", "approve"]);
+
+/**
+ * What to do with a landing-mode-`qa` card's work on Done: `land` squash-lands it onto the base first, `discard`
+ * leaves the base alone (the worktree patch is still saved). Without it, Done on such a card with work is refused
+ * with `landing.decision: "required"` ("land or discard?"), so neither happens by accident.
+ */
+export const runtimeTaskLandingChoiceSchema = z.enum(["land", "discard"]);
+export type RuntimeTaskLandingChoice = z.infer<typeof runtimeTaskLandingChoiceSchema>;
 
 export const runtimeTaskTrashRequestSchema = z.object({
 	taskId: z.string(),
-	trigger: runtimeTaskTrashTriggerSchema.optional(),
+	trigger: runtimeTaskTrashRequestTriggerSchema.optional(),
+	landing: runtimeTaskLandingChoiceSchema.optional(),
 });
 export type RuntimeTaskTrashRequest = z.infer<typeof runtimeTaskTrashRequestSchema>;
 
@@ -599,6 +620,17 @@ export const runtimeTaskTrashAutoStartSchema = z.object({
 });
 export type RuntimeTaskTrashAutoStart = z.infer<typeof runtimeTaskTrashAutoStartSchema>;
 
+/** What the `qa` landing step did (src/server/task-landing-gate.ts). Absent when the card is not landed by Kanban. */
+export const runtimeTaskLandingOutcomeSchema = z.object({
+	decision: z.enum(["required", "landed", "noop", "discarded", "conflict", "error", "held", "shadow"]),
+	baseRef: z.string().optional(),
+	/** The commit on the base (`landed`). */
+	commit: z.string().optional(),
+	/** Conflicting paths (`conflict`). */
+	files: z.array(z.string()).optional(),
+});
+export type RuntimeTaskLandingOutcome = z.infer<typeof runtimeTaskLandingOutcomeSchema>;
+
 export const runtimeTaskTrashResponseSchema = z.object({
 	ok: z.boolean(),
 	status: runtimeTaskTrashStatusSchema,
@@ -608,6 +640,7 @@ export const runtimeTaskTrashResponseSchema = z.object({
 	autoStartedTasks: z.array(runtimeTaskTrashAutoStartSchema),
 	worktreeDeleted: z.boolean(),
 	worktreeDeleteError: z.string().optional(),
+	landing: runtimeTaskLandingOutcomeSchema.optional(),
 	error: z.string().optional(),
 });
 export type RuntimeTaskTrashResponse = z.infer<typeof runtimeTaskTrashResponseSchema>;

@@ -1,8 +1,9 @@
 import type { Dispatch, SetStateAction } from "react";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { notifyError, showAppToast } from "@/components/app-toaster";
-import type { UseTaskSessionsResult } from "@/hooks/use-task-sessions";
+import type { TaskTrashOptions, UseTaskSessionsResult } from "@/hooks/use-task-sessions";
+import type { RuntimeTaskLandingChoice } from "@/runtime/types";
 import type { UseWorkspacePersistenceResult } from "@/runtime/use-workspace-persistence";
 import {
 	addTaskDependency,
@@ -13,6 +14,12 @@ import {
 import { capturePendingDoneMove, withoutPendingDoneMoves } from "@/state/pending-done-moves";
 import type { BoardCard, BoardColumnId, BoardData } from "@/types";
 import { getNextDetailTaskIdAfterTrashMove } from "@/utils/detail-view-task-order";
+
+/** Done on a landing-mode-qa card with work was refused until the user chooses "land" or "discard". */
+export interface LandingDecisionRequest {
+	task: BoardCard;
+	baseRef: string;
+}
 
 interface RequestMoveTaskToTrashOptions {
 	optimisticMoveApplied?: boolean;
@@ -43,10 +50,16 @@ export function useLinkedBacklogTaskActions({
 		fromColumnId: BoardColumnId,
 		options?: RequestMoveTaskToTrashOptions,
 	) => Promise<void>;
+	/** Approve & land: lands a landing-mode-qa card onto its base without QA, then moves it to Done. */
+	approveAndLandTask: (taskId: string) => Promise<void>;
+	landingDecisionRequest: LandingDecisionRequest | null;
+	/** The "land or discard?" answer; null leaves the card where it was. */
+	resolveLandingDecision: (choice: RuntimeTaskLandingChoice | null) => void;
 } {
 	const { flushWorkspaceState, holdPendingDoneMove, releasePendingDoneMove, awaitPendingDoneMoveSettled } =
 		workspacePersistence;
 	const boardRef = useRef(board);
+	const [landingDecisionRequest, setLandingDecisionRequest] = useState<LandingDecisionRequest | null>(null);
 
 	useEffect(() => {
 		boardRef.current = board;
@@ -94,7 +107,7 @@ export function useLinkedBacklogTaskActions({
 	);
 
 	const performMoveTaskToTrash = useCallback(
-		async (task: BoardCard, currentBoard?: BoardData): Promise<void> => {
+		async (task: BoardCard, currentBoard?: BoardData, trashOptions?: TaskTrashOptions): Promise<void> => {
 			const boardBeforeTrash = currentBoard ?? boardRef.current;
 			// The runtime's Done workflow is the only writer of this move. The
 			// browser shows it now but keeps it out of its own saves until the
@@ -122,16 +135,27 @@ export function useLinkedBacklogTaskActions({
 			// Unrelated local edits still waiting for the debounced save land
 			// first, so the runtime's write cannot make that save conflict.
 			await flushWorkspaceState();
-			const result = await trashTask(task.id);
+			const result = await trashTask(task.id, trashOptions);
 			if (!result?.ok) {
 				if (pendingMove) {
 					releasePendingDoneMove(task.id);
 					setBoard((currentBoardState) => withoutPendingDoneMoves(currentBoardState, [pendingMove]));
 				}
+				if (result?.landing?.decision === "required") {
+					setLandingDecisionRequest({ task, baseRef: result.landing.baseRef ?? task.baseRef });
+					return;
+				}
 				if (result?.error) {
 					notifyError(result.error);
 				}
 				return;
+			}
+			if (result.landing?.decision === "landed") {
+				showAppToast({
+					intent: "success",
+					message: `Landed on ${result.landing.baseRef ?? task.baseRef}${result.landing.commit ? ` (${result.landing.commit.slice(0, 8)})` : ""}`,
+					timeout: 5000,
+				});
 			}
 			if (pendingMove) {
 				awaitPendingDoneMoveSettled(task.id);
@@ -192,6 +216,32 @@ export function useLinkedBacklogTaskActions({
 		[performMoveTaskToTrash, setSelectedTaskId],
 	);
 
+	const approveAndLandTask = useCallback(
+		async (taskId: string): Promise<void> => {
+			const selection = findCardSelection(boardRef.current, taskId);
+			if (selection) {
+				await performMoveTaskToTrash(selection.card, boardRef.current, { landing: "land", trigger: "approve" });
+			}
+		},
+		[performMoveTaskToTrash],
+	);
+
+	const resolveLandingDecision = useCallback(
+		(choice: RuntimeTaskLandingChoice | null): void => {
+			const request = landingDecisionRequest;
+			setLandingDecisionRequest(null);
+			if (!request || !choice) {
+				return;
+			}
+			// The refused move was reverted; start again from the card as it is now.
+			const selection = findCardSelection(boardRef.current, request.task.id);
+			if (selection) {
+				void performMoveTaskToTrash(selection.card, boardRef.current, { landing: choice });
+			}
+		},
+		[landingDecisionRequest, performMoveTaskToTrash],
+	);
+
 	return {
 		handleCreateDependency,
 		handleDeleteDependency,
@@ -199,5 +249,8 @@ export function useLinkedBacklogTaskActions({
 			await performMoveTaskToTrash(task, currentBoard);
 		},
 		requestMoveTaskToTrash,
+		approveAndLandTask,
+		landingDecisionRequest,
+		resolveLandingDecision,
 	};
 }
