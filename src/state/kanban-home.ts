@@ -136,7 +136,7 @@ export function getClineDataDirPath(dataDirOverride: string | null = null): stri
 	return resolveClineDataDir(dataDirOverride);
 }
 
-/** Cline's custom-provider file (`<data>/settings/models.json`). `kanban setup` edits its `modelsSourceUrl`s. */
+/** Cline's custom-provider file (`<data>/settings/models.json`). `kanban setup` and doctor compare its Lemonade entry; only the user's `kanban cline apply-lemonade-models` writes it. */
 export function getClineModelsSettingsPath(dataDirOverride: string | null = null): string {
 	return join(resolveClineDataDir(dataDirOverride), CLINE_SETTINGS_DIR, "models.json");
 }

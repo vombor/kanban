@@ -1,45 +1,39 @@
-// Doctor row: do Cline's Lemonade models carry real context windows, or run on Cline's 128K default? Reads
-// models.json only (never Lemonade), so it's fast and shows what Cline sees right now; `kanban setup` fills them in.
-import { CLINE_DEFAULT_CONTEXT_WINDOW, readStoredModels, storedContextWindow } from "../setup/cline-lemonade-models";
-import { readClineLemonadeEntry } from "../setup/cline-models-source";
+// Doctor row: do Cline's Lemonade models (models.json) match what Lemonade reports now? Lists models to add or
+// remove and changed context windows, vision and the rest, with the command the user runs to apply them (Kanban never
+// writes Cline's files itself). Cheap: one catalog round to Lemonade (its requests in parallel, each capped at
+// LEMONADE_TIMEOUT_MS), and Lemonade being down is INFO, not a failure.
+import type { LemonadeModelListSettings } from "../config/model-lists-config";
+import { formatApplyLemonadeModelsCommand } from "../setup/cline-lemonade-apply";
+import { isLemonadeModelsDiffEmpty, planClineLemonadeModels } from "../setup/cline-lemonade-models";
 import type { DoctorFinding } from "./doctor-report";
 
-export async function checkClineLemonadeContextWindows(modelsPath: string): Promise<DoctorFinding[]> {
-	const read = await readClineLemonadeEntry(modelsPath);
-	if (read.kind !== "found") {
+const LEMONADE_TIMEOUT_MS = 1_500;
+
+export async function checkClineLemonadeModels(options: {
+	modelsPath: string;
+	/** Kanban server origin, for the printed command. */
+	origin: string;
+	lemonadeModelList: LemonadeModelListSettings;
+	fetch?: typeof fetch;
+}): Promise<DoctorFinding[]> {
+	const plan = await planClineLemonadeModels({
+		modelsPath: options.modelsPath,
+		requireLabels: options.lemonadeModelList.requireLabels,
+		lemonadeUrl: options.lemonadeModelList.url,
+		fetch: options.fetch,
+		timeoutMs: LEMONADE_TIMEOUT_MS,
+	});
+	if (plan.kind !== "found") {
 		// No Lemonade provider is nothing to check; an unreadable file is the setup rows' finding.
 		return [];
 	}
-	const stored = readStoredModels(read.entry.models);
-	const prefix = `cline lemonade models (${modelsPath})`;
-	if (stored.form === "list") {
-		return [
-			{
-				level: "warn",
-				area: "setup",
-				message: `${prefix}: \`models\` is a list, which cline 3.x rejects (it drops the provider), and no model carries a context window (${CLINE_DEFAULT_CONTEXT_WINDOW} default)`,
-				hint: "kanban setup",
-			},
-		];
+	const prefix = `cline lemonade models (${options.modelsPath})`;
+	const message = `${prefix}: ${plan.details.join("; ")}`;
+	if (!isLemonadeModelsDiffEmpty(plan.diff)) {
+		return [{ level: "warn", area: "setup", message, hint: formatApplyLemonadeModelsCommand(options.origin) }];
 	}
-	const entries = Object.entries(stored.models);
-	if (entries.length === 0) {
-		return [{ level: "info", area: "setup", message: `${prefix}: no models listed` }];
+	if (plan.unreachable) {
+		return [{ level: "info", area: "setup", message }];
 	}
-	const withWindow = entries.flatMap(([id, entry]) => {
-		const window = storedContextWindow(entry);
-		return window === null ? [] : [`${id} ${window}`];
-	});
-	const withoutWindow = entries.filter(([, entry]) => storedContextWindow(entry) === null).map(([id]) => id);
-	if (withoutWindow.length === 0) {
-		return [{ level: "pass", area: "setup", message: `${prefix}: real context windows: ${withWindow.join(", ")}` }];
-	}
-	return [
-		{
-			level: "warn",
-			area: "setup",
-			message: `${prefix}: ${withoutWindow.length} of ${entries.length} on Cline's ${CLINE_DEFAULT_CONTEXT_WINDOW} default (${withoutWindow.join(", ")})${withWindow.length > 0 ? `; real: ${withWindow.join(", ")}` : ""}`,
-			hint: "kanban setup",
-		},
-	];
+	return [{ level: "pass", area: "setup", message }];
 }

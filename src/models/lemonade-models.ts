@@ -116,8 +116,8 @@ export function lemonadeApiBaseUrl(url: string): string {
 	return `${url.replace(/\/+$/u, "")}/api/v1`;
 }
 
-async function fetchJson(url: string, fetchImpl: typeof fetch): Promise<unknown> {
-	const response = await fetchImpl(url, { signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) });
+async function fetchJson(url: string, fetchImpl: typeof fetch, timeoutMs = UPSTREAM_TIMEOUT_MS): Promise<unknown> {
+	const response = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) });
 	if (!response.ok) {
 		throw new Error(`lemonade HTTP ${response.status}`);
 	}
@@ -128,24 +128,26 @@ async function fetchJson(url: string, fetchImpl: typeof fetch): Promise<unknown>
 export async function fetchLemonadeModels(
 	apiBaseUrl: string,
 	fetchImpl: typeof fetch = fetch,
+	timeoutMs = UPSTREAM_TIMEOUT_MS,
 ): Promise<LemonadeModel[]> {
-	return parseLemonadeModels(await fetchJson(`${apiBaseUrl.replace(/\/+$/u, "")}/models`, fetchImpl));
+	return parseLemonadeModels(await fetchJson(`${apiBaseUrl.replace(/\/+$/u, "")}/models`, fetchImpl, timeoutMs));
 }
 
 /**
  * The model list plus what decides each model's context: the global ctx_size (/params) and the loaded models
  * (/health). Only the model list is required; an older Lemonade without the other two still resolves recipe and
- * model-max windows.
+ * model-max windows. The three requests run in parallel, each capped at `timeoutMs`.
  */
 export async function fetchLemonadeCatalog(
 	apiBaseUrl: string,
 	fetchImpl: typeof fetch = fetch,
+	timeoutMs = UPSTREAM_TIMEOUT_MS,
 ): Promise<LemonadeCatalog> {
 	const base = apiBaseUrl.replace(/\/+$/u, "");
 	const [models, params, health] = await Promise.all([
-		fetchLemonadeModels(base, fetchImpl),
-		fetchJson(`${base}/params`, fetchImpl).catch(() => null),
-		fetchJson(`${base}/health`, fetchImpl).catch(() => null),
+		fetchLemonadeModels(base, fetchImpl, timeoutMs),
+		fetchJson(`${base}/params`, fetchImpl, timeoutMs).catch(() => null),
+		fetchJson(`${base}/health`, fetchImpl, timeoutMs).catch(() => null),
 	]);
 	const parsedParams = lemonadeParamsSchema.safeParse(params);
 	const parsedHealth = lemonadeHealthSchema.safeParse(health);

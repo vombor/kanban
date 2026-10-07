@@ -10,7 +10,6 @@ import { createFakeLemonadeFetch } from "../../utilities/lemonade-fixtures";
 import { createTempDir } from "../../utilities/temp-dir";
 
 const ORIGIN = "http://127.0.0.1:3485";
-const NOW = new Date("2026-10-07T12:00:00.000Z");
 // Never the machine's own Lemonade or config.json.
 const LEMONADE = { lemonadeModelList: { url: "http://lemonade.test:13305", requireLabels: ["tool-calling"] } };
 
@@ -37,7 +36,6 @@ describe("kanban setup steps", () => {
 			legacyKitInstalled: overrides.legacyKitInstalled ?? false,
 			config: parsePipelineConfig({}).config,
 			env: overrides.env ?? {},
-			now: NOW,
 			paths,
 			...LEMONADE,
 			fetch: createFakeLemonadeFetch(),
@@ -119,47 +117,45 @@ describe("kanban setup steps", () => {
 		expect(byId(await plan({ legacyKitInstalled: true }), "claude-md").status).toBe("ok");
 	});
 
-	it("points Cline's Lemonade model list at Kanban's route", async () => {
+	it("says which command repoints Cline's Lemonade model list, and writes nothing", async () => {
 		mkdirSync(join(root, "cline", "data", "settings"), { recursive: true });
-		writeFileSync(
-			paths.clineModels,
-			JSON.stringify({
-				providers: {
-					lemonade: {
-						provider: { name: "Lemonade", modelsSourceUrl: "http://127.0.0.1:13306/lemonade/models" },
-						models: ["m"],
-					},
+		const raw = JSON.stringify({
+			providers: {
+				lemonade: {
+					provider: { name: "Lemonade", modelsSourceUrl: "http://127.0.0.1:13306/lemonade/models" },
+					models: ["m"],
 				},
-			}),
-		);
+			},
+		});
+		writeFileSync(paths.clineModels, raw);
 		const step = byId(await plan(), "cline-models-source");
-		expect(step.status).toBe("change");
-		await step.apply?.();
-		expect(JSON.parse(readFileSync(paths.clineModels, "utf8")).providers.lemonade.provider.modelsSourceUrl).toBe(
-			`${ORIGIN}/api/model-lists/lemonade`,
-		);
+		expect(step.status).toBe("manual");
+		expect(step.apply).toBeUndefined();
+		expect(step.details).toEqual([
+			`lemonade modelsSourceUrl: http://127.0.0.1:13306/lemonade/models -> ${ORIGIN}/api/model-lists/lemonade`,
+			`to apply, run \`kanban cline apply-lemonade-models --origin ${ORIGIN}\` (Kanban itself never writes Cline's models.json)`,
+		]);
+		expect(readFileSync(paths.clineModels, "utf8")).toBe(raw);
 	});
 
-	it("fills in Cline's Lemonade model metadata in the same run that repoints the model list", async () => {
-		mkdirSync(join(root, "cline", "data", "settings"), { recursive: true });
-		writeFileSync(
-			paths.clineModels,
-			JSON.stringify({
-				version: 1,
-				providers: {
-					lemonade: {
-						provider: { name: "Lemonade", baseUrl: "http://lemonade.test:13305/api/v1" },
-						models: ["GLM-4.7-Flash-GGUF"],
-					},
+	it("prints Cline's Lemonade model metadata changes; a real run writes nothing under Cline's dir", async () => {
+		const settingsDir = join(root, "cline", "data", "settings");
+		mkdirSync(settingsDir, { recursive: true });
+		const raw = JSON.stringify({
+			version: 1,
+			providers: {
+				lemonade: {
+					provider: { name: "Lemonade", baseUrl: "http://lemonade.test:13305/api/v1" },
+					models: ["GLM-4.7-Flash-GGUF"],
 				},
-			}),
-		);
+			},
+		});
+		writeFileSync(paths.clineModels, raw);
 		const result = await runMachineSetup({
 			origin: ORIGIN,
 			legacyKitInstalled: false,
 			config: parsePipelineConfig({}).config,
 			env: {},
-			now: NOW,
 			paths,
 			...LEMONADE,
 			fetch: createFakeLemonadeFetch(),
@@ -167,15 +163,28 @@ describe("kanban setup steps", () => {
 			entries: [],
 		});
 		const step = result.steps.find((entry) => entry.plan.id === "cline-lemonade-models");
-		expect(step?.error).toBeNull();
-		expect(step?.plan.status).toBe("change");
-		const lemonade = JSON.parse(readFileSync(paths.clineModels, "utf8")).providers.lemonade;
-		expect(lemonade.provider.modelsSourceUrl).toBe(`${ORIGIN}/api/model-lists/lemonade`);
-		expect(lemonade.models["GLM-4.7-Flash-GGUF"]).toMatchObject({ contextWindow: 202752, maxTokens: 32768 });
-		// Two writes in the same second: two backups, neither overwritten.
-		expect(readdirSync(join(root, "cline", "data", "settings")).filter((name) => name.includes(".bak-")).length).toBe(
-			2,
+		expect(step?.plan.status).toBe("manual");
+		expect(step?.applied).toEqual([]);
+		expect(step?.plan.details).toContain(
+			"GLM-4.7-Flash-GGUF: contextWindow (unset) -> 202752 (recipe ctx_size), maxTokens (unset) -> 32768, supportsVision (unset) -> false, supportsReasoning (unset) -> false, inputPrice (unset) -> 0, outputPrice (unset) -> 0",
 		);
+		expect(step?.plan.details.at(-1)).toContain("kanban cline apply-lemonade-models --origin");
+		expect(readFileSync(paths.clineModels, "utf8")).toBe(raw);
+		expect(readdirSync(settingsDir)).toEqual(["models.json"]);
+	});
+
+	it("doctor can leave the Lemonade models step to its own row", async () => {
+		const plans = await planMachineSetup({
+			origin: ORIGIN,
+			legacyKitInstalled: false,
+			config: parsePipelineConfig({}).config,
+			env: {},
+			paths,
+			...LEMONADE,
+			fetch: createFakeLemonadeFetch(),
+			skipSteps: ["cline-lemonade-models"],
+		});
+		expect(plans.map((entry) => entry.id)).not.toContain("cline-lemonade-models");
 	});
 
 	it("a dry run writes nothing", async () => {
@@ -184,7 +193,6 @@ describe("kanban setup steps", () => {
 			legacyKitInstalled: false,
 			config: parsePipelineConfig({}).config,
 			env: {},
-			now: NOW,
 			paths,
 			...LEMONADE,
 			fetch: createFakeLemonadeFetch(),

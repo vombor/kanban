@@ -1,4 +1,4 @@
-// `kanban setup` step: per-model metadata for the Lemonade provider in Cline's models.json.
+// What the Lemonade provider's per-model metadata in Cline's models.json should be, compared with what it is.
 //
 // Without it every Lemonade model runs on Cline's defaults (research, 2026-10-07): a 128K context window, so
 // compaction starts at 0.9 x 128K, too early for GLM-4.7-Flash (202,752) and Devstral (131,072), and no vision, so
@@ -12,10 +12,12 @@
 //   - The output budget is min(maxTokens, window - input - 1024), so maxTokens can't push a request past the window.
 //   - `modelsSourceUrl` only ever yields ids (`extractModelIdsFromPayload`), so the metadata can't ride on the
 //     model-lists route; it has to be in models.json.
-// For every model Lemonade lists (downloaded, with the route's required labels) this sets contextWindow (see
-// src/models/lemonade-models.ts for where the size comes from), maxTokens, supportsVision and supportsReasoning,
-// adds the model when it's missing, and sets zero prices when none are set. Every other key and model is kept.
-// With Lemonade down no value changes (only a list is still rewritten as a record) and the step says so.
+// The wanted record has every model Lemonade lists (downloaded, with the route's required labels) with its
+// contextWindow (see src/models/lemonade-models.ts for where the size comes from), maxTokens, supportsVision and
+// supportsReasoning, and zero prices when none are set; other keys of a model are kept, and models Lemonade no longer
+// lists are dropped. With Lemonade down no value changes (only a list is still rewritten as a record).
+// Read-only: `kanban setup` and doctor print the differences, and only the user's `kanban cline
+// apply-lemonade-models` (cline-lemonade-apply.ts) writes them (Kanban writes nothing under ~/.cline otherwise).
 import { DEFAULT_LEMONADE_MODEL_LIST_SETTINGS } from "../config/model-lists-config";
 import {
 	fetchLemonadeCatalog,
@@ -26,7 +28,7 @@ import {
 	lemonadeApiBaseUrl,
 	resolveLemonadeContextWindow,
 } from "../models/lemonade-models";
-import { readClineLemonadeEntry, writeClineModelsFile } from "./cline-models-source";
+import { readClineLemonadeEntry } from "./cline-models-source";
 
 /** Cline's window for a model whose entry has none (@cline/core `RE`/`OY` = 128000). */
 export const CLINE_DEFAULT_CONTEXT_WINDOW = 128_000;
@@ -89,23 +91,22 @@ export function storedContextWindow(entry: StoredModelEntry): number | null {
 
 export interface LemonadeModelUpdate {
 	id: string;
-	added: boolean;
 	contextWindow: LemonadeContextWindow | null;
 	vision: boolean;
 	reasoning: boolean;
 }
 
-/** `current` with Lemonade's metadata for every listed model; with no catalog only the form changes. */
-export function mergeLemonadeModelMetadata(
+/** The wanted record: `current` with Lemonade's metadata for every listed model; with no catalog, `current`. */
+export function buildDesiredLemonadeModels(
 	current: StoredModels,
 	catalog: LemonadeCatalog | null,
 	requireLabels: readonly string[],
 ): { models: StoredModels; updates: LemonadeModelUpdate[] } {
-	const models: StoredModels = { ...current };
-	const updates: LemonadeModelUpdate[] = [];
 	if (!catalog) {
-		return { models, updates };
+		return { models: { ...current }, updates: [] };
 	}
+	const models: StoredModels = {};
+	const updates: LemonadeModelUpdate[] = [];
 	for (const model of catalog.models) {
 		if (!isListedLemonadeModel(model, requireLabels)) {
 			continue;
@@ -128,43 +129,127 @@ export function mergeLemonadeModelMetadata(
 		next.inputPrice ??= 0;
 		next.outputPrice ??= 0;
 		models[model.id] = next;
-		updates.push({ id: model.id, added: existing === undefined, contextWindow, vision, reasoning });
+		updates.push({ id: model.id, contextWindow, vision, reasoning });
 	}
 	return { models, updates };
 }
 
-function describeUpdate(update: LemonadeModelUpdate, entry: StoredModelEntry | undefined): string {
-	const features = [update.vision ? "vision" : null, update.reasoning ? "reasoning" : null].filter(Boolean);
-	const context = update.contextWindow
+export interface LemonadeFieldChange {
+	key: string;
+	from: unknown;
+	to: unknown;
+}
+
+export interface LemonadeModelsDiff {
+	/** The file has the list form cline 3.x rejects. */
+	listForm: boolean;
+	added: string[];
+	removed: string[];
+	changed: Array<{ id: string; fields: LemonadeFieldChange[] }>;
+}
+
+function sameJson(left: unknown, right: unknown): boolean {
+	return JSON.stringify(left) === JSON.stringify(right);
+}
+
+export function diffLemonadeModels(stored: StoredModelsRead, desired: StoredModels): LemonadeModelsDiff {
+	const added = Object.keys(desired).filter((id) => !(id in stored.models));
+	const removed = Object.keys(stored.models).filter((id) => !(id in desired));
+	const changed: LemonadeModelsDiff["changed"] = [];
+	for (const [id, next] of Object.entries(desired)) {
+		const current = stored.models[id];
+		if (!current) {
+			continue;
+		}
+		const keys = [...new Set([...Object.keys(current), ...Object.keys(next)])];
+		const fields = keys
+			.filter((key) => !sameJson(current[key], next[key]))
+			.map((key) => ({ key, from: current[key], to: next[key] }));
+		if (fields.length > 0) {
+			changed.push({ id, fields });
+		}
+	}
+	return { listForm: stored.form === "list", added, removed, changed };
+}
+
+export function isLemonadeModelsDiffEmpty(diff: LemonadeModelsDiff): boolean {
+	return !diff.listForm && diff.added.length === 0 && diff.removed.length === 0 && diff.changed.length === 0;
+}
+
+function formatValue(value: unknown): string {
+	return value === undefined ? "(unset)" : JSON.stringify(value);
+}
+
+function describeAdded(
+	update: LemonadeModelUpdate | undefined,
+	id: string,
+	entry: StoredModelEntry | undefined,
+): string {
+	const features = [update?.vision ? "vision" : null, update?.reasoning ? "reasoning" : null].filter(Boolean);
+	const context = update?.contextWindow
 		? `context ${update.contextWindow.tokens} (${CONTEXT_SOURCE_LABELS[update.contextWindow.source]}), maxTokens ${entry?.maxTokens}`
-		: `no context info from Lemonade; ${entry && storedContextWindow(entry) !== null ? `keeps context ${entry.contextWindow}` : `Cline's ${CLINE_DEFAULT_CONTEXT_WINDOW} default`}`;
-	return `${update.id}${update.added ? " (added)" : ""}: ${context}${features.length > 0 ? `, ${features.join(", ")}` : ""}`;
+		: `no context info from Lemonade; Cline's ${CLINE_DEFAULT_CONTEXT_WINDOW} default`;
+	return `${id}: add, ${context}${features.length > 0 ? `, ${features.join(", ")}` : ""}`;
 }
 
-export type ClineLemonadeModelsAction =
-	/** No models.json, or no Lemonade provider in it. */
-	| "skip"
-	| "up-to-date"
-	| "update"
-	/** Lemonade didn't answer and the file needs no rewrite; nothing changes. */
-	| "unreachable"
-	| "error";
+function describeChange(id: string, fields: LemonadeFieldChange[], update: LemonadeModelUpdate | undefined): string {
+	const parts = fields.map((field) => {
+		const source =
+			field.key === "contextWindow" && update?.contextWindow
+				? ` (${CONTEXT_SOURCE_LABELS[update.contextWindow.source]})`
+				: "";
+		return `${field.key} ${formatValue(field.from)} -> ${formatValue(field.to)}${source}`;
+	});
+	return `${id}: ${parts.join(", ")}`;
+}
 
-export interface ClineLemonadeModelsPlan {
-	action: ClineLemonadeModelsAction;
+/** One line per difference, in the order added, changed, removed. */
+export function describeLemonadeModelsDiff(
+	diff: LemonadeModelsDiff,
+	desired: StoredModels,
+	updates: readonly LemonadeModelUpdate[],
+): string[] {
+	const updateById = new Map(updates.map((update) => [update.id, update]));
+	return [
+		...(diff.listForm
+			? ["models is a list, which cline 3.x rejects (it drops the provider): rewrite as a record by id"]
+			: []),
+		...diff.added.map((id) => describeAdded(updateById.get(id), id, desired[id])),
+		...diff.changed.map(({ id, fields }) => describeChange(id, fields, updateById.get(id))),
+		...diff.removed.map((id) => `${id}: remove (Lemonade no longer lists it)`),
+	];
+}
+
+function describeInSync(models: StoredModels): string {
+	const entries = Object.entries(models);
+	if (entries.length === 0) {
+		return "no models";
+	}
+	return `${entries.length} model(s) in sync: ${entries
+		.map(([id, entry]) => `${id} ${storedContextWindow(entry) ?? `${CLINE_DEFAULT_CONTEXT_WINDOW} (Cline default)`}`)
+		.join(", ")}`;
+}
+
+export interface LemonadeModelsPlan {
+	/** Lemonade answered and its models are already in the file. */
+	inSync: boolean;
+	/** Lemonade didn't answer (the wanted record is then the file's own, as a record). */
+	unreachable: string | null;
+	diff: LemonadeModelsDiff;
+	/** The wanted `providers.lemonade.models`. */
+	models: StoredModels;
+	/** What is in sync, what would change, or why nothing can be compared. */
 	details: string[];
-	/** Present for `update`. Re-reads the file (another setup step may have written it) and returns what it wrote. */
-	apply?: () => Promise<string[]>;
 }
 
-export interface ClineLemonadeModelsOptions {
-	modelsPath: string;
+export interface LemonadeModelsOptions {
 	/** The model-lists route's labels (`models.lists.lemonade.requireLabels`), so both offer the same models. */
 	requireLabels: readonly string[];
 	/** Lemonade's base URL when the provider entry has no baseUrl (`models.lists.lemonade.url`). */
 	lemonadeUrl?: string;
 	fetch?: typeof fetch;
-	now?: Date;
+	/** Per Lemonade request (default: lemonade-models.ts's). Doctor keeps it short. */
+	timeoutMs?: number;
 }
 
 function apiBaseUrlFor(entry: Record<string, unknown>, fallbackUrl: string): string {
@@ -174,59 +259,45 @@ function apiBaseUrlFor(entry: Record<string, unknown>, fallbackUrl: string): str
 	return baseUrl || lemonadeApiBaseUrl(fallbackUrl);
 }
 
-export async function planClineLemonadeModels(options: ClineLemonadeModelsOptions): Promise<ClineLemonadeModelsPlan> {
-	const read = await readClineLemonadeEntry(options.modelsPath);
-	if (read.kind !== "found") {
-		return { action: read.kind === "absent" ? "skip" : "error", details: [read.detail] };
-	}
-	const apiBaseUrl = apiBaseUrlFor(read.entry, options.lemonadeUrl ?? DEFAULT_LEMONADE_MODEL_LIST_SETTINGS.url);
+/** Compares a Lemonade provider entry's `models` with what Lemonade reports now. Never writes. */
+export async function planLemonadeModelsForEntry(
+	entry: Record<string, unknown>,
+	options: LemonadeModelsOptions,
+): Promise<LemonadeModelsPlan> {
+	const apiBaseUrl = apiBaseUrlFor(entry, options.lemonadeUrl ?? DEFAULT_LEMONADE_MODEL_LIST_SETTINGS.url);
 	let catalog: LemonadeCatalog | null = null;
 	let unreachable: string | null = null;
 	try {
-		catalog = await fetchLemonadeCatalog(apiBaseUrl, options.fetch);
+		catalog = await fetchLemonadeCatalog(apiBaseUrl, options.fetch, options.timeoutMs);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		unreachable = `Lemonade at ${apiBaseUrl} did not answer (${message}); existing model values kept`;
+		unreachable = `Lemonade at ${apiBaseUrl} did not answer (${message}); model values can't be compared`;
 	}
-	const merge = (entryModels: unknown) => {
-		const stored = readStoredModels(entryModels);
-		return { stored, ...mergeLemonadeModelMetadata(stored.models, catalog, options.requireLabels) };
-	};
-	const { stored, models, updates } = merge(read.entry.models);
-	const changed = JSON.stringify(models) !== JSON.stringify(read.entry.models ?? {});
+	const stored = readStoredModels(entry.models);
+	const { models, updates } = buildDesiredLemonadeModels(stored.models, catalog, options.requireLabels);
+	const diff = diffLemonadeModels(stored, models);
+	const empty = isLemonadeModelsDiffEmpty(diff);
 	const details = [
 		...(unreachable ? [unreachable] : []),
-		...(stored.form === "list"
-			? ["models is a list, which cline 3.x rejects (it drops the provider): rewrite as a record by id"]
+		...describeLemonadeModelsDiff(diff, models, updates),
+		...(catalog && updates.length === 0
+			? [`Lemonade lists no downloaded model with labels ${options.requireLabels.join(", ") || "(none)"}`]
 			: []),
-		...updates.map((update) => describeUpdate(update, models[update.id])),
+		...(catalog && empty ? [describeInSync(models)] : []),
 	];
-	if (catalog && updates.length === 0) {
-		details.push(`Lemonade lists no downloaded model with labels ${options.requireLabels.join(", ") || "(none)"}`);
+	return { inSync: catalog !== null && empty, unreachable, diff, models, details };
+}
+
+export type ClineLemonadeModelsPlan =
+	/** No models.json, or no Lemonade provider in it; or a file that can't be read. */
+	{ kind: "absent" | "error"; details: string[] } | ({ kind: "found" } & LemonadeModelsPlan);
+
+export async function planClineLemonadeModels(
+	options: LemonadeModelsOptions & { modelsPath: string },
+): Promise<ClineLemonadeModelsPlan> {
+	const read = await readClineLemonadeEntry(options.modelsPath);
+	if (read.kind !== "found") {
+		return { kind: read.kind, details: [read.detail] };
 	}
-	if (!changed) {
-		return unreachable ? { action: "unreachable", details } : { action: "up-to-date", details };
-	}
-	return {
-		action: "update",
-		details,
-		apply: async () => {
-			const current = await readClineLemonadeEntry(options.modelsPath);
-			if (current.kind !== "found") {
-				throw new Error(current.detail);
-			}
-			const next = merge(current.entry.models).models;
-			if (JSON.stringify(next) === JSON.stringify(current.entry.models ?? {})) {
-				return ["lemonade models already current"];
-			}
-			current.entry.models = next;
-			const backupPath = await writeClineModelsFile(
-				options.modelsPath,
-				current.raw,
-				current.document,
-				options.now ?? new Date(),
-			);
-			return [`lemonade models: wrote metadata for ${updates.length} model(s)`, `backup: ${backupPath}`];
-		},
-	};
+	return { kind: "found", ...(await planLemonadeModelsForEntry(read.entry, options)) };
 }

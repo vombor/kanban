@@ -104,9 +104,15 @@ describe("applyCliSessionScope", () => {
 		});
 	});
 
-	it("refuses project add/create, grants and approvals from a session whatever the mode", async () => {
+	it("refuses project add/create, grants, approvals and Cline writes from a session whatever the mode", async () => {
 		await withTemporaryKanbanHome(async () => {
-			for (const commandPath of ["project add", "project create", "isolation grant", "isolation approve"]) {
+			for (const commandPath of [
+				"project add",
+				"project create",
+				"isolation grant",
+				"isolation approve",
+				"cline apply-lemonade-models",
+			]) {
 				expect(
 					await applyCliSessionScope({
 						commandPath,

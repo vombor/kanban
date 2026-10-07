@@ -66,8 +66,13 @@ Fix it before anything else.
   in the environment Kanban starts from; `kanban setup` only checks and prints what to run (status "to do by hand").
   `kanban models providers --cleanup` lists the edits for Cline's files; you make them. `kanban doctor` reports
   Kanban's rules left in `~/.cline/rules` and `*.bak-before-kanban-setup-*` backups with the `rm` command; it never
-  deletes them. (Open: the Lemonade model list/metadata steps still edit `~/.cline/data/settings/models.json` until
-  the user picks a replacement.)
+  deletes them.
+- **Cline's Lemonade models (`models.json`):** `kanban setup` and `kanban doctor` compare the `lemonade` provider entry
+  (its `modelsSourceUrl` and each model's context window, maxTokens, vision, reasoning) with Kanban's model-lists route
+  and what Lemonade reports now, and list every difference (doctor: WARN, INFO when Lemonade is down). To apply them,
+  run the printed `kanban cline apply-lemonade-models --origin <origin>` yourself (`--dry-run` first to see the
+  changes). It changes only the Lemonade entry, backs up the old file to `~/.kanban/backups/cline/`, and is the only
+  time Kanban writes a Cline file. To roll back, copy the backup over `~/.cline/data/settings/models.json`.
 
 ## Switching a runtime feature on (one owner at a time)
 

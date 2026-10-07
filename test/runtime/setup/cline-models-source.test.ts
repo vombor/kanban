@@ -1,10 +1,9 @@
-import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
-	applyClineModelsSource,
 	buildLemonadeModelListUrl,
 	isManagedModelsSourceUrl,
 	planClineModelsSource,
@@ -51,12 +50,8 @@ describe("Cline models.json modelsSourceUrl step", () => {
 		writeFileSync(modelsPath, `${JSON.stringify(document, null, 2)}\n`, { mode: 0o640 });
 	}
 
-	function read(): ReturnType<typeof clineModelsFile> {
-		return JSON.parse(readFileSync(modelsPath, "utf8")) as ReturnType<typeof clineModelsFile>;
-	}
-
 	function backups(): string[] {
-		return readdirSync(dir.path).filter((name) => name.includes(".bak-before-kanban-setup-"));
+		return readdirSync(dir.path).filter((name) => name.includes(".bak"));
 	}
 
 	it("builds the route URL from a server URL", () => {
@@ -71,90 +66,47 @@ describe("Cline models.json modelsSourceUrl step", () => {
 		expect(isManagedModelsSourceUrl("https://models.example.com/list")).toBe(false);
 	});
 
-	it("repoints the legacy service URL, keeping everything else, the file mode and a backup", async () => {
+	it("wants the legacy service URL repointed, and writes nothing", async () => {
 		write(clineModelsFile("http://127.0.0.1:13306/lemonade/models"));
 		const before = readFileSync(modelsPath, "utf8");
 
-		const result = await applyClineModelsSource({
-			modelsPath,
-			targetUrl: TARGET,
-			dryRun: false,
-			now: new Date("2026-10-07T12:00:00.000Z"),
-		});
-
-		expect(result).toMatchObject({
+		expect(await planClineModelsSource(modelsPath, TARGET)).toMatchObject({
 			action: "update",
-			applied: true,
 			currentUrl: "http://127.0.0.1:13306/lemonade/models",
+			targetUrl: TARGET,
 		});
-		expect(result.backupPath).toBe(`${modelsPath}.bak-before-kanban-setup-20261007T120000Z`);
-		expect(readFileSync(result.backupPath ?? "", "utf8")).toBe(before);
-		expect(read()).toEqual(clineModelsFile(TARGET));
-		expect(statSync(modelsPath).mode & 0o777).toBe(0o640);
-		// Only the lemonade provider is Kanban's to change.
-		expect(
-			(read().providers as Record<string, { provider: { modelsSourceUrl?: string } }>).other?.provider
-				.modelsSourceUrl,
-		).toBe("http://127.0.0.1:13306/lemonade/models");
-	});
-
-	it("sets a missing URL and is idempotent afterwards", async () => {
-		write(clineModelsFile());
-
-		expect((await applyClineModelsSource({ modelsPath, targetUrl: TARGET, dryRun: false })).action).toBe("update");
-		const second = await applyClineModelsSource({ modelsPath, targetUrl: TARGET, dryRun: false });
-
-		expect(second).toMatchObject({ action: "up-to-date", applied: false, backupPath: null });
-		expect(read()).toEqual(clineModelsFile(TARGET));
-		expect(backups()).toHaveLength(1);
-	});
-
-	it("moves the route to a new Kanban origin", async () => {
-		write(clineModelsFile("http://127.0.0.1:3484/api/model-lists/lemonade"));
-
-		expect(await applyClineModelsSource({ modelsPath, targetUrl: TARGET, dryRun: false })).toMatchObject({
-			action: "update",
-			applied: true,
-		});
-		expect(read()).toEqual(clineModelsFile(TARGET));
-	});
-
-	it("writes nothing on a dry run", async () => {
-		write(clineModelsFile("http://127.0.0.1:13306/lemonade/models"));
-		const before = readFileSync(modelsPath, "utf8");
-
-		const result = await applyClineModelsSource({ modelsPath, targetUrl: TARGET, dryRun: true });
-
-		expect(result).toMatchObject({ action: "update", applied: false, backupPath: null });
+		// Planning never writes: only the user's apply command does (cline-lemonade-apply.test.ts).
 		expect(readFileSync(modelsPath, "utf8")).toBe(before);
 		expect(backups()).toEqual([]);
+	});
+
+	it("wants a missing URL set, a route on another Kanban origin moved, and the route kept", async () => {
+		write(clineModelsFile());
+		expect((await planClineModelsSource(modelsPath, TARGET)).action).toBe("update");
+		write(clineModelsFile("http://127.0.0.1:3484/api/model-lists/lemonade"));
+		expect((await planClineModelsSource(modelsPath, TARGET)).action).toBe("update");
+		write(clineModelsFile(TARGET));
+		expect((await planClineModelsSource(modelsPath, TARGET)).action).toBe("up-to-date");
 	});
 
 	it("leaves a URL the user chose alone", async () => {
 		write(clineModelsFile("https://models.example.com/lemonade"));
-		const before = readFileSync(modelsPath, "utf8");
-
-		expect(await applyClineModelsSource({ modelsPath, targetUrl: TARGET, dryRun: false })).toMatchObject({
+		expect(await planClineModelsSource(modelsPath, TARGET)).toMatchObject({
 			action: "custom",
-			applied: false,
+			currentUrl: "https://models.example.com/lemonade",
 		});
-		expect(readFileSync(modelsPath, "utf8")).toBe(before);
 	});
 
-	it("skips a missing file or a file without a Lemonade provider, and never creates one", async () => {
+	it("skips a missing file or a file without a Lemonade provider", async () => {
 		expect((await planClineModelsSource(modelsPath, TARGET)).action).toBe("skip");
 		write({ version: 1, providers: { other: { provider: { name: "Other" } } } });
-		const before = readFileSync(modelsPath, "utf8");
-
-		expect((await applyClineModelsSource({ modelsPath, targetUrl: TARGET, dryRun: false })).action).toBe("skip");
-		expect(readFileSync(modelsPath, "utf8")).toBe(before);
+		expect((await planClineModelsSource(modelsPath, TARGET)).action).toBe("skip");
 	});
 
-	it("reports a broken file as an error and leaves it alone", async () => {
+	it("reports a broken file as an error", async () => {
 		writeFileSync(modelsPath, "{ broken");
-		expect((await applyClineModelsSource({ modelsPath, targetUrl: TARGET, dryRun: false })).action).toBe("error");
+		expect((await planClineModelsSource(modelsPath, TARGET)).action).toBe("error");
 		write({ version: 1 });
 		expect((await planClineModelsSource(modelsPath, TARGET)).action).toBe("error");
-		expect(backups()).toEqual([]);
 	});
 });

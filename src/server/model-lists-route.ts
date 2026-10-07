@@ -10,7 +10,7 @@
 //
 // Only ids reach Cline from here: cline 3.0.69's source fetch keeps `data[].id` and nothing else
 // (@cline/core `extractModelIdsFromPayload`). Context windows, vision and reasoning go into models.json instead
-// (`kanban setup`, src/setup/cline-lemonade-models.ts).
+// (src/setup/cline-lemonade-models.ts; the user applies them with `kanban cline apply-lemonade-models`).
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type { LemonadeModelListSettings } from "../config/model-lists-config";

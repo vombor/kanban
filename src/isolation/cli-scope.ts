@@ -50,13 +50,14 @@ export const MACHINE_WIDE_COMMANDS = [
 	"board restore",
 ] as const;
 
-/** Commands no agent session may run, whatever the isolation mode: registering projects is the user's. */
+/** Commands no agent session may run, whatever the isolation mode: registering projects and writing Cline's files are the user's. */
 export const USER_ONLY_COMMANDS = [
 	"project add",
 	"project create",
 	"isolation grant",
 	"isolation revoke",
 	"isolation approve",
+	"cline apply-lemonade-models",
 ] as const;
 
 /** The project changes that wait for an approval under `enforce` (src/isolation/approvals.ts). */

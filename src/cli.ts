@@ -8,6 +8,7 @@ import packageJson from "../package.json" with { type: "json" };
 import { registerAgentsCommand } from "./commands/agents";
 import { registerBenchCommand } from "./commands/bench";
 import { registerBoardCommand } from "./commands/board";
+import { registerClineCommand } from "./commands/cline";
 import { registerConfigCommand } from "./commands/config";
 import { registerDoctorCommand } from "./commands/doctor";
 import { registerHomeCommand } from "./commands/home";
@@ -899,6 +900,7 @@ function createProgram(invocationArgs: string[]): Command {
 	registerKitCommand(program);
 	registerConfigCommand(program);
 	registerModelsCommand(program);
+	registerClineCommand(program);
 	registerBenchCommand(program);
 	registerPipelineCommand(program);
 	registerPlanCommand(program);

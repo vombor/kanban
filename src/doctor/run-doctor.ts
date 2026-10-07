@@ -1,8 +1,10 @@
 // `kanban doctor [path] [--fix] [--deep]`: one pass over the home, the projects, agent trust, managed sections,
 // machine setup and the "one owner" check. Fast and read-only unless `--fix`, which runs only the safe fixes
 // (register the given project with the default kit, trust, managed sections, worktree push hooks). Machine setup
-// drift is reported, and `kanban setup` fixes it: setup writes user files (CLAUDE.md, providers.json).
+// drift is reported, and `kanban setup` fixes it: setup writes user files (CLAUDE.md, .npmrc), and prints the command
+// the user runs for Cline's files (Kanban writes nothing under ~/.cline).
 import { listLegacyKitProjects, readLegacyKitConfig, readLegacyKitServices } from "../config/legacy-kit-config";
+import { readLemonadeModelListSettings } from "../config/model-lists-config";
 import { readPipelineConfig, readRawGlobalConfig } from "../config/pipeline-config";
 import { loadGlobalRuntimeConfig } from "../config/runtime-config";
 import { loadKitCatalog } from "../kits/resolve-kit";
@@ -20,7 +22,7 @@ import {
 import { readLiveKanbanServerLock } from "../state/kanban-server-lock";
 import { listWorkspaceIndexEntries, loadWorkspaceBoardById } from "../state/workspace-state";
 import { checkKanbanFilesUnderClineDir } from "./cline-dir-checks";
-import { checkClineLemonadeContextWindows } from "./cline-models-checks";
+import { checkClineLemonadeModels } from "./cline-models-checks";
 import { createDeepCheckDeps, type DeepCheckDeps, runDeepChecks } from "./deep-checks";
 import {
 	checkHome,
@@ -49,7 +51,7 @@ export interface DoctorOptions {
 	kanbanVersion: string;
 	deepDeps?: DeepCheckDeps;
 	guardrailDeps?: GuardrailCheckDeps;
-	/** Test hook: the fetch setup's Lemonade step plans with. */
+	/** Test hook: the fetch the Lemonade models row asks Lemonade with. */
 	fetch?: typeof fetch;
 }
 
@@ -112,12 +114,19 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
 				origin: options.origin,
 				legacyKitInstalled: legacyKit.raw !== null,
 				config,
-				fetch: options.fetch,
+				skipSteps: ["cline-lemonade-models"],
 			}),
 		),
 	);
 	const clineModelsPath = getClineModelsSettingsPath(config.agents.cline.dataDir);
-	findings.push(...(await checkClineLemonadeContextWindows(clineModelsPath)));
+	findings.push(
+		...(await checkClineLemonadeModels({
+			modelsPath: clineModelsPath,
+			origin: options.origin,
+			lemonadeModelList: (await readLemonadeModelListSettings()).settings,
+			fetch: options.fetch,
+		})),
+	);
 	findings.push(
 		...(await checkKanbanFilesUnderClineDir({
 			rulesDir: getClineGlobalRulesPath(),

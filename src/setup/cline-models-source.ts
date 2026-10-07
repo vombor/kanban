@@ -1,11 +1,12 @@
-// `kanban setup` step: point the Lemonade provider in Cline's models.json at Kanban's model-lists route.
+// Where the Lemonade provider in Cline's models.json should get its model list: Kanban's model-lists route.
 //
 // Cline offers every id the provider's `modelsSourceUrl` returns. The legacy kit pointed it at its own
 // model-lists service (http://127.0.0.1:13306/lemonade/models), which the route in
-// src/server/model-lists-route.ts replaces. This step rewrites that URL (or sets a missing one) and leaves a
-// URL the user chose for something else alone. The provider entry itself is never created: without a
-// Lemonade provider in Cline there is nothing to point.
-import { chmod, readFile, rename, stat, writeFile } from "node:fs/promises";
+// src/server/model-lists-route.ts replaces. That URL (or a missing one) should be the route; a URL the user chose
+// for something else is left alone. Read-only: Kanban writes nothing under ~/.cline (user rule, 2026-10-07), so
+// `kanban setup` and doctor only report the drift, and the user's `kanban cline apply-lemonade-models`
+// (src/setup/cline-lemonade-apply.ts) is the one thing that changes the file. The provider entry is never created.
+import { readFile } from "node:fs/promises";
 import { z } from "zod";
 
 import { LEMONADE_MODEL_LIST_PATH } from "../server/model-lists-route";
@@ -41,11 +42,6 @@ export interface ClineModelsSourcePlan {
 	currentUrl: string | null;
 	targetUrl: string;
 	detail: string;
-}
-
-export interface ClineModelsSourceResult extends ClineModelsSourcePlan {
-	applied: boolean;
-	backupPath: string | null;
 }
 
 /** The route's URL on a Kanban server origin such as http://127.0.0.1:3484. */
@@ -124,105 +120,30 @@ export async function readClineLemonadeEntry(modelsPath: string): Promise<ClineL
 	};
 }
 
-interface ReadModelsFile {
-	plan: ClineModelsSourcePlan;
-	document: Record<string, unknown> | null;
-	/** The file as read, kept for the backup. */
-	raw: string | null;
-}
-
-async function readAndPlan(modelsPath: string, targetUrl: string): Promise<ReadModelsFile> {
-	const plan = (
-		action: ClineModelsSourceAction,
-		detail: string,
-		currentUrl: string | null = null,
-	): ClineModelsSourcePlan => ({ action, modelsPath, currentUrl, targetUrl, detail });
-	const read = await readClineLemonadeEntry(modelsPath);
-	if (read.kind !== "found") {
-		return { plan: plan(read.kind === "absent" ? "skip" : "error", read.detail), document: null, raw: null };
-	}
-	const { document, raw, modelsSourceUrl: currentUrl } = read;
+/** Where the Lemonade provider's `modelsSourceUrl` should point, given what it points at now. */
+export function planModelsSourceUrl(
+	currentUrl: string | null,
+	targetUrl: string,
+): { action: "up-to-date" | "update" | "custom"; detail: string } {
 	if (currentUrl === targetUrl) {
-		return { plan: plan("up-to-date", "Already points at the model-lists route.", currentUrl), document, raw };
+		return { action: "up-to-date", detail: "Already points at the model-lists route." };
 	}
 	if (currentUrl === null) {
-		return { plan: plan("update", "No modelsSourceUrl yet.", currentUrl), document, raw };
+		return { action: "update", detail: "No modelsSourceUrl yet." };
 	}
 	if (isManagedModelsSourceUrl(currentUrl)) {
-		return {
-			plan: plan("update", "Points at the legacy model-lists service or another Kanban origin.", currentUrl),
-			document,
-			raw,
-		};
+		return { action: "update", detail: "Points at the legacy model-lists service or another Kanban origin." };
 	}
-	return { plan: plan("custom", "Points at a URL Kanban doesn't manage; left alone.", currentUrl), document, raw };
+	return { action: "custom", detail: "Points at a URL Kanban doesn't manage; left alone." };
 }
 
+/** Reads models.json and says whether its Lemonade `modelsSourceUrl` should change. Never writes. */
 export async function planClineModelsSource(modelsPath: string, targetUrl: string): Promise<ClineModelsSourcePlan> {
-	return (await readAndPlan(modelsPath, targetUrl)).plan;
-}
-
-function backupTimestamp(now: Date): string {
-	return now
-		.toISOString()
-		.replace(/[-:]/gu, "")
-		.replace(/\.\d+Z$/u, "Z");
-}
-
-/** Writes a backup that never replaces another: setup's two models.json steps can write in the same second. */
-async function writeNewBackup(basePath: string, raw: string, mode: number): Promise<string> {
-	for (let attempt = 0; ; attempt += 1) {
-		const path = attempt === 0 ? basePath : `${basePath}-${attempt}`;
-		try {
-			await writeFile(path, raw, { encoding: "utf8", mode, flag: "wx" });
-			return path;
-		} catch (error) {
-			if (!(error && typeof error === "object" && "code" in error && error.code === "EEXIST") || attempt >= 99) {
-				throw error;
-			}
-		}
+	const read = await readClineLemonadeEntry(modelsPath);
+	if (read.kind !== "found") {
+		const action = read.kind === "absent" ? "skip" : "error";
+		return { action, modelsPath, currentUrl: null, targetUrl, detail: read.detail };
 	}
-}
-
-/**
- * Replaces models.json with `document` after a timestamped backup of `raw` (the file as read) next to it. The
- * replacement is atomic and keeps the original's mode. Returns the backup's path.
- */
-export async function writeClineModelsFile(
-	modelsPath: string,
-	raw: string,
-	document: Record<string, unknown>,
-	now: Date,
-): Promise<string> {
-	const mode = (await stat(modelsPath)).mode & 0o7777;
-	const backupPath = await writeNewBackup(`${modelsPath}.bak-before-kanban-setup-${backupTimestamp(now)}`, raw, mode);
-	const tempPath = `${modelsPath}.tmp.${process.pid}.${Date.now()}`;
-	await writeFile(tempPath, `${JSON.stringify(document, null, 2)}\n`, { encoding: "utf8", mode });
-	// writeFile's mode is masked by the umask; the replacement keeps the original's mode exactly.
-	await chmod(tempPath, mode);
-	await rename(tempPath, modelsPath);
-	return backupPath;
-}
-
-/**
- * Applies the plan unless `dryRun`. Writes a timestamped backup next to models.json first, then replaces the
- * file atomically with the same mode. Only `providers.lemonade.provider.modelsSourceUrl` changes.
- */
-export async function applyClineModelsSource(options: {
-	modelsPath: string;
-	targetUrl: string;
-	dryRun: boolean;
-	now?: Date;
-}): Promise<ClineModelsSourceResult> {
-	const { plan, document, raw } = await readAndPlan(options.modelsPath, options.targetUrl);
-	if (plan.action !== "update" || options.dryRun || !document || raw === null) {
-		return { ...plan, applied: false, backupPath: null };
-	}
-	const providers = document.providers as Record<string, Record<string, unknown>>;
-	const lemonade = providers[CLINE_LEMONADE_PROVIDER_ID] as Record<string, unknown>;
-	const provider = (lemonade.provider as Record<string, unknown> | undefined) ?? {};
-	lemonade.provider = { ...provider, modelsSourceUrl: options.targetUrl };
-
-	const backupPath = await writeClineModelsFile(options.modelsPath, raw, document, options.now ?? new Date());
-	return { ...plan, applied: true, backupPath };
+	const plan = planModelsSourceUrl(read.modelsSourceUrl, targetUrl);
+	return { ...plan, modelsPath, currentUrl: read.modelsSourceUrl, targetUrl };
 }

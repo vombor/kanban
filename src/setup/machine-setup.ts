@@ -4,7 +4,9 @@
 // Commit/PR prompt override (plan §2.5).
 // Ported from archive/devteam-kit:bin/kit@d2fb30f `cmdMachineSetup` (npmrc, Cline rules, providers.json) and
 // @c8552ae (Cline TUI notices). Kanban writes nothing under ~/.cline (user rule, 2026-10-07): the Cline rules and the
-// notice opt-out now come with every Cline launch (agent-session-adapters.ts), and the providers step only checks.
+// notice opt-out now come with every Cline launch (agent-session-adapters.ts), and the providers and the two
+// models.json (Lemonade) steps only check: the Lemonade ones print the `kanban cline apply-lemonade-models` line the
+// user runs (user's choice, 2026-10-07).
 import { chmod, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -18,8 +20,9 @@ import {
 	getClaudeUserMemoryPath,
 	renderClaudeMdSection,
 } from "./claude-md-section";
-import { planClineLemonadeModels } from "./cline-lemonade-models";
-import { applyClineModelsSource, buildLemonadeModelListUrl, planClineModelsSource } from "./cline-models-source";
+import { formatApplyLemonadeModelsHint } from "./cline-lemonade-apply";
+import { isLemonadeModelsDiffEmpty, planClineLemonadeModels } from "./cline-lemonade-models";
+import { buildLemonadeModelListUrl, planClineModelsSource } from "./cline-models-source";
 import { readManagedSectionStatus, writeManagedSection } from "./managed-section";
 
 export type SetupStepId = "npmrc" | "cline-providers" | "cline-models-source" | "cline-lemonade-models" | "claude-md";
@@ -36,7 +39,8 @@ export interface SetupStepPlan {
 	status: SetupStepStatus;
 	/** What is ok, what would change, or why the step is skipped. */
 	details: string[];
-	/** Present when status is `change`. Returns lines about what it wrote (backups included). */
+	/** Present when status is `change`. Returns lines about what it wrote (backups included). Never set for a step
+	 * on a file under ~/.cline: those are `manual` (Kanban writes nothing there). */
 	apply?: () => Promise<string[]>;
 }
 
@@ -50,7 +54,8 @@ export interface MachineSetupOptions {
 	/** Core settings: `models.providers.default`, `models.bedrockRegion`, `agents.cline.dataDir`. */
 	config: PipelineConfig;
 	env?: NodeJS.ProcessEnv;
-	now?: Date;
+	/** Steps not to plan: doctor compares the Lemonade models in its own row (doctor/cline-models-checks.ts). */
+	skipSteps?: readonly SetupStepId[];
 	/** Test hooks: file locations. */
 	paths?: Partial<MachineSetupPaths>;
 	/** Test hook: `models.lists.lemonade` (default: read from the global config.json). */
@@ -218,6 +223,10 @@ export async function planClineProviders(
 	return { ...base, status: "ok", details: [`bedrock key from ${keySource}, region ${region}`] };
 }
 
+/**
+ * Lemonade `modelsSourceUrl` in Cline's models.json. Read-only: when it should change the step is `manual` and says
+ * which command the user runs (Kanban writes nothing under ~/.cline).
+ */
 export async function planClineModelsSourceStep(paths: MachineSetupPaths, origin: string): Promise<SetupStepPlan> {
 	const targetUrl = buildLemonadeModelListUrl(origin);
 	const plan = await planClineModelsSource(paths.clineModels, targetUrl);
@@ -227,15 +236,8 @@ export async function planClineModelsSourceStep(paths: MachineSetupPaths, origin
 		case "update":
 			return {
 				...base,
-				status: "change",
-				details: [`lemonade modelsSourceUrl: ${current} -> ${targetUrl}`],
-				apply: async () => {
-					const result = await applyClineModelsSource({ modelsPath: paths.clineModels, targetUrl, dryRun: false });
-					return [
-						`lemonade modelsSourceUrl: ${current} -> ${targetUrl}`,
-						...(result.backupPath ? [`backup: ${result.backupPath}`] : []),
-					];
-				},
+				status: "manual",
+				details: [`lemonade modelsSourceUrl: ${current} -> ${targetUrl}`, formatApplyLemonadeModelsHint(origin)],
 			};
 		case "up-to-date":
 			return { ...base, status: "ok", details: [`lemonade modelsSourceUrl: ${current}`] };
@@ -248,29 +250,29 @@ export async function planClineModelsSourceStep(paths: MachineSetupPaths, origin
 	}
 }
 
+/**
+ * Lemonade per-model metadata in Cline's models.json, compared with what Lemonade reports now. Read-only, like the
+ * step above: differences make it `manual` with the command to run.
+ */
 export async function planClineLemonadeModelsStep(
 	paths: MachineSetupPaths,
-	options: { lemonadeModelList: LemonadeModelListSettings; fetch?: typeof fetch; now: Date },
+	options: { origin: string; lemonadeModelList: LemonadeModelListSettings; fetch?: typeof fetch },
 ): Promise<SetupStepPlan> {
 	const plan = await planClineLemonadeModels({
 		modelsPath: paths.clineModels,
 		requireLabels: options.lemonadeModelList.requireLabels,
 		lemonadeUrl: options.lemonadeModelList.url,
 		fetch: options.fetch,
-		now: options.now,
 	});
-	const base = { id: "cline-lemonade-models" as const, target: paths.clineModels, details: plan.details };
-	switch (plan.action) {
-		case "update":
-			return { ...base, status: "change", apply: plan.apply };
-		case "up-to-date":
-			return { ...base, status: "ok" };
-		case "error":
-			return { ...base, status: "error" };
-		default:
-			// Lemonade down is not a setup failure: the file keeps its values and the next run fills them in.
-			return { ...base, status: "skipped" };
+	const base = { id: "cline-lemonade-models" as const, target: paths.clineModels };
+	if (plan.kind !== "found") {
+		return { ...base, status: plan.kind === "absent" ? "skipped" : "error", details: plan.details };
 	}
+	if (!isLemonadeModelsDiffEmpty(plan.diff)) {
+		return { ...base, status: "manual", details: [...plan.details, formatApplyLemonadeModelsHint(options.origin)] };
+	}
+	// Lemonade down is not a setup failure: nothing can be compared, and the next run does.
+	return { ...base, status: plan.inSync ? "ok" : "skipped", details: plan.details };
 }
 
 export async function planClaudeMd(
@@ -312,7 +314,6 @@ export async function planClaudeMd(
 
 export async function planMachineSetup(options: MachineSetupOptions): Promise<SetupStepPlan[]> {
 	const env = options.env ?? process.env;
-	const now = options.now ?? new Date();
 	const paths = { ...getMachineSetupPaths(env, options.config.agents.cline.dataDir), ...options.paths };
 	const steps: Array<{ id: SetupStepId; target: string; plan: () => Promise<SetupStepPlan> }> = [
 		{ id: "npmrc", target: paths.npmrc, plan: () => planNpmrc(paths) },
@@ -336,9 +337,9 @@ export async function planMachineSetup(options: MachineSetupOptions): Promise<Se
 			target: paths.clineModels,
 			plan: async () =>
 				planClineLemonadeModelsStep(paths, {
+					origin: options.origin,
 					lemonadeModelList: options.lemonadeModelList ?? (await readLemonadeModelListSettings()).settings,
 					fetch: options.fetch,
-					now,
 				}),
 		},
 		{
@@ -353,6 +354,9 @@ export async function planMachineSetup(options: MachineSetupOptions): Promise<Se
 	];
 	const plans: SetupStepPlan[] = [];
 	for (const step of steps) {
+		if (options.skipSteps?.includes(step.id)) {
+			continue;
+		}
 		try {
 			plans.push(await step.plan());
 		} catch (error) {

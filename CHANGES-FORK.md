@@ -631,3 +631,18 @@ of this repository is the complete record of changes.
   `workspaces.<id>.isolation.messages` switch (default `deny`). The receiver gets only a fixed notice, queued until its
   Review has settled with nothing typed, rate-limited per pair, and messages are logged on both sides. `hooks.ingest`
   is checked by ownership, with no process lookup. Before rolling back, remove the `isolation` keys from config.json. `kanban doctor` shows each workspace's isolation per agent (native / partial / prompt-only).
+- `src/setup/cline-lemonade-apply.ts`, `src/commands/cline.ts` (new), `src/setup/cline-lemonade-models.ts`,
+  `src/setup/cline-models-source.ts`, `src/setup/machine-setup.ts`, `src/doctor/cline-models-checks.ts`,
+  `src/doctor/run-doctor.ts`, `src/models/lemonade-models.ts`, `src/isolation/cli-scope.ts`, `src/cli.ts`, `AGENTS.md`,
+  `docs/team/RUNBOOK.md`, tests (Kanban prints the Lemonade edits for Cline's models.json and the user applies them,
+  user's choice "C", 2026-10-07): `kanban setup` no longer writes Cline's `models.json`. Its `cline-models-source` and
+  `cline-lemonade-models` steps compare the Lemonade provider entry (the `modelsSourceUrl` pointing at Kanban's
+  model-lists route; each listed model's contextWindow, maxTokens, supportsVision, supportsReasoning and zero prices) with
+  what it should be and, when they differ, list every change and print `kanban cline apply-lemonade-models --origin
+  <origin>` (status "to do by hand"). That command is the only Kanban code that writes the file, and only when the user
+  runs it (agent sessions are refused it in every isolation mode): it copies models.json to
+  `<home>/backups/cline/models.json.<UTC>` (0600, never next to Cline's files), replaces the file atomically with its mode,
+  changes only `providers.lemonade` and writes nothing when the file changed meanwhile; `--dry-run` prints only. Models
+  Lemonade no longer lists are now dropped from the entry (before, they were kept). `kanban doctor`'s Lemonade row now
+  compares models.json with what Lemonade reports (one round of requests, 1.5 s timeout): WARN with the added, removed
+  and changed models and the command, PASS in sync, INFO when Lemonade is down.
