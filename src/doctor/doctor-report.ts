@@ -4,7 +4,16 @@
 /** `fail`: something is broken or two owners act on the same thing. `info`: what is configured, no action. */
 export type DoctorLevel = "pass" | "info" | "warn" | "fail";
 
-export type DoctorArea = "home" | "project" | "trust" | "sections" | "hooks" | "setup" | "owner" | "deep";
+export type DoctorArea =
+	| "home"
+	| "project"
+	| "trust"
+	| "sections"
+	| "hooks"
+	| "setup"
+	| "owner"
+	| "guardrails"
+	| "deep";
 
 export interface DoctorFinding {
 	level: DoctorLevel;

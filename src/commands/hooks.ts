@@ -7,6 +7,8 @@ import type { RuntimeHookEvent, RuntimeTaskHookActivity } from "../core/api-cont
 import { buildKanbanCommandParts } from "../core/kanban-command";
 import { buildKanbanRuntimeUrl, getRuntimeFetch } from "../core/runtime-endpoint";
 import { buildWindowsCmdArgsArray, resolveWindowsComSpec, shouldUseWindowsCmdLaunch } from "../core/windows-cmd-launch";
+import type { ClineGuardPolicy } from "../terminal/agent-guardrails";
+import { evaluateClineGuard } from "../terminal/cline-guard";
 import { parseHookRuntimeContextFromEnv } from "../terminal/hook-runtime-context";
 import type { RuntimeAppRouter } from "../trpc/app-router";
 import {
@@ -559,6 +561,19 @@ async function runCodexHookSubcommand(
 	}
 }
 
+// Prints the PreToolUse decision for Cline (cline-guard.ts). Fails open: a policy or payload it can't read lets the
+// tool run, so a broken guard never freezes a card.
+async function runClineGuardSubcommand(policyBase64: string): Promise<void> {
+	let decision: { cancel: boolean; errorMessage?: string } = { cancel: false };
+	try {
+		const policy = JSON.parse(Buffer.from(policyBase64, "base64").toString("utf8")) as ClineGuardPolicy;
+		decision = evaluateClineGuard(JSON.parse(await readStdinText()), policy);
+	} catch {
+		// fail open
+	}
+	process.stdout.write(`${JSON.stringify(decision)}\n`);
+}
+
 async function runGeminiHookSubcommand(): Promise<void> {
 	let payload = "";
 	try {
@@ -783,6 +798,14 @@ export function registerHooksCommand(program: Command): void {
 				await runHooksNotify(options.event, options, payload);
 			},
 		);
+
+	hooks
+		.command("cline-guard")
+		.description("Cline PreToolUse guard for a task card's guardrails (prints the hook decision).")
+		.requiredOption("--policy-base64 <base64>", "Base64-encoded JSON guard policy.")
+		.action(async (options: { policyBase64: string }) => {
+			await runClineGuardSubcommand(options.policyBase64);
+		});
 
 	hooks
 		.command("gemini-hook")

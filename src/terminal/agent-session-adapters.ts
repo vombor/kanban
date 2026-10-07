@@ -11,12 +11,30 @@ import type {
 	RuntimeTaskImage,
 	RuntimeTaskSessionSummary,
 } from "../core/api-contract";
+import { isHomeAgentSessionId } from "../core/home-agent-session";
 import { buildKanbanCommandParts } from "../core/kanban-command";
 import { quoteShellArg } from "../core/shell";
 import { lockedFileSystem } from "../fs/locked-file-system";
+import {
+	buildGuardrailPromptNote,
+	listGuardrailWritableRoots,
+	type TaskGuardrails,
+} from "../guardrails/task-guardrails";
 import { resolveHomeAgentAppendSystemPrompt } from "../prompts/append-system-prompt";
+import { getClineDataPath } from "../state/kanban-home";
 import { getRuntimeHomePath } from "../state/workspace-state";
 import { getGitStdout } from "../workspace/git-utils";
+import {
+	buildClaudePermissionDeny,
+	buildCodexRulesFile,
+	buildCopilotDenyTools,
+	buildCopilotWriteDenyTools,
+	type ClineGuardPolicy,
+	CODEX_GUARDRAIL_RULES_RELATIVE_PATH,
+	describeAgentGuardrails,
+	listCodexWritableDirs,
+	probeCodexSandbox,
+} from "./agent-guardrails";
 import { isRuntimeDebugModeEnabled } from "./agent-registry";
 import { ensureClaudeWorkspaceTrusted } from "./claude-workspace-trust";
 import { configureCodexHooks, hasCodexConfigOverride } from "./codex-hook-config";
@@ -46,6 +64,11 @@ export interface AgentAdapterLaunchInput {
 	env?: Record<string, string | undefined>;
 	workspaceId?: string;
 	agentSettings?: RuntimeTaskAgentSettings;
+	/**
+	 * The task card's guardrails (src/guardrails/task-guardrails.ts); null/absent for the orchestrator. Each adapter
+	 * applies what its CLI enforces (agent-guardrails.ts); prepareAgentLaunch adds a prompt note for the rest.
+	 */
+	guardrails?: TaskGuardrails | null;
 }
 
 export type AgentOutputTransitionDetector = (
@@ -160,6 +183,15 @@ function buildHooksCommand(args: string[]): string {
 	return buildHooksCommandParts(args).map(quoteShellArg).join(" ");
 }
 
+/** The launch's guardrails when it is a task card's session; the orchestrator (home-agent session) never gets any. */
+function getCardGuardrails(input: AgentAdapterLaunchInput): TaskGuardrails | null {
+	return input.guardrails && !isHomeAgentSessionId(input.taskId) ? input.guardrails : null;
+}
+
+function toSafeFileName(value: string): string {
+	return value.replace(/[^A-Za-z0-9._-]/gu, "_");
+}
+
 function hasCliOption(args: string[], optionName: string): boolean {
 	for (let i = 0; i < args.length; i += 1) {
 		const arg = args[i];
@@ -211,6 +243,21 @@ function stripCliOptions(args: string[], optionNames: readonly string[]): string
 // ---------------------------------------------------------------------------
 
 const CLINE_CLI_HOOK_SOURCE = "cline-cli";
+
+/** `kanban hooks cline-guard` with the card's policy: the worktree, writable dirs (+ Cline's data dir), denies. */
+function buildClineGuardCommandParts(guardrails: TaskGuardrails): string[] {
+	const policy: ClineGuardPolicy = {
+		worktreePath: guardrails.worktreePath,
+		confineWrites: guardrails.confineWrites,
+		writableRoots: [...listGuardrailWritableRoots(guardrails), getClineDataPath()],
+		deniedCommands: guardrails.deniedCommands,
+	};
+	return buildHooksCommandParts([
+		"cline-guard",
+		"--policy-base64",
+		Buffer.from(JSON.stringify(policy), "utf8").toString("base64"),
+	]);
+}
 const KANBAN_MANAGED_CLINE_CLI_HOOK_MARKER = "kanban-managed: cline-cli hook";
 const CLINE_CLI_ASK_TOOL_PATTERN = "ask_followup_question|ask_question|plan_mode_respond|submit_and_exit";
 
@@ -263,7 +310,9 @@ echo '{"cancel":false}'
 `;
 }
 
-function buildClineCliPreToolUseHookScriptContent(): string {
+// With a guard, the hook prints the guard's decision instead of `{"cancel":false}`: `{"cancel":true}` stops the
+// tool call before it runs (cline-guard.ts).
+function buildClineCliPreToolUseHookScriptContent(guardCommand?: string[]): string {
 	const activityCommand = buildClineCliHookCommandParts("activity", "PreToolUse");
 	const reviewCommand = buildClineCliHookCommandParts("to_review", "PreToolUse");
 	const inProgressCommand = buildClineCliHookCommandParts("to_in_progress", "PreToolUse");
@@ -273,7 +322,17 @@ function buildClineCliPreToolUseHookScriptContent(): string {
 		const inProgress = inProgressCommand.map(powerShellQuote).join(" ");
 		return `# ${KANBAN_MANAGED_CLINE_CLI_HOOK_MARKER} (PreToolUse)
 $inputText = [Console]::In.ReadToEnd()
-$isUserQuestionTool = $inputText -match '"(toolName|tool)"\\s*:\\s*"(${CLINE_CLI_ASK_TOOL_PATTERN})"'
+$decision = '{"cancel":false}'
+${
+	guardCommand
+		? `try {
+  $guardOutput = ($inputText | & ${guardCommand.map(powerShellQuote).join(" ")}) -join ""
+  if ($guardOutput) { $decision = $guardOutput }
+} catch {
+}
+`
+		: ""
+}$isUserQuestionTool = $inputText -match '"(toolName|tool)"\\s*:\\s*"(${CLINE_CLI_ASK_TOOL_PATTERN})"'
 try {
   $inputText | & ${activity} | Out-Null
 } catch {
@@ -289,7 +348,7 @@ if ($isUserQuestionTool) {
   } catch {
   }
 }
-Write-Output '{"cancel":false}'
+Write-Output $decision
 exit 0
 `;
 	}
@@ -299,13 +358,20 @@ exit 0
 	return `#!/usr/bin/env bash
 # ${KANBAN_MANAGED_CLINE_CLI_HOOK_MARKER} (PreToolUse)
 INPUT="$(cat || true)"
-printf '%s' "$INPUT" | ${activity} >/dev/null 2>&1 || true
+DECISION='{"cancel":false}'
+${
+	guardCommand
+		? `GUARD="$(printf '%s' "$INPUT" | ${guardCommand.map(quoteShellArg).join(" ")} 2>/dev/null || true)"
+if [ -n "$GUARD" ]; then DECISION="$GUARD"; fi
+`
+		: ""
+}printf '%s' "$INPUT" | ${activity} >/dev/null 2>&1 || true
 if printf '%s' "$INPUT" | grep -Eq '"(toolName|tool)"[[:space:]]*:[[:space:]]*"(${CLINE_CLI_ASK_TOOL_PATTERN})"'; then
   printf '%s' "$INPUT" | ${review} >/dev/null 2>&1 || true
 else
   printf '%s' "$INPUT" | ${inProgress} >/dev/null 2>&1 || true
 fi
-echo '{"cancel":false}'
+printf '%s\\n' "$DECISION"
 `;
 }
 
@@ -736,64 +802,72 @@ const claudeAdapter: AgentSessionAdapter = {
 		}
 
 		const hooks = resolveHookContext(input);
-		if (hooks) {
-			const settingsPath = join(getHookAgentDirectory("claude"), "settings.json");
-			const hooksSettings = {
-				hooks: {
-					Stop: [{ hooks: [{ type: "command", command: buildHookCommand("to_review", { source: "claude" }) }] }],
-					SubagentStop: [
-						{ hooks: [{ type: "command", command: buildHookCommand("activity", { source: "claude" }) }] },
-					],
-					PreToolUse: [
-						{
-							matcher: "*",
-							hooks: [{ type: "command", command: buildHookCommand("activity", { source: "claude" }) }],
-						},
-					],
-					PermissionRequest: [
-						{
-							matcher: "*",
-							hooks: [{ type: "command", command: buildHookCommand("to_review", { source: "claude" }) }],
-						},
-					],
-					PostToolUse: [
-						{
-							matcher: "*",
-							hooks: [{ type: "command", command: buildHookCommand("to_in_progress", { source: "claude" }) }],
-						},
-					],
-					PostToolUseFailure: [
-						{
-							matcher: "*",
-							hooks: [{ type: "command", command: buildHookCommand("to_in_progress", { source: "claude" }) }],
-						},
-					],
-					Notification: [
-						{
-							matcher: "permission_prompt",
-							hooks: [{ type: "command", command: buildHookCommand("to_review", { source: "claude" }) }],
-						},
-						{
-							matcher: "*",
-							hooks: [{ type: "command", command: buildHookCommand("activity", { source: "claude" }) }],
-						},
-					],
-					UserPromptSubmit: [
-						{
-							hooks: [{ type: "command", command: buildHookCommand("to_in_progress", { source: "claude" }) }],
-						},
-					],
-				},
+		const guardrails = getCardGuardrails(input);
+		if (hooks || guardrails) {
+			// A card with guardrails gets its own file: the shared one is also the orchestrator's.
+			const settingsPath = guardrails
+				? join(getHookAgentDirectory("claude"), "cards", `${toSafeFileName(input.taskId)}.json`)
+				: join(getHookAgentDirectory("claude"), "settings.json");
+			const claudeHooks = hooks && {
+				Stop: [{ hooks: [{ type: "command", command: buildHookCommand("to_review", { source: "claude" }) }] }],
+				SubagentStop: [
+					{ hooks: [{ type: "command", command: buildHookCommand("activity", { source: "claude" }) }] },
+				],
+				PreToolUse: [
+					{
+						matcher: "*",
+						hooks: [{ type: "command", command: buildHookCommand("activity", { source: "claude" }) }],
+					},
+				],
+				PermissionRequest: [
+					{
+						matcher: "*",
+						hooks: [{ type: "command", command: buildHookCommand("to_review", { source: "claude" }) }],
+					},
+				],
+				PostToolUse: [
+					{
+						matcher: "*",
+						hooks: [{ type: "command", command: buildHookCommand("to_in_progress", { source: "claude" }) }],
+					},
+				],
+				PostToolUseFailure: [
+					{
+						matcher: "*",
+						hooks: [{ type: "command", command: buildHookCommand("to_in_progress", { source: "claude" }) }],
+					},
+				],
+				Notification: [
+					{
+						matcher: "permission_prompt",
+						hooks: [{ type: "command", command: buildHookCommand("to_review", { source: "claude" }) }],
+					},
+					{
+						matcher: "*",
+						hooks: [{ type: "command", command: buildHookCommand("activity", { source: "claude" }) }],
+					},
+				],
+				UserPromptSubmit: [
+					{
+						hooks: [{ type: "command", command: buildHookCommand("to_in_progress", { source: "claude" }) }],
+					},
+				],
 			};
-			await ensureTextFile(settingsPath, JSON.stringify(hooksSettings, null, 2));
+			const settings = {
+				...(claudeHooks ? { hooks: claudeHooks } : {}),
+				...(guardrails ? { permissions: { deny: buildClaudePermissionDeny(guardrails) } } : {}),
+			};
+			await ensureTextFile(settingsPath, JSON.stringify(settings, null, 2));
 			args.push("--settings", settingsPath);
-			Object.assign(
-				env,
-				createHookRuntimeEnv({
-					taskId: hooks.taskId,
-					workspaceId: hooks.workspaceId,
-				}),
-			);
+			if (hooks) {
+				Object.assign(
+					env,
+					createHookRuntimeEnv({
+						taskId: hooks.taskId,
+						workspaceId: hooks.workspaceId,
+					}),
+				);
+			}
 		}
 
 		if (
@@ -841,6 +915,29 @@ function shouldInspectCodexOutputForTransition(summary: RuntimeTaskSessionSummar
 	);
 }
 
+const CODEX_SANDBOX_FLAGS = [
+	"--dangerously-bypass-approvals-and-sandbox",
+	"--sandbox",
+	"-s",
+	"--ask-for-approval",
+	"-a",
+	"--full-auto",
+] as const;
+
+/**
+ * Whether an autonomous Codex card runs in the workspace-write sandbox instead of the bypass: only when writes are
+ * confined, the user/workspace args chose no sandbox or approval mode, and Codex's sandbox runs on this host.
+ */
+async function shouldConfineCodexWrites(input: AgentAdapterLaunchInput, guardrails: TaskGuardrails): Promise<boolean> {
+	if (!input.autonomousModeEnabled || !guardrails.confineWrites) {
+		return false;
+	}
+	if (CODEX_SANDBOX_FLAGS.some((flag) => hasCliOption(input.args, flag))) {
+		return false;
+	}
+	return await probeCodexSandbox(input.binary);
+}
+
 const codexAdapter: AgentSessionAdapter = {
 	recovery: { clearContextCommand: "/new", cancelTurnInput: ESCAPE },
 	async prepare(input) {
@@ -855,7 +952,28 @@ const codexAdapter: AgentSessionAdapter = {
 			codexArgs.push("-c", "check_for_update_on_startup=false");
 		}
 
-		if (input.autonomousModeEnabled && !hasCliOption(codexArgs, "--dangerously-bypass-approvals-and-sandbox")) {
+		const guardrails = getCardGuardrails(input);
+		if (guardrails) {
+			// Forbidden prefix rules hold even with --dangerously-bypass-approvals-and-sandbox (agent-guardrails.ts).
+			await ensureTextFile(
+				join(input.cwd, ...CODEX_GUARDRAIL_RULES_RELATIVE_PATH.split("/")),
+				buildCodexRulesFile(guardrails.deniedCommands),
+			);
+			await addToWorktreeGitExclude(input.cwd, `/${CODEX_GUARDRAIL_RULES_RELATIVE_PATH}`);
+		}
+
+		if (guardrails && (await shouldConfineCodexWrites(input, guardrails))) {
+			// Writes confined to the worktree, its git dir and the shared dirs; reads and the network stay open
+			// (fetch and rebase onto the base branch need both).
+			codexArgs.push("--sandbox", "workspace-write", "--ask-for-approval", "never");
+			codexArgs.push("-c", "sandbox_workspace_write.network_access=true");
+			for (const dir of listCodexWritableDirs(guardrails)) {
+				codexArgs.push("--add-dir", dir);
+			}
+		} else if (
+			input.autonomousModeEnabled &&
+			!hasCliOption(codexArgs, "--dangerously-bypass-approvals-and-sandbox")
+		) {
 			codexArgs.push("--dangerously-bypass-approvals-and-sandbox");
 		}
 
@@ -1567,7 +1685,9 @@ const clineCliAdapter: AgentSessionAdapter = {
 		// with the original prompt instead of resuming.
 
 		const hooks = resolveHookContext(input);
-		if (hooks) {
+		const guardrails = getCardGuardrails(input);
+		const guardCommand = guardrails ? buildClineGuardCommandParts(guardrails) : undefined;
+		if (hooks || guardCommand) {
 			const hooksDir = join(input.cwd, ".cline", "hooks");
 			const executable = process.platform !== "win32";
 			const hookFiles: Array<{ name: ClineCliHookName; content: string }> = [
@@ -1576,7 +1696,7 @@ const clineCliAdapter: AgentSessionAdapter = {
 				{ name: "TaskCancel", content: buildClineCliHookScriptContent("to_review", "TaskCancel") },
 				{ name: "TaskComplete", content: buildClineCliHookScriptContent("to_review", "TaskComplete") },
 				{ name: "TaskError", content: buildClineCliHookScriptContent("to_review", "TaskError") },
-				{ name: "PreToolUse", content: buildClineCliPreToolUseHookScriptContent() },
+				{ name: "PreToolUse", content: buildClineCliPreToolUseHookScriptContent(guardCommand) },
 				{ name: "PostToolUse", content: buildClineCliPostToolUseHookScriptContent() },
 				{ name: "UserPromptSubmit", content: buildClineCliHookScriptContent("to_in_progress", "UserPromptSubmit") },
 			];
@@ -1589,16 +1709,22 @@ const clineCliAdapter: AgentSessionAdapter = {
 				}
 			}
 			if (skippedHooks.length > 0) {
-				sessionWarning = `Cline hooks not installed for ${skippedHooks.join(", ")}: a user-owned .cline/hooks file already exists. Kanban card state will not track those events.`;
+				sessionWarning = `Cline hooks not installed for ${skippedHooks.join(", ")}: a user-owned .cline/hooks file already exists. Kanban card state will not track those events.${
+					guardCommand && skippedHooks.includes("PreToolUse")
+						? " This card's guardrails are not enforced either."
+						: ""
+				}`;
 			}
 
-			Object.assign(
-				env,
-				createHookRuntimeEnv({
-					taskId: hooks.taskId,
-					workspaceId: hooks.workspaceId,
-				}),
-			);
+			if (hooks) {
+				Object.assign(
+					env,
+					createHookRuntimeEnv({
+						taskId: hooks.taskId,
+						workspaceId: hooks.workspaceId,
+					}),
+				);
+			}
 		}
 
 		const appendedSystemPrompt = resolveHomeAgentAppendSystemPrompt(input.taskId);
@@ -1934,6 +2060,7 @@ const copilotAdapter: AgentSessionAdapter = {
 		const env: Record<string, string | undefined> = {};
 		let sessionWarning: string | undefined;
 		const allowFlags = ["--allow-all", "--allow-all-tools", "--allow-all-paths", "--allow-all-urls", "--yolo"];
+		const guardrails = getCardGuardrails(input);
 
 		if (input.startInPlanMode) {
 			// Plan mode must not inherit approval-bypass flags.
@@ -1955,6 +2082,18 @@ const copilotAdapter: AgentSessionAdapter = {
 			}
 			if (startsAutopilot) {
 				args.push("--autopilot");
+			}
+		}
+
+		if (guardrails) {
+			// Deny rules win over --allow-all-tools and autopilot (`copilot help permissions`).
+			// Writes into the main checkout and the other worktrees are denied for the file tools; Copilot can't allow
+			// only the worktree without dropping --allow-all-paths, and autopilot needs all permissions (agent-guardrails.ts).
+			for (const denyTool of [
+				...buildCopilotDenyTools(guardrails.deniedCommands).denyTools,
+				...buildCopilotWriteDenyTools(guardrails),
+			]) {
+				args.push("--deny-tool", denyTool);
 			}
 		}
 
@@ -2072,6 +2211,23 @@ export function getAgentTurnEndSource(agentId: RuntimeAgentId | null): AgentTurn
 	return (agentId ? ADAPTERS[agentId].turnEndSource : undefined) ?? null;
 }
 
+/** The launch prompt plus the guardrail note, when the agent's CLI leaves some of the card's guardrails unenforced. */
+async function withGuardrailPromptNote(input: AgentAdapterLaunchInput, prompt: string): Promise<string> {
+	const guardrails = getCardGuardrails(input);
+	if (!guardrails || !prompt.trim()) {
+		return prompt;
+	}
+	const report = describeAgentGuardrails(input.agentId, {
+		deniedCommands: guardrails.deniedCommands,
+		confineWrites: guardrails.confineWrites,
+		codexSandbox: ADAPTERS[input.agentId] === codexAdapter ? await shouldConfineCodexWrites(input, guardrails) : null,
+	});
+	if (report.unenforced.length === 0) {
+		return prompt;
+	}
+	return `${prompt.trimEnd()}\n\n${buildGuardrailPromptNote(guardrails, report.unenforced)}`;
+}
+
 export async function prepareAgentLaunch(input: AgentAdapterLaunchInput): Promise<PreparedAgentLaunch> {
 	const preparedPrompt = await prepareTaskPromptWithImages({
 		prompt: input.prompt,
@@ -2079,6 +2235,6 @@ export async function prepareAgentLaunch(input: AgentAdapterLaunchInput): Promis
 	});
 	return await ADAPTERS[input.agentId].prepare({
 		...input,
-		prompt: preparedPrompt,
+		prompt: await withGuardrailPromptNote(input, preparedPrompt),
 	});
 }

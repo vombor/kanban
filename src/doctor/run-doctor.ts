@@ -25,6 +25,7 @@ import {
 	filterExistingRepos,
 } from "./doctor-checks";
 import type { DoctorFinding, DoctorFixOutcome, DoctorReport } from "./doctor-report";
+import { checkGuardrails, type GuardrailCheckDeps } from "./guardrail-checks";
 import { checkOneOwner } from "./one-owner-checks";
 
 export interface DoctorOptions {
@@ -36,6 +37,7 @@ export interface DoctorOptions {
 	origin: string;
 	kanbanVersion: string;
 	deepDeps?: DeepCheckDeps;
+	guardrailDeps?: GuardrailCheckDeps;
 }
 
 export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
@@ -101,6 +103,8 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
 			clineModelsSourceUrl: modelsSource.currentUrl,
 		})),
 	);
+
+	findings.push(...(await checkGuardrails(config, options.guardrailDeps)));
 
 	if (options.deep) {
 		const runtimeConfig = await loadGlobalRuntimeConfig();

@@ -99,6 +99,8 @@ export interface StartTaskSessionRequest {
 	env?: Record<string, string | undefined>;
 	workspaceId?: string;
 	agentSettings?: RuntimeTaskAgentSettings;
+	/** The task card's guardrails (null for the orchestrator), see AgentAdapterLaunchInput. */
+	guardrails?: AgentAdapterLaunchInput["guardrails"];
 }
 
 export interface StartShellSessionRequest {
@@ -408,6 +410,7 @@ export class TerminalSessionManager implements TerminalSessionService {
 			env: request.env,
 			workspaceId: request.workspaceId,
 			agentSettings: request.agentSettings,
+			guardrails: request.guardrails,
 		});
 
 		const env = buildTerminalEnvironment(request.env, launch.env);

@@ -354,6 +354,34 @@ function stripManagedExcludeBlock(content: string): string {
 	return nextLines.join("\n").replace(/\n+$/g, "");
 }
 
+/**
+ * The ignored paths Kanban symlinked into a repo's task worktrees (for example `node_modules`), relative to the
+ * worktree, from the managed block of the repo's info/exclude. Empty when there is none or git can't say.
+ */
+export async function readSymlinkedIgnoredPaths(worktreePath: string): Promise<string[]> {
+	const excludePathOutput = await getGitStdout(["rev-parse", "--git-path", "info/exclude"], worktreePath).catch(
+		() => "",
+	);
+	if (!excludePathOutput) {
+		return [];
+	}
+	const excludePath = isAbsolute(excludePathOutput) ? excludePathOutput : join(worktreePath, excludePathOutput);
+	const content = await readFile(excludePath, "utf8").catch(() => "");
+	const paths: string[] = [];
+	let insideManagedBlock = false;
+	for (const line of content.split("\n")) {
+		if (line === KANBAN_MANAGED_EXCLUDE_BLOCK_START || line === KANBAN_MANAGED_EXCLUDE_BLOCK_END) {
+			insideManagedBlock = line === KANBAN_MANAGED_EXCLUDE_BLOCK_START;
+			continue;
+		}
+		if (insideManagedBlock && line.startsWith("/")) {
+			// Undo escapeGitIgnoreLiteral.
+			paths.push(line.slice(1).replace(/\\(.)/gu, "$1"));
+		}
+	}
+	return paths;
+}
+
 async function syncManagedIgnoredPathExcludes(repoPath: string, relativePaths: string[]): Promise<void> {
 	const excludePathOutput = await getGitStdout(["rev-parse", "--git-path", "info/exclude"], repoPath);
 	if (!excludePathOutput) {

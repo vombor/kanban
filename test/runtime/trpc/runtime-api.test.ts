@@ -22,6 +22,10 @@ const browserMocks = vi.hoisted(() => ({
 	openInBrowser: vi.fn(),
 }));
 
+const guardrailMocks = vi.hoisted(() => ({
+	resolveTaskGuardrails: vi.fn(),
+}));
+
 vi.mock("../../../src/terminal/agent-registry.js", () => ({
 	resolveAgentCommand: agentRegistryMocks.resolveAgentCommand,
 	buildRuntimeConfigResponse: agentRegistryMocks.buildRuntimeConfigResponse,
@@ -33,6 +37,10 @@ vi.mock("../../../src/workspace/task-worktree.js", () => ({
 
 vi.mock("../../../src/workspace/turn-checkpoints.js", () => ({
 	captureTaskTurnCheckpoint: turnCheckpointMocks.captureTaskTurnCheckpoint,
+}));
+
+vi.mock("../../../src/guardrails/task-guardrails.js", () => ({
+	resolveTaskGuardrails: guardrailMocks.resolveTaskGuardrails,
 }));
 
 vi.mock("../../../src/server/browser.js", () => ({
@@ -131,6 +139,8 @@ describe("createRuntimeApi startTaskSession", () => {
 		taskWorktreeMocks.resolveTaskCwd.mockReset();
 		turnCheckpointMocks.captureTaskTurnCheckpoint.mockReset();
 		browserMocks.openInBrowser.mockReset();
+		guardrailMocks.resolveTaskGuardrails.mockReset();
+		guardrailMocks.resolveTaskGuardrails.mockResolvedValue(null);
 		agentRegistryMocks.resolveAgentCommand.mockReturnValue({
 			agentId: "claude",
 			label: "Claude Code",
@@ -264,9 +274,46 @@ describe("createRuntimeApi startTaskSession", () => {
 			expect.objectContaining({
 				taskId: homeTaskId,
 				cwd: "/tmp/repo",
+				// The orchestrator works across the project's worktrees: no guardrails.
+				guardrails: null,
 			}),
 		);
+		expect(guardrailMocks.resolveTaskGuardrails).not.toHaveBeenCalled();
 		expect(turnCheckpointMocks.captureTaskTurnCheckpoint).not.toHaveBeenCalled();
+	});
+
+	it("passes a card session the guardrails resolved for its worktree, project and base branch", async () => {
+		taskWorktreeMocks.resolveTaskCwd.mockResolvedValue("/tmp/existing-worktree");
+		const guardrails = { worktreePath: "/tmp/existing-worktree", deniedCommands: [] };
+		guardrailMocks.resolveTaskGuardrails.mockResolvedValue(guardrails);
+		const terminalManager = {
+			startTaskSession: vi.fn(async () => createSummary()),
+			applyTurnCheckpoint: vi.fn(),
+		};
+		const api = createTestRuntimeApi({
+			getActiveWorkspaceId: vi.fn(() => "workspace-1"),
+			loadScopedRuntimeConfig: vi.fn(async () => createRuntimeConfigState()),
+			setActiveRuntimeConfig: vi.fn(),
+			getScopedTerminalManager: vi.fn(async () => terminalManager as never),
+			resolveInteractiveShellCommand: vi.fn(),
+		});
+
+		const response = await api.startTaskSession(
+			{ workspaceId: "workspace-1", workspacePath: "/tmp/repo" },
+			{ taskId: "task-1", baseRef: "fork/stack", prompt: "Fix it" },
+		);
+
+		expect(response.ok).toBe(true);
+		expect(guardrailMocks.resolveTaskGuardrails).toHaveBeenCalledWith(
+			expect.objectContaining({
+				taskId: "task-1",
+				workspaceId: "workspace-1",
+				worktreePath: "/tmp/existing-worktree",
+				projectPath: "/tmp/repo",
+				baseRef: "fork/stack",
+			}),
+		);
+		expect(terminalManager.startTaskSession).toHaveBeenCalledWith(expect.objectContaining({ guardrails }));
 	});
 
 	it("launches Cline cards as a terminal agent with the card's provider and model", async () => {

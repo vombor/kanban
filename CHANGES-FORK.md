@@ -376,3 +376,18 @@ of this repository is the complete record of changes.
   to Review for ~100 ms, and a background shell can start a new turn ~6 s after the final stop, so QA snapshotted
   half-done work and auto-review typed into a working agent. Session summaries carry `stateChangedAt`; the
   pipeline worker host sends a snapshot once a Review has settled. The column move itself is unchanged.
+- `src/guardrails/` (new), `src/terminal/agent-guardrails.ts`, `src/terminal/cline-guard.ts` (new),
+  `src/terminal/agent-session-adapters.ts`, `src/terminal/session-manager.ts`, `src/trpc/runtime-api.ts`,
+  `src/config/pipeline-config.ts`, `src/commands/hooks.ts`, `src/workspace/task-worktree.ts`,
+  `src/doctor/guardrail-checks.ts` (new), `src/doctor/run-doctor.ts`, `src/doctor/doctor-report.ts`, tests: task-card
+  guardrails. A core `guardrails` section (on by default; per workspace `workspaces.<id>.guardrails`) lists commands
+  task-card agents must never run (any `git push`, `filter-branch`/`filter-repo`, `update-ref`/`branch -D|-f|-m`/
+  `switch -C`/`checkout -B` on a shared branch, podman/docker/systemctl restart/stop/rm, `kanban home migrate`;
+  card-local rebases and resets stay allowed) and keeps their writes in their worktree. Each adapter applies it with
+  its CLI's own mechanism: Claude Code `permissions.deny` in a per-card `--settings` file; Codex `forbidden` execpolicy
+  rules in `<worktree>/.codex/rules/` (they hold under `--dangerously-bypass-approvals-and-sandbox`) and the
+  `workspace-write` sandbox where Codex's sandbox runs on the host; Cline a `kanban hooks cline-guard` step in
+  Kanban's PreToolUse hook (`cancel`); Copilot `--deny-tool` `shell(...)` and `write(<dir>/**)` (it keeps
+  `--allow-all-paths`, which autopilot needs). What a CLI can't enforce goes into a short launch prompt note.
+  `kanban doctor` shows a row per installed agent. The orchestrator (home-agent sidebar session, headless wakes) is
+  exempt.

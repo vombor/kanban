@@ -5,7 +5,7 @@
 
 import { rm } from "node:fs/promises";
 import { TRPCError } from "@trpc/server";
-import { getWorkspacePipelineSettings, readPipelineConfig } from "../config/pipeline-config";
+import { getWorkspacePipelineSettings, parsePipelineConfig, readPipelineConfig } from "../config/pipeline-config";
 import type { RuntimeConfigState } from "../config/runtime-config";
 import { updateGlobalRuntimeConfig, updateRuntimeConfig } from "../config/runtime-config";
 import type {
@@ -23,6 +23,7 @@ import {
 	parseTaskSessionStopRequest,
 } from "../core/api-validation";
 import { isHomeAgentSessionId } from "../core/home-agent-session";
+import { resolveTaskGuardrails } from "../guardrails/task-guardrails";
 import { openInBrowser } from "../server/browser";
 import { getDebugResetTargetPaths } from "../state/kanban-home";
 import { buildRuntimeConfigResponse, resolveAgentCommand } from "../terminal/agent-registry";
@@ -169,6 +170,18 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 						error: "No runnable agent command is configured. Open Settings, install a supported CLI, and select it.",
 					};
 				}
+				// Card sessions only: the orchestrator (home-agent session) works across the project's worktrees.
+				const guardrails = isHomeAgentSessionId(body.taskId)
+					? null
+					: await resolveTaskGuardrails({
+							// An unreadable config.json keeps the default guardrails (on), never none.
+							config: (await readPipelineConfig().catch(() => parsePipelineConfig({}))).config,
+							taskId: body.taskId,
+							workspaceId: workspaceScope.workspaceId,
+							worktreePath: taskCwd,
+							projectPath: workspaceScope.workspacePath,
+							baseRef: body.baseRef,
+						});
 				const summary = await terminalManager.startTaskSession({
 					taskId: body.taskId,
 					agentId: resolved.agentId,
@@ -184,6 +197,7 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 					rows: body.rows,
 					workspaceId: workspaceScope.workspaceId,
 					agentSettings: body.agentSettings,
+					guardrails,
 				});
 
 				let nextSummary = summary;

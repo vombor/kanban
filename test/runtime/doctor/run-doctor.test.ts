@@ -30,7 +30,14 @@ function writeJson(path: string, value: unknown): void {
 	writeFileSync(path, JSON.stringify(value));
 }
 
-const DOCTOR = { fix: false, deep: false, origin: "http://127.0.0.1:3485", kanbanVersion: "0.0.0-test" };
+const DOCTOR = {
+	fix: false,
+	deep: false,
+	origin: "http://127.0.0.1:3485",
+	kanbanVersion: "0.0.0-test",
+	// No agent binaries or sandbox probes from the test machine.
+	guardrailDeps: { isInstalled: () => false, sandboxAvailable: async () => null },
+};
 
 function find(findings: DoctorFinding[], area: DoctorFinding["area"], text: string): DoctorFinding | undefined {
 	return findings.find((finding) => finding.area === area && finding.message.includes(text));

@@ -62,6 +62,16 @@ export const workspacePipelineSettingsSchema = z
 			.strict()
 			.default({ enabled: true }),
 		kit: workspaceKitRefSchema.nullable().default(null),
+		// Task-card guardrails (src/guardrails/): null keeps the machine-wide `guardrails.enabled`. The lists are
+		// added to the machine-wide ones, so a workspace can only tighten them.
+		guardrails: z
+			.object({
+				enabled: z.boolean().nullable().default(null),
+				extraDenyCommands: z.array(z.string().min(1)).default([]),
+				extraWritableDirs: z.array(z.string().min(1)).default([]),
+			})
+			.strict()
+			.default({ enabled: null, extraDenyCommands: [], extraWritableDirs: [] }),
 	})
 	.strict();
 export type WorkspacePipelineSettings = z.infer<typeof workspacePipelineSettingsSchema>;
@@ -357,6 +367,45 @@ export function migrateLegacyConfigKeys(config: Record<string, unknown>): {
 	return { config: { ...config, sessionSync: { enabled: config.sessionSync } }, migrated: ["sessionSync"] };
 }
 
+/**
+ * The commands a task card's agent must never run (src/guardrails/command-patterns.ts has the syntax): words match
+ * the command's own words from the start, `a|b` is either word, `{shared}` is any shared branch (`guardrails.sharedBranches`
+ * plus the card's base branch, also as `refs/heads/<name>`). Card-local rebases and resets stay allowed: a card's
+ * worktree is on its own branch, and git refuses to check out a branch another worktree has.
+ */
+export const DEFAULT_GUARDRAIL_DENY_COMMANDS = [
+	"git push",
+	"git filter-branch",
+	"git filter-repo",
+	"git update-ref {shared}",
+	"git update-ref -d {shared}",
+	"git branch -D|-d|--delete|-f|--force|-m|-M {shared}",
+	"git switch -C|--force-create {shared}",
+	"git checkout -B {shared}",
+	"podman restart|stop|rm|kill",
+	"docker restart|stop|rm|kill",
+	"systemctl restart|stop|kill",
+	"systemctl --user restart|stop|kill",
+	"kanban home migrate",
+] as const;
+const DEFAULT_GUARDRAIL_SHARED_BRANCHES = ["main", "master"] as const;
+
+// Hard limits for task-card agents, translated by each agent adapter into its CLI's own deny mechanism
+// (src/terminal/agent-guardrails.ts). The orchestrator (the home-agent sidebar session, its headless wakes) is
+// exempt by design: it works in the project and all of its worktrees.
+const guardrailsSectionSchema = z
+	.object({
+		enabled: z.boolean().default(true),
+		// Keep card writes inside the card's worktree (plus temp dirs, its git dir and the agent's own data) where
+		// the agent's CLI can enforce it.
+		confineWrites: z.boolean().default(true),
+		extraWritableDirs: z.array(z.string().min(1)).default([]),
+		sharedBranches: z.array(z.string().min(1)).default(() => [...DEFAULT_GUARDRAIL_SHARED_BRANCHES]),
+		denyCommands: z.array(z.string().min(1)).default(() => [...DEFAULT_GUARDRAIL_DENY_COMMANDS]),
+	})
+	.strict();
+export type GuardrailsSettings = z.infer<typeof guardrailsSectionSchema>;
+
 const SECTION_SCHEMAS = {
 	sessionSync: sessionSyncSectionSchema,
 	pipeline: pipelineSectionSchema,
@@ -365,6 +414,7 @@ const SECTION_SCHEMAS = {
 	models: modelsSectionSchema,
 	agents: agentsSectionSchema,
 	backups: backupsSectionSchema,
+	guardrails: guardrailsSectionSchema,
 } as const;
 
 type SectionName = keyof typeof SECTION_SCHEMAS;

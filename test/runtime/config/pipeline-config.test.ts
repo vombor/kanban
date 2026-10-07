@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+	DEFAULT_GUARDRAIL_DENY_COMMANDS,
 	getWorkspacePipelineSettings,
 	migrateLegacyConfigKeys,
 	parsePipelineConfig,
@@ -25,6 +26,49 @@ describe("pipeline config", () => {
 		expect(config.models.providers.default).toBe("bedrock");
 		expect(config.models.providerCapacity).toEqual({ lemonade: { maxLoadedModels: 1 } });
 		expect(config.workspaces).toEqual({});
+	});
+
+	it("has task-card guardrails on by default with the documented deny list", () => {
+		const { config, issues } = parsePipelineConfig({});
+		expect(issues).toEqual([]);
+		expect(config.guardrails).toEqual({
+			enabled: true,
+			confineWrites: true,
+			extraWritableDirs: [],
+			sharedBranches: ["main", "master"],
+			denyCommands: [...DEFAULT_GUARDRAIL_DENY_COMMANDS],
+		});
+		expect(config.guardrails.denyCommands).toEqual(
+			expect.arrayContaining(["git push", "git filter-branch", "git update-ref {shared}", "kanban home migrate"]),
+		);
+		// Card-local rebases and resets are allowed: no plain rebase/reset rule.
+		expect(config.guardrails.denyCommands.some((pattern) => /^git (rebase|reset)\b/u.test(pattern))).toBe(false);
+		expect(getWorkspacePipelineSettings(config, "any").guardrails).toEqual({
+			enabled: null,
+			extraDenyCommands: [],
+			extraWritableDirs: [],
+		});
+	});
+
+	it("reads guardrail settings and per-workspace overrides, and falls back to the defaults on a bad section", () => {
+		const { config, issues } = parsePipelineConfig({
+			guardrails: { confineWrites: false, denyCommands: ["git push"], sharedBranches: ["trunk"] },
+			workspaces: { ws: { guardrails: { enabled: false, extraDenyCommands: ["npm publish"] } } },
+		});
+		expect(issues).toEqual([]);
+		expect(config.guardrails).toMatchObject({
+			confineWrites: false,
+			denyCommands: ["git push"],
+			sharedBranches: ["trunk"],
+		});
+		expect(config.workspaces.ws?.guardrails).toEqual({
+			enabled: false,
+			extraDenyCommands: ["npm publish"],
+			extraWritableDirs: [],
+		});
+		const bad = parsePipelineConfig({ guardrails: { enabled: "yes" } });
+		expect(bad.issues.some((issue) => issue.startsWith("guardrails:"))).toBe(true);
+		expect(bad.config.guardrails.enabled).toBe(true);
 	});
 
 	it("falls back to report-only recovery for an unknown mode", () => {
