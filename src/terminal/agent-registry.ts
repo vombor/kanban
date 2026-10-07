@@ -49,7 +49,7 @@ function parseBooleanEnvValue(value: string | undefined): boolean {
 	return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
-function isRuntimeDebugModeEnabled(): boolean {
+export function isRuntimeDebugModeEnabled(): boolean {
 	const debugModeValue = process.env.KANBAN_DEBUG_MODE ?? process.env.DEBUG_MODE ?? process.env.debug_mode;
 	return parseBooleanEnvValue(debugModeValue);
 }

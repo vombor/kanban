@@ -15,6 +15,8 @@ import {
 	removeWorkspaceIndexEntry,
 	removeWorkspaceStateFiles,
 } from "../state/workspace-state";
+import { ensureClaudeWorkspaceTrusted } from "../terminal/claude-workspace-trust";
+import { ensureCodexWorkspaceTrusted } from "../terminal/codex-workspace-trust";
 import { TerminalSessionManager } from "../terminal/session-manager";
 
 export interface WorkspaceRegistryScope {
@@ -183,6 +185,12 @@ function toProjectSummary(project: {
 	};
 }
 
+// Claude Code and Codex trust a worktree through its main repo, so trusting the project once when the
+// runtime first sees it keeps task sessions off the folder trust dialog. Agent launches repeat it.
+async function trustWorkspaceForTerminalAgents(repoPath: string): Promise<void> {
+	await Promise.all([ensureClaudeWorkspaceTrusted(repoPath), ensureCodexWorkspaceTrusted(repoPath)]);
+}
+
 export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDependencies): Promise<WorkspaceRegistry> {
 	const launchedFromGitRepo = deps.hasGitRepository(deps.cwd);
 	const initialWorkspace = launchedFromGitRepo ? await loadWorkspaceContext(deps.cwd) : null;
@@ -205,9 +213,19 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 	const terminalManagersByWorkspaceId = new Map<string, TerminalSessionManager>();
 	const terminalManagerLoadPromises = new Map<string, Promise<TerminalSessionManager>>();
 
+	const trustedWorkspacePaths = new Set<string>();
 	const rememberWorkspace = (workspaceId: string, repoPath: string): void => {
 		workspacePathsById.set(workspaceId, repoPath);
+		if (!trustedWorkspacePaths.has(repoPath)) {
+			trustedWorkspacePaths.add(repoPath);
+			void trustWorkspaceForTerminalAgents(repoPath).catch(() => {
+				// Best effort: the agent launch pre-trusts again.
+			});
+		}
 	};
+	if (activeWorkspaceId && activeWorkspacePath) {
+		rememberWorkspace(activeWorkspaceId, activeWorkspacePath);
+	}
 
 	const notifyTerminalManagerReady = (workspaceId: string, manager: TerminalSessionManager): void => {
 		deps.onTerminalManagerReady?.(workspaceId, manager);

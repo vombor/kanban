@@ -17,7 +17,10 @@ import { lockedFileSystem } from "../fs/locked-file-system";
 import { resolveHomeAgentAppendSystemPrompt } from "../prompts/append-system-prompt";
 import { getRuntimeHomePath } from "../state/workspace-state";
 import { getGitStdout } from "../workspace/git-utils";
+import { isRuntimeDebugModeEnabled } from "./agent-registry";
+import { ensureClaudeWorkspaceTrusted } from "./claude-workspace-trust";
 import { configureCodexHooks, hasCodexConfigOverride } from "./codex-hook-config";
+import { ensureCodexWorkspaceTrusted } from "./codex-workspace-trust";
 import { createHookRuntimeEnv } from "./hook-runtime-context";
 import {
 	getOpenCodeAuthPathCandidates,
@@ -27,6 +30,7 @@ import {
 import { stripAnsi } from "./output-utils";
 import type { SessionTransitionEvent } from "./session-state-machine";
 import { prepareTaskPromptWithImages } from "./task-image-prompt";
+import type { AgentWorkspaceTrustResult } from "./workspace-trust-root";
 
 export interface AgentAdapterLaunchInput {
 	taskId: string;
@@ -671,8 +675,19 @@ function toBracketedPasteSubmission(command: string): string {
 	return `\u001b[200~${command}\u001b[201~\r`;
 }
 
+function logWorkspacePreTrustError(agentId: "claude" | "codex", result: AgentWorkspaceTrustResult): void {
+	if (result.error && isRuntimeDebugModeEnabled()) {
+		process.stderr.write(
+			`[kanban] ${agentId} workspace pre-trust skipped for ${result.trustRootPath}: ${result.error}\n`,
+		);
+	}
+}
+
 const claudeAdapter: AgentSessionAdapter = {
 	async prepare(input) {
+		// Pre-trust the main repo so Claude Code skips its folder trust dialog (best effort; the
+		// session manager still answers the dialog if it shows).
+		logWorkspacePreTrustError("claude", await ensureClaudeWorkspaceTrusted(input.cwd));
 		const args = [...input.args];
 		const env: Record<string, string | undefined> = {
 			FORCE_HYPERLINK: "1",
@@ -808,6 +823,7 @@ function shouldInspectCodexOutputForTransition(summary: RuntimeTaskSessionSummar
 
 const codexAdapter: AgentSessionAdapter = {
 	async prepare(input) {
+		logWorkspacePreTrustError("codex", await ensureCodexWorkspaceTrusted(input.cwd));
 		const codexArgs = [...input.args];
 		const env: Record<string, string | undefined> = {};
 		const binary = input.binary;

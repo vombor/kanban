@@ -17,6 +17,9 @@ import {
 	prepareAgentLaunch,
 } from "./agent-session-adapters";
 import {
+	CLAUDE_WORKSPACE_TRUST_KEY_DELAY_MS,
+	CLAUDE_WORKSPACE_TRUST_MAX_NAVIGATION_KEYS,
+	getClaudeWorkspaceTrustConfirmInput,
 	hasClaudeWorkspaceTrustPrompt,
 	shouldAutoConfirmClaudeWorkspaceTrust,
 	stopWorkspaceTrustTimers,
@@ -61,6 +64,7 @@ interface ActiveProcessState {
 	shouldInspectOutputForTransition: AgentOutputTransitionInspectionPredicate | null;
 	awaitingCodexPromptAfterEnter: boolean;
 	autoConfirmedWorkspaceTrust: boolean;
+	workspaceTrustNavigationKeys: number;
 	workspaceTrustConfirmTimer: NodeJS.Timeout | null;
 }
 
@@ -232,6 +236,36 @@ export class TerminalSessionManager implements TerminalSessionService {
 		return true;
 	}
 
+	// Fallback for a Claude Code trust dialog that pre-trust did not prevent. One key per render, read from
+	// the dialog's pointer: arrow down off "No, exit", then Enter on "Yes, I trust this folder".
+	private scheduleClaudeWorkspaceTrustKey(taskId: string, active: ActiveProcessState): void {
+		active.workspaceTrustConfirmTimer = setTimeout(() => {
+			active.workspaceTrustConfirmTimer = null;
+			if (this.entries.get(taskId)?.active !== active || active.autoConfirmedWorkspaceTrust) {
+				return;
+			}
+			const input =
+				active.workspaceTrustBuffer === null
+					? null
+					: getClaudeWorkspaceTrustConfirmInput(active.workspaceTrustBuffer);
+			if (input === "\r") {
+				active.autoConfirmedWorkspaceTrust = true;
+				active.session.write(input);
+				// Trust text can remain in the rolling buffer after we auto-confirm.
+				// Clear it so later startup/prompt checks do not match stale trust output.
+				active.workspaceTrustBuffer = "";
+				return;
+			}
+			if (input === null || active.workspaceTrustNavigationKeys >= CLAUDE_WORKSPACE_TRUST_MAX_NAVIGATION_KEYS) {
+				// Never type into a dialog whose focus we cannot read: its default is "No, exit".
+				active.autoConfirmedWorkspaceTrust = true;
+				return;
+			}
+			active.workspaceTrustNavigationKeys += 1;
+			active.session.write(input);
+		}, CLAUDE_WORKSPACE_TRUST_KEY_DELAY_MS);
+	}
+
 	private hasLiveOutputListener(entry: SessionEntry): boolean {
 		for (const listener of entry.listeners.values()) {
 			if (listener.onOutput) {
@@ -394,9 +428,9 @@ export class TerminalSessionManager implements TerminalSessionService {
 							);
 						}
 						if (!entry.active.autoConfirmedWorkspaceTrust && entry.active.workspaceTrustConfirmTimer === null) {
-							const hasClaudePrompt = hasClaudeWorkspaceTrustPrompt(entry.active.workspaceTrustBuffer);
-							const hasCodexPrompt = hasCodexWorkspaceTrustPrompt(entry.active.workspaceTrustBuffer);
-							if (hasClaudePrompt || hasCodexPrompt) {
+							if (hasClaudeWorkspaceTrustPrompt(entry.active.workspaceTrustBuffer)) {
+								this.scheduleClaudeWorkspaceTrustKey(request.taskId, entry.active);
+							} else if (hasCodexWorkspaceTrustPrompt(entry.active.workspaceTrustBuffer)) {
 								entry.active.autoConfirmedWorkspaceTrust = true;
 								const trustConfirmDelayMs = WORKSPACE_TRUST_CONFIRM_DELAY_MS;
 								entry.active.workspaceTrustConfirmTimer = setTimeout(() => {
@@ -536,6 +570,7 @@ export class TerminalSessionManager implements TerminalSessionService {
 			shouldInspectOutputForTransition: launch.shouldInspectOutputForTransition ?? null,
 			awaitingCodexPromptAfterEnter: false,
 			autoConfirmedWorkspaceTrust: false,
+			workspaceTrustNavigationKeys: 0,
 			workspaceTrustConfirmTimer: null,
 		};
 		entry.active = active;
@@ -700,6 +735,7 @@ export class TerminalSessionManager implements TerminalSessionService {
 			shouldInspectOutputForTransition: null,
 			awaitingCodexPromptAfterEnter: false,
 			autoConfirmedWorkspaceTrust: false,
+			workspaceTrustNavigationKeys: 0,
 			workspaceTrustConfirmTimer: null,
 		};
 		entry.active = active;
