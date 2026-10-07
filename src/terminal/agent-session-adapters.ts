@@ -21,6 +21,7 @@ import {
 	listMatcherDeniedCommands,
 	type TaskGuardrails,
 } from "../guardrails/task-guardrails";
+import { buildIsolationPromptNote } from "../isolation/isolation-paths";
 import { resolveHomeAgentAppendSystemPrompt } from "../prompts/append-system-prompt";
 import { CLINE_RULE_FILES } from "../prompts/cline-rules";
 import { getClineDataPath } from "../state/kanban-home";
@@ -32,11 +33,13 @@ import {
 	buildCodexRulesFile,
 	buildCopilotDenyTools,
 	buildCopilotWriteDenyTools,
+	buildIsolationGuardPolicy,
 	type ClineGuardPolicy,
 	CODEX_GUARDRAIL_RULES_MARKER,
 	CODEX_GUARDRAIL_RULES_RELATIVE_PATH,
 	type CommandGuardPolicy,
 	describeAgentGuardrails,
+	describeAgentIsolation,
 	listCodexWritableDirs,
 	probeCodexSandbox,
 	usesKanbanCommandMatcher,
@@ -189,9 +192,21 @@ function buildHooksCommand(args: string[]): string {
 	return buildHooksCommandParts(args).map(quoteShellArg).join(" ");
 }
 
-/** The launch's guardrails when it is a task card's session; the orchestrator (home-agent session) never gets any. */
-function getCardGuardrails(input: AgentAdapterLaunchInput): TaskGuardrails | null {
-	return input.guardrails && !isHomeAgentSessionId(input.taskId) ? input.guardrails : null;
+/**
+ * The launch's guardrails: a task card's, or the orchestrator's isolation-only ones (role `orchestrator`, project
+ * isolation `enforce`). A home-agent session never gets a card's guardrails.
+ */
+function getSessionGuardrails(input: AgentAdapterLaunchInput): TaskGuardrails | null {
+	const guardrails = input.guardrails ?? null;
+	if (!guardrails) {
+		return null;
+	}
+	return isHomeAgentSessionId(input.taskId) === (guardrails.role === "orchestrator") ? guardrails : null;
+}
+
+/** The orchestrator's appended system prompt, with the isolation section under `enforce`; null for a card. */
+function resolveSessionSystemPrompt(input: AgentAdapterLaunchInput): string | null {
+	return resolveHomeAgentAppendSystemPrompt(input.taskId, {}, { isolation: input.guardrails?.isolation ?? null });
 }
 
 function hasCliOption(args: string[], optionName: string): boolean {
@@ -253,6 +268,7 @@ function buildClineGuardCommandParts(guardrails: TaskGuardrails): string[] {
 		confineWrites: guardrails.confineWrites,
 		writableRoots: [...listGuardrailWritableRoots(guardrails), getClineDataPath()],
 		deniedCommands: listMatcherDeniedCommands(guardrails),
+		...buildIsolationGuardPolicy(guardrails),
 	};
 	return buildHooksCommandParts(["cline-guard", "--policy-base64", encodeGuardPolicy(policy)]);
 }
@@ -817,7 +833,7 @@ const claudeAdapter: AgentSessionAdapter = {
 		const env: Record<string, string | undefined> = {
 			FORCE_HYPERLINK: "1",
 		};
-		const appendedSystemPrompt = resolveHomeAgentAppendSystemPrompt(input.taskId);
+		const appendedSystemPrompt = resolveSessionSystemPrompt(input);
 		if (input.autonomousModeEnabled) {
 			// Auto mode is gated behind this env var on Bedrock/Vertex/Foundry; the Anthropic API ignores it.
 			env.CLAUDE_CODE_ENABLE_AUTO_MODE = "1";
@@ -841,26 +857,29 @@ const claudeAdapter: AgentSessionAdapter = {
 		}
 
 		const hooks = resolveHookContext(input);
-		const guardrails = getCardGuardrails(input);
+		const guardrails = getSessionGuardrails(input);
 		if (hooks || guardrails) {
-			// A card with guardrails gets its own file: the shared one is also the orchestrator's.
+			// A session with guardrails gets its own file: the shared one is every unguarded session's.
 			const settingsPath = guardrails
 				? getClaudeCardSettingsPath(input.taskId)
 				: join(getHookAgentDirectory("claude"), "settings.json");
 			// Kanban's matcher on every Bash call (agent-guardrails.ts): the deny rules only match the command as written.
-			const guardHook = guardrails && {
-				matcher: "Bash",
-				hooks: [
-					{
-						type: "command",
-						command: buildHooksCommand([
-							"claude-guard",
-							"--policy-base64",
-							encodeGuardPolicy({ deniedCommands: listMatcherDeniedCommands(guardrails) }),
-						]),
-					},
-				],
+			const guardPolicy: CommandGuardPolicy | null = guardrails && {
+				deniedCommands: listMatcherDeniedCommands(guardrails),
+				...buildIsolationGuardPolicy(guardrails),
 			};
+			const guardHook = guardPolicy &&
+				(guardPolicy.deniedCommands.length > 0 ||
+					(guardPolicy.deniedPathRoots ?? []).length > 0 ||
+					(guardPolicy.protectedWriteRoots ?? []).length > 0) && {
+					matcher: "Bash",
+					hooks: [
+						{
+							type: "command",
+							command: buildHooksCommand(["claude-guard", "--policy-base64", encodeGuardPolicy(guardPolicy)]),
+						},
+					],
+				};
 			const claudeHooks = hooks && {
 				Stop: [{ hooks: [{ type: "command", command: buildHookCommand("to_review", { source: "claude" }) }] }],
 				SubagentStop: [
@@ -1002,14 +1021,14 @@ const codexAdapter: AgentSessionAdapter = {
 		const env: Record<string, string | undefined> = {};
 		const binary = input.binary;
 		let deferredStartupInput: string | undefined;
-		const appendedSystemPrompt = resolveHomeAgentAppendSystemPrompt(input.taskId);
+		const appendedSystemPrompt = resolveSessionSystemPrompt(input);
 
 		if (!hasCodexConfigOverride(codexArgs, "check_for_update_on_startup")) {
 			codexArgs.push("-c", "check_for_update_on_startup=false");
 		}
 
-		const guardrails = getCardGuardrails(input);
-		if (guardrails) {
+		const guardrails = getSessionGuardrails(input);
+		if (guardrails && guardrails.role === "card") {
 			// Forbidden prefix rules hold even with --dangerously-bypass-approvals-and-sandbox (agent-guardrails.ts).
 			await ensureTextFile(
 				join(input.cwd, ...CODEX_GUARDRAIL_RULES_RELATIVE_PATH.split("/")),
@@ -1017,7 +1036,8 @@ const codexAdapter: AgentSessionAdapter = {
 			);
 			await addToWorktreeGitExclude(input.cwd, `/${CODEX_GUARDRAIL_RULES_RELATIVE_PATH}`);
 		} else {
-			// Guardrails off (or the orchestrator): a rules file an earlier launch wrote would still forbid commands.
+			// Guardrails off (or the orchestrator, which has no command denies): a rules file an earlier launch wrote
+			// would still forbid commands.
 			await removeKanbanManagedFile(
 				join(input.cwd, ...CODEX_GUARDRAIL_RULES_RELATIVE_PATH.split("/")),
 				CODEX_GUARDRAIL_RULES_MARKER,
@@ -1550,7 +1570,7 @@ const droidAdapter: AgentSessionAdapter = {
 			}
 		}
 
-		const appendedSystemPrompt = resolveHomeAgentAppendSystemPrompt(input.taskId);
+		const appendedSystemPrompt = resolveSessionSystemPrompt(input);
 		if (
 			appendedSystemPrompt &&
 			!hasCliOption(args, "--append-system-prompt") &&
@@ -1590,7 +1610,7 @@ const kiroAdapter: AgentSessionAdapter = {
 		}
 
 		const hooks = resolveHookContext(input);
-		const appendedSystemPrompt = resolveHomeAgentAppendSystemPrompt(input.taskId);
+		const appendedSystemPrompt = resolveSessionSystemPrompt(input);
 		if (hooks || appendedSystemPrompt) {
 			const configPath = getKiroAgentConfigPath();
 			const config: Record<string, unknown> = {
@@ -1747,7 +1767,7 @@ const clineCliAdapter: AgentSessionAdapter = {
 		// with the original prompt instead of resuming.
 
 		const hooks = resolveHookContext(input);
-		const guardrails = getCardGuardrails(input);
+		const guardrails = getSessionGuardrails(input);
 		const guardCommand = guardrails ? buildClineGuardCommandParts(guardrails) : undefined;
 		if (hooks || guardCommand) {
 			const hooksDir = join(input.cwd, ".cline", "hooks");
@@ -1803,7 +1823,7 @@ const clineCliAdapter: AgentSessionAdapter = {
 			sessionWarning = sessionWarning ? `${sessionWarning} ${ruleWarning}` : ruleWarning;
 		}
 
-		const appendedSystemPrompt = resolveHomeAgentAppendSystemPrompt(input.taskId);
+		const appendedSystemPrompt = resolveSessionSystemPrompt(input);
 		if (appendedSystemPrompt) {
 			// `-s/--system` would replace Cline's system prompt entirely; a project
 			// rules file appends instead and is auto-loaded from `.cline/rules/`.
@@ -2144,7 +2164,7 @@ const copilotAdapter: AgentSessionAdapter = {
 		const env: Record<string, string | undefined> = {};
 		let sessionWarning: string | undefined;
 		const allowFlags = ["--allow-all", "--allow-all-tools", "--allow-all-paths", "--allow-all-urls", "--yolo"];
-		const guardrails = getCardGuardrails(input);
+		const guardrails = getSessionGuardrails(input);
 
 		if (input.startInPlanMode) {
 			// Plan mode must not inherit approval-bypass flags.
@@ -2295,25 +2315,43 @@ export function getAgentTurnEndSource(agentId: RuntimeAgentId | null): AgentTurn
 	return (agentId ? ADAPTERS[agentId].turnEndSource : undefined) ?? null;
 }
 
-/** The launch prompt plus the guardrail note, when the agent's CLI leaves some of the card's guardrails unenforced. */
+/**
+ * The launch prompt plus the guardrail note, when the agent's CLI leaves some of the card's guardrails unenforced,
+ * and the isolation note under project isolation `enforce` (it says what the CLI doesn't block).
+ */
 async function withGuardrailPromptNote(input: AgentAdapterLaunchInput, prompt: string): Promise<string> {
-	const guardrails = getCardGuardrails(input);
+	const guardrails = getSessionGuardrails(input);
 	if (!guardrails || !prompt.trim()) {
 		return prompt;
 	}
+	// Isolation-only guardrails (the orchestrator's, or a card's with guardrails off) have no card rules to state.
+	const hasCardRules =
+		guardrails.role === "card" && (guardrails.deniedCommands.length > 0 || guardrails.confineWrites);
+	const cardNote = hasCardRules ? await buildCardGuardrailNote(input, guardrails) : null;
+	const isolationNote = guardrails.isolation
+		? buildIsolationPromptNote(guardrails.isolation, describeAgentIsolation(input.agentId).unenforced)
+		: null;
+	const notes = [cardNote, isolationNote].filter((note): note is string => Boolean(note));
+	return notes.length > 0 ? `${prompt.trimEnd()}\n\n${notes.join("\n\n")}` : prompt;
+}
+
+async function buildCardGuardrailNote(
+	input: AgentAdapterLaunchInput,
+	guardrails: TaskGuardrails,
+): Promise<string | null> {
 	const report = describeAgentGuardrails(input.agentId, {
 		deniedCommands: guardrails.deniedCommands,
 		confineWrites: guardrails.confineWrites,
 		codexSandbox: ADAPTERS[input.agentId] === codexAdapter ? await shouldConfineCodexWrites(input, guardrails) : null,
 	});
 	if (report.unenforced.length === 0) {
-		return prompt;
+		return null;
 	}
 	// Agents whose guard runs Kanban's matcher let a PR card push its own branch; the others keep the push deny.
 	const rules = usesKanbanCommandMatcher(input.agentId)
 		? listMatcherDeniedCommands(guardrails)
 		: guardrails.deniedCommands;
-	return `${prompt.trimEnd()}\n\n${buildGuardrailPromptNote(guardrails, report.unenforced, rules)}`;
+	return buildGuardrailPromptNote(guardrails, report.unenforced, rules);
 }
 
 export async function prepareAgentLaunch(input: AgentAdapterLaunchInput): Promise<PreparedAgentLaunch> {

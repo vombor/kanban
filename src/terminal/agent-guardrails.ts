@@ -30,6 +30,21 @@
 //   (0aa75) opens that dialog, which hangs the card. So Copilot keeps --allow-all-paths and denies writes into the
 //   main checkout and the project's other worktrees.
 // - Gemini, OpenCode, Droid, Kiro: not installed here, so nothing was verified against their CLI: prompt only.
+//
+// Project isolation (`isolation.mode` `enforce`, src/isolation/) adds, checked against the same CLIs on 2026-10-07:
+// - Claude Code: `Read(//<dir>/**)` and `Edit(//<dir>/**)` deny rules on the other projects (Read covers the Read,
+//   Grep and Glob tools and the Bash file commands Claude Code recognizes), `Edit` on the machine-wide config, and
+//   the Bash guard hook refuses a command that names a denied path (absolute, `~/` or `../` words).
+// - Cline CLI: the PreToolUse guard cancels `read_files` (its `files[].path`, a bare string or `file_path`) and
+//   `editor`/`apply_patch` into a denied dir, and `run_commands` naming a denied path. `search_codebase` takes
+//   only queries and searches the cwd. Cline 3.x runs every card's tools in one hub daemon with the first card's env,
+//   so the session credential there is the first card's: the server tells them apart by the caller's cwd.
+// - Copilot CLI: `--deny-tool write(<dir>/**)` on the other projects and the machine-wide config (file tools). There
+//   is no read kind (`copilot help permissions`: shell, write, url, MCP), and confining paths would drop
+//   --allow-all-paths and hang autopilot: reads are prompt only.
+// - Codex: no path rules (execpolicy matches argv prefixes, the sandbox can't run in the pod and never limits
+//   reads): prompt only. Its shell tool drops env vars matching *KEY*, *SECRET*, *TOKEN* by default
+//   (shell_environment_policy), which the session credential's name avoids.
 import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
@@ -38,6 +53,7 @@ import { join } from "node:path";
 import type { RuntimeAgentId } from "../core/api-contract";
 import { type DeniedCommandRule, expandSlots } from "../guardrails/command-patterns";
 import { isPathInside, listMatcherDeniedCommands, type TaskGuardrails } from "../guardrails/task-guardrails";
+import { listIsolationReadDenied, listIsolationWriteDenied } from "../isolation/isolation-paths";
 
 export type GuardrailEnforcement = "native" | "partial" | "prompt" | "none";
 
@@ -64,6 +80,19 @@ export interface AgentGuardrailContext {
  */
 export function usesKanbanCommandMatcher(agentId: RuntimeAgentId): boolean {
 	return agentId === "claude" || agentId === "cline";
+}
+
+/**
+ * Whether the agent runs every session's tools in one shared process with one env (Cline 3.x's hub daemon), so a
+ * session credential in the env can be another session's (src/isolation/isolation-service.ts uses the caller's cwd).
+ */
+export function sharesProcessEnvAcrossSessions(agentId: RuntimeAgentId): boolean {
+	return agentId === "cline";
+}
+
+/** Whether a command line is the agent's shared daemon (Cline's hub daemon runs with `--cline-hub-daemon`). */
+export function isSharedAgentDaemonCommand(agentId: RuntimeAgentId, command: string): boolean {
+	return agentId === "cline" && command.includes("--cline-hub-daemon");
 }
 
 // ---------------------------------------------------------------------------
@@ -103,7 +132,14 @@ export function buildCopilotDenyTools(rules: readonly DeniedCommandRule[]): {
 
 /** `write(<dir>/**)` denies for the main checkout and the project's other worktrees (file tools only). */
 export function buildCopilotWriteDenyTools(guardrails: TaskGuardrails): string[] {
-	return guardrails.confineWrites ? guardrails.protectedDirs.map((dir) => `write(${dir}/**)`) : [];
+	const denies = guardrails.confineWrites ? guardrails.protectedDirs.map((dir) => `write(${dir}/**)`) : [];
+	if (guardrails.isolation) {
+		// A path may be a file or a dir: deny both forms.
+		for (const path of listIsolationWriteDenied(guardrails.isolation)) {
+			denies.push(`write(${path})`, `write(${path}/**)`);
+		}
+	}
+	return [...new Set(denies)];
 }
 
 // ---------------------------------------------------------------------------
@@ -379,6 +415,14 @@ export function buildClaudePermissionDeny(guardrails: TaskGuardrails): string[] 
 		// `//` is an absolute path from the filesystem root in a permission rule.
 		deny.push(...guardrails.protectedDirs.map((dir) => `Edit(/${dir}/**)`));
 	}
+	if (guardrails.isolation) {
+		for (const path of listIsolationReadDenied(guardrails.isolation)) {
+			deny.push(`Read(/${path})`, `Read(/${path}/**)`);
+		}
+		for (const path of listIsolationWriteDenied(guardrails.isolation)) {
+			deny.push(`Edit(/${path})`, `Edit(/${path}/**)`);
+		}
+	}
 	return [...new Set(deny)];
 }
 
@@ -389,6 +433,12 @@ export function buildClaudePermissionDeny(guardrails: TaskGuardrails): string[] 
 /** What `kanban hooks claude-guard` gets (base64 JSON on its command line). */
 export interface CommandGuardPolicy {
 	deniedCommands: DeniedCommandRule[];
+	/** Project isolation: a command naming a path inside one of these is refused (findDeniedPathInCommand). */
+	deniedPathRoots?: string[];
+	/** Project isolation: a command writing inside one of these (machine-wide config) is refused (findProtectedFileWrite). */
+	protectedWriteRoots?: string[];
+	/** The session's cwd, for relative (`../`) words. */
+	cwd?: string;
 }
 
 /** What `kanban hooks cline-guard` gets (base64 JSON on its command line). */
@@ -396,6 +446,31 @@ export interface ClineGuardPolicy extends CommandGuardPolicy {
 	worktreePath: string;
 	confineWrites: boolean;
 	writableRoots: string[];
+	/** Project isolation: no `read_files` inside these. */
+	deniedReadRoots?: string[];
+	/** Project isolation: no `editor`/`apply_patch` inside these, whatever confineWrites says. */
+	deniedWriteRoots?: string[];
+}
+
+/** The guard hooks' isolation fields of a launch (empty without isolation). */
+export function buildIsolationGuardPolicy(
+	guardrails: TaskGuardrails,
+): Pick<ClineGuardPolicy, "deniedPathRoots" | "deniedReadRoots" | "deniedWriteRoots" | "protectedWriteRoots" | "cwd"> {
+	if (!guardrails.isolation) {
+		return {};
+	}
+	const readDenied = listIsolationReadDenied(guardrails.isolation);
+	const writeDenied = listIsolationWriteDenied(guardrails.isolation);
+	return {
+		cwd: guardrails.worktreePath,
+		// A shell command can't be told reading from writing: commands are checked against the other projects only,
+		// so reading the machine-wide config stays allowed.
+		deniedPathRoots: readDenied,
+		// ...and writes to the machine-wide config (config.json, the agents' config) are checked by command form.
+		protectedWriteRoots: guardrails.isolation.machineConfigPaths,
+		deniedReadRoots: readDenied,
+		deniedWriteRoots: writeDenied,
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -404,6 +479,112 @@ export interface ClineGuardPolicy extends CommandGuardPolicy {
 
 function describeUnenforcedRules(rules: readonly DeniedCommandRule[]): string[] {
 	return rules.length > 0 ? [`commands: ${rules.map((rule) => rule.pattern).join("; ")}`] : [];
+}
+
+export type IsolationEnforcement = "native" | "partial" | "prompt-only";
+
+export interface AgentIsolationReport {
+	/** The session credential reaching the runtime API and the Kanban CLI. */
+	api: { level: GuardrailEnforcement; mechanism: string };
+	reads: { level: GuardrailEnforcement; mechanism: string };
+	writes: { level: GuardrailEnforcement; mechanism: string };
+	/**
+	 * The label for doctor, from reads and writes (the runtime API check is the same for every agent): native (both
+	 * native), prompt-only (nothing but the launch prompt), else partial.
+	 */
+	overall: IsolationEnforcement;
+	/** What the CLI does not block; the launch prompt says so. */
+	unenforced: string[];
+}
+
+function overallIsolation(levels: readonly GuardrailEnforcement[]): IsolationEnforcement {
+	if (levels.every((level) => level === "native")) {
+		return "native";
+	}
+	return levels.every((level) => level === "prompt" || level === "none") ? "prompt-only" : "partial";
+}
+
+/** How the agent's launch enforces project isolation (doctor's rows, the launch prompt's "not blocked" line). */
+export function describeAgentIsolation(agentId: RuntimeAgentId): AgentIsolationReport {
+	// Partial: the credential holds only from its session's process tree (checked through /proc), and a process that
+	// drops it and leaves the tree is the user's for everything but grants (which need the console code).
+	const credential = {
+		level: "partial" as const,
+		mechanism:
+			"per-launch session credential (KANBAN_SESSION_CREDENTIAL), valid only from its session's process tree; a call without it is traced to the session's process tree while some workspace is in enforce",
+	};
+	const build = (
+		api: AgentIsolationReport["api"],
+		reads: AgentIsolationReport["reads"],
+		writes: AgentIsolationReport["writes"],
+		unenforced: string[],
+	): AgentIsolationReport => ({
+		api,
+		reads,
+		writes,
+		overall: overallIsolation([reads.level, writes.level]),
+		unenforced,
+	});
+	switch (agentId) {
+		case "claude":
+			return build(
+				credential,
+				{
+					level: "partial",
+					mechanism:
+						"Read deny rules on the other projects (Read, Grep, Glob and recognized Bash file commands) plus the Bash guard hook on commands that name them",
+				},
+				{
+					level: "partial",
+					mechanism:
+						"Edit deny rules on the other projects and the machine-wide config, plus the Bash guard hook on commands that name them",
+				},
+				["shell commands that reach other projects without naming their paths"],
+			);
+		case "cline":
+			return build(
+				{
+					level: "partial",
+					mechanism:
+						"session credential; Cline's hub daemon shares the first card's env, so a daemon call is the card whose worktree holds the caller's /proc cwd (never the orchestrator)",
+				},
+				{
+					level: "partial",
+					mechanism: "the PreToolUse guard cancels read_files and run_commands that name another project",
+				},
+				{
+					level: "partial",
+					mechanism:
+						"the PreToolUse guard cancels editor/apply_patch into another project or the machine-wide config, and run_commands that name them",
+				},
+				["shell commands that reach other projects without naming their paths"],
+			);
+		case "copilot":
+			return build(
+				credential,
+				{ level: "prompt", mechanism: "launch prompt only (Copilot has no read permission kind)" },
+				{
+					level: "partial",
+					mechanism:
+						"--deny-tool write(...) on the other projects and the machine-wide config (file tools only; shell writes are not checked)",
+				},
+				["reads of other projects", "shell commands that write into other projects"],
+			);
+		case "codex":
+			return build(
+				credential,
+				{ level: "prompt", mechanism: "launch prompt only (no path rules; the sandbox never limits reads)" },
+				{ level: "prompt", mechanism: "launch prompt only (no path rules)" },
+				["reads and writes of other projects"],
+			);
+		default:
+			return build(
+				credential,
+				{ level: "prompt", mechanism: "launch prompt only (no CLI mechanism verified)" },
+				{ level: "prompt", mechanism: "launch prompt only" },
+				["reads and writes of other projects"],
+			);
+	}
 }
 
 export function describeAgentGuardrails(

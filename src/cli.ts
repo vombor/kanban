@@ -12,7 +12,9 @@ import { registerConfigCommand } from "./commands/config";
 import { registerDoctorCommand } from "./commands/doctor";
 import { registerHomeCommand } from "./commands/home";
 import { registerHooksCommand } from "./commands/hooks";
+import { registerIsolationCommand } from "./commands/isolation";
 import { registerKitCommand } from "./commands/kit";
+import { registerMessageCommand } from "./commands/message";
 import { registerModelsCommand } from "./commands/models";
 import { registerOrchestratorCommand } from "./commands/orchestrator";
 import { registerPipelineCommand } from "./commands/pipeline";
@@ -20,6 +22,7 @@ import { registerPlanCommand } from "./commands/plan";
 import { registerProjectCommand } from "./commands/project";
 import { registerQaCommand } from "./commands/qa";
 import { registerRestartCommand } from "./commands/restart";
+import { createRuntimeTrpcClient } from "./commands/runtime-trpc-client";
 import { registerSetupCommand } from "./commands/setup";
 import { registerTaskCommand } from "./commands/task";
 import { loadGlobalRuntimeConfig, loadRuntimeConfig } from "./config/runtime-config";
@@ -42,6 +45,7 @@ import {
 	setKanbanRuntimeTls,
 } from "./core/runtime-endpoint";
 import { lockedFileSystem } from "./fs/locked-file-system";
+import { applyCliSessionScope } from "./isolation/cli-scope";
 import type { PipelineWorkerHost } from "./pipeline/worker-host";
 import { disablePasscode, generateInternalToken, generatePasscode } from "./security/passcode-manager";
 import type { AutoReviewReconciler } from "./server/auto-review-reconciler";
@@ -432,6 +436,7 @@ async function startServer(): Promise<{
 	const runtimeServer = await createRuntimeServer({
 		workspaceRegistry,
 		sessionSyncEnabled: sessionSyncSetting.enabled,
+		reviewSettleMs: sessionSyncSetting.reviewSettleMs,
 		onTaskLanded: (event) => pipelineWorkerHost?.notifyLanded(event),
 		runtimeStateHub: runtimeHub,
 		warn: (message) => {
@@ -864,6 +869,27 @@ function createProgram(invocationArgs: string[]): Command {
 			setKanbanHomeOverride(home);
 		}
 	});
+	// Project isolation in a CLI run from an agent session (src/isolation/cli-scope.ts); the server (the root
+	// action) is never scoped.
+	program.hook("preAction", async (rootCommand, actionCommand) => {
+		if (actionCommand === rootCommand) {
+			return;
+		}
+		const names: string[] = [];
+		for (let command: Command | null = actionCommand; command && command !== rootCommand; command = command.parent) {
+			names.unshift(command.name());
+		}
+		const refusal = await applyCliSessionScope({
+			commandPath: names.join(" "),
+			options: actionCommand.opts(),
+			args: actionCommand.args,
+			createClient: () => createRuntimeTrpcClient(null),
+		});
+		if (refusal) {
+			process.stderr.write(`${refusal}\n`);
+			process.exit(1);
+		}
+	});
 
 	registerTaskCommand(program);
 	registerHooksCommand(program);
@@ -882,6 +908,8 @@ function createProgram(invocationArgs: string[]): Command {
 	registerProjectCommand(program);
 	registerDoctorCommand(program, KANBAN_VERSION);
 	registerQaCommand(program);
+	registerIsolationCommand(program);
+	registerMessageCommand(program);
 
 	program
 		.command("mcp")

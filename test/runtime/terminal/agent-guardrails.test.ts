@@ -57,6 +57,8 @@ function createGuardrails(overrides: Partial<TaskGuardrails> = {}): TaskGuardrai
 		sharedBranches: ["main", "fork/stack"],
 		deniedCommands: rules,
 		ownBranchPush: false,
+		role: "card",
+		isolation: null,
 		...overrides,
 	};
 }

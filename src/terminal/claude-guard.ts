@@ -2,7 +2,13 @@
 // Bash in the card's --settings file (agent-session-adapters.ts). Claude Code's own deny rules match the command
 // text as written; this checks it with Kanban's matcher (command-patterns.ts), which also sees quoted, wrapped and
 // `sh -c` forms and a PR card's own-branch push. A `deny` decision prevents the tool call in every permission mode.
-import { describeDeniedCommand, findDeniedCommand } from "../guardrails/command-patterns";
+import {
+	describeDeniedCommand,
+	describeDeniedPath,
+	findDeniedCommand,
+	findDeniedPathInCommand,
+	findProtectedFileWrite,
+} from "../guardrails/command-patterns";
 import type { CommandGuardPolicy } from "./agent-guardrails";
 
 /** The hook's stdout: a deny decision, or null to leave the call to Claude Code's permission flow. */
@@ -25,14 +31,18 @@ export function evaluateClaudeGuard(payload: unknown, policy: CommandGuardPolicy
 		return null;
 	}
 	const denied = findDeniedCommand(command, policy.deniedCommands);
-	if (!denied) {
+	const deniedPath = denied
+		? null
+		: (findDeniedPathInCommand(command, policy.deniedPathRoots ?? [], policy.cwd) ??
+			findProtectedFileWrite(command, policy.protectedWriteRoots ?? [], policy.cwd));
+	if (!denied && !deniedPath) {
 		return null;
 	}
 	return {
 		hookSpecificOutput: {
 			hookEventName: "PreToolUse",
 			permissionDecision: "deny",
-			permissionDecisionReason: describeDeniedCommand(denied),
+			permissionDecisionReason: denied ? describeDeniedCommand(denied) : describeDeniedPath(deniedPath ?? ""),
 		},
 	};
 }

@@ -36,6 +36,7 @@ import {
 import type { DoctorFinding, DoctorFixOutcome, DoctorReport } from "./doctor-report";
 import { checkGuardrails, type GuardrailCheckDeps } from "./guardrail-checks";
 import { checkHomeLocation } from "./home-location-checks";
+import { checkIsolation } from "./isolation-checks";
 import { checkOneOwner } from "./one-owner-checks";
 
 export interface DoctorOptions {
@@ -137,6 +138,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
 	);
 
 	findings.push(...(await checkGuardrails(config, options.guardrailDeps)));
+	findings.push(...checkIsolation(config, entries, options.guardrailDeps));
 
 	if (options.deep) {
 		const runtimeConfig = await loadGlobalRuntimeConfig();

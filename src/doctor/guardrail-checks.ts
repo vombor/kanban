@@ -131,7 +131,7 @@ export async function checkGuardrails(
 			level: "info",
 			area: "guardrails",
 			message:
-				"the orchestrator is exempt by design: the home-agent sidebar session (also when the watchdog starts it) and its headless wakes get no guardrails, because it works in the project and all of its task worktrees",
+				"the orchestrator is exempt by design from the card guardrails: the home-agent sidebar session (also when the watchdog starts it) and its headless wakes get no command or write limits, because it works in the project and all of its task worktrees; under project isolation enforce it gets the isolation limits (area isolation)",
 		},
 	];
 	if (!settings.enabled) {

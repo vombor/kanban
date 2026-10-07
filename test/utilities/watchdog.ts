@@ -44,7 +44,12 @@ export function createWatchdogHarness(options: WatchdogHarnessOptions = {}) {
 	let headlessPid = options.headlessPid ?? 0;
 	const requests: WatchdogActionRequest[] = [];
 	const results = { ...options.results };
-	const startHeadlessRun = vi.fn((_input: { workspaceId: string; agentId: RuntimeAgentId }) => ({ ok: true }));
+	const startHeadlessRun = vi.fn(
+		(_input: { workspaceId: string; agentId: RuntimeAgentId; env?: Record<string, string> }) => ({
+			ok: true,
+			pid: 4242,
+		}),
+	);
 	const log = vi.fn((_message: string) => {});
 	const watchdog = createWatchdog({
 		actions: {
@@ -57,6 +62,8 @@ export function createWatchdogHarness(options: WatchdogHarnessOptions = {}) {
 					startOrchestratorSession: { ok: true, taskId: "x" },
 					pruneDone: { ok: true, summary: "prune-done: nothing" },
 					sweepProcesses: { ok: true, supported: true, orphans: 1, terminated: 1, zombies: 7 },
+					issueOrchestratorCredential: { ok: true, credential: "cred-headless" },
+					bindOrchestratorCredential: { ok: true },
 				};
 				return (results[kind] ?? fallback[kind]) as never;
 			},

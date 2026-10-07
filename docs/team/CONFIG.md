@@ -63,6 +63,8 @@ Nothing is inherited from another workspace.
 | `kit` | null (= `default`) | `{ name, overrides }`; overrides are dotted kit keys ([KITS.md](KITS.md)) |
 | `guardrails.enabled` | null (= `guardrails.enabled`) | task-card guardrails for this workspace |
 | `guardrails.extraDenyCommands`, `.extraWritableDirs` | `[]` | added to the machine-wide lists; a workspace can only tighten them |
+| `isolation.mode` | null (= `isolation.mode`) | project isolation for this workspace: `off`, `report`, `enforce` ([project-isolation.md](../fork/project-isolation.md)) |
+| `isolation.messages` | `deny` | `allow` lets this project's orchestrator send and receive orchestrator messages; both projects must allow |
 
 ## `pipeline.*`
 
@@ -184,7 +186,8 @@ narrowed root) are not removed and keep working; `kanban doctor` shows a warn ro
 
 Task-card guardrails (`src/guardrails/`). They are resolved for every launch in `runtimeApi.startTaskSession`, and
 each agent adapter applies them with its CLI's own mechanism (`src/terminal/agent-guardrails.ts`). The orchestrator
-(the sidebar session and its headless wakes) gets none.
+(the sidebar session and its headless wakes) gets none; under `isolation.mode` `enforce` it gets only the isolation
+denies (`isolation.*` below).
 
 | Key | Default | What |
 |---|---|---|
@@ -205,6 +208,21 @@ Per agent:
 
 Whatever a CLI can't enforce goes into a short note in the launch prompt. `kanban doctor` shows one row per
 installed agent.
+
+## `isolation.*`
+
+Project isolation (`src/isolation/`, [project-isolation.md](../fork/project-isolation.md)): every agent session,
+the orchestrator included, works only on its own project.
+
+| Key | Default | What |
+|---|---|---|
+| `mode` | `off` | `off`: nothing changes. `report`: reaches outside a session's project are logged to `data/<ws>/isolation.jsonl`, nothing is refused. `enforce`: the runtime API and the Kanban CLI refuse them, launches get the isolation denies, orchestrator wakes stay in the board's own workspace and go to the sidebar session |
+
+A reach between two workspaces follows the stricter of their modes. Whatever the mode, agent sessions can't
+create, register or remove projects. The user's escape hatch is `kanban isolation grant` (in-memory, logged on both
+sides), which waits for a one-time code printed only on the server's console (`kanban isolation approve <id> <code>`).
+Under `enforce` the user's own project add/create/remove waits for one too. Mode changes are logged (`mode_changed`).
+Before rolling back to a build without project isolation, remove the `isolation` keys: older builds reject them.
 
 ## From kit.config.json
 

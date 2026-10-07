@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { afterAll } from "vitest";
 
+import { KANBAN_SESSION_CREDENTIAL_ENV, KANBAN_SESSION_WORKSPACE_ENV } from "../../src/isolation/session-identity";
 import { KANBAN_HOME_ENV, KANBAN_WORKTREES_ENV, LEGACY_KIT_ENV_NAMES } from "../../src/state/kanban-home";
 import { isolateGitConfig, scrubGitEnvironment } from "./git-env";
 
@@ -12,6 +13,10 @@ import { isolateGitConfig, scrubGitEnvironment } from "./git-env";
 // legacy kit's KANBAN_KIT_HOME / KIT_CONFIG (doctor and import-kit read the legacy kit's files).
 delete process.env[KANBAN_HOME_ENV];
 delete process.env[KANBAN_WORKTREES_ENV];
+// A suite run from inside a Kanban agent session would otherwise scope its own CLI calls to that session's project
+// (src/isolation/cli-scope.ts).
+delete process.env[KANBAN_SESSION_CREDENTIAL_ENV];
+delete process.env[KANBAN_SESSION_WORKSPACE_ENV];
 for (const name of LEGACY_KIT_ENV_NAMES) {
 	delete process.env[name];
 }

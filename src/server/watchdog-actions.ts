@@ -4,13 +4,24 @@
 //   - the orchestrator sidebar session is started like the browser starts it (runtime.startTaskSession with the home
 //     agent session id), so a browser that opens later attaches to the same session instead of starting a second;
 //   - prune-done edits the board under the workspace lock and tells the browsers;
-//   - the PID-pressure sweep is the orphan process sweeper's own sweep.
+//   - the PID-pressure sweep is the orphan process sweeper's own sweep;
+//   - project isolation: a wake for one workspace's board never types into or starts another workspace's
+//     orchestrator under `enforce` (the watchdog redirects such a wake home; this is the server's own check), and a
+//     headless orchestrator run gets its workspace's session credential, bound to the run's pid.
+
+import type { PipelineConfig } from "../config/pipeline-config";
 import type {
 	RuntimeProcessSweepResult,
 	RuntimeTaskSessionStartRequest,
 	RuntimeTaskSessionStartResponse,
 } from "../core/api-contract";
-import { createHomeAgentSessionId } from "../core/home-agent-session";
+import {
+	createHomeAgentSessionId,
+	isHomeAgentSessionId,
+	isHomeAgentSessionIdForWorkspace,
+} from "../core/home-agent-session";
+import type { IsolationService } from "../isolation/isolation-service";
+import { readIsolationConfig, resolveReachIsolationMode } from "../isolation/isolation-settings";
 import type { WatchdogActionRequest, WatchdogActionResults } from "../pipeline/watchdog/actions";
 import { pruneDoneCards } from "../pipeline/watchdog/prune-done";
 import { deliverTaskInput, type TaskInputTerminal } from "../terminal/deliver-task-input";
@@ -32,6 +43,10 @@ export interface WatchdogActionDependencies {
 	runProcessSweep: () => Promise<{ supported: boolean; lastSweep: RuntimeProcessSweepResult | null }>;
 	onBoardMutated: (scope: WatchdogActionScope) => Promise<void>;
 	pruneDone?: typeof pruneDoneCards;
+	/** config.json for the isolation check; defaults to reading it. */
+	readConfig?: () => Promise<PipelineConfig>;
+	/** The isolation service's credentials (absent: headless runs get none). */
+	credentials?: Pick<IsolationService, "issueCredential" | "bindCredential">;
 }
 
 export function createWatchdogActionHandler(
@@ -46,9 +61,42 @@ export function createWatchdogActionHandler(
 		return { workspaceId, workspacePath };
 	};
 
+	const readConfig = deps.readConfig ?? readIsolationConfig;
+	/** Why an action of `fromWorkspaceId`'s board may not reach `workspaceId`'s orchestrator, or null. */
+	const refuseCrossWorkspace = async (
+		fromWorkspaceId: string | undefined,
+		workspaceId: string,
+	): Promise<string | null> => {
+		if (!fromWorkspaceId || fromWorkspaceId === workspaceId) {
+			return null;
+		}
+		const mode = resolveReachIsolationMode(await readConfig(), fromWorkspaceId, workspaceId);
+		return mode === "enforce"
+			? `Project isolation: ${fromWorkspaceId}'s board can't wake ${workspaceId}'s orchestrator.`
+			: null;
+	};
+
 	return async (request) => {
 		switch (request.kind) {
 			case "deliverInput": {
+				// A home-agent session id names its workspace: it must be the one the request is scoped to.
+				if (
+					isHomeAgentSessionId(request.taskId) &&
+					!isHomeAgentSessionIdForWorkspace(request.taskId, request.workspaceId)
+				) {
+					return {
+						ok: false,
+						status: "error",
+						evidence: null,
+						enterAttempts: 0,
+						summary: null,
+						error: `${request.taskId} is not ${request.workspaceId}'s orchestrator session.`,
+					};
+				}
+				const refused = await refuseCrossWorkspace(request.fromWorkspaceId, request.workspaceId);
+				if (refused) {
+					return { ok: false, status: "error", evidence: null, enterAttempts: 0, summary: null, error: refused };
+				}
 				const terminal = await deps.getTerminal(scopeOf(request.workspaceId));
 				return await deliverTaskInput(terminal, request.taskId, request.text);
 			}
@@ -59,6 +107,10 @@ export function createWatchdogActionHandler(
 			}
 			case "startOrchestratorSession": {
 				const taskId = createHomeAgentSessionId(request.workspaceId, request.agentId);
+				const refused = await refuseCrossWorkspace(request.fromWorkspaceId, request.workspaceId);
+				if (refused) {
+					return { ok: false, taskId, error: refused };
+				}
 				const response = await deps.startTaskSession(scopeOf(request.workspaceId), {
 					taskId,
 					prompt: request.prompt,
@@ -82,6 +134,22 @@ export function createWatchdogActionHandler(
 				}
 				return { ok: true, summary: result.summary };
 			}
+			case "issueOrchestratorCredential": {
+				if (!deps.credentials) {
+					return { ok: false, credential: null, error: "no isolation service" };
+				}
+				const scope = scopeOf(request.workspaceId);
+				const credential = deps.credentials.issueCredential({
+					workspaceId: request.workspaceId,
+					taskId: createHomeAgentSessionId(request.workspaceId, request.agentId),
+					role: "orchestrator",
+					agentId: request.agentId,
+					cwd: scope.workspacePath,
+				});
+				return { ok: true, credential };
+			}
+			case "bindOrchestratorCredential":
+				return { ok: deps.credentials?.bindCredential(request.credential, request.pid) ?? false };
 			case "sweepProcesses": {
 				const response = await deps.runProcessSweep();
 				const sweep = response.lastSweep;

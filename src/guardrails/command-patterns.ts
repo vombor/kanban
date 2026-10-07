@@ -519,3 +519,137 @@ export function describeDeniedCommand(match: DeniedCommandMatch): string {
 		: "";
 	return `${blocked} matches "${match.rule.pattern}". Task cards never push, rewrite shared branches or restart services; leave that to the orchestrator.${pushHint}`;
 }
+
+/**
+ * Project isolation: the first word of a command line that names a path inside one of `roots` (absolute, `~/`, or
+ * relative with a `..` segment, resolved against `cwd`), or null. Also catches `--opt=/path`. Like the command
+ * matcher it sees the command as written, so a path built at run time (`$VAR`, globs) gets past it.
+ */
+export function findDeniedPathInCommand(
+	commandLine: string,
+	roots: readonly string[],
+	cwd: string | undefined,
+	userHome: string = process.env.HOME ?? "",
+): string | null {
+	if (roots.length === 0) {
+		return null;
+	}
+	const normalizedRoots = roots.map((root) => root.replace(/\/+$/u, ""));
+	const inside = (path: string) =>
+		normalizedRoots.some((root) => root.length > 0 && (path === root || path.startsWith(`${root}/`)));
+	for (const words of splitShellCommandLine(commandLine)) {
+		for (const word of words) {
+			const value = word.includes("=") && word.startsWith("-") ? word.slice(word.indexOf("=") + 1) : word;
+			let path: string | null = null;
+			if (value.startsWith("/")) {
+				path = value;
+			} else if ((value === "~" || value.startsWith("~/")) && userHome) {
+				path = `${userHome}${value.slice(1)}`;
+			} else if (cwd && /(^|\/)\.\.(\/|$)/u.test(value)) {
+				path = `${cwd}/${value}`;
+			}
+			if (path && inside(normalizeSlashPath(path))) {
+				return word;
+			}
+		}
+	}
+	return null;
+}
+
+/** Programs that only read the files they name: naming a protected file is fine, a redirect into it isn't. */
+const READ_ONLY_PROGRAMS = new Set([
+	"cat",
+	"less",
+	"more",
+	"head",
+	"tail",
+	"grep",
+	"egrep",
+	"fgrep",
+	"rg",
+	"jq",
+	"ls",
+	"stat",
+	"wc",
+	"diff",
+	"cmp",
+	"file",
+	"md5sum",
+	"sha1sum",
+	"sha256sum",
+	"bat",
+]);
+
+/**
+ * Project isolation's shell-write check for the machine-wide config (config.json, the agents' config): the word of
+ * `commandLine` that writes inside one of `roots`, or null. A redirect into it (`> config.json`, `>> …`), or any
+ * program but a read-only one naming it, even inside a script (`sed -i`, `cp`, `python -c "open('…','w')"`). Like
+ * the other command checks it only sees the command as written.
+ */
+export function findProtectedFileWrite(
+	commandLine: string,
+	roots: readonly string[],
+	cwd: string | undefined,
+	userHome: string = process.env.HOME ?? "",
+): string | null {
+	const normalizedRoots = roots.map((root) => normalizeSlashPath(root)).filter((root) => root !== "/");
+	if (normalizedRoots.length === 0) {
+		return null;
+	}
+	const inside = (path: string) => normalizedRoots.some((root) => path === root || path.startsWith(`${root}/`));
+	const resolveWord = (value: string): string | null => {
+		if (value.startsWith("/")) {
+			return normalizeSlashPath(value);
+		}
+		if ((value === "~" || value.startsWith("~/")) && userHome) {
+			return normalizeSlashPath(`${userHome}${value.slice(1)}`);
+		}
+		return cwd ? normalizeSlashPath(`${cwd}/${value}`) : null;
+	};
+	// The splitter drops redirections: their targets are read from the line itself.
+	for (const match of commandLine.matchAll(/(?:^|[^<>-])(?:\d|&)?>{1,2}\|?\s*(["']?)([^\s"'|;&<>()]+)\1/gu)) {
+		const target = match[2] ?? "";
+		const path = resolveWord(target);
+		if (path && inside(path)) {
+			return target;
+		}
+	}
+	const homeForms = (root: string) =>
+		userHome && root.startsWith(`${userHome}/`) ? [root, `~${root.slice(userHome.length)}`] : [root];
+	const named = normalizedRoots.flatMap(homeForms);
+	for (const words of splitShellCommandLine(commandLine)) {
+		const programIndex = words.findIndex((word) => !/^[A-Za-z_][A-Za-z0-9_]*=/u.test(word));
+		const program = (words[programIndex] ?? "").split("/").pop() ?? "";
+		if (programIndex === -1 || READ_ONLY_PROGRAMS.has(program)) {
+			continue;
+		}
+		for (const word of words.slice(programIndex + 1)) {
+			const path = word.startsWith("/") || word.startsWith("~") ? resolveWord(word) : null;
+			if ((path && inside(path)) || named.some((root) => word.includes(root))) {
+				return word;
+			}
+		}
+	}
+	return null;
+}
+
+/** `/a/./b/../c//` → `/a/c` (no filesystem access). */
+function normalizeSlashPath(path: string): string {
+	const parts: string[] = [];
+	for (const part of path.split("/")) {
+		if (part === "" || part === ".") {
+			continue;
+		}
+		if (part === "..") {
+			parts.pop();
+			continue;
+		}
+		parts.push(part);
+	}
+	return `/${parts.join("/")}`;
+}
+
+/** What Kanban's guard hooks tell the agent about a command that names another project's path. */
+export function describeDeniedPath(word: string): string {
+	return `Blocked by Kanban's project isolation: \`${word}\` is outside this session's project (another project, its data, or machine-wide config). Work only on this project; ask the user if you need anything else.`;
+}

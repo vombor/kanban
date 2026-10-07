@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { readFile, realpath, rm, rmdir } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { z } from "zod";
 
 import {
@@ -155,6 +155,24 @@ function createEmptyWorkspaceIndex(): WorkspaceIndexFile {
 		entries: {},
 		repoPathToId: {},
 	};
+}
+
+/**
+ * Project isolation's scope for a Kanban CLI process run from an agent session (src/isolation/cli-scope.ts): which
+ * registered workspaces it may see and open, and whether it may register a new one (never: that's the user's). Set
+ * once by the CLI's preAction hook; the server never sets one.
+ */
+export interface WorkspaceAccessGuard {
+	/** "refuse" hides the workspace from listings and makes opening it fail. */
+	check: (workspaceId: string) => Promise<"allow" | "refuse">;
+	/** The error for a refused open or registration. */
+	describeRefusal: (what: { workspaceId: string | null; repoPath: string }) => string;
+}
+
+let workspaceAccessGuard: WorkspaceAccessGuard | null = null;
+
+export function setWorkspaceAccessGuard(guard: WorkspaceAccessGuard | null): void {
+	workspaceAccessGuard = guard;
 }
 
 export function getRuntimeHomePath(): string {
@@ -450,6 +468,16 @@ function detectGitRoot(cwd: string): string | null {
 	return runGitCapture(cwd, ["rev-parse", "--show-toplevel"]);
 }
 
+/** The main checkout of a linked worktree (a card's), or null when `repoPath` is one itself or isn't in git. */
+function detectMainWorktreePath(repoPath: string): string | null {
+	const commonDir = runGitCapture(repoPath, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+	if (!commonDir || basename(commonDir) !== ".git") {
+		return null;
+	}
+	const mainPath = dirname(commonDir);
+	return mainPath === repoPath ? null : mainPath;
+}
+
 function detectGitCurrentBranch(repoPath: string): string | null {
 	return runGitCapture(repoPath, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
 }
@@ -560,8 +588,27 @@ export async function loadWorkspaceContext(
 	cwd: string,
 	options: LoadWorkspaceContextOptions = {},
 ): Promise<RuntimeWorkspaceContext> {
-	const repoPath = await resolveWorkspacePath(cwd);
+	let repoPath = await resolveWorkspacePath(cwd);
 	const autoCreateIfMissing = options.autoCreateIfMissing ?? true;
+	const guard = workspaceAccessGuard;
+	if (guard) {
+		const index = await readWorkspaceIndex();
+		let existingEntry = findWorkspaceEntry(index, repoPath);
+		// Under isolation a card's worktree is its project (a session never registers one): `kanban task list` run
+		// in a task worktree without --project-path opens the project's board.
+		const mainPath = existingEntry ? null : detectMainWorktreePath(repoPath);
+		const mainEntry = mainPath ? findWorkspaceEntry(index, await realpath(mainPath).catch(() => mainPath)) : null;
+		if (mainEntry) {
+			existingEntry = mainEntry;
+			repoPath = mainEntry.repoPath;
+		}
+		if (!existingEntry) {
+			throw new Error(guard.describeRefusal({ workspaceId: null, repoPath }));
+		}
+		if ((await guard.check(existingEntry.workspaceId)) === "refuse") {
+			throw new Error(guard.describeRefusal({ workspaceId: existingEntry.workspaceId, repoPath }));
+		}
+	}
 	if (!autoCreateIfMissing) {
 		const index = await readWorkspaceIndex();
 		const existingEntry = findWorkspaceEntry(index, repoPath);
@@ -602,6 +649,9 @@ export async function loadWorkspaceContextById(workspaceId: string): Promise<Run
 	if (!entry) {
 		return null;
 	}
+	if (workspaceAccessGuard && (await workspaceAccessGuard.check(workspaceId)) === "refuse") {
+		return null;
+	}
 	try {
 		return await loadWorkspaceContext(entry.repoPath);
 	} catch {
@@ -611,12 +661,23 @@ export async function loadWorkspaceContextById(workspaceId: string): Promise<Run
 
 export async function listWorkspaceIndexEntries(): Promise<RuntimeWorkspaceIndexEntry[]> {
 	const index = await readWorkspaceIndex();
-	return Object.values(index.entries)
+	const entries = Object.values(index.entries)
 		.map((entry) => ({
 			workspaceId: entry.workspaceId,
 			repoPath: entry.repoPath,
 		}))
 		.sort((left, right) => left.repoPath.localeCompare(right.repoPath));
+	const guard = workspaceAccessGuard;
+	if (!guard) {
+		return entries;
+	}
+	const visible: RuntimeWorkspaceIndexEntry[] = [];
+	for (const entry of entries) {
+		if ((await guard.check(entry.workspaceId)) === "allow") {
+			visible.push(entry);
+		}
+	}
+	return visible;
 }
 
 export async function removeWorkspaceIndexEntry(workspaceId: string): Promise<boolean> {

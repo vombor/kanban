@@ -131,6 +131,25 @@ import {
 	runtimeWorktreeEnsureRequestSchema,
 	runtimeWorktreeEnsureResponseSchema,
 } from "../core/api-contract";
+import { isHomeAgentSessionId, isHomeAgentSessionIdForWorkspace } from "../core/home-agent-session";
+import type { RuntimeCaller } from "../isolation/session-identity";
+import {
+	isolationApprovalRequestResponseSchema,
+	isolationApprovalRequestSchema,
+	isolationApprovalStatusResponseSchema,
+	isolationApproveRequestSchema,
+	isolationApproveResponseSchema,
+	isolationGrantRequestSchema,
+	isolationGrantResponseSchema,
+	isolationGrantsResponseSchema,
+	isolationRevokeRequestSchema,
+	isolationWhoamiResponseSchema,
+	messageInboxRequestSchema,
+	messageInboxResponseSchema,
+	messageSendRequestSchema,
+	messageSendResponseSchema,
+	type RuntimeIsolationApi,
+} from "./isolation-api";
 
 export interface RuntimeTrpcWorkspaceScope {
 	workspaceId: string;
@@ -140,6 +159,22 @@ export interface RuntimeTrpcWorkspaceScope {
 export interface RuntimeTrpcContext {
 	requestedWorkspaceId: string | null;
 	workspaceScope: RuntimeTrpcWorkspaceScope | null;
+	/**
+	 * Who is calling (src/isolation/session-identity.ts): an agent session (its credential, or traced to its process
+	 * tree) or the user. Absent = the user (in-process callers, tests).
+	 */
+	caller?: RuntimeCaller;
+	/**
+	 * Resolves the caller on first use (the /proc lookup costs a scan, and hot paths like hooks.ingest never need
+	 * it); wins over `caller`.
+	 */
+	getCaller?: () => Promise<RuntimeCaller>;
+	/** The caller with the process-tree lookup forced on, for grants, approvals and project changes. */
+	resolveStrictCaller?: () => Promise<RuntimeCaller>;
+	/** A passcode-authenticated browser session (remote mode): the user, so project changes need no approval. */
+	trustedBrowser?: boolean;
+	/** Project isolation's checks and procedures (src/trpc/isolation-api.ts); absent = no checks. */
+	isolationApi?: RuntimeIsolationApi;
 	runtimeApi: {
 		loadConfig: (scope: RuntimeTrpcWorkspaceScope | null) => Promise<RuntimeConfigResponse>;
 		saveConfig: (
@@ -290,7 +325,59 @@ const t = initTRPC.context<RuntimeTrpcContext>().create({
 	},
 });
 
-const workspaceProcedure = t.procedure.use(({ ctx, next }) => {
+function forbidden(message: string): TRPCError {
+	return new TRPCError({ code: "FORBIDDEN", message });
+}
+
+const USER: RuntimeCaller = { kind: "user" };
+
+async function readCaller(ctx: RuntimeTrpcContext): Promise<RuntimeCaller> {
+	return ctx.getCaller ? await ctx.getCaller() : (ctx.caller ?? USER);
+}
+
+async function readStrictCaller(ctx: RuntimeTrpcContext): Promise<RuntimeCaller> {
+	return ctx.resolveStrictCaller ? await ctx.resolveStrictCaller() : await readCaller(ctx);
+}
+
+/** Refuses a machine-wide operation from an agent session under project isolation `enforce`. */
+async function assertMachineAction(ctx: RuntimeTrpcContext, action: string): Promise<void> {
+	if (!ctx.isolationApi) {
+		return;
+	}
+	const decision = await ctx.isolationApi.checkMachineAction(await readCaller(ctx), action);
+	if (!decision.allowed) {
+		throw forbidden(decision.message);
+	}
+}
+
+/**
+ * Refuses a project create/add/remove from an agent session (always, whatever the isolation mode). While some
+ * workspace is in enforce, anyone else's change waits for the console-code approval, which then runs `run`.
+ */
+async function assertProjectChange(
+	ctx: RuntimeTrpcContext,
+	kind: "create" | "add" | "remove",
+	target: { path?: string | null; workspaceId?: string | null },
+	run: () => Promise<string>,
+): Promise<void> {
+	if (!ctx.isolationApi) {
+		return;
+	}
+	// Whatever the mode, a session without its credential is traced to its process tree here.
+	const decision = await ctx.isolationApi.checkProjectChange({
+		caller: await readStrictCaller(ctx),
+		kind,
+		target,
+		action: `projects.${kind}`,
+		trustedBrowser: ctx.trustedBrowser === true,
+		run,
+	});
+	if (!decision.allowed) {
+		throw forbidden(decision.message);
+	}
+}
+
+const workspaceProcedure = t.procedure.use(async ({ ctx, next, path }) => {
 	if (!ctx.requestedWorkspaceId) {
 		throw new TRPCError({
 			code: "BAD_REQUEST",
@@ -302,6 +389,17 @@ const workspaceProcedure = t.procedure.use(({ ctx, next }) => {
 			code: "NOT_FOUND",
 			message: `Unknown workspace ID: ${ctx.requestedWorkspaceId}`,
 		});
+	}
+	// Project isolation: a session reaches only its own workspace (and the ones the user granted it).
+	if (ctx.isolationApi) {
+		const decision = await ctx.isolationApi.checkWorkspaceAccess(
+			await readCaller(ctx),
+			ctx.workspaceScope.workspaceId,
+			path,
+		);
+		if (decision.outcome === "refuse") {
+			throw forbidden(decision.message);
+		}
 	}
 	return next({
 		ctx: {
@@ -325,6 +423,8 @@ export const runtimeAppRouter = t.router({
 			.input(runtimeConfigSaveRequestSchema)
 			.output(runtimeConfigResponseSchema)
 			.mutation(async ({ ctx, input }) => {
+				// The runtime config's agent and prompt settings are machine-wide (config.json).
+				await assertMachineAction(ctx, "runtime.saveConfig");
 				return await ctx.runtimeApi.saveConfig(ctx.workspaceScope, input);
 			}),
 		startTaskSession: workspaceProcedure
@@ -359,6 +459,7 @@ export const runtimeAppRouter = t.router({
 				return await ctx.runtimeApi.startShellSession(ctx.workspaceScope, input);
 			}),
 		resetAllState: t.procedure.output(runtimeDebugResetAllStateResponseSchema).mutation(async ({ ctx }) => {
+			await assertMachineAction(ctx, "runtime.resetAllState");
 			return await ctx.runtimeApi.resetAllState(ctx.workspaceScope);
 		}),
 		openFile: t.procedure
@@ -371,6 +472,7 @@ export const runtimeAppRouter = t.router({
 			return await ctx.runtimeApi.getUpdateStatus(ctx.workspaceScope);
 		}),
 		runUpdateNow: t.procedure.output(runtimeRunUpdateResponseSchema).mutation(async ({ ctx }) => {
+			await assertMachineAction(ctx, "runtime.runUpdateNow");
 			return await ctx.runtimeApi.runUpdateNow(ctx.workspaceScope);
 		}),
 		// Process hygiene: the last orphan sweep, and a sweep on demand (debug dialog).
@@ -378,6 +480,7 @@ export const runtimeAppRouter = t.router({
 			return await ctx.runtimeApi.getProcessSweep();
 		}),
 		runProcessSweep: t.procedure.output(runtimeProcessSweepResponseSchema).mutation(async ({ ctx }) => {
+			await assertMachineAction(ctx, "runtime.runProcessSweep");
 			return await ctx.runtimeApi.runProcessSweep();
 		}),
 	}),
@@ -486,18 +589,38 @@ export const runtimeAppRouter = t.router({
 	}),
 	projects: t.router({
 		list: t.procedure.output(runtimeProjectsResponseSchema).query(async ({ ctx }) => {
-			return await ctx.projectsApi.listProjects(ctx.requestedWorkspaceId);
+			const response = await ctx.projectsApi.listProjects(ctx.requestedWorkspaceId);
+			const caller = ctx.isolationApi ? await readCaller(ctx) : USER;
+			if (!ctx.isolationApi || caller.kind === "user") {
+				return response;
+			}
+			// A session only sees the projects isolation lets it reach.
+			const visible = await ctx.isolationApi.filterVisibleWorkspaceIds(
+				caller,
+				response.projects.map((project) => project.id),
+			);
+			return {
+				currentProjectId:
+					response.currentProjectId && visible.has(response.currentProjectId) ? response.currentProjectId : null,
+				projects: response.projects.filter((project) => visible.has(project.id)),
+			};
 		}),
 		add: t.procedure
 			.input(runtimeProjectAddRequestSchema)
 			.output(runtimeProjectAddResponseSchema)
 			.mutation(async ({ ctx, input }) => {
+				await assertProjectChange(ctx, "add", { path: input.gitUrl ? null : (input.path ?? null) }, async () =>
+					JSON.stringify(await ctx.projectsApi.addProject(ctx.requestedWorkspaceId, input)),
+				);
 				return await ctx.projectsApi.addProject(ctx.requestedWorkspaceId, input);
 			}),
 		create: t.procedure
 			.input(runtimeProjectCreateRequestSchema)
 			.output(runtimeProjectCreateResponseSchema)
 			.mutation(async ({ ctx, input }) => {
+				await assertProjectChange(ctx, "create", { path: input.path }, async () =>
+					JSON.stringify(await ctx.projectsApi.createProject(ctx.requestedWorkspaceId, input)),
+				);
 				return await ctx.projectsApi.createProject(ctx.requestedWorkspaceId, input);
 			}),
 		roots: t.procedure.output(runtimeProjectRootsResponseSchema).query(async ({ ctx }) => {
@@ -513,15 +636,21 @@ export const runtimeAppRouter = t.router({
 			.input(runtimeProjectRemoveRequestSchema)
 			.output(runtimeProjectRemoveResponseSchema)
 			.mutation(async ({ ctx, input }) => {
+				await assertProjectChange(ctx, "remove", { workspaceId: input.projectId }, async () =>
+					JSON.stringify(await ctx.projectsApi.removeProject(ctx.requestedWorkspaceId, input)),
+				);
 				return await ctx.projectsApi.removeProject(ctx.requestedWorkspaceId, input);
 			}),
+		// The add-project dialog's folder browsing: the user's, never a session's under isolation `enforce`.
 		pickDirectory: t.procedure.output(runtimeProjectDirectoryPickerResponseSchema).mutation(async ({ ctx }) => {
+			await assertMachineAction(ctx, "projects.pickDirectory");
 			return await ctx.projectsApi.pickProjectDirectory(ctx.requestedWorkspaceId);
 		}),
 		listDirectoryContents: t.procedure
 			.input(runtimeDirectoryListRequestSchema)
 			.output(runtimeDirectoryListResponseSchema)
 			.query(async ({ ctx, input }) => {
+				await assertMachineAction(ctx, "projects.listDirectoryContents");
 				return await ctx.projectsApi.listDirectoryContents(ctx.requestedWorkspaceId, input);
 			}),
 	}),
@@ -530,7 +659,98 @@ export const runtimeAppRouter = t.router({
 			.input(runtimeHookIngestRequestSchema)
 			.output(runtimeHookIngestResponseSchema)
 			.mutation(async ({ ctx, input }) => {
+				// Validated by ownership, not by the caller: hooks run on every tool call, and Cline runs them in its shared
+				// daemon under another card's process tree. A home-agent session id names its own workspace.
+				if (
+					isHomeAgentSessionId(input.taskId) &&
+					!isHomeAgentSessionIdForWorkspace(input.taskId, input.workspaceId)
+				) {
+					throw forbidden(`${input.taskId} is not a session of workspace ${input.workspaceId}.`);
+				}
 				return await ctx.hooksApi.ingest(input);
+			}),
+	}),
+	// Project isolation (src/trpc/isolation-api.ts): who a caller is, the user's grants.
+	isolation: t.router({
+		whoami: t.procedure.output(isolationWhoamiResponseSchema).query(async ({ ctx }) => {
+			if (!ctx.isolationApi) {
+				return {
+					caller: "user",
+					workspaceId: null,
+					taskId: null,
+					role: null,
+					via: null,
+					mode: "off",
+					reachable: null,
+				};
+			}
+			return await ctx.isolationApi.whoami(await readCaller(ctx));
+		}),
+		grant: t.procedure
+			.input(isolationGrantRequestSchema)
+			.output(isolationGrantResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.isolationApi) {
+					return { ok: false, grant: null, approvalId: null, error: "Project isolation is not available here." };
+				}
+				return await ctx.isolationApi.grant(await readStrictCaller(ctx), input);
+			}),
+		approve: t.procedure
+			.input(isolationApproveRequestSchema)
+			.output(isolationApproveResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.isolationApi) {
+					return { ok: false, result: null, error: "Project isolation is not available here." };
+				}
+				return await ctx.isolationApi.approve(await readStrictCaller(ctx), input);
+			}),
+		approvalStatus: t.procedure
+			.input(isolationRevokeRequestSchema)
+			.output(isolationApprovalStatusResponseSchema)
+			.query(({ ctx, input }) =>
+				ctx.isolationApi ? ctx.isolationApi.approvalStatus(input.id) : { approval: null },
+			),
+		requestApproval: t.procedure
+			.input(isolationApprovalRequestSchema)
+			.output(isolationApprovalRequestResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.isolationApi) {
+					return { ok: true, approvalId: null, required: false };
+				}
+				return await ctx.isolationApi.requestApproval(await readStrictCaller(ctx), input);
+			}),
+		revoke: t.procedure
+			.input(isolationRevokeRequestSchema)
+			.output(isolationGrantResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.isolationApi) {
+					return { ok: false, grant: null, approvalId: null, error: "Project isolation is not available here." };
+				}
+				return await ctx.isolationApi.revoke(await readStrictCaller(ctx), input.id);
+			}),
+		grants: t.procedure.output(isolationGrantsResponseSchema).query(async ({ ctx }) => {
+			return ctx.isolationApi ? await ctx.isolationApi.listGrants(await readCaller(ctx)) : { grants: [] };
+		}),
+	}),
+	// Orchestrator messages between projects (src/isolation/messages.ts).
+	message: t.router({
+		send: t.procedure
+			.input(messageSendRequestSchema)
+			.output(messageSendResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.isolationApi) {
+					return { ok: false, message: null, queued: false, error: "Messages are not available here." };
+				}
+				return await ctx.isolationApi.sendMessage(await readCaller(ctx), input);
+			}),
+		inbox: t.procedure
+			.input(messageInboxRequestSchema)
+			.output(messageInboxResponseSchema)
+			.query(async ({ ctx, input }) => {
+				if (!ctx.isolationApi) {
+					return { ok: false, workspaceId: null, messages: [], error: "Messages are not available here." };
+				}
+				return await ctx.isolationApi.inbox(await readCaller(ctx), input);
 			}),
 	}),
 });

@@ -13,6 +13,7 @@ import type {
 	RuntimeWorkspaceStateResponse,
 } from "../core/api-contract";
 import { getDetailTerminalTaskId } from "../core/detail-terminal-session";
+import { isHomeAgentSessionIdForWorkspace } from "../core/home-agent-session";
 import {
 	buildKanbanRuntimeUrl,
 	getKanbanRuntimeHost,
@@ -21,6 +22,8 @@ import {
 	getKanbanRuntimeTls,
 	isKanbanRemoteHost,
 } from "../core/runtime-endpoint";
+import { createIsolationService, type IsolationService } from "../isolation/isolation-service";
+import { createMessageNoticeQueue } from "../isolation/message-notices";
 import type { PipelineActionRequest, PipelineActionResult } from "../pipeline/actions";
 import type { PipelineEventMap } from "../pipeline/events";
 import type { WatchdogActionRequest } from "../pipeline/watchdog/actions";
@@ -44,10 +47,13 @@ import {
 	mutateWorkspaceState,
 } from "../state/workspace-state";
 import { createClineTurnMonitor } from "../terminal/cline-turn-monitor";
+import { deliverTaskInput } from "../terminal/deliver-task-input";
+import { DEFAULT_REVIEW_SETTLE_MS } from "../terminal/review-settle";
 import type { TerminalSessionManager } from "../terminal/session-manager";
 import { createTerminalWebSocketBridge } from "../terminal/ws-server";
 import { type RuntimeTrpcContext, type RuntimeTrpcWorkspaceScope, runtimeAppRouter } from "../trpc/app-router";
 import { createHooksApi } from "../trpc/hooks-api";
+import { createIsolationApi } from "../trpc/isolation-api";
 import { createProjectsApi } from "../trpc/projects-api";
 import { createRuntimeApi } from "../trpc/runtime-api";
 import { createWorkspaceApi } from "../trpc/workspace-api";
@@ -63,6 +69,7 @@ import { createOrphanProcessSweeper } from "./orphan-process-sweeper";
 import { createPipelineActionRunner } from "./pipeline-actions";
 import { createProcessReaper, type PreparedWorktreeReap } from "./process-reaper";
 import { createProcProcessTableReader, isProcessTableSupported } from "./process-table";
+import { createRequestCallerResolver } from "./request-caller";
 import type { RuntimeStateHub } from "./runtime-state-hub";
 import { createTaskLandingGate } from "./task-landing-gate";
 import { createTaskTrashWorkflow, createTrashTaskRequestHandler, type TaskTrashWorkflow } from "./task-trash-workflow";
@@ -97,6 +104,10 @@ export interface CreateRuntimeServerDependencies {
 	sessionSyncEnabled: boolean;
 	/** Kanban landed a card (the `qa` landing step); the pipeline worker host passes it to the worker. */
 	onTaskLanded?: (event: PipelineEventMap["landed"]) => void;
+	/** Project isolation's state (src/isolation/isolation-service.ts); the server makes one when absent. */
+	isolation?: IsolationService;
+	/** `sessionSync.reviewSettleSec` in ms: orchestrator message notices wait for a settled Review. */
+	reviewSettleMs?: number;
 }
 
 export interface RuntimeServer {
@@ -106,6 +117,8 @@ export interface RuntimeServer {
 	handleWatchdogRequest: (request: WatchdogActionRequest) => Promise<unknown>;
 	/** Runs the pipeline worker's action requests (pipeline-actions.ts). */
 	runPipelineAction: (request: PipelineActionRequest) => Promise<PipelineActionResult>;
+	/** Project isolation's state: credentials, grants, the caller checks. */
+	isolation: IsolationService;
 	url: string;
 	close: () => Promise<void>;
 }
@@ -141,11 +154,12 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 	const resolveWorkspaceScopeFromRequest = async (
 		request: IncomingMessage,
 		requestUrl: URL,
+		fallbackWorkspaceId: string | null = null,
 	): Promise<{
 		requestedWorkspaceId: string | null;
 		workspaceScope: RuntimeTrpcWorkspaceScope | null;
 	}> => {
-		const requestedWorkspaceId = readWorkspaceIdFromRequest(request, requestUrl);
+		const requestedWorkspaceId = readWorkspaceIdFromRequest(request, requestUrl) ?? fallbackWorkspaceId;
 		if (!requestedWorkspaceId) {
 			return {
 				requestedWorkspaceId: null,
@@ -187,8 +201,27 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		deps.workspaceRegistry.clearActiveWorkspace();
 	};
 
+	const processTableReader = isProcessTableSupported() ? createProcProcessTableReader() : null;
+	const isolation =
+		deps.isolation ??
+		createIsolationService({
+			processReader: processTableReader,
+			listLiveSessions: () =>
+				deps.workspaceRegistry.listManagedWorkspaces().flatMap((workspace) =>
+					workspace.terminalManager.listSummaries().map((summary) => ({
+						workspaceId: workspace.workspaceId,
+						taskId: summary.taskId,
+						agentId: summary.agentId,
+						pid: summary.pid,
+						cwd: summary.workspacePath ?? null,
+						live: workspace.terminalManager.hasLiveProcess(summary.taskId),
+					})),
+				),
+			warn: deps.warn,
+		});
+	const { resolveRequestScope, authorizeWorkspaceUpgrade } = createRequestCallerResolver(isolation);
 	const processReaper = createProcessReaper({
-		reader: isProcessTableSupported() ? createProcProcessTableReader() : null,
+		reader: processTableReader,
 		getWorktreeRoots: getTaskWorktreeSearchRootPaths,
 		log: deps.warn,
 	});
@@ -274,12 +307,45 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			return await orphanProcessSweeper.getStatus();
 		},
 		sessionSyncEnabled: deps.sessionSyncEnabled,
+		isolation,
+	});
+	// Orchestrator message notices wait for the receiver's settled Review with nothing typed (message-notices.ts).
+	const messageNotices = createMessageNoticeQueue({
+		findOrchestratorSession: (workspaceId) => {
+			const terminalManager = deps.workspaceRegistry.getTerminalManagerForWorkspace(workspaceId);
+			const summary = terminalManager
+				?.listSummaries()
+				.find(
+					(candidate) =>
+						isHomeAgentSessionIdForWorkspace(candidate.taskId, workspaceId) &&
+						terminalManager.hasLiveProcess(candidate.taskId),
+				);
+			if (!terminalManager || !summary) {
+				return null;
+			}
+			return { taskId: summary.taskId, summary, hasDraft: terminalManager.hasTypedInputSinceEnter(summary.taskId) };
+		},
+		deliver: async (workspaceId, taskId, notice) => {
+			const terminalManager = deps.workspaceRegistry.getTerminalManagerForWorkspace(workspaceId);
+			return terminalManager ? (await deliverTaskInput(terminalManager, taskId, notice)).ok : false;
+		},
+		settleMs: deps.reviewSettleMs ?? DEFAULT_REVIEW_SETTLE_MS,
+	});
+	messageNotices.start();
+	// A session's credential stops working when its process ends (resolveCaller checks that too); this drops them.
+	const credentialSweep = setInterval(() => isolation.pruneCredentials(), 10_000);
+	credentialSweep.unref();
+	const isolationApi = createIsolationApi({
+		service: isolation,
+		listEntries: listWorkspaceIndexEntries,
+		notices: messageNotices,
 	});
 
 	const handleWatchdogRequest = createWatchdogActionHandler({
 		getWorkspacePathById: deps.workspaceRegistry.getWorkspacePathById,
 		getTerminal: getScopedTerminalManager,
 		startTaskSession: async (scope, input) => await runtimeApi.startTaskSession(scope, input),
+		credentials: isolation,
 		runProcessSweep: async () => {
 			await orphanProcessSweeper.sweep();
 			return await orphanProcessSweeper.getStatus();
@@ -340,10 +406,19 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 
 	const createTrpcContext = async (req: IncomingMessage): Promise<RuntimeTrpcContext> => {
 		const requestUrl = new URL(req.url ?? "/", "http://localhost");
-		const scope = await resolveWorkspaceScopeFromRequest(req, requestUrl);
+		// The caller is resolved on first use (hooks.ingest, the hot path, never asks); a session's call without a
+		// workspace is scoped to its own project, never to the server's active one.
+		const { getCaller, resolveStrictCaller, fallbackWorkspaceId } = await resolveRequestScope(req);
+		const scope = await resolveWorkspaceScopeFromRequest(req, requestUrl, fallbackWorkspaceId);
+		const sessionToken = extractSessionTokenFromCookie(req.headers.cookie);
 		return {
 			requestedWorkspaceId: scope.requestedWorkspaceId,
 			workspaceScope: scope.workspaceScope,
+			getCaller,
+			resolveStrictCaller,
+			// The passcode gate's browser cookie (remote mode): the user at the browser, so no console code is needed.
+			trustedBrowser: isRemoteMode && isPasscodeEnabled() && sessionToken !== null && validateSession(sessionToken),
+			isolationApi,
 			runtimeApi,
 			workspaceApi: createWorkspaceApi({
 				ensureTerminalManagerForWorkspace: deps.ensureTerminalManagerForWorkspace,
@@ -589,7 +664,14 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		// ── End passcode gate ─────────────────────────────────────────────────
 		(request as IncomingMessage & { __kanbanUpgradeHandled?: boolean }).__kanbanUpgradeHandled = true;
 		const requestedWorkspaceId = requestUrl.searchParams.get("workspaceId")?.trim() || null;
-		deps.runtimeStateHub.handleUpgrade(request, socket, head, { requestedWorkspaceId });
+		void authorizeWorkspaceUpgrade(request, requestedWorkspaceId).then((allowed) => {
+			if (!allowed) {
+				socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+				socket.destroy();
+				return;
+			}
+			deps.runtimeStateHub.handleUpgrade(request, socket, head, { requestedWorkspaceId });
+		});
 	});
 	const terminalWebSocketBridge = createTerminalWebSocketBridge({
 		server,
@@ -603,6 +685,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 						return token !== null && validateSession(token);
 					}
 				: undefined,
+		authorizeUpgrade: async (request, workspaceId) => await authorizeWorkspaceUpgrade(request, workspaceId),
 	});
 	server.on("upgrade", (request, socket) => {
 		const handled = (request as IncomingMessage & { __kanbanUpgradeHandled?: boolean }).__kanbanUpgradeHandled;
@@ -636,7 +719,10 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		taskTrashWorkflow,
 		handleWatchdogRequest,
 		runPipelineAction,
+		isolation,
 		close: async () => {
+			messageNotices.close();
+			clearInterval(credentialSweep);
 			orphanProcessSweeper.close();
 			clineTurnMonitor.close();
 			await deps.runtimeStateHub.close();

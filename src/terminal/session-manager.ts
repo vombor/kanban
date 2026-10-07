@@ -63,6 +63,11 @@ interface ActiveProcessState {
 	detectOutputTransition: AgentOutputTransitionDetector | null;
 	shouldInspectOutputForTransition: AgentOutputTransitionInspectionPredicate | null;
 	awaitingCodexPromptAfterEnter: boolean;
+	/**
+	 * Text was typed into the TUI since the last Enter (writeInput): the input box may hold a draft, so nothing may
+	 * type into it and press Enter (orchestrator message notices, src/isolation/message-notices.ts).
+	 */
+	typedSinceEnter: boolean;
 	autoConfirmedWorkspaceTrust: boolean;
 	workspaceTrustNavigationKeys: number;
 	workspaceTrustConfirmTimer: NodeJS.Timeout | null;
@@ -327,6 +332,20 @@ export class TerminalSessionManager implements TerminalSessionService {
 			return changedAt ?? startedAt;
 		}
 		return Math.max(changedAt, startedAt);
+	}
+
+	/**
+	 * Whether startTaskSession would hand back the live session unchanged (a process in a running or Review state)
+	 * instead of starting a new one. Its env (the session credential) then stays the running process's.
+	 */
+	willReuseLiveSession(taskId: string): boolean {
+		const entry = this.entries.get(taskId);
+		return Boolean(entry?.active && isActiveState(entry.summary.state));
+	}
+
+	/** Whether text was typed into the session since its last Enter (the input box may hold a draft). */
+	hasTypedInputSinceEnter(taskId: string): boolean {
+		return this.entries.get(taskId)?.active?.typedSinceEnter === true;
 	}
 
 	/** Whether the task's session has a process now (false for a summary hydrated after a restart). */
@@ -600,6 +619,7 @@ export class TerminalSessionManager implements TerminalSessionService {
 			detectOutputTransition: launch.detectOutputTransition ?? null,
 			shouldInspectOutputForTransition: launch.shouldInspectOutputForTransition ?? null,
 			awaitingCodexPromptAfterEnter: false,
+			typedSinceEnter: false,
 			autoConfirmedWorkspaceTrust: false,
 			workspaceTrustNavigationKeys: 0,
 			workspaceTrustConfirmTimer: null,
@@ -768,6 +788,7 @@ export class TerminalSessionManager implements TerminalSessionService {
 			detectOutputTransition: null,
 			shouldInspectOutputForTransition: null,
 			awaitingCodexPromptAfterEnter: false,
+			typedSinceEnter: false,
 			autoConfirmedWorkspaceTrust: false,
 			workspaceTrustNavigationKeys: 0,
 			workspaceTrustConfirmTimer: null,
@@ -842,6 +863,14 @@ export class TerminalSessionManager implements TerminalSessionService {
 			(data.includes(13) || data.includes(10))
 		) {
 			entry.active.awaitingCodexPromptAfterEnter = true;
+		}
+		// Escape sequences alone (focus-in, arrows) don't change whether the input box holds a draft.
+		// biome-ignore lint/suspicious/noControlCharactersInRegex: strips terminal escape sequences from typed input.
+		const text = data.toString("utf8").replace(/\u001b\[[0-9;?]*[A-Za-z~]|\u001b./gu, "");
+		if (/[\r\n]/u.test(text)) {
+			entry.active.typedSinceEnter = !/[\r\n]\s*$/u.test(text);
+		} else if (text.length > 0) {
+			entry.active.typedSinceEnter = true;
 		}
 		entry.active.session.write(data);
 		return cloneSummary(entry.summary);

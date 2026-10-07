@@ -447,6 +447,41 @@ export function getCodexSessionsPath(homeOverride: string | null = null): string
 	);
 }
 
+/**
+ * The machine-wide files no project's agent may edit under project isolation (src/isolation/isolation-paths.ts):
+ * Kanban's config.json, kits and workspace index, and the agents' user-level config. The user changes them, or
+ * `kanban` commands the user runs. Not the agents' own data (transcripts, sessions, Claude's per-project memory).
+ */
+export function getMachineConfigPaths(homePath = getKanbanHomePath()): string[] {
+	const userHome = getUserHomePath();
+	const claudeDir = join(userHome, ".claude");
+	const codexHome = readNonEmptyEnv("CODEX_HOME");
+	const codexDir = codexHome ? expandUserPath(codexHome, userHome) : join(userHome, ".codex");
+	const copilotDir = join(userHome, ".copilot");
+	const clineDir = getClineConfigDirPath();
+	return [
+		join(homePath, CONFIG_FILENAME),
+		getKanbanKitsPath(homePath),
+		join(getKanbanWorkspacesRootPath(homePath), "index.json"),
+		join(userHome, ".claude.json"),
+		join(claudeDir, "settings.json"),
+		join(claudeDir, "settings.local.json"),
+		join(claudeDir, "CLAUDE.md"),
+		join(claudeDir, "agents"),
+		join(claudeDir, "commands"),
+		join(claudeDir, "skills"),
+		join(claudeDir, "hooks"),
+		join(codexDir, "config.toml"),
+		join(codexDir, "AGENTS.md"),
+		join(codexDir, "rules"),
+		join(copilotDir, "config.json"),
+		join(copilotDir, "mcp-config.json"),
+		join(resolveClineDataDir(null), CLINE_SETTINGS_DIR),
+		getClineGlobalRulesPath(),
+		join(clineDir, "hooks"),
+	];
+}
+
 /** Per-workspace pipeline data that people and agents read (`<home>/data/<workspaceId>`, plan §6.2). */
 export function getKanbanWorkspaceDataPath(workspaceId: string, homePath = getKanbanHomePath()): string {
 	return join(getKanbanDataPath(homePath), workspaceId);
@@ -465,6 +500,18 @@ export function getPlanIndexPath(workspaceId: string, homePath = getKanbanHomePa
 /** The pipeline's decision log, one JSON line per decision (`<home>/data/<workspaceId>/pipeline-decisions.jsonl`). */
 export function getPipelineDecisionLogPath(workspaceId: string, homePath = getKanbanHomePath()): string {
 	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), PIPELINE_DECISIONS_FILENAME);
+}
+
+/**
+ * Project isolation's files for one workspace (src/isolation/): `isolation.jsonl` logs every refused or reported
+ * reach of its sessions, grants and grant uses; `messages.jsonl` is its side of the orchestrator messages.
+ */
+export function getIsolationWorkspacePaths(
+	workspaceId: string,
+	homePath = getKanbanHomePath(),
+): { log: string; messages: string } {
+	const dataDir = getKanbanWorkspaceDataPath(workspaceId, homePath);
+	return { log: join(dataDir, "isolation.jsonl"), messages: join(dataDir, "messages.jsonl") };
 }
 
 /** The workspace's QA log (`<home>/data/<workspaceId>/qa-log.md`): check results, verdicts; people and agents read it. */

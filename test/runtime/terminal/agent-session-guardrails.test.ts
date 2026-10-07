@@ -8,9 +8,11 @@ import { DEFAULT_GUARDRAIL_DENY_COMMANDS } from "../../../src/config/pipeline-co
 import type { RuntimeAgentId } from "../../../src/core/api-contract";
 import { parseDeniedCommandPatterns } from "../../../src/guardrails/command-patterns";
 import type { TaskGuardrails } from "../../../src/guardrails/task-guardrails";
+import type { SessionIsolation } from "../../../src/isolation/isolation-paths";
 import type { AgentAdapterLaunchInput } from "../../../src/terminal/agent-session-adapters";
 import { prepareAgentLaunch } from "../../../src/terminal/agent-session-adapters";
 import { evaluateClaudeGuard } from "../../../src/terminal/claude-guard";
+import { evaluateClineGuard } from "../../../src/terminal/cline-guard";
 import { removeTaskLaunchFiles } from "../../../src/workspace/task-launch-files";
 import { deleteTaskWorktree } from "../../../src/workspace/task-worktree";
 
@@ -40,6 +42,8 @@ function createGuardrails(overrides: Partial<TaskGuardrails> = {}): TaskGuardrai
 		sharedBranches: ["main", "fork/stack"],
 		deniedCommands: parseDeniedCommandPatterns(DEFAULT_GUARDRAIL_DENY_COMMANDS, ["main", "fork/stack"]),
 		ownBranchPush: false,
+		role: "card",
+		isolation: null,
 		...overrides,
 	};
 }
@@ -345,4 +349,126 @@ describe("the orchestrator is exempt", () => {
 			await launch.cleanup?.();
 		},
 	);
+});
+
+// Project isolation `enforce` (src/isolation/): the orchestrator's isolation-only guardrails and the cards' isolation.
+describe("project isolation at launch", () => {
+	const ISOLATION_NOTE = "Kanban project isolation:";
+	const isolation = (): SessionIsolation => ({
+		workspaceId: "workspace-1",
+		projectPath: "/projects/repo",
+		dataDir: join(tempHome, ".kanban", "data", "workspace-1"),
+		deniedDirs: ["/projects/other", "/worktrees/o1/other", join(tempHome, ".kanban", "data", "other")],
+		machineConfigPaths: [join(tempHome, ".kanban", "config.json"), join(tempHome, ".claude", "settings.json")],
+		claudeProjectDirs: [join(tempHome, ".claude", "projects", "-projects-other")],
+	});
+	const orchestratorGuardrails = (): TaskGuardrails =>
+		createGuardrails({
+			role: "orchestrator",
+			worktreePath: worktree,
+			protectedDirs: [],
+			confineWrites: false,
+			linkedDirs: [],
+			sharedBranches: [],
+			deniedCommands: [],
+			isolation: isolation(),
+		});
+	const orchestratorInput = (agentId: RuntimeAgentId, prompt = "Wake: d0001 is stalled") =>
+		launchInput(agentId, { taskId: `${HOME_AGENT_TASK_ID}${agentId}`, prompt, guardrails: orchestratorGuardrails() });
+
+	it("Claude orchestrator: Read and Edit denies on the other project, Edit on machine config, no command denies", async () => {
+		const launch = await prepareAgentLaunch(orchestratorInput("claude"));
+		const settingsPath = valuesOf(launch.args, "--settings")[0] ?? "";
+		const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+		expect(settings.permissions.deny).toEqual(
+			expect.arrayContaining([
+				"Read(//projects/other/**)",
+				"Edit(//projects/other/**)",
+				`Read(/${join(tempHome, ".claude", "projects", "-projects-other")}/**)`,
+				`Edit(/${join(tempHome, ".kanban", "config.json")})`,
+			]),
+		);
+		expect(settings.permissions.deny.some((rule: string) => rule.startsWith("Bash("))).toBe(false);
+		expect(settings.permissions.deny.some((rule: string) => rule.includes("/projects/repo"))).toBe(false);
+		// Machine config is readable.
+		expect(settings.permissions.deny).not.toContain(`Read(/${join(tempHome, ".kanban", "config.json")})`);
+		// The Bash guard hook refuses commands that name the other project.
+		const guard = settings.hooks.PreToolUse[0].hooks[0].command as string;
+		expect(guard).toContain("claude-guard");
+		const policy = JSON.parse(
+			Buffer.from(guard.split(" ").at(-1)?.replaceAll("'", "") ?? "", "base64").toString("utf8"),
+		);
+		expect(
+			evaluateClaudeGuard({ tool_name: "Bash", tool_input: { command: "cat /projects/other/README.md" } }, policy)
+				?.hookSpecificOutput.permissionDecision,
+		).toBe("deny");
+		expect(
+			evaluateClaudeGuard({ tool_name: "Bash", tool_input: { command: "git push origin main" } }, policy),
+		).toBeNull();
+		// The system prompt's isolation section names only its own project.
+		const systemPrompt = valuesOf(launch.args, "--append-system-prompt")[0] ?? "";
+		expect(systemPrompt).toContain("# Project isolation");
+		expect(systemPrompt).toContain("/projects/repo");
+		expect(systemPrompt).not.toContain("/projects/other");
+		const prompt = launch.args.at(-1) ?? "";
+		expect(prompt).toContain(ISOLATION_NOTE);
+		expect(prompt).not.toContain(GUARDRAIL_NOTE);
+		expect(prompt).not.toContain("/projects/other");
+	});
+
+	it("Codex orchestrator: no rules file in the project checkout, the bypass stays, isolation in the prompt", async () => {
+		const launch = await prepareAgentLaunch(orchestratorInput("codex"));
+		expect(existsSync(join(worktree, ".codex", "rules", "kanban-guardrails.rules"))).toBe(false);
+		expect(launch.args).toContain("--dangerously-bypass-approvals-and-sandbox");
+		const joined = launch.args.join("\n");
+		expect(joined).toContain(ISOLATION_NOTE);
+		expect(joined).toContain("reads and writes of other projects");
+	});
+
+	it("Copilot orchestrator: write denies on the other project and machine config, full permissions kept", async () => {
+		const launch = await prepareAgentLaunch(orchestratorInput("copilot"));
+		expect(launch.args).toContain("--allow-all-paths");
+		const denies = valuesOf(launch.args, "--deny-tool");
+		expect(denies).toEqual(
+			expect.arrayContaining(["write(/projects/other/**)", `write(${join(tempHome, ".claude", "settings.json")})`]),
+		);
+		expect(denies.some((rule) => rule.startsWith("shell("))).toBe(false);
+	});
+
+	it("Cline orchestrator: the guard cancels reads, edits and commands into the other project", async () => {
+		await prepareAgentLaunch(orchestratorInput("cline"));
+		const hook = readFileSync(join(worktree, ".cline", "hooks", "PreToolUse"), "utf8");
+		expect(hook).toContain("cline-guard");
+		const encoded = /--policy-base64'? '?([A-Za-z0-9+/=]+)/u.exec(hook)?.[1] ?? "";
+		const policy = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
+		const call = (name: string, input: unknown) => evaluateClineGuard({ tool_call: { name, input } }, policy);
+		expect(call("read_files", { files: [{ path: "/projects/other/a.ts" }] }).cancel).toBe(true);
+		expect(call("read_files", { files: [{ path: join(worktree, "a.ts") }] }).cancel).toBe(false);
+		expect(call("editor", { path: "/projects/other/a.ts" }).cancel).toBe(true);
+		expect(call("editor", { path: join(tempHome, ".kanban", "config.json") }).cancel).toBe(true);
+		// The orchestrator writes anywhere in its own project (its card worktrees included).
+		expect(call("editor", { path: "/worktrees/c9/repo/x.ts" }).cancel).toBe(false);
+		expect(call("run_commands", { commands: ["ls ../../projects/other"] }).cancel).toBe(false);
+		expect(call("run_commands", { commands: ["kanban task list --project-path /projects/other"] }).cancel).toBe(true);
+	});
+
+	it("a card gets the isolation on top of its own guardrails", async () => {
+		const launch = await prepareAgentLaunch(
+			launchInput("claude", { guardrails: createGuardrails({ isolation: isolation() }) }),
+		);
+		const settings = JSON.parse(readFileSync(valuesOf(launch.args, "--settings")[0] ?? "", "utf8"));
+		expect(settings.permissions.deny).toEqual(
+			expect.arrayContaining(["Bash(git push)", "Edit(//projects/repo/**)", "Read(//projects/other/**)"]),
+		);
+		expect(launch.args.at(-1)).toContain(ISOLATION_NOTE);
+	});
+
+	it("with isolation off the orchestrator launch is unchanged", async () => {
+		const launch = await prepareAgentLaunch(
+			launchInput("claude", { taskId: `${HOME_AGENT_TASK_ID}claude`, guardrails: null }),
+		);
+		const settingsPath = valuesOf(launch.args, "--settings")[0] ?? "";
+		expect(settingsPath).not.toContain("cards");
+		expect(valuesOf(launch.args, "--append-system-prompt")[0]).not.toContain("# Project isolation");
+	});
 });

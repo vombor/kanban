@@ -238,3 +238,87 @@ describe("wakeOrchestrator", () => {
 		expect(state.woken).toEqual({});
 	});
 });
+
+// Project isolation: a board's wake goes to its own orchestrator only (B's watchdog can't wake A's orchestrator).
+describe("watchdog wake under project isolation", () => {
+	function crossTargetHarness(isolation: Record<string, unknown>, wake: Record<string, unknown> = {}) {
+		const harness = createWatchdogHarness({
+			config: qaConfig({ mode: "sidebar", target: "home", ...wake }, { isolation }),
+		});
+		harnesses.push(harness);
+		harness.observe({
+			workspaceId: "home",
+			board: createBoard({}),
+			selectedAgentId: "codex",
+			workspacePath: "/projects/home",
+		});
+		harness.observe({ workspaceId: "foo", board: stalledBoard(), selectedAgentId: "claude" });
+		return harness;
+	}
+
+	it("enforce: foo's wake starts foo's own orchestrator, never orchestrator.wake.target's", async () => {
+		const harness = crossTargetHarness({ mode: "enforce" });
+		await harness.watchdog.tick();
+		const starts = harness.requests.filter((request) => request.kind === "startOrchestratorSession");
+		expect(starts).toEqual([
+			expect.objectContaining({ workspaceId: "foo", agentId: "claude", fromWorkspaceId: "foo" }),
+		]);
+		expect(harness.requests.some((request) => "workspaceId" in request && request.workspaceId === "home")).toBe(
+			false,
+		);
+	});
+
+	it("report: the wake still goes to the target, with a note that enforce would send it home", async () => {
+		const harness = crossTargetHarness({ mode: "report" });
+		await harness.watchdog.tick();
+		const start = harness.requests.find((request) => request.kind === "startOrchestratorSession");
+		expect(start).toMatchObject({ workspaceId: "home", fromWorkspaceId: "foo" });
+		const decisions = readFileSync(harness.paths("foo").decisions, "utf8");
+		expect(decisions).toContain("project isolation enforce would wake foo's own orchestrator instead");
+		// A report is "would", never "skipped": the wake did happen.
+		const redirect = decisions
+			.split("\n")
+			.filter(Boolean)
+			.map((line) => JSON.parse(line) as { note?: string; outcome?: string })
+			.find((record) => record.note?.includes("would wake foo's own orchestrator"));
+		expect(redirect?.outcome).toBe("report");
+	});
+
+	it("a headless run gets its workspace's session credential, bound to the run's pid", async () => {
+		const harness = createWatchdogHarness({
+			config: qaConfig({ mode: "headless" }, { isolation: { mode: "report" } }),
+		});
+		harnesses.push(harness);
+		harness.observe({ workspaceId: "foo", board: stalledBoard(), selectedAgentId: "claude" });
+		await harness.watchdog.tick();
+		expect(harness.requests).toContainEqual({
+			kind: "issueOrchestratorCredential",
+			workspaceId: "foo",
+			agentId: "claude",
+		});
+		expect(harness.startHeadlessRun).toHaveBeenCalledWith(
+			expect.objectContaining({
+				workspaceId: "foo",
+				env: { KANBAN_SESSION_CREDENTIAL: "cred-headless", KANBAN_SESSION_WORKSPACE_ID: "foo" },
+			}),
+		);
+		expect(harness.requests).toContainEqual({
+			kind: "bindOrchestratorCredential",
+			credential: "cred-headless",
+			pid: 4242,
+		});
+	});
+
+	it("enforce: a headless wake goes to the sidebar session (a headless run has no isolation guardrails)", async () => {
+		const harness = createWatchdogHarness({
+			config: qaConfig({ mode: "headless" }, { isolation: { mode: "enforce" } }),
+		});
+		harnesses.push(harness);
+		harness.observe({ workspaceId: "foo", board: stalledBoard(), selectedAgentId: "claude" });
+		await harness.watchdog.tick();
+		expect(harness.startHeadlessRun).not.toHaveBeenCalled();
+		expect(harness.requests.filter((request) => request.kind === "startOrchestratorSession")).toEqual([
+			expect.objectContaining({ workspaceId: "foo", agentId: "claude" }),
+		]);
+	});
+});

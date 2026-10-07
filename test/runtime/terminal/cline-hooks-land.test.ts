@@ -44,6 +44,8 @@ describe("Cline hooks in a card's worktree", () => {
 			sharedBranches: ["main"],
 			deniedCommands: parseDeniedCommandPatterns(DEFAULT_GUARDRAIL_DENY_COMMANDS, ["main"]),
 			ownBranchPush: false,
+			role: "card",
+			isolation: null,
 		};
 	}
 

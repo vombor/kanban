@@ -42,6 +42,11 @@ export interface CreateTerminalWebSocketBridgeRequest {
 	 */
 	validateUpgradeSession?: (cookieHeader: string | undefined) => boolean;
 	/**
+	 * Project isolation (src/isolation/): whether the caller may attach to a terminal of `workspaceId`. An agent
+	 * session may only attach to its own project's terminals. Absent = every upgrade may.
+	 */
+	authorizeUpgrade?: (request: IncomingMessage, workspaceId: string) => Promise<boolean>;
+	/**
 	 * Interval between viewer liveness pings. Defaults to
 	 * TERMINAL_WS_HEARTBEAT_INTERVAL_MS. Exposed so tests can use a short interval.
 	 */
@@ -279,6 +284,7 @@ export function createTerminalWebSocketBridge({
 	isTerminalIoWebSocketPath,
 	isTerminalControlWebSocketPath,
 	validateUpgradeSession,
+	authorizeUpgrade,
 	heartbeatIntervalMs,
 	ackStallTimeoutMs,
 	viewerPauseBudgetBytes,
@@ -757,9 +763,24 @@ export function createTerminalWebSocketBridge({
 
 			const targetServer = isIoRequest ? ioServer : controlServer;
 			const clientId = getTerminalClientId(url);
-			targetServer.handleUpgrade(request, socket, head, (ws: WebSocket) => {
-				targetServer.emit("connection", ws, { taskId, workspaceId, clientId, terminalManager });
-			});
+			const upgrade = () =>
+				targetServer.handleUpgrade(request, socket, head, (ws: WebSocket) => {
+					targetServer.emit("connection", ws, { taskId, workspaceId, clientId, terminalManager });
+				});
+			if (!authorizeUpgrade) {
+				upgrade();
+				return;
+			}
+			void authorizeUpgrade(request, workspaceId)
+				.catch(() => true)
+				.then((allowed) => {
+					if (!allowed) {
+						(socket as Socket).write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+						(socket as Socket).destroy();
+						return;
+					}
+					upgrade();
+				});
 		} catch {
 			socket.destroy();
 		}

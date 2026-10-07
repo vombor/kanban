@@ -37,6 +37,15 @@ export const workspaceKitRefSchema = z
 	.strict();
 export type WorkspaceKitRef = z.infer<typeof workspaceKitRefSchema>;
 
+/**
+ * Project isolation (src/isolation/, docs/fork/project-isolation.md). `off` (default): nothing changes. `report`:
+ * agent sessions are identified and every reach outside their own project is logged to data/<ws>/isolation.jsonl,
+ * nothing is refused. `enforce`: agent sessions reach only their own project through the runtime API and the Kanban
+ * CLI, and their launches get the isolation guardrails their CLI can enforce (src/terminal/agent-guardrails.ts).
+ */
+export const isolationModeSchema = z.enum(["off", "report", "enforce"]);
+export type IsolationMode = z.infer<typeof isolationModeSchema>;
+
 export const workspacePipelineSettingsSchema = z
 	.object({
 		name: z.string().nullable().default(null),
@@ -73,6 +82,16 @@ export const workspacePipelineSettingsSchema = z
 			})
 			.strict()
 			.default({ enabled: null, extraDenyCommands: [], extraWritableDirs: [] }),
+		// Project isolation (src/isolation/): `mode` overrides the machine-wide `isolation.mode` (null keeps it).
+		// `messages` is this project's switch for orchestrator messages (src/isolation/messages.ts): the sending and
+		// the receiving project must both say `allow`.
+		isolation: z
+			.object({
+				mode: isolationModeSchema.nullable().default(null),
+				messages: z.enum(["allow", "deny"]).default("deny"),
+			})
+			.strict()
+			.default({ mode: null, messages: "deny" }),
 	})
 	.strict();
 export type WorkspacePipelineSettings = z.infer<typeof workspacePipelineSettingsSchema>;
@@ -431,6 +450,14 @@ const projectsSectionSchema = z
 	.strict();
 export type ProjectsSettings = z.infer<typeof projectsSectionSchema>;
 
+// Project isolation, machine-wide; per workspace: `workspaces.<id>.isolation`.
+const isolationSectionSchema = z
+	.object({
+		mode: isolationModeSchema.default("off"),
+	})
+	.strict();
+export type IsolationSettings = z.infer<typeof isolationSectionSchema>;
+
 const SECTION_SCHEMAS = {
 	sessionSync: sessionSyncSectionSchema,
 	pipeline: pipelineSectionSchema,
@@ -441,6 +468,7 @@ const SECTION_SCHEMAS = {
 	backups: backupsSectionSchema,
 	guardrails: guardrailsSectionSchema,
 	projects: projectsSectionSchema,
+	isolation: isolationSectionSchema,
 } as const;
 
 type SectionName = keyof typeof SECTION_SCHEMAS;

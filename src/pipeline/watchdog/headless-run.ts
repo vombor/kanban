@@ -124,7 +124,7 @@ export function spawnOrchestratorRunProcess(options: OrchestratorRunOptions): {
 				"--live-session-min",
 				String(options.liveSessionMin),
 			],
-			{ cwd: options.projectPath, detached: true, stdio: "ignore", env: process.env },
+			{ cwd: options.projectPath, detached: true, stdio: "ignore", env: { ...process.env, ...options.env } },
 		);
 		child.on("error", () => {});
 		child.unref();
@@ -184,6 +184,8 @@ export interface OrchestratorRunOptions {
 	liveSessionMin: number;
 	/** Skip the live interactive-session check (a human-run test). */
 	ignoreLive?: boolean;
+	/** Extra env for the run and its agent (the session credential of project isolation). */
+	env?: Record<string, string>;
 }
 
 export interface OrchestratorRunDependencies {

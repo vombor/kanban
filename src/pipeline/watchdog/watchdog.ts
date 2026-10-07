@@ -30,6 +30,8 @@ import {
 import type { RuntimeAgentId, RuntimeBoardCard, RuntimeBoardColumnId } from "../../core/api-contract";
 import type { EffectiveModelConfig } from "../../core/effective-agent";
 import { createHomeAgentSessionId } from "../../core/home-agent-session";
+import { resolveIsolationMode, resolveReachIsolationMode } from "../../isolation/isolation-settings";
+import { KANBAN_SESSION_CREDENTIAL_ENV, KANBAN_SESSION_WORKSPACE_ENV } from "../../isolation/session-identity";
 import { createRoutingPolicy, type RoutingPolicy } from "../../kits/policy";
 import { type KitCatalog, resolveWorkspaceKit } from "../../kits/resolve-kit";
 import {
@@ -147,7 +149,8 @@ export interface WatchdogDependencies {
 		agentId: RuntimeAgentId;
 		timeoutMin: number;
 		liveSessionMin: number;
-	}) => { ok: boolean; error?: string };
+		env?: Record<string, string>;
+	}) => { ok: boolean; pid?: number; error?: string };
 	probeModel?: (provider: string, model: string) => Promise<boolean>;
 	isTrusted?: (agentId: RuntimeAgentId, directory: string) => Promise<boolean | null>;
 	hooksOnPromptSubmit?: (agentId: RuntimeAgentId) => boolean;
@@ -654,7 +657,28 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 			});
 			return;
 		}
-		const targetWorkspaceId = wakeSettings.target ?? workspaceId;
+		let targetWorkspaceId = wakeSettings.target ?? workspaceId;
+		// Project isolation: a board's wake goes to its own orchestrator only. `orchestrator.wake.target` (one
+		// orchestrator for every workspace) was the migration's exception; under `enforce` the wake goes home.
+		if (targetWorkspaceId !== workspaceId) {
+			const reachMode = resolveReachIsolationMode(context.parsed.config, workspaceId, targetWorkspaceId);
+			if (reachMode !== "off") {
+				record(records, context, {
+					workspaceId,
+					taskId: null,
+					kind: "wake",
+					// enforce redirects the wake (done); report only says it would.
+					outcome: reachMode === "enforce" ? "acted" : "report",
+					note:
+						reachMode === "enforce"
+							? `orchestrator.wake.target ${targetWorkspaceId} is another project and project isolation is enforce: waking ${workspaceId}'s own orchestrator instead`
+							: `orchestrator.wake.target ${targetWorkspaceId} is another project: project isolation enforce would wake ${workspaceId}'s own orchestrator instead`,
+				});
+				if (reachMode === "enforce") {
+					targetWorkspaceId = workspaceId;
+				}
+			}
+		}
 		const targetSnapshot = snapshots.get(targetWorkspaceId);
 		if (!targetSnapshot) {
 			record(records, context, {
@@ -683,6 +707,10 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 		const runningHeadlessPid =
 			(await headlessPid(targetWorkspaceId)) ||
 			(headlessStartedAt !== undefined && context.now - headlessStartedAt <= JUST_STARTED_MS ? -1 : 0);
+		// A headless run carries no session credential and no isolation guardrails: under `enforce` the wake goes
+		// to the sidebar session, which startTaskSession launches with both.
+		const wakeMode =
+			resolveIsolationMode(context.parsed.config, targetWorkspaceId) === "enforce" ? "sidebar" : wakeSettings.mode;
 		const target = {
 			workspaceId: targetWorkspaceId,
 			projectPath: targetSnapshot.workspacePath,
@@ -708,7 +736,7 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 			const live = isOrchestratorSessionLive(session);
 			const route = live
 				? `type into ${sessionId}`
-				: wakeSettings.mode === "headless" && hasHeadlessRunner(agentId)
+				: wakeMode === "headless" && hasHeadlessRunner(agentId)
 					? `start a headless ${agentId} run in ${targetWorkspaceId}`
 					: `start ${sessionId} with the wake as its first input`;
 			record(records, context, {
@@ -731,7 +759,7 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 				items,
 				queued,
 				target,
-				mode: wakeSettings.mode,
+				mode: wakeMode,
 				text,
 				now: context.now,
 				cooldownMs: wakeSettings.cooldownMin * MIN,
@@ -742,21 +770,47 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 					queueForHeadless,
 					startHeadless: async (fresh) => {
 						await queueForHeadless(fresh);
+						// The run is the workspace's orchestrator: its `kanban` calls carry the workspace's session
+						// credential, bound to the run's pid (project isolation; an old server without the kind answers
+						// with an error, and the run starts without one, as before).
+						const issued = await deps.actions
+							.request({ kind: "issueOrchestratorCredential", workspaceId: targetWorkspaceId, agentId })
+							.catch(() => null);
+						const credential = issued?.ok ? issued.credential : null;
 						const started = startHeadlessRun({
 							workspaceId: targetWorkspaceId,
 							projectPath: targetSnapshot.workspacePath,
 							agentId,
 							timeoutMin: wakeSettings.timeoutMin,
 							liveSessionMin: wakeSettings.liveSessionMin,
+							...(credential
+								? {
+										env: {
+											[KANBAN_SESSION_CREDENTIAL_ENV]: credential,
+											[KANBAN_SESSION_WORKSPACE_ENV]: targetWorkspaceId,
+										},
+									}
+								: {}),
 						});
 						if (started.ok) {
 							justStarted.set(headlessKey, context.now);
+							if (credential && started.pid) {
+								await deps.actions
+									.request({ kind: "bindOrchestratorCredential", credential, pid: started.pid })
+									.catch(() => null);
+							}
 						}
 						return started;
 					},
 					deliver: async (input) =>
 						await deps.actions
-							.request({ kind: "deliverInput", workspaceId: targetWorkspaceId, taskId: sessionId, text: input })
+							.request({
+								kind: "deliverInput",
+								workspaceId: targetWorkspaceId,
+								taskId: sessionId,
+								text: input,
+								fromWorkspaceId: workspaceId,
+							})
 							.catch(
 								(error: unknown) =>
 									({
@@ -770,7 +824,13 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 							),
 					startSession: async (prompt) => {
 						const result = await deps.actions
-							.request({ kind: "startOrchestratorSession", workspaceId: targetWorkspaceId, agentId, prompt })
+							.request({
+								kind: "startOrchestratorSession",
+								workspaceId: targetWorkspaceId,
+								agentId,
+								prompt,
+								fromWorkspaceId: workspaceId,
+							})
 							.catch((error: unknown) => ({ ok: false, taskId: sessionId, error: String(error) }));
 						if (result.ok) {
 							justStarted.set(sessionId, context.now);

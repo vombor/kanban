@@ -5,7 +5,13 @@
 import { realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
-import { describeDeniedCommand, findDeniedCommand } from "../guardrails/command-patterns";
+import {
+	describeDeniedCommand,
+	describeDeniedPath,
+	findDeniedCommand,
+	findDeniedPathInCommand,
+	findProtectedFileWrite,
+} from "../guardrails/command-patterns";
 import { isPathInside } from "../guardrails/task-guardrails";
 import type { ClineGuardPolicy } from "./agent-guardrails";
 
@@ -81,6 +87,26 @@ function listWritePaths(toolName: string, input: Record<string, unknown>): strin
 	return [];
 }
 
+/** The files a `read_files` input names: `files[].path`, a bare string or list, `{ path }` or `{ file_path }`. */
+export function listReadPaths(input: unknown): string[] {
+	const value = parseMaybeJson(input);
+	if (typeof value === "string") {
+		return [value];
+	}
+	if (Array.isArray(value)) {
+		return value.flatMap((entry) => listReadPaths(entry));
+	}
+	const record = asRecord(value);
+	if (!record) {
+		return [];
+	}
+	if (record.files !== undefined) {
+		return listReadPaths(record.files);
+	}
+	const path = typeof record.path === "string" ? record.path : record.file_path;
+	return typeof path === "string" ? [path] : [];
+}
+
 function readToolCall(payload: unknown): { toolName: string; input: Record<string, unknown> } | null {
 	const record = asRecord(payload);
 	const toolCall = asRecord(record?.tool_call);
@@ -138,14 +164,38 @@ export function evaluateClineGuard(payload: unknown, policy: ClineGuardPolicy): 
 			if (denied) {
 				return { cancel: true, errorMessage: describeDeniedCommand(denied) };
 			}
+			const cwd = policy.cwd ?? policy.worktreePath;
+			const deniedPath =
+				findDeniedPathInCommand(line, policy.deniedPathRoots ?? [], cwd) ??
+				findProtectedFileWrite(line, policy.protectedWriteRoots ?? [], cwd);
+			if (deniedPath) {
+				return { cancel: true, errorMessage: describeDeniedPath(deniedPath) };
+			}
 		}
 		return ALLOW;
+	}
+	const toAbsolute = (path: string) => (isAbsolute(path) ? path : resolve(policy.worktreePath, path));
+	if (call.toolName === "read_files") {
+		const deniedReadRoots = policy.deniedReadRoots ?? [];
+		for (const path of listReadPaths(call.input)) {
+			if (deniedReadRoots.length > 0 && isWritablePath(toAbsolute(path), deniedReadRoots)) {
+				return { cancel: true, errorMessage: describeDeniedPath(path) };
+			}
+		}
+		return ALLOW;
+	}
+	const writePaths = listWritePaths(call.toolName, call.input);
+	const deniedWriteRoots = policy.deniedWriteRoots ?? [];
+	for (const path of writePaths) {
+		if (deniedWriteRoots.length > 0 && isWritablePath(toAbsolute(path), deniedWriteRoots)) {
+			return { cancel: true, errorMessage: describeDeniedPath(path) };
+		}
 	}
 	if (!policy.confineWrites) {
 		return ALLOW;
 	}
-	for (const path of listWritePaths(call.toolName, call.input)) {
-		const absolute = isAbsolute(path) ? path : resolve(policy.worktreePath, path);
+	for (const path of writePaths) {
+		const absolute = toAbsolute(path);
 		if (!isWritablePath(absolute, policy.writableRoots)) {
 			return {
 				cancel: true,

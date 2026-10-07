@@ -23,10 +23,19 @@ import {
 	parseTaskSessionStopRequest,
 } from "../core/api-validation";
 import { isHomeAgentSessionId } from "../core/home-agent-session";
-import { resolveTaskGuardrails } from "../guardrails/task-guardrails";
+import { resolveOrchestratorGuardrails, resolveTaskGuardrails } from "../guardrails/task-guardrails";
+import { grantCoversSession } from "../isolation/grants";
+import { resolveSessionIsolation } from "../isolation/isolation-paths";
+import type { IsolationService } from "../isolation/isolation-service";
+import {
+	type AgentSessionIdentity,
+	getSessionRole,
+	KANBAN_SESSION_CREDENTIAL_ENV,
+	KANBAN_SESSION_WORKSPACE_ENV,
+} from "../isolation/session-identity";
 import { openInBrowser } from "../server/browser";
 import { getDebugResetTargetPaths } from "../state/kanban-home";
-import { loadWorkspaceBoardById } from "../state/workspace-state";
+import { listWorkspaceIndexEntries, loadWorkspaceBoardById } from "../state/workspace-state";
 import { buildRuntimeConfigResponse, resolveAgentCommand } from "../terminal/agent-registry";
 import { deliverTaskInput } from "../terminal/deliver-task-input";
 import type { TerminalSessionManager } from "../terminal/session-manager";
@@ -49,6 +58,8 @@ export interface CreateRuntimeApiDependencies {
 	runProcessSweep: () => Promise<RuntimeProcessSweepResponse>;
 	/** The `sessionSync` setting as read at startup (src/config/session-sync-config.ts); the browser follows it. */
 	sessionSyncEnabled: boolean;
+	/** Project isolation (src/isolation/): each launch gets a session credential and, under `enforce`, its denies. */
+	isolation?: IsolationService;
 }
 
 async function resolveExistingTaskCwdOrEnsure(options: {
@@ -171,12 +182,31 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 						error: "No runnable agent command is configured. Open Settings, install a supported CLI, and select it.",
 					};
 				}
-				// Card sessions only: the orchestrator (home-agent session) works across the project's worktrees.
+				// An unreadable config.json keeps the default guardrails (on) and isolation off.
+				const pipelineConfig = (await readPipelineConfig().catch(() => parsePipelineConfig({}))).config;
+				const identity: AgentSessionIdentity = {
+					workspaceId: workspaceScope.workspaceId,
+					taskId: body.taskId,
+					role: getSessionRole(body.taskId),
+					agentId: resolved.agentId,
+					cwd: taskCwd,
+				};
+				// Project isolation `enforce`: the other projects and the machine-wide config, minus the user's grants.
+				const isolation = await resolveSessionIsolation({
+					config: pipelineConfig,
+					workspaceId: workspaceScope.workspaceId,
+					projectPath: workspaceScope.workspacePath,
+					entries: await listWorkspaceIndexEntries().catch(() => []),
+					grantedWorkspaceIds: (deps.isolation?.grants.list() ?? [])
+						.filter((grant) => grantCoversSession(grant, identity))
+						.flatMap((grant) => grant.reach),
+				});
+				// The orchestrator (home-agent session) works across the project's worktrees: isolation only.
 				const guardrails = isHomeAgentSessionId(body.taskId)
-					? null
+					? await resolveOrchestratorGuardrails({ projectPath: workspaceScope.workspacePath, isolation })
 					: await resolveTaskGuardrails({
-							// An unreadable config.json keeps the default guardrails (on), never none.
-							config: (await readPipelineConfig().catch(() => parsePipelineConfig({}))).config,
+							config: pipelineConfig,
+							isolation,
 							taskId: body.taskId,
 							workspaceId: workspaceScope.workspaceId,
 							worktreePath: taskCwd,
@@ -191,6 +221,13 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 								)
 								.catch(() => null),
 						});
+				// A live session is handed back unchanged (the session manager's own predicate) and keeps its credential;
+				// a new process gets a new one.
+				const credential = deps.isolation
+					? terminalManager.willReuseLiveSession(body.taskId)
+						? deps.isolation.credentials.current(workspaceScope.workspaceId, body.taskId)
+						: deps.isolation.issueCredential(identity)
+					: null;
 				const summary = await terminalManager.startTaskSession({
 					taskId: body.taskId,
 					agentId: resolved.agentId,
@@ -207,6 +244,14 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 					workspaceId: workspaceScope.workspaceId,
 					agentSettings: body.agentSettings,
 					guardrails,
+					...(credential
+						? {
+								env: {
+									[KANBAN_SESSION_CREDENTIAL_ENV]: credential,
+									[KANBAN_SESSION_WORKSPACE_ENV]: workspaceScope.workspaceId,
+								},
+							}
+						: {}),
 				});
 
 				let nextSummary = summary;

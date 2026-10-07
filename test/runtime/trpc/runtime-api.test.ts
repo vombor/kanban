@@ -43,7 +43,8 @@ vi.mock("../../../src/workspace/turn-checkpoints.js", () => ({
 	captureTaskTurnCheckpoint: turnCheckpointMocks.captureTaskTurnCheckpoint,
 }));
 
-vi.mock("../../../src/guardrails/task-guardrails.js", () => ({
+vi.mock("../../../src/guardrails/task-guardrails.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../src/guardrails/task-guardrails")>()),
 	resolveTaskGuardrails: guardrailMocks.resolveTaskGuardrails,
 }));
 
@@ -56,6 +57,8 @@ vi.mock("../../../src/server/browser.js", () => ({
 	openInBrowser: browserMocks.openInBrowser,
 }));
 
+import { createIsolationService } from "../../../src/isolation/isolation-service";
+import { KANBAN_SESSION_CREDENTIAL_ENV, KANBAN_SESSION_WORKSPACE_ENV } from "../../../src/isolation/session-identity";
 import { getKanbanGlobalConfigPath } from "../../../src/state/kanban-home";
 import type { RuntimeTrpcContext } from "../../../src/trpc/app-router";
 import { type CreateRuntimeApiDependencies, createRuntimeApi } from "../../../src/trpc/runtime-api";
@@ -325,6 +328,60 @@ describe("createRuntimeApi startTaskSession", () => {
 			}),
 		);
 		expect(terminalManager.startTaskSession).toHaveBeenCalledWith(expect.objectContaining({ guardrails }));
+	});
+
+	it("gives each new agent process a session credential bound to its workspace, and keeps a live session's", async () => {
+		taskWorktreeMocks.resolveTaskCwd.mockResolvedValue("/tmp/existing-worktree");
+		guardrailMocks.resolveTaskGuardrails.mockResolvedValue(null);
+		let reused = false;
+		const terminalManager = {
+			startTaskSession: vi.fn(async () => createSummary()),
+			applyTurnCheckpoint: vi.fn(),
+			// The session manager's own "hand the live session back" predicate (active && isActiveState).
+			willReuseLiveSession: vi.fn(() => reused),
+			hasLiveProcess: vi.fn(() => true),
+		};
+		const isolation = createIsolationService({
+			processReader: null,
+			listLiveSessions: () => [],
+			log: async () => {},
+		});
+		const api = createTestRuntimeApi({
+			getActiveWorkspaceId: vi.fn(() => "workspace-1"),
+			loadScopedRuntimeConfig: vi.fn(async () => createRuntimeConfigState()),
+			setActiveRuntimeConfig: vi.fn(),
+			getScopedTerminalManager: vi.fn(async () => terminalManager as never),
+			resolveInteractiveShellCommand: vi.fn(),
+			isolation,
+		});
+		const scope = { workspaceId: "workspace-1", workspacePath: "/tmp/repo" };
+		await api.startTaskSession(scope, { taskId: "task-1", baseRef: "main", prompt: "Fix it" });
+		const env = (terminalManager.startTaskSession.mock.calls[0] as unknown as [{ env?: Record<string, string> }])[0]
+			.env;
+		expect(env?.[KANBAN_SESSION_WORKSPACE_ENV]).toBe("workspace-1");
+		expect(isolation.credentials.resolve(env?.[KANBAN_SESSION_CREDENTIAL_ENV])).toMatchObject({
+			identity: { workspaceId: "workspace-1", taskId: "task-1", role: "card", cwd: "/tmp/existing-worktree" },
+		});
+		// A live session handed back unchanged keeps its credential (and its env says so).
+		reused = true;
+		await api.startTaskSession(scope, { taskId: "task-1", baseRef: "main", prompt: "Fix it" });
+		const second = (
+			terminalManager.startTaskSession.mock.calls[1] as unknown as [{ env?: Record<string, string> }]
+		)[0];
+		expect(second.env?.[KANBAN_SESSION_CREDENTIAL_ENV]).toBe(env?.[KANBAN_SESSION_CREDENTIAL_ENV]);
+		expect(isolation.credentials.resolve(env?.[KANBAN_SESSION_CREDENTIAL_ENV])).not.toBeNull();
+		// A process that is alive but not reused (an exited-state session is relaunched) gets a new credential: the
+		// old check (hasLiveProcess) launched it with none.
+		reused = false;
+		await api.startTaskSession(scope, { taskId: "task-1", baseRef: "main", prompt: "Fix it" });
+		const third = (
+			terminalManager.startTaskSession.mock.calls[2] as unknown as [{ env?: Record<string, string> }]
+		)[0];
+		expect(third.env?.[KANBAN_SESSION_CREDENTIAL_ENV]).toBeTruthy();
+		expect(third.env?.[KANBAN_SESSION_CREDENTIAL_ENV]).not.toBe(env?.[KANBAN_SESSION_CREDENTIAL_ENV]);
+		expect(isolation.credentials.resolve(third.env?.[KANBAN_SESSION_CREDENTIAL_ENV])).toMatchObject({
+			identity: { taskId: "task-1" },
+		});
 	});
 
 	it("passes the card's git action to the guardrails, so a PR card may push its own branch", async () => {

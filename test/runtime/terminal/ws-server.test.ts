@@ -5,7 +5,7 @@ import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RawData } from "ws";
 import { WebSocket } from "ws";
-
+import { parsePipelineConfig } from "../../../src/config/pipeline-config";
 import type { RuntimeTaskSessionSummary, RuntimeTerminalWsServerMessage } from "../../../src/core/api-contract";
 import { getKanbanRuntimePort, setKanbanRuntimePort } from "../../../src/core/runtime-endpoint";
 import {
@@ -14,6 +14,9 @@ import {
 	TERMINAL_WS_CLOSE_REASONS,
 	TERMINAL_WS_CLOSE_RESTORE_LIMIT,
 } from "../../../src/core/terminal-ws-close";
+import { createIsolationService } from "../../../src/isolation/isolation-service";
+import { KANBAN_SESSION_CREDENTIAL_HEADER } from "../../../src/isolation/session-identity";
+import { createRequestCallerResolver } from "../../../src/server/request-caller";
 import type { TerminalSessionListener, TerminalSessionService } from "../../../src/terminal/terminal-session-service";
 import type { TerminalRestoreSnapshot } from "../../../src/terminal/terminal-state-mirror";
 import { createTerminalWebSocketBridge, type TerminalWebSocketBridge } from "../../../src/terminal/ws-server";
@@ -373,6 +376,76 @@ describe("createTerminalWebSocketBridge – passcode gate", () => {
 			await freshBridge.close();
 			await new Promise<void>((resolve, reject) => {
 				freshServer.close((error) => (error ? reject(error) : resolve()));
+			});
+		}
+	});
+});
+
+describe("createTerminalWebSocketBridge – project isolation", () => {
+	it("answers 403 to a session's upgrade into another project under enforce, and lets its own through", async () => {
+		const isolation = createIsolationService({
+			readConfig: async () => parsePipelineConfig({ isolation: { mode: "enforce" } }).config,
+			processReader: null,
+			listLiveSessions: () => [
+				{ workspaceId: "other", taskId: "t9", agentId: "claude", pid: 4242, cwd: "/w/t9", live: true },
+				{ workspaceId: WORKSPACE_ID, taskId: "t8", agentId: "claude", pid: 4243, cwd: "/w/t8", live: true },
+			],
+			log: async () => {},
+		});
+		const { authorizeWorkspaceUpgrade } = createRequestCallerResolver(isolation);
+		const otherCredential = isolation.credentials.issue({
+			workspaceId: "other",
+			taskId: "t9",
+			role: "card",
+			agentId: "claude",
+			cwd: "/w/t9",
+		});
+		const ownCredential = isolation.credentials.issue({
+			workspaceId: WORKSPACE_ID,
+			taskId: "t8",
+			role: "card",
+			agentId: "claude",
+			cwd: "/w/t8",
+		});
+		const isolatedServer = createServer((_request, response) => {
+			response.writeHead(404);
+			response.end();
+		});
+		const manager = new FakeTerminalManager();
+		const isolatedBridge = createTerminalWebSocketBridge({
+			server: isolatedServer,
+			resolveTerminalManager: (workspaceId) => (workspaceId === WORKSPACE_ID ? manager : null),
+			isTerminalIoWebSocketPath: (pathname) => pathname === "/api/terminal/io",
+			isTerminalControlWebSocketPath: (pathname) => pathname === "/api/terminal/control",
+			authorizeUpgrade: authorizeWorkspaceUpgrade,
+		});
+		isolatedServer.listen(0, "127.0.0.1");
+		await once(isolatedServer, "listening");
+		const address = isolatedServer.address() as AddressInfo;
+		const originalPort = getKanbanRuntimePort();
+		setKanbanRuntimePort(address.port);
+		const url = `ws://127.0.0.1:${address.port}/api/terminal/io?taskId=${TASK_ID}&workspaceId=${WORKSPACE_ID}`;
+		const upgrade = async (credential: string | null) =>
+			await new Promise<string>((resolve, reject) => {
+				const ws = new WebSocket(url, {
+					headers: credential ? { [KANBAN_SESSION_CREDENTIAL_HEADER]: credential } : undefined,
+				});
+				ws.once("upgrade", (response) => {
+					resolve(String(response.statusCode));
+					ws.close();
+				});
+				ws.once("unexpected-response", (_request, response) => resolve(String(response.statusCode)));
+				ws.once("error", (error) => (String(error.message).includes("403") ? resolve("403") : reject(error)));
+			});
+		try {
+			expect(await upgrade(otherCredential)).toBe("403");
+			expect(await upgrade(ownCredential)).toBe("101");
+			expect(await upgrade(null)).toBe("101");
+		} finally {
+			setKanbanRuntimePort(originalPort);
+			await isolatedBridge.close();
+			await new Promise<void>((resolve, reject) => {
+				isolatedServer.close((error) => (error ? reject(error) : resolve()));
 			});
 		}
 	});

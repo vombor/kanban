@@ -601,3 +601,33 @@ of this repository is the complete record of changes.
   auto-review, the watchdog's stall checks and the scoreboard leave plan cards alone. On landing `qa` a plan card's
   spec lands through the Done gate like dev work (only on a human's land, with no `landed` event for kit
   features). The board shows a "Plan" badge and keeps the role through browser saves.
+- `src/isolation/*` (new), `src/trpc/isolation-api.ts` (new), `src/commands/isolation.ts` (new), `src/commands/message.ts`
+  (new), `src/doctor/isolation-checks.ts` (new), `src/trpc/app-router.ts`, `src/trpc/runtime-api.ts`,
+  `src/server/runtime-server.ts`, `src/server/watchdog-actions.ts`, `src/terminal/ws-server.ts`,
+  `src/terminal/agent-guardrails.ts`, `src/terminal/agent-session-adapters.ts`, `src/terminal/cline-guard.ts`,
+  `src/terminal/claude-guard.ts`, `src/guardrails/task-guardrails.ts`, `src/guardrails/command-patterns.ts`,
+  `src/prompts/append-system-prompt.ts`, `src/state/workspace-state.ts`, `src/state/kanban-home.ts`,
+  `src/config/pipeline-config.ts`, `src/pipeline/watchdog/watchdog.ts`, `src/pipeline/watchdog/actions.ts`,
+  `src/pipeline/watchdog/headless-run.ts`, `src/server/request-caller.ts` (new), `src/terminal/session-manager.ts`,
+  `src/commands/runtime-trpc-client.ts`, `src/cli.ts`, `src/doctor/run-doctor.ts`, `src/doctor/doctor-report.ts`,
+  `src/doctor/guardrail-checks.ts`, `docs/fork/project-isolation.md` (new), `docs/team/CONFIG.md`, `AGENTS.md`, tests
+  (project isolation, user requirement 2026-10-07): every agent session works only on its own project. Each launch
+  gets a per-session credential, which the runtime API checks and only accepts from that session's process tree (the
+  loopback connection traced through `/proc`; headless orchestrator runs get one bound to their pid). Cline's shared
+  daemon is attributed by the calling process's `/proc` cwd, always as a card. A credential from anywhere else is an
+  unknown caller, never the user. Credential-less calls are traced to a session's process tree while some workspace is
+  in `enforce`. With every workspace `off` the CLI isn't scoped at all. `isolation.mode` is `off` (default), `report` (log to
+  `data/<ws>/isolation.jsonl`) or `enforce`. Under `enforce`, a session's API calls, CLI board access, WebSocket
+  upgrades and machine-wide operations stay inside its project. Launches deny other projects' checkouts, worktrees
+  and data where the CLI can express it (Claude Code Read/Edit rules and a Bash path guard, Cline's PreToolUse guard,
+  Copilot write denies; Codex and the unverified agents get a prompt note). The orchestrator gets isolation-only
+  guardrails and a scoped system prompt, and wakes stay in the board's own workspace and use the sidebar session.
+  Agent sessions can't create, register or remove projects in any mode. The user's escape hatch is `kanban isolation
+  grant` (in-memory, user-only, logged on both sides), completed with a one-time code printed only on the server's
+  console (`kanban isolation approve`). Under `enforce` the user's own project changes need one too, except from a
+  passcode-authenticated browser. Claude Code and Cline also refuse shell writes to the machine-wide config, and
+  every isolation mode change is logged. `kanban message send|inbox|reply` adds orchestrator-to-
+  orchestrator requests, addressed by project, with an authenticated sender and a per-project
+  `workspaces.<id>.isolation.messages` switch (default `deny`). The receiver gets only a fixed notice, queued until its
+  Review has settled with nothing typed, rate-limited per pair, and messages are logged on both sides. `hooks.ingest`
+  is checked by ownership, with no process lookup. Before rolling back, remove the `isolation` keys from config.json. `kanban doctor` shows each workspace's isolation per agent (native / partial / prompt-only).

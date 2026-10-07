@@ -6,6 +6,7 @@ import type { RuntimeAgentId } from "../core/api-contract";
 import { isHomeAgentSessionId } from "../core/home-agent-session";
 import { resolveKanbanCommandParts } from "../core/kanban-command";
 import { buildShellCommandLine } from "../core/shell";
+import { buildIsolationPromptNote, type SessionIsolation } from "../isolation/isolation-paths";
 import { getTaskWorktreeSearchRootPaths } from "../state/kanban-home";
 import { detectAutoUpdateInstallation, UpdatePackageManager } from "../update/update";
 
@@ -25,6 +26,20 @@ export interface RenderAppendSystemPromptOptions {
 	agentId?: RuntimeAgentId | null;
 	/** Roots that contain task worktrees. Defaults to the resolved Kanban home's roots. */
 	taskWorktreesRootPaths?: readonly string[];
+	/** Project isolation `enforce` (src/isolation/isolation-paths.ts): adds the "this project only" section. */
+	isolation?: SessionIsolation | null;
+}
+
+function renderIsolationSection(isolation: SessionIsolation | null | undefined): string {
+	if (!isolation) {
+		return "";
+	}
+	return `
+# Project isolation
+
+${buildIsolationPromptNote(isolation, [])}
+- \`--project-path\` may only name this project's checkout or one of its task worktrees. Kanban refuses any other project for this session, and never registers a new one for you.
+`;
 }
 
 const APPEND_PROMPT_AGENT_IDS: readonly RuntimeAgentId[] = [
@@ -142,7 +157,7 @@ You are the Kanban sidebar agent for this workspace. Help the user interact with
 Kanban is a CLI tool for orchestrating multiple coding agents working on tasks in parallel on a kanban board. It manages git worktrees automatically so that each task can run a dedicated CLI agent in its own worktree.
 
 You are a Kanban board management helper: your job is to create, organize, link, start, and manage tasks using the Kanban CLI.
-
+${renderIsolationSection(options.isolation)}
 # CRITICAL: You are NOT a coding agent
 
 NEVER edit, create, delete, or modify any files in the workspace. NEVER write code, fix bugs, refactor, or do any implementation work yourself. You do not have the role of a coding assistant. Your only job is to manage the Kanban board using the Kanban CLI commands listed below.
@@ -375,11 +390,13 @@ Notes:
 export function resolveHomeAgentAppendSystemPrompt(
 	taskId: string,
 	options: ResolveAppendSystemPromptCommandPrefixOptions = {},
+	session: { isolation?: SessionIsolation | null } = {},
 ): string | null {
 	if (!isHomeAgentSessionId(taskId)) {
 		return null;
 	}
 	return renderAppendSystemPrompt(resolveAppendSystemPromptCommandPrefix(options), {
 		agentId: resolveHomeAgentId(taskId),
+		isolation: session.isolation ?? null,
 	});
 }

@@ -1,8 +1,10 @@
 // The guardrails of one task card's agent session: the commands it must never run and the directories it may write
 // (`guardrails.*` and `workspaces.<id>.guardrails` in config.json, src/config/pipeline-config.ts). Resolved once per
 // launch by the runtime and handed to the agent adapter, which applies what its CLI can enforce
-// (src/terminal/agent-guardrails.ts). The orchestrator never gets any: the home-agent sidebar session (and the
-// watchdog's start of it) resolves to null here, and the headless orchestrator wake does not go through the adapters.
+// (src/terminal/agent-guardrails.ts). The orchestrator gets no card guardrails: the home-agent sidebar session (and
+// the watchdog's start of it) resolves to null in resolveTaskGuardrails. Under project isolation `enforce` it gets
+// resolveOrchestratorGuardrails instead (isolation only: no command denies, writes anywhere in its own project), and
+// cards get the same isolation on top of their own guardrails (src/isolation/isolation-paths.ts).
 import { lstat, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
@@ -10,12 +12,15 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import { getWorkspacePipelineSettings, type PipelineConfig } from "../config/pipeline-config";
 import type { RuntimeTaskAutoReviewMode } from "../core/api-contract";
 import { isHomeAgentSessionId } from "../core/home-agent-session";
+import type { SessionIsolation } from "../isolation/isolation-paths";
 import { getGitStdout } from "../workspace/git-utils";
 import { readSymlinkedIgnoredPaths } from "../workspace/task-worktree";
 import { allowOwnBranchPush, type DeniedCommandRule, parseDeniedCommandPatterns } from "./command-patterns";
 
 export interface TaskGuardrails {
-	/** The card's worktree (the agent's cwd). */
+	/** A task card's guardrails, or the orchestrator's (isolation only, resolveOrchestratorGuardrails). */
+	role: "card" | "orchestrator";
+	/** The card's worktree (the agent's cwd); the project checkout for the orchestrator. */
 	worktreePath: string;
 	/** The project's main checkout. */
 	projectPath: string;
@@ -43,6 +48,8 @@ export interface TaskGuardrails {
 	 * matcher guards the shell, it may push its own branch (listMatcherDeniedCommands); elsewhere push stays denied.
 	 */
 	ownBranchPush: boolean;
+	/** Project isolation (`enforce`): the other projects and the machine-wide config; null when isolation is off. */
+	isolation: SessionIsolation | null;
 }
 
 export interface ResolveTaskGuardrailsInput {
@@ -54,6 +61,8 @@ export interface ResolveTaskGuardrailsInput {
 	baseRef?: string | null;
 	/** The card's git action (`autoReviewMode`) at launch; `pr` may allow pushing its own branch. */
 	gitAction?: RuntimeTaskAutoReviewMode | null;
+	/** The launch's project isolation (resolveSessionIsolation), or null. */
+	isolation?: SessionIsolation | null;
 }
 
 function toBranchName(ref: string | null | undefined): string | null {
@@ -126,18 +135,74 @@ export function getGuardrailTempDirs(): string[] {
 	return dirs;
 }
 
-/** A card session's guardrails, or null: the orchestrator's sessions, or guardrails off for the workspace. */
+async function readGitCommonDir(cwd: string): Promise<string | null> {
+	const gitCommonDir = await getGitStdout(["rev-parse", "--path-format=absolute", "--git-common-dir"], cwd)
+		.then((output) => output.trim())
+		.catch(() => "");
+	return gitCommonDir ? await realpathOrSelf(gitCommonDir) : null;
+}
+
+/**
+ * The orchestrator's guardrails under project isolation: no command denies and writes anywhere in its own project
+ * (it reviews, lands and fixes its cards' worktrees), only the isolation denies. Null without isolation.
+ */
+export async function resolveOrchestratorGuardrails(input: {
+	projectPath: string;
+	isolation: SessionIsolation | null;
+}): Promise<TaskGuardrails | null> {
+	if (!input.isolation) {
+		return null;
+	}
+	const projectPath = await realpathOrSelf(input.projectPath);
+	return {
+		role: "orchestrator",
+		worktreePath: projectPath,
+		projectPath,
+		protectedDirs: [],
+		confineWrites: false,
+		gitCommonDir: await readGitCommonDir(projectPath),
+		tempDirs: getGuardrailTempDirs(),
+		linkedDirs: [],
+		extraWritableDirs: [],
+		sharedBranches: [],
+		deniedCommands: [],
+		ownBranchPush: false,
+		isolation: input.isolation,
+	};
+}
+
+/**
+ * A card session's guardrails, or null: the orchestrator's sessions, or guardrails off for the workspace and no
+ * isolation. Guardrails off with isolation on keeps only the isolation (no command denies, writes not confined).
+ */
 export async function resolveTaskGuardrails(input: ResolveTaskGuardrailsInput): Promise<TaskGuardrails | null> {
 	if (isHomeAgentSessionId(input.taskId)) {
 		return null;
 	}
 	const settings = input.config.guardrails;
 	const workspace = getWorkspacePipelineSettings(input.config, input.workspaceId);
-	if (!(workspace.guardrails.enabled ?? settings.enabled)) {
-		return null;
-	}
+	const isolation = input.isolation ?? null;
 	const worktreePath = await realpathOrSelf(input.worktreePath);
 	const projectPath = await realpathOrSelf(input.projectPath);
+	if (!(workspace.guardrails.enabled ?? settings.enabled)) {
+		return isolation
+			? {
+					role: "card",
+					worktreePath,
+					projectPath,
+					protectedDirs: [],
+					confineWrites: false,
+					gitCommonDir: await readGitCommonDir(worktreePath),
+					tempDirs: getGuardrailTempDirs(),
+					linkedDirs: [],
+					extraWritableDirs: [],
+					sharedBranches: [],
+					deniedCommands: [],
+					ownBranchPush: false,
+					isolation,
+				}
+			: null;
+	}
 
 	const sharedBranches: string[] = [];
 	for (const branch of settings.sharedBranches) {
@@ -146,20 +211,19 @@ export async function resolveTaskGuardrails(input: ResolveTaskGuardrailsInput): 
 	addUnique(sharedBranches, toBranchName(workspace.defaultBaseRef));
 	addUnique(sharedBranches, toBranchName(input.baseRef));
 
-	const gitCommonDir = await getGitStdout(["rev-parse", "--path-format=absolute", "--git-common-dir"], worktreePath)
-		.then((output) => output.trim())
-		.catch(() => "");
+	const gitCommonDir = await readGitCommonDir(worktreePath);
 	const extraWritableDirs: string[] = [];
 	for (const dir of [...settings.extraWritableDirs, ...workspace.guardrails.extraWritableDirs]) {
 		addUnique(extraWritableDirs, resolve(expandHome(dir)));
 	}
 
 	return {
+		role: "card",
 		worktreePath,
 		projectPath,
 		protectedDirs: await listOtherWorktrees(worktreePath, projectPath),
 		confineWrites: settings.confineWrites,
-		gitCommonDir: gitCommonDir ? await realpathOrSelf(gitCommonDir) : null,
+		gitCommonDir,
 		tempDirs: getGuardrailTempDirs(),
 		linkedDirs: await listSymlinkTargets(worktreePath),
 		extraWritableDirs,
@@ -169,6 +233,7 @@ export async function resolveTaskGuardrails(input: ResolveTaskGuardrailsInput): 
 			sharedBranches,
 		),
 		ownBranchPush: input.gitAction === "pr" && settings.prCardPush === "own-branch",
+		isolation,
 	};
 }
 
