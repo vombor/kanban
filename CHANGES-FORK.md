@@ -668,3 +668,20 @@ of this repository is the complete record of changes.
   config.json `workspaces.<id>` and `orchestrator.wake.target`, home-agent session ids, `messages.jsonl`, calibration
   specs, restart-recover requests). Logs keep the old id as history. State left at the new id by an unregistered
   project is refused unless `--move-aside`. A journal in `run/rename-id.json` makes a rerun finish an interrupted run.
+- `src/terminal/cline-card-dir.ts`, `src/terminal/cline-hook-identity.ts` (new), `src/terminal/agent-session-adapters.ts`,
+  `src/terminal/cline-guard.ts`, `src/commands/hooks.ts`, `AGENTS.md`, tests (foo 4189a, 2026-10-07: its writes were
+  blocked as "outside this card's worktree" of whichever foo Cline card started last). A project that git-ignores
+  `.cline/` got it mirrored into every task worktree as a symlink to the main checkout's `.cline`, so all its Cline
+  cards (and its Cline sidebar session) shared one `.cline/hooks`, and each launch rewrote everyone's hook scripts with
+  its own `--task-id` and guard policy. cline 3.0.69 runs each session's hooks from that session's workspace (the
+  hub daemon only supplies the env), so the files themselves were wrong. Now a Cline launch first makes `.cline` the
+  card's own directory: a Kanban-mirrored symlink becomes a real directory whose other entries link to the shared ones,
+  and whose `hooks` and `rules` link only the user's own files (Kanban's hook scripts and the orchestrator's rule stay
+  per session). A `.cline` or `.cline/hooks` symlink Kanban didn't make fails the launch with an error. Every Kanban
+  Cline hook also checks the payload's `workspaceRoots[0]` (the session's worktree, sent by cline 3.0.69 with every
+  hook event): `kanban hooks cline-guard` against its policy's worktree, `kanban hooks notify|ingest` against the new
+  `--workspace-root` flag the scripts pass with `--task-id/--workspace-id`. A call from another worktree's session,
+  a payload without a root, a `cline-cli` notify without `--workspace-root` (scripts written before this change), or
+  `--workspace-root` without the card's ids is refused (the guard cancels the tool with the reason). A Cline launch
+  without a workspace id writes no notify step at all, because that would report for the daemon env's card. Cards
+  running on old scripts get their own hooks at their next launch or `kanban task resume`.

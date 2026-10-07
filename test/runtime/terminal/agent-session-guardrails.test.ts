@@ -441,7 +441,8 @@ describe("project isolation at launch", () => {
 		expect(hook).toContain("cline-guard");
 		const encoded = /--policy-base64'? '?([A-Za-z0-9+/=]+)/u.exec(hook)?.[1] ?? "";
 		const policy = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
-		const call = (name: string, input: unknown) => evaluateClineGuard({ tool_call: { name, input } }, policy);
+		const call = (name: string, input: unknown) =>
+			evaluateClineGuard({ workspaceRoots: [worktree], tool_call: { name, input } }, policy);
 		expect(call("read_files", { files: [{ path: "/projects/other/a.ts" }] }).cancel).toBe(true);
 		expect(call("read_files", { files: [{ path: join(worktree, "a.ts") }] }).cancel).toBe(false);
 		expect(call("editor", { path: "/projects/other/a.ts" }).cancel).toBe(true);

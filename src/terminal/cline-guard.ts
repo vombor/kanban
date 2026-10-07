@@ -14,6 +14,7 @@ import {
 } from "../guardrails/command-patterns";
 import { isPathInside } from "../guardrails/task-guardrails";
 import type { ClineGuardPolicy } from "./agent-guardrails";
+import { checkClineHookWorkspaceRoot } from "./cline-hook-identity";
 
 export interface ClineGuardDecision {
 	cancel: boolean;
@@ -154,6 +155,11 @@ export function isWritablePath(path: string, roots: readonly string[]): boolean 
 }
 
 export function evaluateClineGuard(payload: unknown, policy: ClineGuardPolicy): ClineGuardDecision {
+	// The policy is the card's whose worktree it names: a session in another worktree is refused, never judged by it.
+	const identityError = checkClineHookWorkspaceRoot(payload, policy.worktreePath);
+	if (identityError) {
+		return { cancel: true, errorMessage: `Blocked by Kanban's task-card guardrails: ${identityError}` };
+	}
 	const call = readToolCall(payload);
 	if (!call) {
 		return ALLOW;

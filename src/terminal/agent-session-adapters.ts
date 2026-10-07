@@ -46,6 +46,13 @@ import {
 } from "./agent-guardrails";
 import { isRuntimeDebugModeEnabled } from "./agent-registry";
 import { ensureClaudeWorkspaceTrusted } from "./claude-workspace-trust";
+import {
+	ensureCardOwnedClineDir,
+	KANBAN_HOME_AGENT_CLINE_RULE_FILE,
+	KANBAN_MANAGED_CLINE_CLI_HOOK_MARKER,
+	KANBAN_MANAGED_CLINE_RULE_MARKER,
+} from "./cline-card-dir";
+import { CLINE_HOOK_WORKSPACE_ROOT_FLAG } from "./cline-hook-identity";
 import { configureCodexHooks, hasCodexConfigOverride } from "./codex-hook-config";
 import { ensureCodexWorkspaceTrusted } from "./codex-workspace-trust";
 import { createHookRuntimeArgs, createHookRuntimeEnv } from "./hook-runtime-context";
@@ -276,8 +283,12 @@ function buildClineGuardCommandParts(guardrails: TaskGuardrails): string[] {
 function encodeGuardPolicy(policy: CommandGuardPolicy): string {
 	return Buffer.from(JSON.stringify(policy), "utf8").toString("base64");
 }
-const KANBAN_MANAGED_CLINE_CLI_HOOK_MARKER = "kanban-managed: cline-cli hook";
 const CLINE_CLI_ASK_TOOL_PATTERN = "ask_followup_question|ask_question|plan_mode_respond|submit_and_exit";
+
+/** The card a Cline hook script belongs to: its ids and the worktree its session works in (the launch cwd). */
+interface ClineHookCard extends HookContext {
+	workspaceRoot: string;
+}
 
 type ClineCliHookName =
 	| "TaskStart"
@@ -296,17 +307,20 @@ function getClineCliHookScriptPath(hooksDir: string, hookName: ClineCliHookName)
 	return join(hooksDir, hookName);
 }
 
+// Cline runs these scripts in its shared hub daemon, whose KANBAN_HOOK_* env and cwd are another card's: the command
+// names the card and its session's workspace root, which `kanban hooks notify` checks against the payload's.
+// Without a card (no workspace id) there is no notify at all: it would fall back to the daemon's env.
 function buildClineCliHookCommandParts(
 	event: RuntimeHookEvent,
 	hookName: ClineCliHookName,
-	hooks: HookContext | null,
-): string[] {
+	card: ClineHookCard | null,
+): string[] | null {
+	if (!card) {
+		return null;
+	}
 	const parts = buildHooksCommandParts(["notify", "--event", event, "--source", CLINE_CLI_HOOK_SOURCE]);
 	parts.push("--hook-event-name", hookName);
-	// Cline runs these scripts in its shared hub daemon, whose KANBAN_HOOK_* env is another card's: name the card here.
-	if (hooks) {
-		parts.push(...createHookRuntimeArgs(hooks));
-	}
+	parts.push(...createHookRuntimeArgs(card), CLINE_HOOK_WORKSPACE_ROOT_FLAG, card.workspaceRoot);
 	if (event === "to_review" && hookName === "TaskComplete") {
 		parts.push("--activity-text", "Waiting for review");
 	}
@@ -316,128 +330,134 @@ function buildClineCliHookCommandParts(
 function buildClineCliHookScriptContent(
 	event: RuntimeHookEvent,
 	hookName: ClineCliHookName,
-	hooks: HookContext | null,
+	card: ClineHookCard | null,
 ): string {
-	const commandParts = buildClineCliHookCommandParts(event, hookName, hooks);
+	const commandParts = buildClineCliHookCommandParts(event, hookName, card);
 	if (process.platform === "win32") {
-		const command = commandParts.map(powerShellQuote).join(" ");
-		return `# ${KANBAN_MANAGED_CLINE_CLI_HOOK_MARKER} (${hookName})
-$inputText = [Console]::In.ReadToEnd()
-try {
-  $inputText | & ${command} | Out-Null
+		const notify = commandParts
+			? `try {
+  $inputText | & ${commandParts.map(powerShellQuote).join(" ")} | Out-Null
 } catch {
 }
-Write-Output '{"cancel":false}'
+`
+			: "";
+		return `# ${KANBAN_MANAGED_CLINE_CLI_HOOK_MARKER} (${hookName})
+$inputText = [Console]::In.ReadToEnd()
+${notify}Write-Output '{"cancel":false}'
 exit 0
 `;
 	}
-	const command = commandParts.map(quoteShellArg).join(" ");
+	const notify = commandParts
+		? `printf '%s' "$INPUT" | ${commandParts.map(quoteShellArg).join(" ")} >/dev/null 2>&1 || true
+`
+		: "";
 	return `#!/usr/bin/env bash
 # ${KANBAN_MANAGED_CLINE_CLI_HOOK_MARKER} (${hookName})
 INPUT="$(cat || true)"
-printf '%s' "$INPUT" | ${command} >/dev/null 2>&1 || true
-echo '{"cancel":false}'
+${notify}echo '{"cancel":false}'
 `;
 }
 
 // With a guard, the hook prints the guard's decision instead of `{"cancel":false}`: `{"cancel":true}` stops the
 // tool call before it runs (cline-guard.ts).
-function buildClineCliPreToolUseHookScriptContent(hooks: HookContext | null, guardCommand?: string[]): string {
-	const activityCommand = buildClineCliHookCommandParts("activity", "PreToolUse", hooks);
-	const reviewCommand = buildClineCliHookCommandParts("to_review", "PreToolUse", hooks);
-	const inProgressCommand = buildClineCliHookCommandParts("to_in_progress", "PreToolUse", hooks);
+function buildClineCliPreToolUseHookScriptContent(card: ClineHookCard | null, guardCommand?: string[]): string {
+	const activityCommand = buildClineCliHookCommandParts("activity", "PreToolUse", card);
+	const reviewCommand = buildClineCliHookCommandParts("to_review", "PreToolUse", card);
+	const inProgressCommand = buildClineCliHookCommandParts("to_in_progress", "PreToolUse", card);
+	const hasNotify = activityCommand && reviewCommand && inProgressCommand;
 	if (process.platform === "win32") {
-		const activity = activityCommand.map(powerShellQuote).join(" ");
-		const review = reviewCommand.map(powerShellQuote).join(" ");
-		const inProgress = inProgressCommand.map(powerShellQuote).join(" ");
-		return `# ${KANBAN_MANAGED_CLINE_CLI_HOOK_MARKER} (PreToolUse)
-$inputText = [Console]::In.ReadToEnd()
-$decision = '{"cancel":false}'
-${
-	guardCommand
-		? `try {
+		const guard = guardCommand
+			? `try {
   $guardOutput = ($inputText | & ${guardCommand.map(powerShellQuote).join(" ")}) -join ""
   if ($guardOutput) { $decision = $guardOutput }
 } catch {
 }
 `
-		: ""
-}$isUserQuestionTool = $inputText -match '"(toolName|tool)"\\s*:\\s*"(${CLINE_CLI_ASK_TOOL_PATTERN})"'
+			: "";
+		const notify = hasNotify
+			? `$isUserQuestionTool = $inputText -match '"(toolName|tool)"\\s*:\\s*"(${CLINE_CLI_ASK_TOOL_PATTERN})"'
 try {
-  $inputText | & ${activity} | Out-Null
+  $inputText | & ${activityCommand.map(powerShellQuote).join(" ")} | Out-Null
 } catch {
 }
 if ($isUserQuestionTool) {
   try {
-    $inputText | & ${review} | Out-Null
+    $inputText | & ${reviewCommand.map(powerShellQuote).join(" ")} | Out-Null
   } catch {
   }
 } else {
   try {
-    $inputText | & ${inProgress} | Out-Null
+    $inputText | & ${inProgressCommand.map(powerShellQuote).join(" ")} | Out-Null
   } catch {
   }
 }
-Write-Output $decision
+`
+			: "";
+		return `# ${KANBAN_MANAGED_CLINE_CLI_HOOK_MARKER} (PreToolUse)
+$inputText = [Console]::In.ReadToEnd()
+$decision = '{"cancel":false}'
+${guard}${notify}Write-Output $decision
 exit 0
 `;
 	}
-	const activity = activityCommand.map(quoteShellArg).join(" ");
-	const review = reviewCommand.map(quoteShellArg).join(" ");
-	const inProgress = inProgressCommand.map(quoteShellArg).join(" ");
+	const guard = guardCommand
+		? `GUARD="$(printf '%s' "$INPUT" | ${guardCommand.map(quoteShellArg).join(" ")} 2>/dev/null || true)"
+if [ -n "$GUARD" ]; then DECISION="$GUARD"; fi
+`
+		: "";
+	const notify = hasNotify
+		? `printf '%s' "$INPUT" | ${activityCommand.map(quoteShellArg).join(" ")} >/dev/null 2>&1 || true
+if printf '%s' "$INPUT" | grep -Eq '"(toolName|tool)"[[:space:]]*:[[:space:]]*"(${CLINE_CLI_ASK_TOOL_PATTERN})"'; then
+  printf '%s' "$INPUT" | ${reviewCommand.map(quoteShellArg).join(" ")} >/dev/null 2>&1 || true
+else
+  printf '%s' "$INPUT" | ${inProgressCommand.map(quoteShellArg).join(" ")} >/dev/null 2>&1 || true
+fi
+`
+		: "";
 	return `#!/usr/bin/env bash
 # ${KANBAN_MANAGED_CLINE_CLI_HOOK_MARKER} (PreToolUse)
 INPUT="$(cat || true)"
 DECISION='{"cancel":false}'
-${
-	guardCommand
-		? `GUARD="$(printf '%s' "$INPUT" | ${guardCommand.map(quoteShellArg).join(" ")} 2>/dev/null || true)"
-if [ -n "$GUARD" ]; then DECISION="$GUARD"; fi
-`
-		: ""
-}printf '%s' "$INPUT" | ${activity} >/dev/null 2>&1 || true
-if printf '%s' "$INPUT" | grep -Eq '"(toolName|tool)"[[:space:]]*:[[:space:]]*"(${CLINE_CLI_ASK_TOOL_PATTERN})"'; then
-  printf '%s' "$INPUT" | ${review} >/dev/null 2>&1 || true
-else
-  printf '%s' "$INPUT" | ${inProgress} >/dev/null 2>&1 || true
-fi
-printf '%s\\n' "$DECISION"
+${guard}${notify}printf '%s\\n' "$DECISION"
 `;
 }
 
-function buildClineCliPostToolUseHookScriptContent(hooks: HookContext | null): string {
-	const activityCommand = buildClineCliHookCommandParts("activity", "PostToolUse", hooks);
-	const inProgressCommand = buildClineCliHookCommandParts("to_in_progress", "PostToolUse", hooks);
+function buildClineCliPostToolUseHookScriptContent(card: ClineHookCard | null): string {
+	const activityCommand = buildClineCliHookCommandParts("activity", "PostToolUse", card);
+	const inProgressCommand = buildClineCliHookCommandParts("to_in_progress", "PostToolUse", card);
+	const hasNotify = activityCommand && inProgressCommand;
 	if (process.platform === "win32") {
-		const activity = activityCommand.map(powerShellQuote).join(" ");
-		const inProgress = inProgressCommand.map(powerShellQuote).join(" ");
-		return `# ${KANBAN_MANAGED_CLINE_CLI_HOOK_MARKER} (PostToolUse)
-$inputText = [Console]::In.ReadToEnd()
-$isUserQuestionTool = $inputText -match '"(toolName|tool)"\\s*:\\s*"(${CLINE_CLI_ASK_TOOL_PATTERN})"'
+		const notify = hasNotify
+			? `$isUserQuestionTool = $inputText -match '"(toolName|tool)"\\s*:\\s*"(${CLINE_CLI_ASK_TOOL_PATTERN})"'
 try {
-  $inputText | & ${activity} | Out-Null
+  $inputText | & ${activityCommand.map(powerShellQuote).join(" ")} | Out-Null
 } catch {
 }
 if ($isUserQuestionTool) {
   try {
-    $inputText | & ${inProgress} | Out-Null
+    $inputText | & ${inProgressCommand.map(powerShellQuote).join(" ")} | Out-Null
   } catch {
   }
 }
-Write-Output '{"cancel":false}'
+`
+			: "";
+		return `# ${KANBAN_MANAGED_CLINE_CLI_HOOK_MARKER} (PostToolUse)
+$inputText = [Console]::In.ReadToEnd()
+${notify}Write-Output '{"cancel":false}'
 exit 0
 `;
 	}
-	const activity = activityCommand.map(quoteShellArg).join(" ");
-	const inProgress = inProgressCommand.map(quoteShellArg).join(" ");
+	const notify = hasNotify
+		? `printf '%s' "$INPUT" | ${activityCommand.map(quoteShellArg).join(" ")} >/dev/null 2>&1 || true
+if printf '%s' "$INPUT" | grep -Eq '"(toolName|tool)"[[:space:]]*:[[:space:]]*"(${CLINE_CLI_ASK_TOOL_PATTERN})"'; then
+  printf '%s' "$INPUT" | ${inProgressCommand.map(quoteShellArg).join(" ")} >/dev/null 2>&1 || true
+fi
+`
+		: "";
 	return `#!/usr/bin/env bash
 # ${KANBAN_MANAGED_CLINE_CLI_HOOK_MARKER} (PostToolUse)
 INPUT="$(cat || true)"
-printf '%s' "$INPUT" | ${activity} >/dev/null 2>&1 || true
-if printf '%s' "$INPUT" | grep -Eq '"(toolName|tool)"[[:space:]]*:[[:space:]]*"(${CLINE_CLI_ASK_TOOL_PATTERN})"'; then
-  printf '%s' "$INPUT" | ${inProgress} >/dev/null 2>&1 || true
-fi
-echo '{"cancel":false}'
+${notify}echo '{"cancel":false}'
 `;
 }
 
@@ -451,8 +471,6 @@ async function ensureKanbanManagedHookFile(filePath: string, content: string, ex
 	await ensureTextFile(filePath, content, executable);
 	return true;
 }
-
-const KANBAN_MANAGED_CLINE_RULE_MARKER = "<!-- kanban-managed: cline rule -->";
 
 /** Cline's env for every launch: no ClinePass/Desktop promo notice over the TUI (cline 3.0.69 reads it per run). */
 const CLINE_LAUNCH_ENV: Readonly<Record<string, string>> = { CLINE_DISABLE_CLINE_PASS_NOTICE: "1" };
@@ -1767,22 +1785,25 @@ const clineCliAdapter: AgentSessionAdapter = {
 		// with the original prompt instead of resuming.
 
 		const hooks = resolveHookContext(input);
+		const card: ClineHookCard | null = hooks && { ...hooks, workspaceRoot: input.cwd };
 		const guardrails = getSessionGuardrails(input);
 		const guardCommand = guardrails ? buildClineGuardCommandParts(guardrails) : undefined;
+		// The hooks and rules written below are this card's: never a .cline directory shared with other cards.
+		await ensureCardOwnedClineDir(input.cwd);
 		if (hooks || guardCommand) {
 			const hooksDir = join(input.cwd, ".cline", "hooks");
 			const executable = process.platform !== "win32";
 			const hookFiles: Array<{ name: ClineCliHookName; content: string }> = [
-				{ name: "TaskStart", content: buildClineCliHookScriptContent("to_in_progress", "TaskStart", hooks) },
-				{ name: "TaskResume", content: buildClineCliHookScriptContent("to_in_progress", "TaskResume", hooks) },
-				{ name: "TaskCancel", content: buildClineCliHookScriptContent("to_review", "TaskCancel", hooks) },
-				{ name: "TaskComplete", content: buildClineCliHookScriptContent("to_review", "TaskComplete", hooks) },
-				{ name: "TaskError", content: buildClineCliHookScriptContent("to_review", "TaskError", hooks) },
-				{ name: "PreToolUse", content: buildClineCliPreToolUseHookScriptContent(hooks, guardCommand) },
-				{ name: "PostToolUse", content: buildClineCliPostToolUseHookScriptContent(hooks) },
+				{ name: "TaskStart", content: buildClineCliHookScriptContent("to_in_progress", "TaskStart", card) },
+				{ name: "TaskResume", content: buildClineCliHookScriptContent("to_in_progress", "TaskResume", card) },
+				{ name: "TaskCancel", content: buildClineCliHookScriptContent("to_review", "TaskCancel", card) },
+				{ name: "TaskComplete", content: buildClineCliHookScriptContent("to_review", "TaskComplete", card) },
+				{ name: "TaskError", content: buildClineCliHookScriptContent("to_review", "TaskError", card) },
+				{ name: "PreToolUse", content: buildClineCliPreToolUseHookScriptContent(card, guardCommand) },
+				{ name: "PostToolUse", content: buildClineCliPostToolUseHookScriptContent(card) },
 				{
 					name: "UserPromptSubmit",
-					content: buildClineCliHookScriptContent("to_in_progress", "UserPromptSubmit", hooks),
+					content: buildClineCliHookScriptContent("to_in_progress", "UserPromptSubmit", card),
 				},
 			];
 			const skippedHooks: string[] = [];
@@ -1827,7 +1848,7 @@ const clineCliAdapter: AgentSessionAdapter = {
 		if (appendedSystemPrompt) {
 			// `-s/--system` would replace Cline's system prompt entirely; a project
 			// rules file appends instead and is auto-loaded from `.cline/rules/`.
-			const rulesPath = join(input.cwd, ".cline", "rules", "kanban-home-agent.md");
+			const rulesPath = join(input.cwd, ".cline", "rules", KANBAN_HOME_AGENT_CLINE_RULE_FILE);
 			await ensureTextFile(rulesPath, `${appendedSystemPrompt}\n`);
 		}
 

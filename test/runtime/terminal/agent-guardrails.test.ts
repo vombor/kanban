@@ -362,6 +362,7 @@ describe("Cline guard", () => {
 	};
 	const call = (name: string, input: Record<string, unknown>) => ({
 		hookName: "tool_call",
+		workspaceRoots: ["/wt/card-1/repo"],
 		tool_call: { id: "1", name, input },
 		preToolUse: { toolName: name, parameters: {} },
 	});
@@ -393,7 +394,10 @@ describe("Cline guard", () => {
 		// The string-valued copy in preToolUse.parameters when tool_call is missing.
 		expect(
 			evaluateClineGuard(
-				{ preToolUse: { toolName: "run_commands", parameters: { commands: '["podman restart kanban"]' } } },
+				{
+					workspaceRoots: ["/wt/card-1/repo"],
+					preToolUse: { toolName: "run_commands", parameters: { commands: '["podman restart kanban"]' } },
+				},
 				policy,
 			).cancel,
 		).toBe(true);
@@ -418,7 +422,9 @@ describe("Cline guard", () => {
 				.cancel,
 		).toBe(false);
 		expect(evaluateClineGuard(call("read_files", { files: ["/etc/hostname"] }), policy).cancel).toBe(false);
-		expect(evaluateClineGuard({ nothing: true }, policy)).toEqual({ cancel: false });
+		expect(evaluateClineGuard({ nothing: true, workspaceRoots: ["/wt/card-1/repo"] }, policy)).toEqual({
+			cancel: false,
+		});
 	});
 
 	it("lets a PR card push its own branch only when its policy says so", () => {

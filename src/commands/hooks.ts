@@ -10,6 +10,7 @@ import { buildWindowsCmdArgsArray, resolveWindowsComSpec, shouldUseWindowsCmdLau
 import type { ClineGuardPolicy, CommandGuardPolicy } from "../terminal/agent-guardrails";
 import { evaluateClaudeGuard } from "../terminal/claude-guard";
 import { evaluateClineGuard } from "../terminal/cline-guard";
+import { CLINE_HOOK_WORKSPACE_ROOT_FLAG, checkClineHookWorkspaceRoot } from "../terminal/cline-hook-identity";
 import { parseHookRuntimeContextFromEnv, resolveHookRuntimeContext } from "../terminal/hook-runtime-context";
 import type { RuntimeAppRouter } from "../trpc/app-router";
 import {
@@ -28,6 +29,7 @@ export {
 	startCodexSessionWatcher,
 } from "./hook-events/codex-hook-events";
 
+const CLINE_CLI_HOOK_SOURCE = "cline-cli";
 const VALID_EVENTS = new Set<RuntimeHookEvent>(["to_review", "to_in_progress", "activity"]);
 
 interface HooksIngestArgs {
@@ -48,6 +50,7 @@ interface HookCommandMetadataOptionValues {
 	metadataBase64?: string;
 	taskId?: string;
 	workspaceId?: string;
+	workspaceRoot?: string;
 }
 
 interface CodexWrapperArgs {
@@ -363,7 +366,34 @@ function normalizeHookMetadata(
 	return merged;
 }
 
-function parseHooksIngestArgs(
+/**
+ * A Cline hook runs in Cline's shared hub daemon (cline-hook-identity.ts): its script names the card's worktree, and the
+ * payload's session must work there. Refuses a Cline hook call without that, never reporting it for the env's card.
+ */
+class ClineHookCardError extends Error {}
+
+function assertClineHookCard(options: HookCommandMetadataOptionValues, payload: Record<string, unknown> | null): void {
+	const workspaceRoot = options.workspaceRoot?.trim();
+	if (!workspaceRoot) {
+		if (options.source === CLINE_CLI_HOOK_SOURCE) {
+			throw new ClineHookCardError(
+				`a cline-cli hook must name its card's worktree (${CLINE_HOOK_WORKSPACE_ROOT_FLAG}); this script predates that, restart the card so Kanban rewrites it`,
+			);
+		}
+		return;
+	}
+	if (!options.taskId?.trim() || !options.workspaceId?.trim()) {
+		throw new ClineHookCardError(
+			`${CLINE_HOOK_WORKSPACE_ROOT_FLAG} needs --task-id and --workspace-id: the env names another card`,
+		);
+	}
+	const identityError = checkClineHookWorkspaceRoot(payload, workspaceRoot);
+	if (identityError) {
+		throw new ClineHookCardError(identityError);
+	}
+}
+
+export function parseHooksIngestArgs(
 	event: RuntimeHookEvent,
 	options: HookCommandMetadataOptionValues,
 	payloadArg: string | undefined,
@@ -375,6 +405,7 @@ function parseHooksIngestArgs(
 	const payloadFromStdin = parseJsonObject(stdinPayload.trim());
 	const payloadFromArg = payloadArg ? parseJsonObject(payloadArg) : null;
 	const payload = payloadFromBase64 ?? payloadFromStdin ?? payloadFromArg;
+	assertClineHookCard(options, payload);
 	const metadata = normalizeHookMetadata(event, payload, flagMetadata);
 	return {
 		event,
@@ -511,8 +542,11 @@ async function runHooksNotify(
 		const codexEnrichedArgs = await enrichCodexReviewMetadata(parsedArgs, process.cwd());
 		const args = await enrichDroidReviewMetadata(codexEnrichedArgs);
 		await ingestHookEvent(args);
-	} catch {
-		// Best effort only.
+	} catch (error) {
+		// Best effort only, but say why a Cline hook was refused (the scripts discard it, a person running it sees it).
+		if (error instanceof ClineHookCardError) {
+			process.stderr.write(`kanban hooks notify: ${error.message}\n`);
+		}
 	}
 }
 
@@ -789,6 +823,10 @@ export function registerHooksCommand(program: Command): void {
 		.option("--metadata-base64 <base64>", "Base64-encoded JSON metadata payload.")
 		.option("--task-id <id>", "Card the hook belongs to (wins over KANBAN_HOOK_TASK_ID).")
 		.option("--workspace-id <id>", "Workspace of that card (wins over KANBAN_HOOK_WORKSPACE_ID).")
+		.option(
+			"--workspace-root <path>",
+			"Cline hooks: the card's worktree; the payload's session must work there, or the call is refused.",
+		)
 		.action(
 			async (
 				payload: string | undefined,
@@ -811,6 +849,10 @@ export function registerHooksCommand(program: Command): void {
 		.option("--metadata-base64 <base64>", "Base64-encoded JSON metadata payload.")
 		.option("--task-id <id>", "Card the hook belongs to (wins over KANBAN_HOOK_TASK_ID).")
 		.option("--workspace-id <id>", "Workspace of that card (wins over KANBAN_HOOK_WORKSPACE_ID).")
+		.option(
+			"--workspace-root <path>",
+			"Cline hooks: the card's worktree; the payload's session must work there, or the call is refused.",
+		)
 		.action(
 			async (
 				payload: string | undefined,
