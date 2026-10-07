@@ -6,17 +6,25 @@
 #    when that is executable (waits for Kanban, then starts the kit services).
 #  - on SIGTERM/SIGINT, runs the pre-stop hook for at most $KANBAN_PRESTOP_TIMEOUT s (default 45):
 #    $KANBAN_PRESTOP_HOOK, else `<kit>/bin/kit prepare-restart` when executable (tags the WIP of running cards and
-#    writes the restart manifest). Then forwards the signal to the child and waits for it. A failing, missing or
-#    hung hook never blocks the stop; a second signal cuts the hook short (or, after it, is forwarded at once).
+#    writes the restart manifest), then the runtime's restart prepare for at most $KANBAN_RESTART_PREPARE_TIMEOUT s
+#    (default 20): $KANBAN_RESTART_PREPARE_HOOK, else `kanban restart prepare` when `kanban` is on PATH (the
+#    runtime's WIP tags and restart manifest for every workspace, with the server's start time). Both run while
+#    Kanban is still up; 45 + 20 s plus Kanban's own 10 s fit the quadlet's StopTimeout=90. Then forwards the
+#    signal to the child and waits for it. A failing, missing or hung step never blocks the stop (each logs one
+#    result line); a second signal cuts the running step short and skips the rest (or, after them, is forwarded
+#    at once).
 #  - exits with the child's exit status (128+N when a signal killed it).
 # Hooks are `sh -c` strings; set one to the empty string to turn it off. <kit> is $KANBAN_KIT_HOME, default
 # /root/.kanban (the persistent volume). Hook output goes to <kit>/logs/kanban-entrypoint.log when that dir is
-# writable, else stderr; the step lines go to stderr (podman logs) and that log.
+# writable, else stderr; the step lines go to stderr (podman logs) and that log. The restart prepare step gets the
+# command's --port/--host/--home/--https as KANBAN_RUNTIME_PORT/KANBAN_RUNTIME_HOST/KANBAN_HOME/KANBAN_RUNTIME_HTTPS:
+# a CLI started from here would otherwise look for the server on the default port (3484, the image uses 3485).
 # Replaces node's docker-entrypoint.sh, which only prefixes `node` when the command is a flag or not on PATH.
 set -u
 
 kit_home=${KANBAN_KIT_HOME:-/root/.kanban}
 prestop_timeout=${KANBAN_PRESTOP_TIMEOUT:-45}
+restart_prepare_timeout=${KANBAN_RESTART_PREPARE_TIMEOUT:-20}
 hook_log=
 if [ -d "$kit_home/logs" ] && [ -w "$kit_home/logs" ]; then
 	hook_log=$kit_home/logs/kanban-entrypoint.log
@@ -46,6 +54,49 @@ elif [ -x "$kit" ]; then
 else
 	prestop_hook=
 fi
+
+if [ -n "${KANBAN_RESTART_PREPARE_HOOK+set}" ]; then
+	restart_prepare_hook=$KANBAN_RESTART_PREPARE_HOOK
+elif command -v kanban >/dev/null 2>&1; then
+	restart_prepare_hook="kanban restart prepare"
+else
+	restart_prepare_hook=
+fi
+
+# Where the command's server listens, for the restart prepare step. Empty: the CLI's own env/defaults (a command the
+# entrypoint can't read, like `sh -c '... exec kanban ...'`, or `--port auto`; set KANBAN_RUNTIME_PORT etc. then).
+runtime_port=
+runtime_host=
+runtime_home=
+runtime_https=
+option=
+for arg in "$@"; do
+	case $option in
+	--port) runtime_port=$arg ;;
+	--host) runtime_host=$arg ;;
+	--home) runtime_home=$arg ;;
+	esac
+	option=
+	case $arg in
+	--port | --host | --home) option=$arg ;;
+	--port=*) runtime_port=${arg#--port=} ;;
+	--host=*) runtime_host=${arg#--host=} ;;
+	--home=*) runtime_home=${arg#--home=} ;;
+	--https) runtime_https=1 ;;
+	esac
+done
+case $runtime_port in
+'' | *[!0-9]*) runtime_port= ;;
+esac
+
+# The restart prepare step's environment (run in its subshell): the command's server, where the entrypoint knows it.
+export_runtime_env() {
+	[ -z "$runtime_port" ] || export KANBAN_RUNTIME_PORT="$runtime_port"
+	[ -z "$runtime_host" ] || export KANBAN_RUNTIME_HOST="$runtime_host"
+	[ -z "$runtime_home" ] || export KANBAN_HOME="$runtime_home"
+	[ -z "$runtime_https" ] || export KANBAN_RUNTIME_HTTPS=1
+	return 0
+}
 
 if [ "$#" -eq 0 ]; then
 	log "no command given"
@@ -78,22 +129,27 @@ fi
 child=$!
 log "started pid $child: $*"
 
-# run_prestop: the pre-stop hook in its own process group (timeout's), killed with it at the deadline or on a
-# second stop signal. Returns once the hook is over or abandoned.
-run_prestop() {
-	if [ -z "$prestop_hook" ]; then
-		log "no pre-stop hook"
+# run_stop_step <label> <hook> <timeout> [<env setup>]: one pre-stop step in its own process group (timeout's),
+# killed with it at the deadline or on a second stop signal. <env setup> is a function run in the step's subshell
+# first. Returns once the step is over (0) or abandoned by a second stop signal (1: skip the remaining steps).
+run_stop_step() {
+	label=$1
+	hook=$2
+	step_timeout=$3
+	env_setup=${4:-:}
+	if [ -z "$hook" ]; then
+		log "no $label"
 		return 0
 	fi
 	if ! command -v timeout >/dev/null 2>&1; then
-		log "pre-stop hook skipped: no timeout command to bound it"
+		log "$label skipped: no timeout command to bound it"
 		return 0
 	fi
-	log "pre-stop hook (timeout ${prestop_timeout}s): $prestop_hook"
+	log "$label (timeout ${step_timeout}s): $hook"
 	if [ -n "$hook_log" ]; then
-		timeout -k 5 "$prestop_timeout" sh -c "$prestop_hook" </dev/null >>"$hook_log" 2>&1 &
+		("$env_setup" && exec timeout -k 5 "$step_timeout" sh -c "$hook") </dev/null >>"$hook_log" 2>&1 &
 	else
-		timeout -k 5 "$prestop_timeout" sh -c "$prestop_hook" </dev/null >&2 &
+		("$env_setup" && exec timeout -k 5 "$step_timeout" sh -c "$hook") </dev/null >&2 &
 	fi
 	hook_pid=$!
 	hook_status=
@@ -105,10 +161,10 @@ run_prestop() {
 		fi
 		case $pending in
 		TERM | INT)
-			log "SIG$pending again: abandoning the pre-stop hook"
+			log "SIG$pending again: abandoning the $label"
 			pending=
 			kill -TERM "$hook_pid" 2>/dev/null
-			return 0
+			return 1
 			;;
 		HUP)
 			pending=
@@ -120,10 +176,22 @@ run_prestop() {
 		break
 	done
 	case $hook_status in
-	0) log "pre-stop hook done" ;;
-	124 | 137) log "pre-stop hook timed out after ${prestop_timeout}s" ;;
-	*) log "pre-stop hook failed (exit $hook_status)" ;;
+	0) log "$label done" ;;
+	124 | 137) log "$label timed out after ${step_timeout}s" ;;
+	*) log "$label failed (exit $hook_status)" ;;
 	esac
+	return 0
+}
+
+# run_prestop: the kit's pre-stop hook, then the runtime's restart prepare, both before Kanban gets the signal.
+run_prestop() {
+	run_stop_step "pre-stop hook" "$prestop_hook" "$prestop_timeout" || return 0
+	if [ -n "$restart_prepare_hook" ] && ! kill -0 "$child" 2>/dev/null; then
+		log "restart prepare skipped: pid $child already exited"
+		return 0
+	fi
+	run_stop_step "restart prepare" "$restart_prepare_hook" "$restart_prepare_timeout" export_runtime_env
+	return 0
 }
 
 stopping=

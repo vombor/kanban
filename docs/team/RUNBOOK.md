@@ -107,11 +107,13 @@ on). There is no `pause` command.
 
 ## Incidents
 
-**Planned restart (Kanban or container).** On every stop the image entrypoint runs its pre-stop hook (bounded,
-45 s) before passing the signal on: `$KANBAN_PRESTOP_HOOK`, else the legacy kit's `kit prepare-restart`
-(`deploy/kanban-entrypoint.sh`, `docs/fork/container-lifecycle.md`). `kanban restart prepare` is the runtime's
-equivalent (it tags the WIP of mid-turn cards and writes `restart-manifest.json`). It is not wired into the
-entrypoint yet: run it yourself before a planned restart, and before a Kanban-only restart run both.
+**Planned restart (Kanban or container).** On every container stop the image entrypoint runs, while Kanban is still
+up and before passing the signal on, the legacy kit's `kit prepare-restart` (`$KANBAN_PRESTOP_HOOK`, at most 45 s)
+and then `kanban restart prepare` for every workspace (`$KANBAN_RESTART_PREPARE_HOOK`, at most 20 s; the runtime's
+equivalent: it tags the WIP of mid-turn cards and writes `restart-manifest.json` with the server's start time).
+Each step logs one result line to `<kit home>/logs/kanban-entrypoint.log` (`restart prepare done` / `failed` /
+`timed out`); a failed or hung step never holds up the stop (`deploy/kanban-entrypoint.sh`,
+`docs/fork/container-lifecycle.md`). Only a Kanban-only restart (no container stop) needs both run by hand first.
 `kanban restart recover --dry-run` shows what restart recovery would do on the live board. Without `--dry-run` it
 asks the worker to check now. Never restart the pod yourself: that is the user's step on the host.
 

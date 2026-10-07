@@ -471,3 +471,10 @@ of this repository is the complete record of changes.
   card (push permission is decided at launch from the card's git action) and that the user lets it push by setting
   the git action to PR (`kanban task update --auto-review-mode pr`) and restarting its session; the guard hooks'
   plain push block says the same.
+- `deploy/kanban-entrypoint.sh`, `deploy/Containerfile` (comment), `docs/fork/container-lifecycle.md`,
+  `docs/team/RUNBOOK.md`, `docs/team/WORKFLOW.md`, `test/integration/kanban-entrypoint.integration.test.ts`: on every
+  container stop the entrypoint also runs `kanban restart prepare` (all workspaces), after the legacy kit's
+  `kit prepare-restart` and before Kanban gets the signal, bounded by `KANBAN_RESTART_PREPARE_TIMEOUT` (default 20 s,
+  inside the quadlet's StopTimeout=90) and pointed at the command's `--port`/`--host`/`--home`/`--https`. A failing,
+  hung or missing command, or a Kanban already down, logs one line and never holds up the stop. It no longer has to
+  be run by hand before a planned container restart.

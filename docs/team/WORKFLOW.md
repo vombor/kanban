@@ -221,8 +221,8 @@ its own start time (`<home>/run/server-start.json`). After a restart, a card who
 server and has no process is an **orphan**, unless its turn had already ended (finished work waits for QA as usual).
 Nothing nudges, QA's, snapshots or escalates an orphan. Dev orphans are resumed one at a time, 20 s apart, on the
 same model, after a WIP tag `preserve/<id>-wip-<stamp>-restart`. Mid-run QA cards are recreated for the same
-snapshot, and calibration cards are left to their runner. `kanban restart prepare` tags the WIP and writes `restart-manifest.json` (the image entrypoint still runs the
-legacy `kit prepare-restart` on every stop). A manifest is used only by the start right after the
+snapshot, and calibration cards are left to their runner. `kanban restart prepare` tags the WIP and writes `restart-manifest.json` (the image entrypoint runs it on every
+container stop, after the legacy `kit prepare-restart`). A manifest is used only by the start right after the
 server that wrote it, and is never replayed. Until the cutover, the legacy autoland does this (since kit `a2b4695`
 it also resumes Claude cards with `claude --continue` and a short resume note), and the runtime only reports it.
 

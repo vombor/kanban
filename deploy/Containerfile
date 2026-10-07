@@ -50,7 +50,8 @@ EXPOSE 3600
 # Container lifecycle (docs/fork/container-lifecycle.md): kanban-entrypoint runs the CMD (or a quadlet Exec=
 # override) as its child. Every start launches `kit boot` from the persistent /root/.kanban in the background;
 # every stop (podman stop, systemctl stop/restart, podman auto-update, host shutdown) first runs
-# `kit prepare-restart` (at most KANBAN_PRESTOP_TIMEOUT s, default 45), then passes the signal on to Kanban
+# `kit prepare-restart` (at most KANBAN_PRESTOP_TIMEOUT s, default 45) and `kanban restart prepare` (at most
+# KANBAN_RESTART_PREPARE_TIMEOUT s, default 20), then passes the signal on to Kanban
 # (which gives itself up to 10 s more). It replaces node's docker-entrypoint.sh, which only prefixes `node` when the
 # command is a flag or not on PATH.
 # An image cannot set a stop timeout, and podman stop's default of 10 s would SIGKILL mid-hook: run the container

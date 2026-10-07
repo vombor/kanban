@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { join, resolve } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -20,6 +21,7 @@ while :; do sleep 0.05; done
 
 let tempDir: { path: string; cleanup: () => void };
 let kitHome: string;
+let binDir: string;
 let events: string;
 let childScript: string;
 let running: ChildProcess[] = [];
@@ -30,13 +32,24 @@ interface Entrypoint {
 	exited: Promise<number | null>;
 }
 
-function startEntrypoint(args: string[], env: Record<string, string> = {}): Entrypoint {
+/** `env` values override the defaults below; `undefined` leaves a variable unset (the entrypoint's own default). */
+function startEntrypoint(args: string[], env: Record<string, string | undefined> = {}): Entrypoint {
 	let stderr = "";
-	// Never the real kit: KANBAN_KIT_HOME is a temp dir and no KANBAN_* setting leaks in from this machine.
+	// Never the real kit or the real `kanban restart prepare` (it would tag this machine's worktrees): KANBAN_KIT_HOME
+	// is a temp dir, no KANBAN_* setting leaks in from this machine, and restart prepare is off unless a test turns it
+	// on (then with the stub `kanban` from writeFakeKanban, first on PATH).
 	const baseEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KANBAN_")));
+	const childEnv = Object.entries({
+		...baseEnv,
+		PATH: `${binDir}:${process.env.PATH ?? ""}`,
+		KANBAN_KIT_HOME: kitHome,
+		KANBAN_RESTART_PREPARE_HOOK: "",
+		EVENTS: events,
+		...env,
+	}).filter((entry): entry is [string, string] => entry[1] !== undefined);
 	const child = spawn("sh", [ENTRYPOINT, ...args], {
 		cwd: tempDir.path,
-		env: { ...baseEnv, KANBAN_KIT_HOME: kitHome, EVENTS: events, ...env },
+		env: Object.fromEntries(childEnv),
 		stdio: ["ignore", "ignore", "pipe"],
 	});
 	running.push(child);
@@ -69,11 +82,39 @@ function writeFakeKit(): void {
 	chmodSync(kit, 0o755);
 }
 
+// Stands in for the `kanban` CLI: records its arguments and the server it was pointed at, then runs `body`.
+function writeFakeKanban(body = 'echo "kanban output"'): void {
+	const kanban = join(binDir, "kanban");
+	const record = 'echo "kanban $* port=$KANBAN_RUNTIME_PORT home=$KANBAN_HOME" >> "$EVENTS"';
+	writeFileSync(kanban, `#!/bin/sh\n${record}\n${body}\n`);
+	chmodSync(kanban, 0o755);
+}
+
+/** PATH without the directories that have `command`, plus the stub bin dir (for "not installed"). */
+function pathWithout(command: string): string {
+	const dirs = (process.env.PATH ?? "").split(":").filter((dir) => dir && !existsSync(join(dir, command)));
+	return [binDir, ...dirs].join(":");
+}
+
+/** A local port nothing listens on (bound, then released). */
+async function findClosedPort(): Promise<number> {
+	const server = createServer();
+	await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+	const address = server.address();
+	await new Promise((resolveClose) => server.close(resolveClose));
+	if (!address || typeof address === "string") {
+		throw new Error("no port");
+	}
+	return address.port;
+}
+
 describe.skipIf(!supported).sequential("deploy/kanban-entrypoint.sh", () => {
 	beforeEach(() => {
 		tempDir = createTempDir("kanban-entrypoint-");
 		kitHome = join(tempDir.path, "kit");
 		mkdirSync(kitHome);
+		binDir = join(tempDir.path, "bin");
+		mkdirSync(binDir);
 		events = join(tempDir.path, "events");
 		childScript = join(tempDir.path, "child.sh");
 		writeFileSync(childScript, FAKE_CHILD);
@@ -231,24 +272,159 @@ while :; do sleep 0.05; done
 		expect(readEvents()).toEqual(["override ran", "child ready", "hook ran", "child got TERM"]);
 	});
 
-	it("defaults to `kit boot` and `kit prepare-restart` from KANBAN_KIT_HOME, logging to its logs dir", async () => {
+	it("defaults to `kit boot`, `kit prepare-restart` and `kanban restart prepare`, logging to the kit's logs dir", async () => {
 		writeFakeKit();
+		writeFakeKanban();
 		mkdirSync(join(kitHome, "logs"));
-		const entry = startEntrypoint(["sh", childScript]);
+		const entry = startEntrypoint(["sh", childScript, "--port", "3485", "--no-open"], {
+			KANBAN_RESTART_PREPARE_HOOK: undefined,
+		});
 		await waitForEvent("kit boot");
 		await waitForEvent("child ready");
 
 		entry.process.kill("SIGTERM");
 
 		expect(await entry.exited).toBe(7);
+		// Both while Kanban is up, the kit first; the CLI is pointed at the command's port.
 		expect(readEvents().filter((event) => event !== "kit boot")).toEqual([
 			"child ready",
 			"kit prepare-restart",
+			"kanban restart prepare port=3485 home=",
 			"child got TERM",
 		]);
 		const log = readFileSync(join(kitHome, "logs", "kanban-entrypoint.log"), "utf8");
 		expect(log).toContain("kit output for boot");
 		expect(log).toContain("kit output for prepare-restart");
 		expect(log).toContain("pre-stop hook done");
+		expect(log).toContain("restart prepare (timeout 20s): kanban restart prepare");
+		expect(log).toContain("kanban output");
+		expect(log).toContain("restart prepare done");
+	});
+
+	it("passes --port=/--home from the command to restart prepare", async () => {
+		writeFakeKanban();
+		const entry = startEntrypoint(["sh", childScript, "--port=4000", "--home", "/srv/kanban-home"], {
+			KANBAN_START_HOOK: "",
+			KANBAN_PRESTOP_HOOK: "",
+			KANBAN_RESTART_PREPARE_HOOK: "kanban restart prepare",
+		});
+		await waitForEvent("child ready");
+
+		entry.process.kill("SIGTERM");
+
+		expect(await entry.exited).toBe(7);
+		expect(readEvents()).toEqual([
+			"child ready",
+			"kanban restart prepare port=4000 home=/srv/kanban-home",
+			"child got TERM",
+		]);
+	});
+
+	it.each([
+		["fails", "exit 1", "restart prepare failed (exit 1)"],
+		// What the real CLI does with the server down: its request is refused and it exits 1.
+		[
+			"finds the server down",
+			`exec node -e 'fetch("http://127.0.0.1:" + process.env.KANBAN_RUNTIME_PORT).then(() => process.exit(0), (error) => { console.error(error.message); process.exit(1); })'`,
+			"restart prepare failed (exit 1)",
+		],
+	])("still stops when restart prepare %s", async (_name, body, logLine) => {
+		writeFakeKanban(body);
+		const entry = startEntrypoint(["sh", childScript, "--port", String(await findClosedPort())], {
+			KANBAN_START_HOOK: "",
+			KANBAN_PRESTOP_HOOK: 'echo "hook ran" >> "$EVENTS"',
+			KANBAN_RESTART_PREPARE_HOOK: "kanban restart prepare",
+		});
+		await waitForEvent("child ready");
+
+		entry.process.kill("SIGTERM");
+
+		expect(await entry.exited).toBe(7);
+		expect(readEvents()).toEqual([
+			"child ready",
+			"hook ran",
+			expect.stringMatching(/^kanban restart prepare port=\d+ home=$/u),
+			"child got TERM",
+		]);
+		expect(entry.stderr()).toContain(logLine);
+	});
+
+	it("stops waiting for restart prepare at its timeout and kills it", async () => {
+		writeFakeKanban('sleep 30; echo "kanban end" >> "$EVENTS"');
+		const entry = startEntrypoint(["sh", childScript], {
+			KANBAN_START_HOOK: "",
+			KANBAN_PRESTOP_HOOK: "",
+			KANBAN_RESTART_PREPARE_HOOK: "kanban restart prepare",
+			KANBAN_RESTART_PREPARE_TIMEOUT: "1",
+		});
+		await waitForEvent("child ready");
+		const signalledAt = Date.now();
+
+		entry.process.kill("SIGTERM");
+
+		expect(await entry.exited).toBe(7);
+		expect(Date.now() - signalledAt).toBeLessThan(5_000);
+		expect(readEvents()).toEqual(["child ready", "kanban restart prepare port= home=", "child got TERM"]);
+		expect(entry.stderr()).toContain("restart prepare timed out after 1s");
+	});
+
+	it("skips restart prepare when Kanban exited during the kit hook", async () => {
+		writeFakeKanban();
+		writeFileSync(
+			childScript,
+			`echo "child ready" >> "$EVENTS"
+while [ ! -e "$EVENTS.quit" ]; do sleep 0.05; done
+echo "child quit" >> "$EVENTS"
+`,
+		);
+		const entry = startEntrypoint(["sh", childScript], {
+			KANBAN_START_HOOK: "",
+			// Kanban goes down on its own while the kit hook runs (the hook waits until it is gone).
+			KANBAN_PRESTOP_HOOK:
+				'touch "$EVENTS.quit"; while ! grep -q "child quit" "$EVENTS"; do sleep 0.05; done; sleep 0.2',
+			KANBAN_RESTART_PREPARE_HOOK: "kanban restart prepare",
+		});
+		await waitForEvent("child ready");
+
+		entry.process.kill("SIGTERM");
+
+		expect(await entry.exited).toBe(0);
+		expect(readEvents()).toEqual(["child ready", "child quit"]);
+		expect(entry.stderr()).toMatch(/restart prepare skipped: pid \d+ already exited/u);
+	});
+
+	it("skips restart prepare without a `kanban` command", async () => {
+		const entry = startEntrypoint(["sh", childScript], {
+			KANBAN_START_HOOK: "",
+			KANBAN_PRESTOP_HOOK: "",
+			KANBAN_RESTART_PREPARE_HOOK: undefined,
+			PATH: pathWithout("kanban"),
+		});
+		await waitForEvent("child ready");
+
+		entry.process.kill("SIGTERM");
+
+		expect(await entry.exited).toBe(7);
+		expect(readEvents()).toEqual(["child ready", "child got TERM"]);
+		expect(entry.stderr()).toContain("no restart prepare");
+	});
+
+	it("a second signal during the kit hook skips restart prepare", async () => {
+		writeFakeKanban();
+		const entry = startEntrypoint(["sh", childScript], {
+			KANBAN_START_HOOK: "",
+			KANBAN_PRESTOP_HOOK: 'echo "hook start" >> "$EVENTS"; sleep 30',
+			KANBAN_PRESTOP_TIMEOUT: "60",
+			KANBAN_RESTART_PREPARE_HOOK: "kanban restart prepare",
+		});
+		await waitForEvent("child ready");
+		entry.process.kill("SIGTERM");
+		await waitForEvent("hook start");
+
+		entry.process.kill("SIGTERM");
+
+		expect(await entry.exited).toBe(7);
+		expect(readEvents()).toEqual(["child ready", "hook start", "child got TERM"]);
+		expect(entry.stderr()).not.toContain("restart prepare (timeout");
 	});
 });

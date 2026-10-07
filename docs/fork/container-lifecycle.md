@@ -8,11 +8,19 @@ kit on the persistent volume (`/root/.kanban`) to the container's start and stop
   services). Kanban never waits for it.
 - **Every stop** (`podman stop`, `systemctl stop/restart`, `podman auto-update`, host shutdown: all of them send
   SIGTERM) first runs `/root/.kanban/bin/kit prepare-restart` (tags the WIP of every running card and writes the
-  restart manifest, so autoland resumes exactly those cards afterwards), for at most 45 s. Then it passes the
-  signal on to Kanban (which shuts down within 10 s) and exits with Kanban's exit status.
+  restart manifest, so autoland resumes exactly those cards afterwards), for at most 45 s, then `kanban restart
+  prepare` (the runtime's WIP tags and restart manifest for every workspace, with the server's start time), for
+  at most 20 s. Both run while Kanban is still up. Then it passes the signal on to Kanban (which shuts down within
+  10 s) and exits with Kanban's exit status.
 
-A missing kit, a failing hook or a hook that runs past its timeout never blocks or aborts the stop: the
-entrypoint logs it and goes on. A second SIGTERM/SIGINT cuts the hook short and is passed on at once.
+A missing kit or `kanban`, a failing step, a step that runs past its timeout or a Kanban that is already down
+never blocks or aborts the stop: the entrypoint logs one line for it and goes on. A second SIGTERM/SIGINT cuts the
+running step short, skips the rest and is passed on at once.
+
+`kanban restart prepare` gets the command's `--port`, `--host`, `--home` and `--https` as `KANBAN_RUNTIME_PORT`,
+`KANBAN_RUNTIME_HOST`, `KANBAN_HOME` and `KANBAN_RUNTIME_HTTPS` (a CLI started outside the server would look on the
+default port 3484). With an `Exec=` override the entrypoint can't read (`sh -c '...'`), set those in the
+container's environment.
 
 The image's command (`kanban --port 3485 ...`) runs as the entrypoint's child, so Kanban is no longer
 PID 2: it sits behind `podman-init` (PID 1) and the entrypoint (PID 2), with a small pid that is about the same at
@@ -24,7 +32,8 @@ every start. An `Exec=` override still works: it replaces only the command, and 
 [Container]
 Image=ghcr.io/vombor/kanban-dev:latest
 AutoUpdate=registry
-# podman stop's default (10 s) would SIGKILL Kanban while the pre-stop hook runs: 45 s hook + 10 s Kanban + margin.
+# podman stop's default (10 s) would SIGKILL Kanban while the pre-stop steps run: 45 s kit + 20 s restart prepare +
+# 10 s Kanban + margin.
 StopTimeout=90
 RunInit=true
 # No Exec= needed: the image's command plus the entrypoint start the kit. Remove the old
@@ -51,6 +60,8 @@ updates containers that run under a systemd unit (quadlet does that) with a full
 | `KANBAN_START_HOOK` | `<kit>/bin/kit boot` if executable | `sh -c` command run detached at start; empty = none |
 | `KANBAN_PRESTOP_HOOK` | `<kit>/bin/kit prepare-restart` if executable | `sh -c` command run on SIGTERM/SIGINT; empty = none |
 | `KANBAN_PRESTOP_TIMEOUT` | `45` | seconds; the hook's process group is killed after it |
+| `KANBAN_RESTART_PREPARE_HOOK` | `kanban restart prepare` if `kanban` is on PATH | `sh -c` command run after the pre-stop hook; empty = none |
+| `KANBAN_RESTART_PREPARE_TIMEOUT` | `20` | seconds; as above |
 | `KANBAN_KIT_HOME` | `/root/.kanban` | where `<kit>` is |
 
 E.g. to tag the cards of more than one board before a stop:
@@ -65,7 +76,7 @@ podman logs --since 10m <container> 2>&1 | grep kanban-entrypoint
 
 After a start: `start hook (detached): '/root/.kanban/bin/kit boot'` and `started pid <n>: kanban ...`. After a
 stop (`podman logs` still works on the stopped container): `SIGTERM: pre-stop ...`, `pre-stop hook done` (or
-`timed out` / `failed`), `forwarding SIGTERM`, `pid <n> exited with status ...`. The same lines plus the hooks'
+`timed out` / `failed`), `restart prepare done` (or `timed out` / `failed` / `skipped`), `forwarding SIGTERM`, `pid <n> exited with status ...`. The same lines plus the hooks'
 output are in `/root/.kanban/logs/kanban-entrypoint.log`, which survives the container being replaced (auto-update);
 `kit boot` also writes `/root/.kanban/logs/kit-boot.log`. `podman inspect <container> --format
 '{{.Config.StopTimeout}}'` should print 90.
