@@ -145,6 +145,113 @@ describe("pipeline actions on the server", () => {
 		expect(fakes.startTaskSession).not.toHaveBeenCalled();
 		expect(findCardInBoard(store.stored.board, "dev01")?.columnId).toBe("review");
 	});
+
+	it("updates a card's prompt and keeps its other fields", async () => {
+		const dev = createCard({
+			id: "d1111",
+			title: "Wishlist",
+			agentId: "cline",
+			agentSettings: { providerId: "bedrock", modelId: "kimi" },
+			autoReviewEnabled: true,
+			autoReviewMode: "qa",
+		});
+		const { store, run } = createRunner({ review: [dev] });
+
+		expect(
+			await run({ ...SCOPE, kind: "updateTask", taskId: "d1111", prompt: "Build it\n\nREWORK round 2" }),
+		).toEqual({
+			ok: true,
+		});
+		expect(findCardInBoard(store.stored.board, "d1111")).toMatchObject({
+			columnId: "review",
+			card: {
+				title: "Wishlist",
+				prompt: "Build it\n\nREWORK round 2",
+				agentId: "cline",
+				agentSettings: { providerId: "bedrock", modelId: "kimi" },
+				autoReviewMode: "qa",
+			},
+		});
+		expect(await run({ ...SCOPE, kind: "updateTask", taskId: "nope1", prompt: "x" })).toEqual({
+			ok: false,
+			error: "task nope1 is not on the board",
+		});
+	});
+
+	it("resumes with the card's own current prompt when the request names none", async () => {
+		const dev = createCard({ id: "d1111", prompt: "Build it\n\nREWORK round 2", agentSettings: { modelId: "kimi" } });
+		const { fakes, run } = createRunner({ review: [dev] });
+
+		expect(await run({ ...SCOPE, kind: "resumeTask", taskId: "d1111", agentId: "cline" })).toMatchObject({
+			ok: true,
+		});
+		expect(fakes.startTaskSession).toHaveBeenCalledWith(
+			expect.objectContaining(SCOPE),
+			expect.objectContaining({ prompt: "Build it\n\nREWORK round 2", agentSettings: { modelId: "kimi" } }),
+		);
+	});
+
+	it("replaceLive stops a live idle session first and moves the card only once a new session started", async () => {
+		const createLiveRunner = (stops: boolean) => {
+			const store = createWorkspaceStateStore({
+				board: createBoard({ review: [createCard({ id: "d1111" })] }),
+				sessions: {},
+				revision: 1,
+			});
+			const fakes = createFakeTaskTrashWorkflowDependencies(store);
+			let live = true;
+			const stopTaskSession = vi.fn(() => {
+				live = !stops;
+			});
+			const run = createPipelineActionRunner({
+				mutateWorkspaceState: store.mutateWorkspaceState,
+				ensureTaskWorktree: fakes.ensureTaskWorktree,
+				// The real startTaskSession returns a live idle session unchanged; refuse to "start" over one here.
+				startTaskSession: async (scope, input) => {
+					if (live) {
+						throw new Error("started over a live session");
+					}
+					live = true;
+					return await fakes.startTaskSession(scope, input);
+				},
+				hasLiveProcess: () => live,
+				stopTaskSession,
+				stopTimeoutMs: 300,
+			});
+			return { store, fakes, run, stopTaskSession };
+		};
+
+		const stopping = createLiveRunner(true);
+		expect(await stopping.run({ ...SCOPE, kind: "resumeTask", taskId: "d1111", agentId: "cline" })).toEqual({
+			ok: false,
+			error: "task d1111 has a live session; not resumed",
+		});
+		expect(stopping.stopTaskSession).not.toHaveBeenCalled();
+		expect(
+			await stopping.run({ ...SCOPE, kind: "resumeTask", taskId: "d1111", agentId: "cline", replaceLive: true }),
+		).toEqual({ ok: true, detail: "started, moved to In Progress" });
+		expect(stopping.stopTaskSession).toHaveBeenCalledTimes(1);
+		expect(findCardInBoard(stopping.store.stored.board, "d1111")?.columnId).toBe("in_progress");
+
+		// A session that doesn't go away: no start, the card stays where it is.
+		const stuck = createLiveRunner(false);
+		expect(
+			await stuck.run({ ...SCOPE, kind: "resumeTask", taskId: "d1111", agentId: "cline", replaceLive: true }),
+		).toEqual({ ok: false, error: "task d1111: its live session could not be stopped; not resumed" });
+		expect(findCardInBoard(stuck.store.stored.board, "d1111")?.columnId).toBe("review");
+	});
+
+	it("blocks an escalated card: Backlog with one BLOCKED: prefix", async () => {
+		const { store, run } = createRunner({ review: [createCard({ id: "d1111", title: "Wishlist" })] });
+
+		expect(await run({ ...SCOPE, kind: "blockTask", taskId: "d1111" })).toEqual({ ok: true });
+		expect(await run({ ...SCOPE, kind: "blockTask", taskId: "d1111" })).toEqual({ ok: true });
+
+		expect(findCardInBoard(store.stored.board, "d1111")).toMatchObject({
+			columnId: "backlog",
+			card: { title: "BLOCKED: Wishlist" },
+		});
+	});
 });
 
 describe("QA gate card actions over the worker's request channel", () => {

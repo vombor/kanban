@@ -7,14 +7,23 @@
 //   stuck on a startup dialog (lib/prompt-watch.cjs: Kanban hooks UserPromptSubmit for Claude Code and Codex);
 // - its folder-trust state (claude-workspace-trust.ts, codex-workspace-trust.ts);
 // - an interactive session of the agent that Kanban did not start (Claude Code transcripts), so a headless run is not
-//   started beside a human's live session.
+//   started beside a human's live session;
+// - for the rework loop (src/pipeline/rework.ts): the slash command that clears the agent's conversation in its TUI,
+//   and how big its current session is (Cline's session files), for the `/clear` thresholds.
 import { open, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { RUNTIME_AGENT_CATALOG } from "../core/agent-catalog";
 import type { RuntimeAgentId } from "../core/api-contract";
+import { getClineDataDirPath } from "../state/kanban-home";
 import { isClaudeWorkspaceTrusted } from "./claude-workspace-trust";
+import {
+	type ClineSessionSize,
+	createClineSessionFileReader,
+	getClineSessionsPath,
+	readLatestClineSessionSize,
+} from "./cline-session-files";
 import { getCodexWorkspaceTrustLevel } from "./codex-workspace-trust";
 
 /** Written into every headless orchestrator prompt; a transcript that starts with it is not an interactive session. */
@@ -32,7 +41,16 @@ export interface LiveInteractiveSession {
 	ageSec: number;
 }
 
+export interface AgentSessionSizeOptions {
+	/** `agents.cline.dataDir` (null = Cline's default). */
+	clineDataDir: string | null;
+}
+
 interface OrchestratorAgentProfile {
+	/** Typed into the TUI to start a fresh conversation in the same session (same model). */
+	clearCommand?: string;
+	/** The size of the agent's current session in this worktree, or null when unknown. */
+	sessionSize?: (worktreePath: string, options: AgentSessionSizeOptions) => Promise<ClineSessionSize | null>;
 	headless?: (prompt: string) => HeadlessOrchestratorCommand;
 	/** The agent fires a hook when it takes its prompt (a start with no hook is a stuck start). */
 	hooksOnPromptSubmit?: boolean;
@@ -80,6 +98,8 @@ async function findLiveClaudeTranscript(
 	return null;
 }
 
+const clineSessionFiles = createClineSessionFileReader();
+
 const PROFILES: Partial<Record<RuntimeAgentId, OrchestratorAgentProfile>> = {
 	// Ported from archive/devteam-kit:bin/orchestrator-wake.mjs@6da71597 (runOnce: `claude -p … --permission-mode auto`)
 	// and kit main cc1eefe (no headless run while an interactive Claude session in the project is live).
@@ -91,6 +111,18 @@ const PROFILES: Partial<Record<RuntimeAgentId, OrchestratorAgentProfile>> = {
 		hooksOnPromptSubmit: true,
 		trusted: async (directory) => await isClaudeWorkspaceTrusted(directory),
 		liveInteractiveSession: findLiveClaudeTranscript,
+		clearCommand: "/clear",
+	},
+	// Ported from archive/devteam-kit:services/kanban-autoland.mjs@6da71597 (rework: `/clear` resets the Cline
+	// conversation, sessionSize from Cline's session files).
+	cline: {
+		clearCommand: "/clear",
+		sessionSize: async (worktreePath, options) =>
+			await readLatestClineSessionSize(
+				clineSessionFiles,
+				getClineSessionsPath(getClineDataDirPath(options.clineDataDir)),
+				worktreePath,
+			),
 	},
 	codex: {
 		headless: (prompt) => ({
@@ -146,4 +178,19 @@ export async function findLiveInteractiveSession(
 		now: options.now ?? Date.now(),
 		homeDir: options.homeDir ?? homedir(),
 	});
+}
+
+/** The agent's "clear the conversation" command, or null when it has none (a rework then resumes the full session). */
+export function getAgentClearCommand(agentId: RuntimeAgentId): string | null {
+	return PROFILES[agentId]?.clearCommand ?? null;
+}
+
+/** The size of the agent's current session in the worktree, or null when the agent's sessions can't be measured. */
+export async function readAgentSessionSize(
+	agentId: RuntimeAgentId,
+	worktreePath: string,
+	options: AgentSessionSizeOptions,
+): Promise<ClineSessionSize | null> {
+	const measure = PROFILES[agentId]?.sessionSize;
+	return measure ? await measure(worktreePath, options).catch(() => null) : null;
 }

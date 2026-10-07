@@ -44,6 +44,7 @@ import {
 	buildProviderRetryPrompt,
 	CONTINUE_PROMPT,
 } from "./recovery-prompts";
+import { isReworkAwaitingStart, type OpenRework, readOpenRework } from "./rework-state";
 
 export type RecoverySettings = PipelineConfig["pipeline"]["recovery"];
 
@@ -72,8 +73,12 @@ export interface RecoveryFlowState {
 	escalated: { at: string; reason: string } | null;
 	/** When recovery last typed into the card (Kanban's own field; the legacy kit didn't need it). */
 	recoverySentAt: string | null;
+	/** The rework stage's newest unreturned rework (rework-state.ts); a fresh one not seen started is its card. */
+	openRework: OpenRework | null;
 	/** The newest of these restarts the nudge/continue/retry budgets (sinceBudget). */
 	resetAt: string | null;
+	/** When the rework stage last sent a rework: a rework starts the budgets afresh, like a verdict. */
+	lastReworkAt: string | null;
 	lastVerdictAt: string | null;
 	handbacks: StampedEntry[];
 }
@@ -138,15 +143,17 @@ export function readRecoveryFlow(entry: Record<string, unknown> | undefined): Re
 				: { at: "", reason: "escalated" }
 			: null,
 		recoverySentAt: stringOrNull(flow.recoverySentAt),
+		openRework: readOpenRework(flow),
 		resetAt: stringOrNull(flow.resetAt),
+		lastReworkAt: stringOrNull(flow.lastReworkAt),
 		lastVerdictAt: newestVerdictAt(stringOrNull(flow.lastVerdictAt), entry?.qaVerdicts),
 		handbacks: stampedList(flow.handbacks),
 	};
 }
 
-/** Entries made since the last verdict, handback or fresh restart: those count against a budget. */
+/** Entries made since the last verdict, rework, handback or fresh restart: those count against a budget. */
 export function sinceBudget<T extends StampedEntry>(list: readonly T[], flow: RecoveryFlowState): T[] {
-	const marks = [flow.lastVerdictAt, flow.handbacks.at(-1)?.at ?? null, flow.resetAt]
+	const marks = [flow.lastVerdictAt, flow.lastReworkAt, flow.handbacks.at(-1)?.at ?? null, flow.resetAt]
 		.filter((mark): mark is string => Boolean(mark))
 		.sort();
 	const since = marks.at(-1);
@@ -611,6 +618,12 @@ export function decideRecovery(input: RecoveryCardInput): RecoveryDecision {
 	}
 	if (flow.orphan) {
 		return { kind: "none", reason: "orphaned by a Kanban restart: restart recovery resumes it" };
+	}
+	if (isReworkAwaitingStart(flow.openRework, input.now)) {
+		return {
+			kind: "none",
+			reason: `rework sent at ${flow.openRework?.at}: the rework stage's started-check owns it until it starts`,
+		};
 	}
 	return input.column === "review" ? decideReview(input) : decideInProgress(input);
 }

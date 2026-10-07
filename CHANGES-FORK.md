@@ -329,3 +329,35 @@ of this repository is the complete record of changes.
   its start in `<home>/run/server-start.json` (reading the previous record first), and a restart manifest is used
   only when the server that wrote it is the one right before this start; any other is dropped, never replayed. Agents declare `/clear` and the cancel key in their adapter (`recovery`). New commands `kanban restart prepare|recover [--workspace] [--dry-run]` and
   `kanban task send|resume|restart-fresh`. `kanban doctor`'s one-owner check gets a recovery row (Kanban vs autoland).
+- `src/pipeline/rework.ts`, `rework-text.ts`, `rework-notes.ts`, `rework-state.ts`, `handback.ts` (new),
+  `src/pipeline/recovery.ts`, `src/server/runtime-server.ts`,
+  `src/pipeline/{actions,worker,worker-protocol,worker-host,qa-gate,qa-log,hold,decision-log}.ts`,
+  `src/pipeline/watchdog/{stalls,watchdog,attention}.ts`, `src/server/pipeline-actions.ts`, `src/commands/task.ts`,
+  `src/terminal/{cline-session-files,orchestrator-agents}.ts`: the rework loop (plan step P4-5). On a workspace with
+  landing `qa` and shadow off, a dev card whose newest QA verdict is FAIL or STALLED, whose PASS did not land because
+  of a merge conflict (the QA gate now keeps the landing outcome on `qaPass.landing`), or whose rework came back with
+  an unchanged snapshot is acted on once (`qaflow.handled[]`). At `pipeline.rework.maxFailRounds` FAIL rounds (land
+  conflicts count; plus each handback's extra rounds) the core escalates to the orchestrator whatever the kit says;
+  below it the kit's `onFail` decides. `rework`: the REWORK section goes into the card prompt before FINAL STEP, the
+  QA write-up and artifacts into `.qa/r<N>/` in the worktree (git-ignored via `info/exclude`), and the section is
+  typed into the card's session (after the agent's clear command, `/clear` for Cline and Claude Code, with the whole
+  prompt when the session is past `clearAfterTurns`/`clearAfterTokens`; only Cline sessions are measured). No session
+  to type into: a fresh session from the card prompt on the same agent, only when the card pins its model (P4-6's
+  `resumeTask`, which now takes an optional `prompt`, default the card's own). A rework
+  whose session ran on another agent or model than the card names is refused (→ escalate). A started-check restarts
+  a rework not seen running after 2 min once (`resumeTask` with `replaceLive`: a live idle session is stopped first and
+  the card moves only once a new session started), then escalates. Recovery leaves a fresh rework not yet started to
+  the started-check and counts its budgets from `qaflow.lastReworkAt` too; the rework stage leaves a card recovery
+  holds alone. Escalation to the orchestrator: `qaflow.escalated`,
+  `## ESCALATE` in the QA log, the card to Backlog as `BLOCKED: …` (the watchdog's ATTENTION.md and wake already read
+  `qaflow.escalated`); to a model: the work is tagged `preserve/<id>-<model>` and a sibling card takes the task over
+  on that model (left in Backlog when `requireApproval`). `runoff` is refused (escalated to the orchestrator) until
+  P4-T3's `runoffs` feature can hold the racing siblings' PASSes, so a sibling and the original can't both land. A
+  rework a crashed worker left `pending` is sent again from its recorded trigger (or counted as sent when the card
+  ran meanwhile). `stop`: `qaflow.stopped`, one
+  ATTENTION.md line and a wake (watchdog). Events `reworkSent` and `escalated` are emitted. New worker requests
+  `updateTask`, `blockTask`. New command `kanban task handback --task-id <id> --note … [--extra-rounds
+  N] [--by NAME]` (append-only, under the pipeline state's lock; drops the `BLOCKED: ` prefix; closes the rework the escalation came from, so the started-check doesn't escalate it
+  again; with extra rounds the card goes to Review and its last FAIL is reworked once, except after a STALLED QA
+  round, which it says it won't rework). Nothing changes for workspaces on landing
+  `off`/`commit`/`pr`, in shadow, or on the `default` kit (no QA, so no verdicts).

@@ -424,6 +424,37 @@ describe("recovery state", () => {
 		expectKind(decideRecovery({ ...crashed, flow: afterVerdict }), "nudge");
 	});
 
+	it("restarts the budgets at a rework, and leaves a fresh rework that hasn't started to the rework stage", () => {
+		const nudges = [
+			{ at: "2026-10-07T11:00:00.000Z", reason: "error", poisoned: false, warn: "" },
+			{ at: "2026-10-07T11:10:00.000Z", reason: "error", poisoned: false, warn: "" },
+		];
+		const crashed = input({
+			session: session({ reviewReason: "error" }),
+			detail: detail([message("assistant", "Working…")]),
+		});
+		const reworkAt = new Date(NOW - 60_000).toISOString();
+		const sent = flow({ nudges, lastReworkAt: reworkAt, reworks: [{ at: reworkAt, via: "chat" }] });
+		expect(sent.lastReworkAt).toBe(reworkAt);
+		expect(sinceBudget(sent.nudges, sent)).toEqual([]);
+		// Sent a minute ago and not seen started: the started-check's card.
+		expect(expectKind(decideRecovery({ ...crashed, flow: sent }), "none").reason).toContain(
+			"the rework stage's started-check owns it",
+		);
+		// Started, returned, closed, or older than the started-check's two windows: recovery's again.
+		for (const rework of [
+			{ at: reworkAt, startedAt: reworkAt },
+			{ at: reworkAt, returned: reworkAt },
+			{ at: reworkAt, closedBy: "handback" },
+			{ at: new Date(NOW - 5 * MIN).toISOString() },
+		]) {
+			expectKind(
+				decideRecovery({ ...crashed, flow: flow({ lastReworkAt: rework.at, reworks: [rework] }) }),
+				"nudge",
+			);
+		}
+	});
+
 	it("reads an orphan mark as stale once the card has a session again or the mark is from another start", () => {
 		const start = Date.parse("2026-10-07T11:00:00.000Z");
 		const marked = flow({ orphan: { at: "x", kanbanStart: new Date(start).toISOString(), kind: "dev" } });

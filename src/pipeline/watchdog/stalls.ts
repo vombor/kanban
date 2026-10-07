@@ -127,6 +127,19 @@ export function readEscalation(entry: PipelineCardState | undefined): Escalation
 	};
 }
 
+/** `qaflow.stopped`: the kit answered `stop` after a FAIL (src/pipeline/rework.ts); the card waits in Review. */
+export function readStop(entry: PipelineCardState | undefined): EscalationInfo | null {
+	const stopped = asRecord(entry?.qaflow).stopped;
+	if (!stopped) {
+		return null;
+	}
+	const record = asRecord(stopped);
+	return {
+		at: typeof record.at === "string" ? record.at : "?",
+		reason: typeof record.reason === "string" ? record.reason : "stopped",
+	};
+}
+
 function cardsByColumn(board: RuntimeBoardData): Array<{ column: RuntimeBoardColumnId; card: RuntimeBoardCard }> {
 	return board.columns.flatMap((column) => column.cards.map((card) => ({ column: column.id, card })));
 }
@@ -180,6 +193,7 @@ export function detectStalls(input: StallInput): StallResult {
 			if (
 				!input.qaGated(card) ||
 				qaflow.escalated ||
+				qaflow.stopped ||
 				qaflow.outage ||
 				hasQaCard.has(card.id) ||
 				now - since < settings.reviewMin * MIN ||

@@ -50,11 +50,14 @@ describe("ATTENTION.md", () => {
 		expect(readTriageVerdict(qaLog, "a0002")).toBeNull();
 	});
 
-	it("an escalation or an idle pipeline already handed to the user doesn't wake the orchestrator", () => {
+	it("an escalation, a stopped card or an idle pipeline already handed to the user doesn't wake the orchestrator", () => {
 		const users = new Set(["b0001"]);
 		const held = new Set(["c0001"]);
 		expect(isHandedOver("- **b0001** (review): escalated 2026-… (x); triage: y", users, held)).toBe(true);
 		expect(isHandedOver("- **b0009** (review): escalated 2026-… (x); triage: y", users, held)).toBe(false);
+		expect(isHandedOver("- **b0001** (review): stopped 2026-… (x); the kit does not rework it", users, held)).toBe(
+			true,
+		);
 		expect(isHandedOver("- **pipeline idle**: nothing …: b0001, c0001", users, held)).toBe(true);
 		expect(isHandedOver("- **pipeline idle**: nothing …: b0001, d0001", users, held)).toBe(false);
 	});

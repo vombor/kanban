@@ -8,13 +8,11 @@
 // and @2ffe609 (benchOnly: every PASS is preserved and nothing lands), as a mechanism with no runoff logic: the
 // legacy kit deleted a loser because its Done always landed; here `discard` goes through the Done workflow
 // without landing, with the work kept as the preserve tag.
-import { access } from "node:fs/promises";
-
 import type { RuntimeTaskLandingChoice, RuntimeTaskTrashResponse } from "../core/api-contract";
 import type { EffectiveCard, KitVerdict, OnPassAnswer, RoutingPolicy } from "../kits/policy";
 import { tagPreservedWork } from "../workspace/land";
-import { getTaskWorktreeCandidatePaths } from "../workspace/task-worktree";
 import type { PipelineCardState, PipelineStateStore } from "./pipeline-state";
+import { findTaskWorktree } from "./rework-notes";
 import { takeTaskSnapshot } from "./snapshots";
 
 export interface PipelineHold {
@@ -152,18 +150,7 @@ export async function releaseHold(deps: ReleaseHoldDependencies, input: ReleaseH
  * tag holds uncommitted work too. Throws when the card has no worktree.
  */
 export async function preserveTaskWork(input: { workspacePath: string; taskId: string; tag: string }): Promise<string> {
-	let worktreePath: string | null = null;
-	for (const candidate of getTaskWorktreeCandidatePaths(input.workspacePath, input.taskId)) {
-		if (
-			await access(candidate).then(
-				() => true,
-				() => false,
-			)
-		) {
-			worktreePath = candidate;
-			break;
-		}
-	}
+	const worktreePath = await findTaskWorktree(input.workspacePath, input.taskId);
 	if (!worktreePath) {
 		throw new Error(`task ${input.taskId} has no worktree to preserve`);
 	}

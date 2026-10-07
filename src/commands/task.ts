@@ -32,6 +32,10 @@ import {
 	updateTask,
 } from "../core/task-board-mutations";
 import { type DevAssignmentDecision, recordDevAssignment, resolveDevAssignment } from "../kits/dev-assignment";
+import { BLOCKED_TITLE_PREFIX } from "../pipeline/actions";
+import { handBackTask } from "../pipeline/handback";
+import { createPipelineStateStore } from "../pipeline/pipeline-state";
+import { createQaLogAppender } from "../pipeline/qa-log";
 import { resolveProjectInputPath } from "../projects/project-path";
 import { loadWorkspaceContext, mutateWorkspaceState } from "../state/workspace-state";
 import {
@@ -1040,6 +1044,78 @@ export async function approveTask(input: { cwd: string; taskId: string; projectP
 	};
 }
 
+/**
+ * `kanban task handback`: gives an escalated card back to the pipeline (src/pipeline/handback.ts). The card loses its
+ * `BLOCKED: ` title prefix; with `--extra-rounds N` it goes from Backlog to Review, where the pipeline reworks the
+ * FAIL that escalated it with N more FAIL rounds. Without extra rounds, or after a STALLED QA round (never reworked),
+ * it stays in Backlog for you to restart, and the result says so.
+ */
+export async function handbackTask(input: {
+	cwd: string;
+	taskId: string;
+	note: string;
+	extraRounds: number;
+	by?: string;
+	projectPath?: string;
+}): Promise<JsonRecord> {
+	const workspaceRepoPath = await resolveWorkspaceRepoPath(input.projectPath, input.cwd);
+	const workspaceId = await ensureRuntimeWorkspace(workspaceRepoPath);
+	const runtimeClient = createRuntimeTrpcClient(workspaceId);
+	const result = await handBackTask(createPipelineStateStore(), {
+		workspaceId,
+		taskId: input.taskId,
+		note: input.note,
+		extraRounds: input.extraRounds,
+		by: input.by?.trim() || "orchestrator",
+		now: Date.now(),
+	});
+	await createQaLogAppender()(workspaceId, result.qaLogSection);
+	const task = await updateRuntimeWorkspaceState(runtimeClient, workspaceRepoPath, (state) => {
+		const record = findTaskRecord(state, input.taskId);
+		if (!record) {
+			return { board: state.board, value: null };
+		}
+		let board = state.board;
+		let card = record.task;
+		let columnId = record.columnId;
+		if (card.title.startsWith(BLOCKED_TITLE_PREFIX)) {
+			const updated = updateTask(board, card.id, {
+				title: card.title.slice(BLOCKED_TITLE_PREFIX.length),
+				prompt: card.prompt,
+				baseRef: card.baseRef,
+				startInPlanMode: card.startInPlanMode,
+				autoReviewEnabled: card.autoReviewEnabled === true,
+				autoReviewMode: card.autoReviewMode,
+				images: card.images,
+			});
+			if (updated.updated && updated.task) {
+				board = updated.board;
+				card = updated.task;
+			}
+		}
+		if (result.reworks && columnId === "backlog") {
+			const moved = moveTaskToColumn(board, card.id, "review");
+			if (moved.moved) {
+				board = moved.board;
+				card = moved.task ?? card;
+				columnId = "review";
+			}
+		}
+		return { board, value: formatTaskRecord({ ...state, board }, card, columnId) };
+	});
+	return {
+		ok: true,
+		task,
+		workspacePath: workspaceRepoPath,
+		handback: result.handback,
+		message: result.reworks
+			? `Escalation cleared with ${input.extraRounds} more FAIL round(s); the pipeline reworks the card's last FAIL once it is in Review.`
+			: input.extraRounds > 0
+				? `Escalation cleared with ${input.extraRounds} more FAIL round(s), but it was escalated over a STALLED QA round, which the pipeline does not rework: restart the card (or change it) so it gets a new snapshot and QA round.`
+				: "Escalation cleared, no extra rounds: restart or rework the card yourself.",
+	};
+}
+
 async function deleteTaskCommand(input: {
 	cwd: string;
 	taskId?: string;
@@ -1438,6 +1514,36 @@ export function registerTaskCommand(program: Command): void {
 					}),
 			);
 		});
+
+	task
+		.command("handback")
+		.description(
+			"Give an escalated task back to the pipeline (landing mode qa): clears the escalation, drops the BLOCKED: prefix.",
+		)
+		.requiredOption("--task-id <id>", "Task ID.")
+		.requiredOption("--note <text>", "Why it goes back (recorded in the QA log and the pipeline state).")
+		.option(
+			"--extra-rounds <n>",
+			"Grant N more FAIL rounds; the task moves to Review and the pipeline reworks the FAIL that escalated it.",
+			"0",
+		)
+		.option("--by <name>", "Who hands it back (default: orchestrator).")
+		.option("--project-path <path>", "Workspace path. Defaults to current directory workspace.")
+		.action(
+			async (options: { taskId: string; note: string; extraRounds: string; by?: string; projectPath?: string }) => {
+				await runTaskCommand(
+					async () =>
+						await handbackTask({
+							cwd: process.cwd(),
+							taskId: options.taskId,
+							note: options.note,
+							extraRounds: Number(options.extraRounds),
+							by: options.by,
+							projectPath: options.projectPath,
+						}),
+				);
+			},
+		);
 
 	task
 		.command("delete")

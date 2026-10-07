@@ -11,7 +11,9 @@
 // Acting goes through the server: `finishTask()` sends a `finishTask` request (the Done workflow with its landing
 // step) and resolves with the server's answer; features release holds through it (src/pipeline/hold.ts). Outside
 // shadow the QA gate (qa-gate.ts) acts on the kit's answers: it creates, starts and nudges QA cards through `action`
-// requests (actions.ts), finishes them and lands a PASS through `finishTask`; the worker never writes the board.
+// requests (actions.ts), finishes them and lands a PASS through `finishTask`; then the rework stage (rework.ts) acts
+// on FAILs, land conflicts and returned reworks with the kit's `onFail` answer through the same requests and
+// `deliverInput`. The worker never writes the board.
 //
 // A workspace is evaluated only with landing mode `qa`, or by recovery alone with `pipeline.recovery.mode: "on"` and
 // recovery enabled (recovery-stage.ts). Everything else (`off`, `commit`, `pr`, no entry = `off` on the `default`
@@ -29,6 +31,7 @@ import { type KitCatalog, loadKitCatalog, resolveWorkspaceKit } from "../kits/re
 import { registerTeamKitFeatures } from "../kits/team/features";
 import { readClineProvidersFile } from "../models/cline-providers";
 import { getClineProvidersSettingsPath } from "../state/kanban-home";
+import { getAgentClearCommand, readAgentSessionSize } from "../terminal/orchestrator-agents";
 import type { PipelineActions } from "./actions";
 import { CHECKS_VERSION, type ChecksResult, type ChecksRunner, createChecksRunner, formatChecksReport } from "./checks";
 import { createPipelineDecisionLog, type PipelineDecisionLog, type PipelineDecisionRecord } from "./decision-log";
@@ -48,6 +51,7 @@ import { createQaPreviewController } from "./qa-preview";
 import { readQaVerdictFile } from "./qa-verdict";
 import { createWorkerRecoveryStage } from "./recovery-runtime";
 import type { RecoveryStage, RecoveryStageDependencies } from "./recovery-stage";
+import { createReworkStage, type ReworkStage } from "./rework";
 import { stopScratchProcesses } from "./scratch-processes";
 import { createSubmissionStage, type SubmissionInspector } from "./submission-stage";
 import type { WatchdogActionRequest, WatchdogActionResult, WatchdogActions } from "./watchdog/actions";
@@ -93,6 +97,7 @@ export interface PipelineWorkerDependencies {
 	qaGate?: QaGate;
 	/** The recovery stage, given the worker's request-backed actions. Default: the real one (recovery-runtime.ts). */
 	createRecovery?: (act: RecoveryStageDependencies["act"]) => RecoveryStage;
+	reworkStage?: ReworkStage;
 	now?: () => number;
 }
 
@@ -290,18 +295,27 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			}
 		},
 	};
+	const deliverInput = async ({
+		workspaceId,
+		taskId,
+		text,
+	}: {
+		workspaceId: string;
+		taskId: string;
+		text: string;
+	}): Promise<{ ok: boolean; error?: string }> => {
+		try {
+			const delivered = await watchdogActions.request({ kind: "deliverInput", workspaceId, taskId, text });
+			return delivered.ok ? { ok: true } : { ok: false, error: delivered.error ?? delivered.status };
+		} catch (error) {
+			return { ok: false, error: error instanceof Error ? error.message : String(error) };
+		}
+	};
 	const qaGate =
 		deps.qaGate ??
 		createQaGate({
 			actions: gateActions,
-			deliverInput: async ({ workspaceId, taskId, text }) => {
-				try {
-					const delivered = await watchdogActions.request({ kind: "deliverInput", workspaceId, taskId, text });
-					return delivered.ok ? { ok: true } : { ok: false, error: delivered.error ?? delivered.status };
-				} catch (error) {
-					return { ok: false, error: error instanceof Error ? error.message : String(error) };
-				}
-			},
+			deliverInput,
 			finishTask,
 			appendQaLog,
 			store,
@@ -352,6 +366,19 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 	const recovery =
 		deps.createRecovery?.(recoveryAct) ??
 		createWorkerRecoveryStage({ store, decisionLog, act: recoveryAct, log, now });
+	const reworkStage =
+		deps.reworkStage ??
+		createReworkStage({
+			actions: gateActions,
+			deliverInput,
+			store,
+			bus,
+			appendQaLog,
+			preserveWork,
+			readSessionSize: readAgentSessionSize,
+			getClearCommand: getAgentClearCommand,
+			log,
+		});
 	const watchdog = (deps.createWatchdog ?? createWatchdog)({
 		actions: watchdogActions,
 		readConfig,
@@ -528,9 +555,22 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 				lastDecisionKeys.delete(key);
 			}
 		}
-		// QA card starts and ingests are events, logged each time. A shadow workspace acts on nothing.
+		// QA card starts and ingests, reworks and escalations are events, logged each time. A shadow workspace acts
+		// on nothing.
 		if (!shadow && pipelineOn) {
 			records.push(...(await qaGate.tick({ ...gateContext, now: now() })));
+			records.push(
+				...(await reworkStage.tick({
+					snapshot,
+					settings,
+					rework: parsed.config.pipeline.rework,
+					kitName: resolution.kitName,
+					policy,
+					agentDefaultModels,
+					clineDataDir: parsed.config.agents.cline.dataDir,
+					now: now(),
+				})),
+			);
 		}
 		if (records.length > 0) {
 			await decisionLog.append(records);

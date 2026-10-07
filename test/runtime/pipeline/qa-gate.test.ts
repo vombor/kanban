@@ -33,8 +33,16 @@ function createdTasks(actions: QaGateHarnessAction[]) {
 	return actions.flatMap((action) => (action.kind === "createTask" ? [action.task] : []));
 }
 
+const REWORK_KINDS = new Set(["updateTask", "resumeTask", "blockTask"]);
+
+/** The QA gate's own actions; what the rework stage does after a FAIL is tested in rework.test.ts. */
 function kinds(actions: QaGateHarnessAction[]) {
-	return actions.map((action) => `${action.kind}:${"taskId" in action ? action.taskId : action.task.taskId}`);
+	return actions
+		.filter(
+			(action) =>
+				!REWORK_KINDS.has(action.kind) && !(action.kind === "deliverInput" && !action.taskId.startsWith("qa")),
+		)
+		.map((action) => `${action.kind}:${"taskId" in action ? action.taskId : action.task.taskId}`);
 }
 
 describe("QA gate", () => {
@@ -264,7 +272,7 @@ describe("QA gate", () => {
 			},
 		]);
 		expect(readQaGateEntry(state.cards.qa001)).toMatchObject({ status: "ingested", verdict: "FAIL", trashed: true });
-		expect(harness.events).toMatchObject([
+		expect(harness.events.filter((event) => event.name === "verdictRecorded")).toMatchObject([
 			{
 				name: "verdictRecorded",
 				event: {
@@ -421,6 +429,6 @@ describe("QA gate", () => {
 
 		expect(kinds(harness.actions)).toEqual(["finishTask:qa001", "finishTask:qa001"]);
 		expect(readQaVerdictRecords((await harness.store.load("foo")).cards.d1111)).toHaveLength(1);
-		expect(harness.events).toHaveLength(1);
+		expect(harness.events.filter((event) => event.name === "verdictRecorded")).toHaveLength(1);
 	});
 });

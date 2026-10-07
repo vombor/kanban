@@ -2,7 +2,7 @@
 // The server owns the board and the sessions and sends the worker snapshots; the worker decides and logs. When a
 // stage acts, the worker asks the server, so the server stays the only writer of the board: `finishTask` (the
 // Done workflow, landing included) or a `request` (the watchdog's actions, src/pipeline/watchdog/actions.ts, and
-// the QA gate's card actions, src/pipeline/actions.ts). The server answers with `finishTaskResult` / `response`.
+// the pipeline's card actions, src/pipeline/actions.ts). The server answers with `finishTaskResult` / `response`.
 import type { RuntimeTaskLandingChoice, RuntimeTaskTrashResponse } from "../core/api-contract";
 import type { PipelineActionRequest } from "./actions";
 import type { PipelineWorkspaceSnapshot } from "./engine";
@@ -20,7 +20,7 @@ export interface PipelineFinishTaskRequest {
 	trigger: "pipeline" | "hold_release";
 }
 
-/** What a worker `request` can ask: a watchdog action or a QA gate card action (told apart by `kind`). */
+/** What a worker `request` can ask: a watchdog action or a pipeline card action (told apart by `kind`). */
 export type PipelineServerRequest = WatchdogActionRequest | PipelineActionRequest;
 
 export type PipelineHostMessage =
@@ -58,7 +58,15 @@ export function isPipelineWorkerMessage(value: unknown): value is PipelineWorker
 	return hasType(value) && typeof value.type === "string" && WORKER_MESSAGE_TYPES.has(value.type);
 }
 
+const PIPELINE_ACTION_KINDS = new Set<string>([
+	"createTask",
+	"startTask",
+	"resumeTask",
+	"updateTask",
+	"blockTask",
+] satisfies PipelineActionRequest["kind"][]);
+
 /** Whether a `request` is one of the pipeline's card actions (the rest are watchdog actions). */
 export function isPipelineActionRequest(request: PipelineServerRequest): request is PipelineActionRequest {
-	return request.kind === "createTask" || request.kind === "startTask" || request.kind === "resumeTask";
+	return PIPELINE_ACTION_KINDS.has(request.kind);
 }

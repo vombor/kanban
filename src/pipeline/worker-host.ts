@@ -16,10 +16,11 @@
 //   request; the host runs it and answers `finishTaskResult`. Lands from any trigger reach the worker as `landed`.
 // - A worker that exits on its own is restarted after a growing delay. `pipeline.workerEntry` points the child at
 //   another build's CLI (the dev pod's "fix it live" loop): the host runs `<workerEntry> pipeline worker`.
-// - A worker `request` for a QA gate card action (create or start a QA card, src/pipeline/actions.ts) runs through
-//   `runAction`, only for a workspace on landing mode `qa` (pipeline not paused) as of the last sweep; anything else
-//   is refused, also while the watchdog has every workspace. Restart recovery's `resumeTask` (recovery runs on
-//   landing-off workspaces too, plan §12) and every other `request` (a watchdog action, `handleWatchdogRequest`) are
+// - A worker `request` for a card action (the QA gate's create/start, the rework stage's update/block,
+//   src/pipeline/actions.ts) runs through `runAction`, only for a workspace on landing mode `qa` (pipeline not paused)
+//   as of the last sweep; anything else is refused, also while the watchdog has every workspace. `resumeTask`
+//   (restart recovery runs on landing-off workspaces too, plan §12; the rework stage only runs on `qa` ones) and every
+//   other `request` (a watchdog action, `handleWatchdogRequest`) are
 //   accepted for any workspace the worker has.
 import { type ChildProcess, fork } from "node:child_process";
 

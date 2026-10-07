@@ -87,6 +87,7 @@ import {
 	detectStalls,
 	isBoardBusy,
 	readEscalation,
+	readStop,
 	resolveWatchdogCardRole,
 	type WatchdogCardRole,
 } from "./stalls";
@@ -415,6 +416,15 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 				if (verdict !== "fixed") {
 					attention.push(
 						`- **${taskId}** (${column}): escalated ${escalation.at} (${escalation.reason}); triage: ${verdict}`,
+					);
+				}
+			}
+			// The kit answered `stop` after a FAIL: the card waits in Review for a human (plan §4.0, onFail default).
+			for (const [taskId, entry] of Object.entries(pipelineState.cards)) {
+				const stop = readStop(entry);
+				if (stop && !readEscalation(entry) && columns.get(taskId) === "review") {
+					attention.push(
+						`- **${taskId}** (review): stopped ${stop.at} (${stop.reason}); the kit does not rework it`,
 					);
 				}
 			}

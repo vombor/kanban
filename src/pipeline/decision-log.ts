@@ -19,6 +19,8 @@ const DECISION_LOG_MAX_BYTES = 5 * 1024 * 1024;
 /**
  * `land`: the Done workflow's landing step (src/server/task-landing-gate.ts), written by the server. `qa_gate`: the
  * kit's QA answer for a dev card; `qa_start` / `qa_ingest` / `qa_pass`: the QA gate starting and ingesting QA cards and acting on a PASS; `recovery` / `restart`: recovery-stage.ts.
+ * `rework`: the rework loop acting on a FAIL, STALLED, land conflict or unchanged rework (the kit's `onFail` answer,
+ * or the core's own escalation at the `maxFailRounds` cap), and checking that a rework started.
  */
 export type PipelineStage =
 	| "worker"
@@ -28,6 +30,7 @@ export type PipelineStage =
 	| "qa_start"
 	| "qa_ingest"
 	| "qa_pass"
+	| "rework"
 	| "land"
 	| "recovery"
 	| "restart";

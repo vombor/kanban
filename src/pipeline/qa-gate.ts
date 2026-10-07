@@ -12,7 +12,7 @@
 //    recorded STALLED.
 // 4. PASS: the kit's `onPass` (decideOnPass, hold.ts) may hold the card; otherwise the Done workflow lands it
 //    (src/server/task-landing-gate.ts, trigger `pipeline`). FAIL, STALLED and a land conflict are the rework stage's
-//    (P4-5): the gate records them and does nothing more.
+//    (rework.ts): the gate records them (the verdict, `qaPass.landing`) and does nothing more.
 //
 // The gate only handles the QA cards it created (state entry `qaGate`): QA cards the legacy kit made stay the
 // legacy kit's.
@@ -39,6 +39,7 @@ import type {
 	RuntimeBoardCard,
 	RuntimeBoardColumnId,
 	RuntimeTaskAgentSettings,
+	RuntimeTaskLandingOutcome,
 	RuntimeTaskTrashResponse,
 } from "../core/api-contract";
 import { resolveCardRole, resolveReviewedTaskId } from "../core/card-role";
@@ -106,6 +107,8 @@ export interface QaPassEntry {
 	/** The Done workflow's status for `land`. */
 	status: string | null;
 	error: string | null;
+	/** What the landing step answered for `land` (a `conflict` with its files goes to the rework stage). */
+	landing?: RuntimeTaskLandingOutcome | null;
 }
 
 export function readQaPassEntry(entry: PipelineCardState | undefined): QaPassEntry | null {
@@ -609,7 +612,12 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 					status: "failed" as const,
 					error: error instanceof Error ? error.message : String(error),
 				}));
-			await markHandled({ action: "land", status: result.status, error: result.ok ? null : (result.error ?? null) });
+			await markHandled({
+				action: "land",
+				status: result.status,
+				error: result.ok ? null : (result.error ?? null),
+				landing: "landing" in result ? (result.landing ?? null) : null,
+			});
 			records.push(
 				record(
 					context,

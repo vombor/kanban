@@ -12,7 +12,7 @@ const CARD_ID = /\*\*([0-9a-f]{5})\b/gu;
 const PLAN_HELD_STEP = /^- \[(wait\b[^\]]*|watch|user)\]/u;
 const PLAN_OPEN_STEP = /^- \[ \]/mu;
 const PIPELINE_IDLE_ITEM = /^- \*\*pipeline idle\*\*: .*?: (.+)$/u;
-const ESCALATED_ITEM = /^- \*\*([0-9a-f]{5})\*\* \(\w+\): escalated /u;
+const ESCALATED_ITEM = /^- \*\*([0-9a-f]{5})\*\* \(\w+\): (?:escalated|stopped) /u;
 
 export const PID_PRESSURE_ITEM_MARKER = "**PID pressure**";
 export const PIPELINE_IDLE_ITEM_MARKER = "**pipeline idle**";

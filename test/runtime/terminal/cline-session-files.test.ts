@@ -3,7 +3,11 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createClineSessionFileReader, getClineSessionsPath } from "../../../src/terminal/cline-session-files";
+import {
+	createClineSessionFileReader,
+	getClineSessionsPath,
+	readLatestClineSessionSize,
+} from "../../../src/terminal/cline-session-files";
 import { createTempDir } from "../../utilities/temp-dir";
 
 interface SessionFixture {
@@ -182,5 +186,36 @@ describe("cline session messages", () => {
 		]);
 		expect(await reader.readLatestSessionMessages(sessionsPath, "/other")).toBeNull();
 		expect(await reader.readLatestSessionMessages(sessionsPath, "/nowhere")).toBeNull();
+	});
+});
+
+describe("cline session size", () => {
+	it("measures the newest session for the rework /clear thresholds: assistant turns and the last input tokens", async () => {
+		const sessionsPath = createSessionsDir([
+			{
+				id: "1_old",
+				meta: { cwd: WORKTREE, started_at: "2026-10-07T09:00:00Z" },
+				messages: { messages: [{ role: "assistant", content: [{ type: "text", text: "old" }] }] },
+			},
+			{
+				id: "2_new",
+				meta: { cwd: WORKTREE, started_at: "2026-10-07T10:00:00Z" },
+				messages: {
+					messages: [
+						{ role: "user", content: [{ type: "text", text: "task" }] },
+						{ role: "assistant", content: [{ type: "text", text: "a" }], metrics: { inputTokens: 1000 } },
+						{ role: "assistant", content: [] },
+						{ role: "assistant", content: [{ type: "tool_use" }], metrics: { inputTokens: 151_000 } },
+					],
+				},
+			},
+		]);
+		const reader = createClineSessionFileReader();
+
+		expect(await readLatestClineSessionSize(reader, sessionsPath, WORKTREE)).toEqual({
+			turns: 2,
+			lastInputTokens: 151_000,
+		});
+		expect(await readLatestClineSessionSize(reader, sessionsPath, "/elsewhere")).toBeNull();
 	});
 });

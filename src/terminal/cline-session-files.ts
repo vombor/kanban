@@ -297,3 +297,32 @@ export function createClineSessionFileReader(): ClineSessionFileReader & ClineSe
 		},
 	};
 }
+
+/** How big a session is: what a resumed rework would re-read every turn. */
+export interface ClineSessionSize {
+	/** Assistant turns with content. */
+	turns: number;
+	/** The input tokens of the last turn (the context it sent). */
+	lastInputTokens: number;
+}
+
+// Ported from archive/devteam-kit:services/kanban-autoland.mjs@6da71597 (sessionSize: assistant turns with content,
+// and the last one's metrics.inputTokens).
+export function measureClineSession(messages: readonly unknown[]): ClineSessionSize {
+	const turns = messages.filter((message): message is { content: unknown[]; metrics?: { inputTokens?: unknown } } => {
+		const value = message as { role?: unknown; content?: unknown } | null;
+		return value?.role === "assistant" && Array.isArray(value.content) && value.content.length > 0;
+	});
+	const lastInput = Number(turns.at(-1)?.metrics?.inputTokens ?? 0);
+	return { turns: turns.length, lastInputTokens: Number.isFinite(lastInput) ? lastInput : 0 };
+}
+
+/** The size of the worktree's newest Cline session, or null when it has none (or no messages yet). */
+export async function readLatestClineSessionSize(
+	reader: Pick<ClineSessionFileReader, "readLatestSessionMessages">,
+	sessionsPath: string,
+	workspacePath: string,
+): Promise<ClineSessionSize | null> {
+	const messages = await reader.readLatestSessionMessages(sessionsPath, workspacePath);
+	return messages ? measureClineSession(messages) : null;
+}

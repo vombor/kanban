@@ -12,9 +12,9 @@
 //
 // For each Review card it runs the submission stage (submission-stage.ts: snapshot, scripted checks), then asks the
 // QA-gate question (`qaPolicy`) for each submitted card and records the answer. A `qa` answer goes to the QA gate
-// (qa-gate.ts, through `submitQa`) unless the workspace is in shadow. The stages that act on later answers (rework,
-// recovery) are later cards; a decision without a stage to act on it is logged as `not_implemented` (or `shadow`
-// on a shadow workspace).
+// (qa-gate.ts, through `submitQa`) unless the workspace is in shadow. The rework loop (rework.ts) acts on what the
+// gate records after a FAIL; recovery is a later card. A decision without a stage to act on it is logged as
+// `not_implemented` (or `shadow` on a shadow workspace).
 
 import type { PipelineConfig, WorkspacePipelineSettings } from "../config/pipeline-config";
 import type {

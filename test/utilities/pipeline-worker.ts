@@ -19,9 +19,13 @@ import { createQaGate } from "../../src/pipeline/qa-gate";
 import { type AppendQaLog, createQaLogAppender } from "../../src/pipeline/qa-log";
 import type { QaPreviewController } from "../../src/pipeline/qa-preview";
 import type { QaVerdictRead } from "../../src/pipeline/qa-verdict";
+import { createReworkStage } from "../../src/pipeline/rework";
+import type { StageQaNotesInput } from "../../src/pipeline/rework-notes";
+import type { StaleBase } from "../../src/pipeline/rework-text";
 import type { SubmissionInspector } from "../../src/pipeline/submission-stage";
 import { createPipelineWorker, type PipelineWorkerDependencies } from "../../src/pipeline/worker";
 import type { PipelineFinishTaskRequest, PipelineWorkerMessage } from "../../src/pipeline/worker-protocol";
+import type { ClineSessionSize } from "../../src/terminal/cline-session-files";
 import { createTempDir } from "./temp-dir";
 
 /** What the QA gate asked the server for, in order. */
@@ -49,6 +53,15 @@ export interface PipelineWorkerHarnessOptions {
 	now?: number;
 	/** Replaces the recovery stage (which otherwise reads Cline session files under the test's HOME). */
 	createRecovery?: PipelineWorkerDependencies["createRecovery"];
+	/** The rework stage's view of a card's worktree. Default: none (no QA notes staged, no stale base). */
+	worktree?: (taskId: string) => string | null;
+	staleBase?: (taskId: string) => StaleBase | null;
+	/** The card's session size for the `/clear` thresholds. Default: unknown. */
+	sessionSize?: (agentId: RuntimeAgentId) => ClineSessionSize | null;
+	/** The agent's clear command. Default: "/clear" for every agent. */
+	clearCommand?: (agentId: RuntimeAgentId) => string | null;
+	/** preserveWork for an escalation to a model. Default: records the tag. */
+	preserveWork?: (input: { workspacePath: string; taskId: string; tag: string }) => Promise<unknown>;
 }
 
 /**
@@ -67,6 +80,10 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 	const verdicts = new Map<string, QaVerdictRead>();
 	const stoppedScratch: string[][] = [];
 	let uuidCount = 0;
+	let siblingCount = 0;
+	const preservedTags: string[] = [];
+	const stagedNotes: StageQaNotesInput[] = [];
+	let snapshotOf = (taskId: string): string | null => (options.snapshot ? options.snapshot(taskId) : `snap-${taskId}`);
 	let rawConfig: unknown = options.config ?? {};
 	const messages: PipelineWorkerMessage[] = [];
 	const events: Array<{ name: PipelineEventName; event: PipelineEventMap[PipelineEventName] }> = [];
@@ -110,7 +127,7 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 		store,
 		bus,
 		preview,
-		readSnapshot: async (_repoPath, taskId) => (options.snapshot ? options.snapshot(taskId) : `snap-${taskId}`),
+		readSnapshot: async (_repoPath, taskId) => snapshotOf(taskId),
 		readVerdict: async (outboxDir) => verdicts.get(outboxDir) ?? { kind: "missing" },
 		stopScratchProcesses: async (dirs) => {
 			stoppedScratch.push(dirs);
@@ -124,6 +141,35 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 		randomUuid: () => {
 			uuidCount += 1;
 			return `qa${String(uuidCount).padStart(3, "0")}00-0000-0000-0000-000000000000`;
+		},
+		log: () => {},
+	});
+	const reworkStage = createReworkStage({
+		actions: { run: async (request) => answer(request) },
+		deliverInput: async (input) => answer({ kind: "deliverInput", ...input }),
+		store,
+		bus,
+		appendQaLog,
+		preserveWork:
+			options.preserveWork ??
+			(async ({ tag }) => {
+				preservedTags.push(tag);
+			}),
+		readSnapshot: async (_repoPath, taskId) => snapshotOf(taskId),
+		findWorktree: async (_workspacePath, taskId) => options.worktree?.(taskId) ?? null,
+		stageQaNotes: async (input) => {
+			stagedNotes.push(input);
+			return `.qa/r${input.round}`;
+		},
+		readStaleBase: async ({ worktreePath }) => options.staleBase?.(worktreePath) ?? null,
+		readSessionSize: async (agentId) => options.sessionSize?.(agentId) ?? null,
+		getClearCommand: (agentId) => (options.clearCommand ? options.clearCommand(agentId) : "/clear"),
+		getQaLogPath: qaLogPath,
+		getArtifactsPath: artifactsPath,
+		// Sibling card ids s0001, s0002, …
+		randomUuid: () => {
+			siblingCount += 1;
+			return `s${String(siblingCount).padStart(4, "0")}0-0000-0000-0000-000000000000`;
 		},
 		log: () => {},
 	});
@@ -147,6 +193,7 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 		loadAgentDefaultModels: async () => ({}),
 		qaGate,
 		createRecovery: options.createRecovery,
+		reworkStage,
 		now: () => now,
 	});
 
@@ -172,6 +219,12 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 		actions,
 		previewCalls,
 		stoppedScratch,
+		preservedTags,
+		stagedNotes,
+		/** Changes the snapshot commit the QA gate and the rework stage read. */
+		setSnapshot: (next: (taskId: string) => string | null) => {
+			snapshotOf = next;
+		},
 		/** What the QA card's outbox (`<outboxRoot>/<qaTaskId>`) holds. */
 		setVerdict: (outboxDir: string, read: QaVerdictRead) => {
 			verdicts.set(outboxDir, read);
@@ -216,6 +269,8 @@ export function createSnapshot(input: {
 				agentId: session.agentId ?? null,
 				modelId: session.modelId ?? null,
 				state: session.state ?? "awaiting_review",
+				...(session.lastHookAt !== undefined ? { lastHookAt: session.lastHookAt } : {}),
+				...(session.startedAt !== undefined ? { startedAt: session.startedAt } : {}),
 			}),
 		),
 	};

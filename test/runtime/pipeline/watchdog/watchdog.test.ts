@@ -148,12 +148,16 @@ describe("watchdog on", () => {
 				version: 1,
 				since: "2026-10-01T00:00:00.000Z",
 				importedFrom: null,
-				cards: { e0001: { qaflow: { escalated: { at: "2026-10-07T09:00:00Z", reason: "3 FAILs" } } } },
+				cards: {
+					e0001: { qaflow: { escalated: { at: "2026-10-07T09:00:00Z", reason: "3 FAILs" } } },
+					f0001: { qaflow: { stopped: { at: "2026-10-07T09:30:00Z", reason: "the kit does not rework" } } },
+				},
 			}),
 		);
 		const board = createBoard({
 			review: [
 				createCard({ id: "e0001", updatedAt: WATCHDOG_NOW - 60 * MIN }),
+				createCard({ id: "f0001", updatedAt: WATCHDOG_NOW - 60 * MIN }),
 				createCard({ id: "bb001", updatedAt: WATCHDOG_NOW - 60 * MIN }),
 			],
 			in_progress: [createCard({ id: "d0002", updatedAt: WATCHDOG_NOW - 60 * MIN })],
@@ -168,6 +172,10 @@ describe("watchdog on", () => {
 		expect(attention).toContain(
 			"- **e0001** (review): escalated 2026-10-07T09:00:00Z (3 FAILs); triage: needs decision",
 		);
+		expect(attention).toContain(
+			"- **f0001** (review): stopped 2026-10-07T09:30:00Z (the kit does not rework); the kit does not rework it",
+		);
+		expect(attention).not.toContain("f0001:review-stall");
 		expect(attention).toContain("## Orchestrator: needs the user\n- **bb001**: choose");
 		expect(harness.requests).toEqual(
 			expect.arrayContaining([

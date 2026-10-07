@@ -331,6 +331,9 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			}),
 		startTaskSession: async (scope, input) => await runtimeApi.startTaskSession(scope, input),
 		hasLiveProcess: async (scope, taskId) => (await getScopedTerminalManager(scope)).hasLiveProcess(taskId),
+		stopTaskSession: async (scope, taskId) => {
+			(await getScopedTerminalManager(scope)).stopTaskSession(taskId);
+		},
 		onBoardMutated: async (scope) =>
 			await deps.runtimeStateHub.broadcastRuntimeWorkspaceStateUpdated(scope.workspaceId, scope.workspacePath),
 	});

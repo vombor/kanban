@@ -46,9 +46,10 @@ describe("detectStalls", () => {
 		expect(result.items).toEqual([expect.objectContaining({ key: "d0001:review-stall", taskId: "d0001" })]);
 	});
 
-	it("leaves a Review card alone when the kit doesn't QA-gate it, or it is recent, escalated, an open user item, or has a QA card", () => {
+	it("leaves a Review card alone when the kit doesn't QA-gate it, or it is recent, escalated, stopped, an open user item, or has a QA card", () => {
 		const board = createBoard({
 			review: [
+				old("d0006"),
 				old("d0001"),
 				old("d0002"),
 				old("d0003"),
@@ -60,7 +61,10 @@ describe("detectStalls", () => {
 		const result = detectStalls(
 			input(board, {
 				qaGated: (card) => card.id !== "d0001",
-				pipelineCards: { d0002: { qaflow: { escalated: { at: "2026-10-07T10:00:00Z", reason: "3 FAILs" } } } },
+				pipelineCards: {
+					d0002: { qaflow: { escalated: { at: "2026-10-07T10:00:00Z", reason: "3 FAILs" } } },
+					d0006: { qaflow: { stopped: { at: "2026-10-07T10:00:00Z", reason: "the kit does not rework" } } },
+				},
 				userItemIds: new Set(["d0003"]),
 				sessions: new Map([["qa001", session("qa001", { state: "running" })]]),
 			}),

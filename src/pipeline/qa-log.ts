@@ -73,6 +73,15 @@ export function getPreviousQaRounds(text: string, devTaskId: string): string {
 		.join("\n\n");
 }
 
+/** The dev card's newest verdict section of `round`, else its newest section; "" when it has none. */
+export function getQaLogSection(text: string, devTaskId: string, round: number): string {
+	const sections = getQaSections(text, devTaskId);
+	const ofRound = sections.filter(
+		(section) => Number(/\(round (\d+)\)/u.exec(section.split("\n")[0] ?? "")?.[1] ?? 1) === round,
+	);
+	return (ofRound.at(-1) ?? sections.at(-1) ?? "").trimEnd();
+}
+
 export interface QaLogSectionInput {
 	devTaskId: string;
 	round: number;
