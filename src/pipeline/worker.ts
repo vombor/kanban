@@ -367,6 +367,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 				taskId: action.taskId,
 				prompt: action.prompt,
 				agentId: action.agentId,
+				continueConversation: action.continueConversation,
 			});
 			return resumed.ok ? { ok: true, status: "started" } : { ok: false, error: resumed.error };
 		} catch (error) {

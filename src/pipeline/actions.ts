@@ -38,6 +38,11 @@ export type PipelineActionRequest =
 	 * stage for a rework that has no session to type into or never started. `prompt` absent = the card's current
 	 * prompt. A card with a live session is refused, unless `replaceLive` (the rework started-check: the live session
 	 * never took the rework), which stops it first; the card moves only once a new session has started.
+	 * `continueConversation` (restart recovery only, for an agent whose resume continues its conversation; see
+	 * buildRestartResumeLaunch) starts with `resumeFromTrash`, so `prompt` is the next turn of the old conversation
+	 * (the resume note), never the card prompt. The rework stage never sets it, `replaceLive` included: the session it
+	 * replaces never took the rework, so a fresh session gets the reworked card prompt instead of a conversation that
+	 * carries the context the rework round meant to leave behind.
 	 */
 	| (PipelineActionScope & {
 			kind: "resumeTask";
@@ -45,6 +50,7 @@ export type PipelineActionRequest =
 			prompt?: string;
 			agentId: RuntimeAgentId;
 			replaceLive?: boolean;
+			continueConversation?: boolean;
 	  })
 	/** Replaces a card's prompt and/or title (the rework stage's REWORK section). */
 	| (PipelineActionScope & { kind: "updateTask"; taskId: string; prompt?: string; title?: string })

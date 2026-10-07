@@ -383,7 +383,13 @@ describe("pipeline worker", () => {
 					const workspaceId = input.snapshot.workspaceId;
 					results.push(await act(workspaceId, { kind: "input", taskId: "dev-1", data: "\u001b" }));
 					results.push(
-						await act(workspaceId, { kind: "resume", taskId: "dev-1", prompt: "Go on.", agentId: "cline" }),
+						await act(workspaceId, {
+							kind: "resume",
+							taskId: "dev-1",
+							prompt: "Go on.",
+							agentId: "claude",
+							continueConversation: true,
+						}),
 					);
 					return [];
 				},
@@ -418,7 +424,8 @@ describe("pipeline worker", () => {
 			workspacePath: "/repos/kanban-2uge",
 			taskId: "dev-1",
 			prompt: "Go on.",
-			agentId: "cline",
+			agentId: "claude",
+			continueConversation: true,
 		});
 		await handled;
 		expect(results).toEqual([

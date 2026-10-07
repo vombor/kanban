@@ -9,7 +9,10 @@
 // - an interactive session of the agent that Kanban did not start (Claude Code transcripts), so a headless run is not
 //   started beside a human's live session;
 // - for the rework loop (src/pipeline/rework.ts): the slash command that clears the agent's conversation in its TUI,
-//   and how big its current session is (Cline's session files), for the `/clear` thresholds.
+//   and how big its current session is (Cline's session files), for the `/clear` thresholds;
+// - for restart recovery and `kanban task resume`: whether a resume (the adapter's `resumeFromTrash`) continues the
+//   agent's last conversation in the worktree with a launch prompt, so the agent gets a short resume note instead of
+//   its whole card prompt again.
 import { open, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -49,6 +52,13 @@ export interface AgentSessionSizeOptions {
 interface OrchestratorAgentProfile {
 	/** Typed into the TUI to start a fresh conversation in the same session (same model). */
 	clearCommand?: string;
+	/**
+	 * A launch with `resumeFromTrash` continues the agent's last conversation in the worktree and takes the launch
+	 * prompt as its next turn. Set only where that was verified against the installed CLI: the other adapters add a
+	 * resume flag too, but whether it picks this worktree's session and keeps a launch prompt is unverified (Codex
+	 * `resume --last [SESSION_ID] [PROMPT]`; Copilot starts a new session when it finds none for the worktree).
+	 */
+	continuesConversationOnResume?: boolean;
 	/** The size of the agent's current session in this worktree, or null when unknown. */
 	sessionSize?: (worktreePath: string, options: AgentSessionSizeOptions) => Promise<ClineSessionSize | null>;
 	headless?: (prompt: string) => HeadlessOrchestratorCommand;
@@ -112,6 +122,9 @@ const PROFILES: Partial<Record<RuntimeAgentId, OrchestratorAgentProfile>> = {
 		trusted: async (directory) => await isClaudeWorkspaceTrusted(directory),
 		liveInteractiveSession: findLiveClaudeTranscript,
 		clearCommand: "/clear",
+		// Ported from kit main a2b4695 lib/resume.mjs (resumeClaude): `claude --continue <prompt>` continues the most
+		// recent conversation in the current directory (claude --help, 2.1.292).
+		continuesConversationOnResume: true,
 	},
 	// Ported from archive/devteam-kit:services/kanban-autoland.mjs@6da71597 (rework: `/clear` resets the Cline
 	// conversation, sessionSize from Cline's session files).
@@ -193,4 +206,9 @@ export async function readAgentSessionSize(
 ): Promise<ClineSessionSize | null> {
 	const measure = PROFILES[agentId]?.sessionSize;
 	return measure ? await measure(worktreePath, options).catch(() => null) : null;
+}
+
+/** Whether a resume (`resumeFromTrash`) continues the agent's last conversation in the worktree with a launch prompt. */
+export function agentContinuesConversationOnResume(agentId: RuntimeAgentId): boolean {
+	return PROFILES[agentId]?.continuesConversationOnResume === true;
 }

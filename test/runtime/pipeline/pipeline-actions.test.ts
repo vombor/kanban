@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { parsePipelineConfig } from "../../../src/config/pipeline-config";
 import type { PipelineActionRequest, PipelineActionResult } from "../../../src/pipeline/actions";
+import { RESTART_RESUME_NOTE } from "../../../src/pipeline/recovery-prompts";
 import { createPipelineWorkerHost, type PipelineWorkerChild } from "../../../src/pipeline/worker-host";
 import type { PipelineHostMessage, PipelineWorkerMessage } from "../../../src/pipeline/worker-protocol";
 import { createPipelineActionRunner } from "../../../src/server/pipeline-actions";
@@ -114,6 +115,35 @@ describe("pipeline actions on the server", () => {
 		);
 		expect(findCardInBoard(store.stored.board, "dev01")?.columnId).toBe("in_progress");
 		expect(onBoardMutated).toHaveBeenCalled();
+	});
+
+	it("continueConversation resumes the agent's conversation with the note as launch prompt; the card prompt stays", async () => {
+		const dev = createCard({ id: "dev01", prompt: "Do the card." });
+		const { store, fakes, run } = createRunner({ in_progress: [dev] });
+
+		expect(
+			await run({
+				...SCOPE,
+				kind: "resumeTask",
+				taskId: "dev01",
+				prompt: RESTART_RESUME_NOTE,
+				agentId: "claude",
+				continueConversation: true,
+			}),
+		).toEqual({ ok: true, detail: "started" });
+		expect(fakes.startTaskSession).toHaveBeenCalledWith(
+			expect.objectContaining(SCOPE),
+			expect.objectContaining({ prompt: RESTART_RESUME_NOTE, agentId: "claude", resumeFromTrash: true }),
+		);
+		expect(findCardInBoard(store.stored.board, "dev01")?.card.prompt).toBe("Do the card.");
+	});
+
+	it("never sends resumeFromTrash without continueConversation", async () => {
+		const { fakes, run } = createRunner({ review: [createCard({ id: "dev01" })] });
+		await run({ ...SCOPE, kind: "resumeTask", taskId: "dev01", prompt: "Do it.", agentId: "claude" });
+		const input = vi.mocked(fakes.startTaskSession).mock.calls[0]?.[1];
+		expect(input).toMatchObject({ prompt: "Do it.", agentId: "claude" });
+		expect(input).not.toHaveProperty("resumeFromTrash");
 	});
 
 	it("resumes only In Progress and Review cards", async () => {
@@ -232,6 +262,10 @@ describe("pipeline actions on the server", () => {
 		).toEqual({ ok: true, detail: "started, moved to In Progress" });
 		expect(stopping.stopTaskSession).toHaveBeenCalledTimes(1);
 		expect(findCardInBoard(stopping.store.stored.board, "d1111")?.columnId).toBe("in_progress");
+		// The replacement is a fresh session from the (reworked) card prompt, never the old conversation.
+		const replaced = vi.mocked(stopping.fakes.startTaskSession).mock.calls.at(-1)?.[1];
+		expect(replaced).toMatchObject({ prompt: createCard({ id: "d1111" }).prompt.trim() });
+		expect(replaced).not.toHaveProperty("resumeFromTrash");
 
 		// A session that doesn't go away: no start, the card stays where it is.
 		const stuck = createLiveRunner(false);

@@ -2,7 +2,9 @@
 // lesson (the "no images" and output-cap notes, the overflow search hint, the restart WIP note).
 //
 // Ported from archive/devteam-kit:services/kanban-autoland.mjs@6da71597 (nudgeIfErrored, sendDueRetry) and
-// archive/devteam-kit:lib/resume.mjs@6da71597 (WIP_NOTE).
+// archive/devteam-kit:lib/resume.mjs@6da71597 (WIP_NOTE) and kit main a2b4695 lib/resume.mjs (RESUME_NOTE).
+import type { RuntimeAgentId } from "../core/api-contract";
+import { agentContinuesConversationOnResume } from "../terminal/orchestrator-agents";
 import { OUTPUT_CAP_TOKENS, type PrematureStop } from "./recovery-detect";
 
 export const CONTINUE_PROMPT =
@@ -11,6 +13,11 @@ export const CONTINUE_PROMPT =
 // 219fc1b: only when the worktree has changes. A note on a clean worktree made the agent search other worktrees.
 export const RESTART_WIP_NOTE =
 	"NOTE (Kanban): Kanban restarted while you were working on this card, so your previous session was lost. Your work in progress is still in this worktree: run git status and git diff first, review what is there, and continue from it. Do not start over or discard it.";
+
+// kit main a2b4695 (kanban-2uge, 10/07): the launch prompt of a resume that continues the conversation. The card
+// prompt there would hand the agent its whole task again as a new turn, inviting it to redo finished work.
+export const RESTART_RESUME_NOTE =
+	"NOTE (orchestrator): you were resumed after a container/Kanban restart that ended your previous session. Pick up where you left off (check git status and git diff if unsure what you already did), finish the card, and end with a STATUS line.";
 
 const WORK_IS_HERE = "Your work so far is in this worktree (git status / git diff): continue the task from there.";
 
@@ -64,4 +71,25 @@ export function buildProviderRetryPrompt(error: string): string {
 /** The prompt a resumed card starts with: its own prompt, plus the WIP note only when the worktree has changes. */
 export function buildResumePrompt(cardPrompt: string, hasWorkInProgress: boolean): string {
 	return hasWorkInProgress ? `${cardPrompt}\n\n${RESTART_WIP_NOTE}` : cardPrompt;
+}
+
+export interface RestartResumeLaunch {
+	prompt: string;
+	/** Start with `resumeFromTrash`: the agent continues its last conversation in the worktree. */
+	continueConversation: boolean;
+}
+
+/**
+ * How a card whose session died with a restart starts again: an agent that can continue its conversation gets the
+ * resume note as its launch prompt (no WIP note: the conversation knows its own work), every other agent (Cline among
+ * them) a new session with buildResumePrompt(). The board card's prompt is never changed.
+ */
+export function buildRestartResumeLaunch(
+	agentId: RuntimeAgentId,
+	cardPrompt: string,
+	hasWorkInProgress: boolean,
+): RestartResumeLaunch {
+	return agentContinuesConversationOnResume(agentId)
+		? { prompt: RESTART_RESUME_NOTE, continueConversation: true }
+		: { prompt: buildResumePrompt(cardPrompt, hasWorkInProgress), continueConversation: false };
 }

@@ -4,9 +4,12 @@
 //                 Ported from archive/devteam-kit:bin/chat-card.mjs@6da71597.
 //   resume        restarts cards whose session died (a Kanban/container restart): a new WIP tag
 //                 (preserve/<id>-wip-<stamp>-restart), a new session with the card prompt (+ the WIP note only when
-//                 the worktree has tracked changes), In Progress, same agent and model. Restart recovery does the
-//                 same by itself with `pipeline.recovery.mode: "on"`.
-//                 Ported from archive/devteam-kit:lib/resume.mjs@6da71597 and bin/resume-card.mjs.
+//                 the worktree has tracked changes), In Progress, same agent and model. An agent whose resume
+//                 continues its conversation (Claude: `--continue`) continues it with the resume note as its launch
+//                 prompt instead (buildRestartResumeLaunch). Restart recovery does the same by itself with
+//                 `pipeline.recovery.mode: "on"`.
+//                 Ported from archive/devteam-kit:lib/resume.mjs@6da71597, kit main a2b4695 lib/resume.mjs
+//                 (resumeClaude) and bin/resume-card.mjs.
 //   restart-fresh starts a card over, possibly on another model: preserve the worktree as preserve/<id>-<label>,
 //                 stop the session and park the card in Backlog, reset the worktree to the base tip, drop the
 //                 REWORK sections and the BLOCKED prefix, set the model, reset the card's pipeline history, then
@@ -15,10 +18,16 @@
 //                 agent's old TUI has to stop before a fresh session starts.
 import { readFile } from "node:fs/promises";
 
-import type { RuntimeBoardCard, RuntimeBoardColumnId, RuntimeWorkspaceStateResponse } from "../core/api-contract";
+import type {
+	RuntimeAgentId,
+	RuntimeBoardCard,
+	RuntimeBoardColumnId,
+	RuntimeWorkspaceStateResponse,
+} from "../core/api-contract";
 import { resolveCardRole } from "../core/card-role";
+import { resolveEffectiveAgent } from "../core/effective-agent";
 import { addTaskDependency, getTaskColumnId, moveTaskToColumn, updateTask } from "../core/task-board-mutations";
-import { buildResumePrompt } from "../pipeline/recovery-prompts";
+import { buildRestartResumeLaunch } from "../pipeline/recovery-prompts";
 import { updateTrackedPipelineCardFlow } from "../pipeline/recovery-runtime";
 import { hasTrackedChanges, nextRestartWipTag, preserveWorktree, tagRestartWip } from "../pipeline/wip-tag";
 import { resolveProjectInputPath } from "../projects/project-path";
@@ -104,18 +113,28 @@ async function moveCard(workspace: TaskWorkspace, taskId: string, to: RuntimeBoa
 	return result.value;
 }
 
-/** Starts a session with `prompt` (ensuring the worktree) and moves the card to In Progress. */
+/** The card's effective agent (plan §4.0): the agent its session ran on, else the card's, else the selected one. */
+async function resolveCardAgent(workspace: TaskWorkspace, card: RuntimeBoardCard): Promise<RuntimeAgentId> {
+	const config = await workspace.client.runtime.getConfig.query();
+	return resolveEffectiveAgent(card, workspace.state.sessions[card.id] ?? null, config);
+}
+
+/**
+ * Starts a session with `prompt` (ensuring the worktree) and moves the card to In Progress. `resumeFromTrash`
+ * continues the agent's last conversation with `prompt` as its next turn.
+ */
 async function startCardSession(
 	workspace: TaskWorkspace,
 	card: RuntimeBoardCard,
 	prompt: string,
+	options: { agentId?: RuntimeAgentId; resumeFromTrash?: boolean } = {},
 ): Promise<{ state: string }> {
 	const ensured = await workspace.client.workspace.ensureWorktree.mutate({ taskId: card.id, baseRef: card.baseRef });
 	if (!ensured.ok) {
 		throw new Error(ensured.error ?? "Could not ensure task worktree.");
 	}
 	// The agent the session ran on wins over the card's (plan §4.0); the server falls back to the selected agent.
-	const agentId = workspace.state.sessions[card.id]?.agentId ?? card.agentId ?? undefined;
+	const agentId = options.agentId ?? workspace.state.sessions[card.id]?.agentId ?? card.agentId ?? undefined;
 	const started = await workspace.client.runtime.startTaskSession.mutate({
 		taskId: card.id,
 		prompt,
@@ -124,6 +143,7 @@ async function startCardSession(
 		baseRef: card.baseRef,
 		agentId,
 		agentSettings: card.agentSettings,
+		...(options.resumeFromTrash ? { resumeFromTrash: true } : {}),
 	});
 	if (!started.ok || !started.summary) {
 		throw new Error(started.error ?? "Could not start task session.");
@@ -182,19 +202,26 @@ async function resumeOne(workspace: TaskWorkspace, taskId: string, dryRun: boole
 			? await nextRestartWipTag(worktree, taskId, new Date())
 			: await tagRestartWip(worktree, taskId)
 		: null;
+	const agentId = await resolveCardAgent(workspace, card);
+	const launch = buildRestartResumeLaunch(agentId, card.prompt, hasWip);
 	const result: JsonRecord = {
 		taskId,
 		column,
 		role: resolveCardRole(card),
+		agentId,
 		model: card.agentSettings?.modelId ?? summary?.modelId ?? null,
 		wipTag,
 		workInProgress: hasWip,
+		continuesConversation: launch.continueConversation,
 		worktree,
 	};
 	if (dryRun) {
 		return { ...result, ok: true, dryRun: true };
 	}
-	const started = await startCardSession(workspace, card, buildResumePrompt(card.prompt, hasWip));
+	const started = await startCardSession(workspace, card, launch.prompt, {
+		agentId,
+		resumeFromTrash: launch.continueConversation,
+	});
 	// A card restart recovery marked as orphaned is no longer one, and a resume by hand ends a recovery escalation.
 	await updateTrackedPipelineCardFlow(workspace.workspaceId, taskId, (qaflow) => ({
 		...qaflow,

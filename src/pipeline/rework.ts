@@ -1230,6 +1230,8 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 				patch.restartAt = nowIso;
 				if (canRestartOnSameModel(card, session)) {
 					// The live session (if any) never took the rework: replace it, or startTaskSession would hand it back.
+					// Never `continueConversation`: a fresh session from the card prompt (REWORK section included) is
+					// what delivers the rework; continuing would keep the conversation that never took it.
 					const restarted = await run({
 						...scopeOf(scope),
 						kind: "resumeTask",

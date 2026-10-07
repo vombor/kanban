@@ -85,7 +85,7 @@ on). There is no `pause` command.
 | Hand an escalated card back | `kanban task handback --task-id <id> --note "<why>" [--extra-rounds N] [--by NAME]` |
 | Release a held PASS (runoff) | `kanban task release-hold --task-id <id> --land` or `--discard [--tag preserve/<id>-<model>] [--note …]` |
 | Type into a card | `kanban task send <id> "<text>"` or `@file` (`--no-enter` to only type) |
-| Restart a dead card | `kanban task resume <id…> [--dry-run]`: WIP tag, a new session with the card prompt (+ a WIP note when the worktree has changes), same agent and model |
+| Restart a dead card | `kanban task resume <id…> [--dry-run]`: WIP tag, a new session with the card prompt (+ a WIP note when the worktree has changes), same agent and model; a Claude card continues its conversation (`--continue`) with a resume note instead |
 | Start over, maybe on another model | `kanban task restart-fresh <id> --model <m> --label <suffix> [--provider P] [--hold] [--after <id>] [--note …]` |
 | Queue an orchestrator wake | `kanban orchestrator wake "<issue>" [--when-card-done <id> \| --when-model-up <m>]` |
 | Prune Done | `kanban board prune-done [--workspace W] [--days N] [--dry-run]` (the watchdog does it hourly when on) |
@@ -118,9 +118,9 @@ Each step logs one result line to `<kit home>/logs/kanban-entrypoint.log` (`rest
 asks the worker to check now. Never restart the pod yourself: that is the user's step on the host.
 
 - Until the cutover, restart resumes come from the legacy autoland. `pipeline.recovery.mode` stays `report`, so
-  never both: a double resume starts two sessions. The legacy kit (since `a2b4695`) resumes a Claude card with
-  `claude --continue` and a resume note as its next turn. The runtime's resume (`kanban task resume`, and recovery
-  in mode `on`) starts a new session with the card prompt, for every agent.
+  never both: a double resume starts two sessions. Both resume a Claude card the same way: `claude --continue` with
+  a resume note as its next turn (the legacy kit since `a2b4695`; the runtime's `kanban task resume`, and recovery
+  in mode `on`). Every other agent, Cline included, gets a new session with the card prompt (+ a WIP note).
 - A card that still shows "running" after a restart has no process. `kanban task resume <id>` brings it back.
 
 **Stuck card.**

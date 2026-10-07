@@ -6,6 +6,7 @@ import type { PipelineDecisionRecord } from "../../../src/pipeline/decision-log"
 import type { PipelineSessionView, PipelineWorkspaceSnapshot } from "../../../src/pipeline/engine";
 import type { PipelineWorkspaceState } from "../../../src/pipeline/pipeline-state";
 import type { RecoveryFlowPatch } from "../../../src/pipeline/recovery";
+import { RESTART_RESUME_NOTE, RESTART_WIP_NOTE } from "../../../src/pipeline/recovery-prompts";
 import { applyRecoveryPatches } from "../../../src/pipeline/recovery-runtime";
 import {
 	createRecoveryStage,
@@ -293,8 +294,9 @@ describe("recovery stage", () => {
 		};
 		const records = await harness.evaluate(snapshot);
 		const resume = harness.actions.find((action) => action.kind === "resume");
-		expect(resume).toMatchObject({ kind: "resume", taskId: "dev1", agentId: "cline" });
-		expect(resume?.kind === "resume" && resume.prompt).toContain("Kanban restarted while you were working");
+		// Cline has no conversation resume: a new session with the card prompt and the WIP note.
+		expect(resume).toMatchObject({ kind: "resume", taskId: "dev1", agentId: "cline", continueConversation: false });
+		expect(resume?.kind === "resume" && resume.prompt).toBe(`Prompt of dev1.\n\n${RESTART_WIP_NOTE}`);
 		const restart = records.filter((record) => record.stage === "restart");
 		expect(restart.map((record) => [record.taskId, record.outcome])).toEqual([
 			[null, "none"],
@@ -308,6 +310,25 @@ describe("recovery stage", () => {
 		const again = await harness.evaluate(snapshot);
 		expect(again.filter((record) => record.stage === "restart")).toEqual([]);
 		expect(harness.actions.filter((action) => action.kind === "resume")).toHaveLength(1);
+	});
+
+	it("resumes an orphaned Claude card by continuing its conversation, with the resume note instead of the card prompt", async () => {
+		const harness = createHarness({ manifest: null, trackedChanges: true });
+		const records = await harness.evaluate({
+			board: board({ in_progress: [card("dev1")] }),
+			sessions: [
+				session("dev1", { agentId: "claude", state: "running", live: false, startedAt: SERVER_START - 60_000 }),
+			],
+			serverStartedAt: SERVER_START,
+		});
+		expect(harness.actions.find((action) => action.kind === "resume")).toEqual({
+			kind: "resume",
+			taskId: "dev1",
+			agentId: "claude",
+			prompt: RESTART_RESUME_NOTE,
+			continueConversation: true,
+		});
+		expect(records.filter((record) => record.stage === "restart").at(-1)?.note).toContain("conversation continued");
 	});
 
 	it("only reports orphans in report mode, and keeps a failed resume marked for the user", async () => {

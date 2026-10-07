@@ -225,4 +225,19 @@ describe("TerminalSessionManager auto-restart", () => {
 		const third = await manager.getRestoreSnapshot("task-1");
 		expect(third?.restoreGeneration).toBe(2);
 	});
+
+	it("starts a resume awaiting input without a prompt, and running when its launch prompt is the next turn", async () => {
+		ptySessionSpawnMock.mockImplementation((request: MockSpawnRequest) => createMockPtySession(111, request));
+		const manager = new TerminalSessionManager();
+		const base = { agentId: "claude" as const, binary: "claude", args: [], resumeFromTrash: true };
+
+		await manager.startTaskSession({ ...base, taskId: "task-restore", cwd: "/tmp/task-restore", prompt: "" });
+		expect(manager.getSummary("task-restore")).toMatchObject({ state: "awaiting_review", reviewReason: "attention" });
+
+		await manager.startTaskSession({ ...base, taskId: "task-resume", cwd: "/tmp/task-resume", prompt: "NOTE" });
+		expect(manager.getSummary("task-resume")).toMatchObject({ state: "running", reviewReason: null });
+		expect(prepareAgentLaunchMock).toHaveBeenLastCalledWith(
+			expect.objectContaining({ prompt: "NOTE", resumeFromTrash: true }),
+		);
+	});
 });

@@ -191,7 +191,8 @@ export function createPipelineActionRunner(
 	};
 
 	// Restart recovery and the rework stage: the card keeps its column until a new session is up, then goes to In
-	// Progress (as resume-card did).
+	// Progress (as resume-card did). `continueConversation` launches with `resumeFromTrash` (e.g. `claude --continue
+	// <resume note>`); the card's stored prompt is never changed either way.
 	const resumeTask = async (
 		request: Extract<PipelineActionRequest, { kind: "resumeTask" }>,
 	): Promise<PipelineActionResult> => {
@@ -230,6 +231,7 @@ export function createPipelineActionRunner(
 			baseRef: card.baseRef,
 			agentId: request.agentId,
 			agentSettings: card.agentSettings,
+			...(request.continueConversation ? { resumeFromTrash: true } : {}),
 		});
 		if (!started.ok || !started.summary) {
 			return { ok: false, error: started.error ?? "could not start the task session" };

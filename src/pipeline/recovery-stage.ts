@@ -36,7 +36,7 @@ import {
 	type RecoveryFlowPatch,
 	readRecoveryFlow,
 } from "./recovery";
-import { buildPoisonedHistoryPrompt, buildResumePrompt } from "./recovery-prompts";
+import { buildPoisonedHistoryPrompt, buildRestartResumeLaunch } from "./recovery-prompts";
 import { planRestartRecovery, type RestartManifest, type RestartOrphan } from "./restart-recovery";
 
 /**
@@ -49,8 +49,12 @@ export type RecoveryAction =
 	| { kind: "deliver"; taskId: string; text: string }
 	/** Cancel the agent's request in flight (Esc). */
 	| { kind: "input"; taskId: string; data: string }
-	/** Start a new session for a card whose session died (restart recovery), then move it to In Progress. */
-	| { kind: "resume"; taskId: string; prompt: string; agentId: RuntimeAgentId };
+	/**
+	 * Start a new session for a card whose session died (restart recovery), then move it to In Progress.
+	 * `continueConversation`: the agent continues its last conversation and `prompt` is the resume note
+	 * (buildRestartResumeLaunch).
+	 */
+	| { kind: "resume"; taskId: string; prompt: string; agentId: RuntimeAgentId; continueConversation?: boolean };
 
 export interface RecoveryActionResult {
 	ok: boolean;
@@ -494,11 +498,14 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 			const worktree = await deps.locateWorktree(current.snapshot.workspacePath, context.card);
 			const wipTag = orphan.wipTag ?? (worktree ? await deps.tagRestartWip(worktree, orphan.taskId) : null);
 			const hasWip = worktree ? await deps.hasTrackedChanges(worktree) : false;
+			const agentId = context.effective.effective.agentId;
+			const launch = buildRestartResumeLaunch(agentId, context.card.prompt, hasWip);
 			const result = await deps.act(workspaceId, {
 				kind: "resume",
 				taskId: orphan.taskId,
-				prompt: buildResumePrompt(context.card.prompt, hasWip),
-				agentId: context.effective.effective.agentId,
+				prompt: launch.prompt,
+				agentId,
+				continueConversation: launch.continueConversation,
 			});
 			const model = context.effective.effective.model?.model ?? "its default model";
 			if (!result.ok) {
@@ -519,7 +526,7 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 			await deps.appendRecords([
 				record(
 					"acted",
-					`resumed on ${model} (${wipTag ? `WIP tag ${wipTag}` : "no WIP tag"}${hasWip ? ", WIP note" : ", fresh"}); no FAIL round, nudge or escalation counted`,
+					`resumed on ${model} (${wipTag ? `WIP tag ${wipTag}` : "no WIP tag"}${launch.continueConversation ? ", conversation continued" : hasWip ? ", WIP note" : ", fresh"}); no FAIL round, nudge or escalation counted`,
 					context,
 				),
 			]);

@@ -617,14 +617,17 @@ export class TerminalSessionManager implements TerminalSessionService {
 		}
 
 		const startedAt = now();
+		// A resume waits for the user (trash restore sends no prompt), unless its launch prompt is the next turn
+		// (restart recovery's resume note).
+		const awaitingInput = request.resumeFromTrash === true && !request.prompt.trim();
 		updateSummary(entry, {
-			state: request.resumeFromTrash ? "awaiting_review" : "running",
+			state: awaitingInput ? "awaiting_review" : "running",
 			agentId: request.agentId,
 			workspacePath: request.cwd,
 			pid: session.pid,
 			startedAt,
 			lastOutputAt: launch.sessionWarning ? startedAt : null,
-			reviewReason: request.resumeFromTrash ? "attention" : null,
+			reviewReason: awaitingInput ? "attention" : null,
 			exitCode: null,
 			lastHookAt: null,
 			latestHookActivity: null,

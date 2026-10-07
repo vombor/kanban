@@ -483,3 +483,13 @@ of this repository is the complete record of changes.
   legacy autoland's PID pressure hold. While a PID pressure flag is up (the watchdog's, or the legacy kit's review-watch's
   while its config exists), the QA gate creates and starts no QA cards and restart recovery waits before each resume,
   each hold logged once; both go on when it clears. One reader serves the worker host (every snapshot) and calibration.
+- `src/terminal/orchestrator-agents.ts` (`agentContinuesConversationOnResume`), `src/pipeline/recovery-prompts.ts`
+  (`RESTART_RESUME_NOTE`, `buildRestartResumeLaunch`), `recovery-stage.ts`, `actions.ts`, `worker.ts`, `rework.ts`
+  (comment), `src/server/pipeline-actions.ts`, `src/commands/task-recovery.ts`, `src/terminal/session-manager.ts`,
+  tests: restart recovery and `kanban task resume` continue a Claude card's conversation (`resumeFromTrash`, i.e.
+  `claude --continue`) with the legacy kit's resume note as the launch prompt instead of starting a new session with
+  the whole card prompt (ported from kit main a2b4695 `lib/resume.mjs` resumeClaude). The card's stored prompt never
+  changes. Other agents, Cline included, still restart fresh with the card prompt (+ the WIP note), because their
+  "resume + launch prompt" behaviour isn't verified. The rework started-check's `replaceLive` restart stays a fresh
+  session from the reworked card prompt. A `resumeFromTrash` start with a launch prompt now begins `running`, not
+  `awaiting_review`.
