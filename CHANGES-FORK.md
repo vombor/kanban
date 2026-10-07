@@ -443,3 +443,15 @@ of this repository is the complete record of changes.
   roots as given and resolved; Codex's workspace-write sandbox may write `~/.npm`, `~/.cache` and the other package
   caches; the doctor shows per-workspace guardrail overrides and caps its Codex sandbox probe at 5 s (a timed-out
   probe is no longer cached as "no sandbox").
+- `scripts/pipeline-shadow-diff.ts` (new), `src/pipeline/shadow-diff/` (new: `legacy-autoland-log.ts`, `shadow-diff.ts`,
+  `shadow-diff-report.ts`, `load-shadow-diff-inputs.ts`, `run-shadow-diff.ts`), `src/state/kanban-home.ts`
+  (`getLegacyKitAutolandLogPath`), `tsconfig.json` (typechecks `scripts/**/*.ts`), `package.json` (`npm run
+  shadow-diff`; lint covers the script), `docs/team/WORKFLOW.md`, `RUNBOOK.md`, `CONFIG.md`, `KITS.md` (new), tests: the
+  cutover's shadow diff and the team-workflow docs (plan step P4-8). The script compares, read-only, what the pipeline
+  decided on a shadow workspace (`pipeline-decisions.jsonl`, `dev-assignment.jsonl`) with what the legacy kit's
+  autoland did (its log, the board's QA cards, `checks-state.json` resets): QA routing, the kit's `onFail` answer for
+  each legacy FAIL/STALLED/conflict (asked offline, since a shadow pipeline has no verdicts of its own), recovery
+  nudges and holds, restart orphans, and dev-assignment proposals. Exit 0 when nothing is unexplained (plan
+  differences such as QA for Claude-built cards are marked KNOWN). Replaces the legacy kit's `test/equivalence.sh`
+  for the port. The docs rewrite the legacy kit's WORKFLOW/RUNBOOK/CONFIG for the core and add the kit schema, the
+  `default` and `team` kits and how to write a user kit. Nothing runs on its own.

@@ -206,6 +206,14 @@ export function getLegacyKitDefaultRunPath(): string {
 	return join(getLegacyKitHomePath(), RUN_DIR);
 }
 
+/**
+ * The legacy kit's autoland log (`<kit home>/logs/kanban-autoland.log`, its default `logs.autoland`), which the
+ * cutover's shadow diff compares with the pipeline's decision log. Read-only.
+ */
+export function getLegacyKitAutolandLogPath(): string {
+	return join(getLegacyKitHomePath(), LOGS_DIR, "kanban-autoland.log");
+}
+
 /** Expands `~` and resolves relative paths against `baseDir`, as config values in the home are read. */
 export function expandKanbanConfigPath(path: string, baseDir: string): string {
 	return expandUserPath(path, baseDir);
