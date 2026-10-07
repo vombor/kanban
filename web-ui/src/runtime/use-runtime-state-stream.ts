@@ -1,5 +1,6 @@
 import { useEffect, useReducer } from "react";
 
+import { getReconnectDelayMs } from "@/runtime/reconnect-backoff";
 import type {
 	RuntimeProjectSummary,
 	RuntimeStateStreamMessage,
@@ -11,8 +12,6 @@ import type {
 	RuntimeWorkspaceStateResponse,
 } from "@/runtime/types";
 
-const STREAM_RECONNECT_BASE_DELAY_MS = 500;
-const STREAM_RECONNECT_MAX_DELAY_MS = 5_000;
 // After this long hidden (a backgrounded phone tab), treat an "open" socket as possibly dead and reconnect.
 const STREAM_STALE_AFTER_HIDDEN_MS = 30_000;
 
@@ -245,7 +244,7 @@ export function useRuntimeStateStream(requestedWorkspaceId: string | null): UseR
 			if (reconnectTimer !== null) {
 				return;
 			}
-			const delay = Math.min(STREAM_RECONNECT_MAX_DELAY_MS, STREAM_RECONNECT_BASE_DELAY_MS * 2 ** reconnectAttempt);
+			const delay = getReconnectDelayMs(reconnectAttempt);
 			reconnectAttempt += 1;
 			reconnectTimer = window.setTimeout(() => {
 				connect();

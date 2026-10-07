@@ -8,6 +8,12 @@ import { WebSocket } from "ws";
 
 import type { RuntimeTaskSessionSummary, RuntimeTerminalWsServerMessage } from "../../../src/core/api-contract";
 import { getKanbanRuntimePort, setKanbanRuntimePort } from "../../../src/core/runtime-endpoint";
+import {
+	TERMINAL_WS_CLOSE_ACK_STALL,
+	TERMINAL_WS_CLOSE_HEARTBEAT_TIMEOUT,
+	TERMINAL_WS_CLOSE_REASONS,
+	TERMINAL_WS_CLOSE_RESTORE_LIMIT,
+} from "../../../src/core/terminal-ws-close";
 import type { TerminalSessionListener, TerminalSessionService } from "../../../src/terminal/terminal-session-service";
 import type { TerminalRestoreSnapshot } from "../../../src/terminal/terminal-state-mirror";
 import { createTerminalWebSocketBridge, type TerminalWebSocketBridge } from "../../../src/terminal/ws-server";
@@ -172,6 +178,21 @@ async function waitForIoMessage(queuedSocket: QueuedWebSocket, timeoutMs = 2_000
 			clearTimeout(timeoutId);
 			queuedSocket.events.removeListener("message", tryResolve);
 			reject(error);
+		});
+	});
+}
+
+interface ReceivedClose {
+	code: number;
+	reason: string;
+}
+
+// Resolves with the close code and reason the client saw. A terminated
+// connection (no close frame) shows up as 1006 with an empty reason.
+function captureClose(socket: WebSocket): Promise<ReceivedClose> {
+	return new Promise((resolve) => {
+		socket.once("close", (code: number, reason: Buffer) => {
+			resolve({ code, reason: reason.toString("utf8") });
 		});
 	});
 }
@@ -543,6 +564,7 @@ describe("createTerminalWebSocketBridge", () => {
 
 			// Zombie viewer: connected, but never acks output and never replies to pings.
 			ioSocket = new WebSocket(ioUrl, { autoPong: false });
+			const ioClosed = captureClose(ioSocket);
 			await once(ioSocket, "open");
 			controlSocket = new WebSocket(controlUrl, { autoPong: false });
 			// Register before "open" resolves: the server sends restore immediately.
@@ -573,6 +595,12 @@ describe("createTerminalWebSocketBridge", () => {
 			await waitForAssertion(() => {
 				expect(ioSocket?.readyState).toBe(WebSocket.CLOSED);
 			}, 2_000);
+			// Only the pongs were missing, so the socket could still carry a close
+			// frame: the viewer learns why it was dropped.
+			await expect(ioClosed).resolves.toEqual({
+				code: TERMINAL_WS_CLOSE_HEARTBEAT_TIMEOUT,
+				reason: TERMINAL_WS_CLOSE_REASONS[TERMINAL_WS_CLOSE_HEARTBEAT_TIMEOUT],
+			});
 		} finally {
 			for (const socket of [ioSocket, controlSocket]) {
 				if (socket && socket.readyState !== WebSocket.CLOSED) {
@@ -582,6 +610,84 @@ describe("createTerminalWebSocketBridge", () => {
 			await heartbeatBridge.close();
 			await new Promise<void>((resolve, reject) => {
 				heartbeatServer.close((error) => {
+					if (error) {
+						reject(error);
+						return;
+					}
+					resolve();
+				});
+			});
+		}
+	});
+
+	it("terminates a dead viewer that never answers the close handshake", async () => {
+		// A socket whose peer is gone cannot complete close(code, reason). The
+		// heartbeat must still drop it quickly (not after ws's 30 s close timeout),
+		// or its backpressure claim keeps the shared PTY paused.
+		const deadManager = new FakeTerminalManager();
+		const deadServer = createServer((_request, response) => {
+			response.writeHead(404);
+			response.end();
+		});
+		const deadBridge = createTerminalWebSocketBridge({
+			server: deadServer,
+			resolveTerminalManager: (workspaceId) => (workspaceId === WORKSPACE_ID ? deadManager : null),
+			isTerminalIoWebSocketPath: (pathname) => pathname === "/api/terminal/io",
+			isTerminalControlWebSocketPath: (pathname) => pathname === "/api/terminal/control",
+			heartbeatIntervalMs: 50,
+		});
+		deadServer.listen(0, "127.0.0.1");
+		await once(deadServer, "listening");
+		const deadAddress = deadServer.address() as AddressInfo | null;
+		if (!deadAddress) {
+			throw new Error("Expected websocket server address.");
+		}
+		setKanbanRuntimePort(deadAddress.port);
+		const deadUrl = `ws://127.0.0.1:${deadAddress.port}`;
+
+		let ioSocket: WebSocket | null = null;
+		let controlSocket: WebSocket | null = null;
+		try {
+			const ioUrl = `${deadUrl}/api/terminal/io?taskId=${TASK_ID}&workspaceId=${WORKSPACE_ID}&clientId=dead`;
+			const controlUrl = `${deadUrl}/api/terminal/control?taskId=${TASK_ID}&workspaceId=${WORKSPACE_ID}&clientId=dead`;
+
+			ioSocket = new WebSocket(ioUrl, { autoPong: false });
+			await once(ioSocket, "open");
+			controlSocket = new WebSocket(controlUrl, { autoPong: false });
+			const restoreReceived = new Promise<void>((resolve) => {
+				controlSocket?.on("message", (message) => {
+					const parsed = JSON.parse(rawDataToBuffer(message).toString("utf8")) as RuntimeTerminalWsServerMessage;
+					if (parsed.type === "restore") {
+						resolve();
+					}
+				});
+			});
+			await once(controlSocket, "open");
+			await restoreReceived;
+			controlSocket.send(JSON.stringify({ type: "restore_complete" }));
+
+			deadManager.emitOutput(TASK_ID, "x".repeat(120_000));
+			await waitForAssertion(() => {
+				expect(deadManager.pauseOutput).toHaveBeenCalledTimes(1);
+			});
+			// The peer stops reading entirely, so the server's close frame is never
+			// answered and only terminate() can end the connection.
+			for (const socket of [ioSocket, controlSocket]) {
+				(socket as WebSocket & { _socket?: { pause: () => void } })._socket?.pause();
+			}
+
+			await waitForAssertion(() => {
+				expect(deadManager.resumeOutput).toHaveBeenCalledTimes(1);
+			}, 3_000);
+		} finally {
+			for (const socket of [ioSocket, controlSocket]) {
+				if (socket && socket.readyState !== WebSocket.CLOSED) {
+					socket.terminate();
+				}
+			}
+			await deadBridge.close();
+			await new Promise<void>((resolve, reject) => {
+				deadServer.close((error) => {
 					if (error) {
 						reject(error);
 						return;
@@ -630,6 +736,7 @@ describe("createTerminalWebSocketBridge", () => {
 			// Note: default autoPong. This viewer answers every ping, exactly like a
 			// real suspended tab, so the liveness heartbeat will never terminate it.
 			ioSocket = await openQueuedWebSocket(ioUrl);
+			const ioClosed = captureClose(ioSocket.socket);
 			controlSocket = await openQueuedWebSocket(controlUrl);
 
 			await waitForControlMessage(controlSocket, (message) => message.type === "restore");
@@ -649,6 +756,10 @@ describe("createTerminalWebSocketBridge", () => {
 			await waitForAssertion(() => {
 				expect(ioSocket?.socket.readyState).toBe(WebSocket.CLOSED);
 			}, 2_000);
+			await expect(ioClosed).resolves.toEqual({
+				code: TERMINAL_WS_CLOSE_ACK_STALL,
+				reason: TERMINAL_WS_CLOSE_REASONS[TERMINAL_WS_CLOSE_ACK_STALL],
+			});
 		} finally {
 			for (const queued of [ioSocket, controlSocket]) {
 				if (queued && queued.socket.readyState !== WebSocket.CLOSED) {
@@ -1099,6 +1210,7 @@ describe("createTerminalWebSocketBridge", () => {
 			const controlUrl = `${frozenUrl}/api/terminal/control?taskId=${TASK_ID}&workspaceId=${WORKSPACE_ID}&clientId=frozen`;
 
 			ioSocket = await openQueuedWebSocket(ioUrl);
+			const ioClosed = captureClose(ioSocket.socket);
 			controlSocket = await openQueuedWebSocket(controlUrl);
 
 			await waitForControlMessage(controlSocket, (message) => message.type === "restore");
@@ -1135,6 +1247,10 @@ describe("createTerminalWebSocketBridge", () => {
 			expect(forcedRestores.length).toBeLessThanOrEqual(forcedRestoreLimit);
 			// The viewer's backpressure claim was released, so the PTY is not left paused.
 			expect(frozenManager.resumeOutput).toHaveBeenCalled();
+			await expect(ioClosed).resolves.toEqual({
+				code: TERMINAL_WS_CLOSE_RESTORE_LIMIT,
+				reason: TERMINAL_WS_CLOSE_REASONS[TERMINAL_WS_CLOSE_RESTORE_LIMIT],
+			});
 		} finally {
 			for (const queued of [ioSocket, controlSocket]) {
 				if (queued && queued.socket.readyState !== WebSocket.CLOSED) {

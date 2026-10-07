@@ -5,6 +5,7 @@ import { getTerminalThemeColors, useTheme } from "@/hooks/use-theme";
 import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import { disposePersistentTerminal, ensurePersistentTerminal } from "@/terminal/persistent-terminal-manager";
 import { registerTerminalController } from "@/terminal/terminal-controller-registry";
+import type { TerminalConnectionStatus } from "@/terminal/terminal-reconnect-controller";
 
 interface UsePersistentTerminalSessionInput {
 	taskId: string;
@@ -22,9 +23,11 @@ interface UsePersistentTerminalSessionInput {
 export interface UsePersistentTerminalSessionResult {
 	containerRef: MutableRefObject<HTMLDivElement | null>;
 	lastError: string | null;
+	connectionStatus: TerminalConnectionStatus | null;
 	isStopping: boolean;
 	clearTerminal: () => void;
 	stopTerminal: () => Promise<void>;
+	retryConnection: () => void;
 }
 
 export function usePersistentTerminalSession({
@@ -56,6 +59,7 @@ export function usePersistentTerminalSession({
 		sessionStartedAt: number | null;
 	} | null>(null);
 	const [lastError, setLastError] = useState<string | null>(null);
+	const [connectionStatus, setConnectionStatus] = useState<TerminalConnectionStatus | null>(null);
 	const [isStopping, setIsStopping] = useState(false);
 	callbackRef.current = {
 		onSummary,
@@ -72,6 +76,7 @@ export function usePersistentTerminalSession({
 			terminalRef.current = null;
 			previousSessionRef.current = null;
 			setLastError(null);
+			setConnectionStatus(null);
 			setIsStopping(false);
 			return;
 		}
@@ -85,6 +90,7 @@ export function usePersistentTerminalSession({
 			terminalRef.current = null;
 			previousSessionRef.current = null;
 			setLastError("No project selected.");
+			setConnectionStatus(null);
 			return;
 		}
 		const container = containerRef.current;
@@ -118,6 +124,7 @@ export function usePersistentTerminalSession({
 			onConnectionReady: (connectedTaskId) => {
 				callbackRef.current.onConnectionReady?.(connectedTaskId);
 			},
+			onConnectionStatus: setConnectionStatus,
 			onLastError: setLastError,
 			onSummary: (summary) => {
 				callbackRef.current.onSummary?.(summary);
@@ -183,11 +190,17 @@ export function usePersistentTerminalSession({
 		terminalRef.current?.clear();
 	}, []);
 
+	const retryConnection = useCallback(() => {
+		terminalRef.current?.retryConnection();
+	}, []);
+
 	return {
 		containerRef,
 		lastError,
+		connectionStatus,
 		isStopping,
 		clearTerminal,
 		stopTerminal,
+		retryConnection,
 	};
 }

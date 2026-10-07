@@ -1,3 +1,4 @@
+import { describeTerminalWsClose } from "@runtime-terminal-ws-close";
 import { ClipboardAddon } from "@xterm/addon-clipboard";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
@@ -21,6 +22,12 @@ import {
 	hasInterruptAcknowledgement,
 	hasLikelyShellPrompt,
 } from "@/terminal/terminal-prompt-heuristics";
+import {
+	type TerminalCloseInfo,
+	type TerminalConnectionStatus,
+	TerminalReconnectController,
+	type TerminalSocketKind,
+} from "@/terminal/terminal-reconnect-controller";
 import { isMacPlatform } from "@/utils/platform";
 
 const SHIFT_ENTER_SEQUENCE = "\n";
@@ -36,6 +43,7 @@ interface PersistentTerminalAppearance {
 
 interface PersistentTerminalSubscriber {
 	onConnectionReady?: (taskId: string) => void;
+	onConnectionStatus?: (status: TerminalConnectionStatus) => void;
 	onLastError?: (message: string | null) => void;
 	onSummary?: (summary: RuntimeTaskSessionSummary) => void;
 	onOutputText?: (text: string) => void;
@@ -159,6 +167,10 @@ class PersistentTerminal {
 	private visibleContainer: HTMLDivElement | null = null;
 	private ioSocket: WebSocket | null = null;
 	private controlSocket: WebSocket | null = null;
+	// Bumped for every stream socket. Writes queued from an older stream
+	// must not acknowledge their bytes on the newer control socket.
+	private connectionGeneration = 0;
+	private readonly reconnect: TerminalReconnectController;
 	private connectionReady = false;
 	private restoreCompleted = false;
 	private outputTextDecoder = new TextDecoder();
@@ -233,7 +245,16 @@ class PersistentTerminal {
 			// Fall back to the default renderer when WebGL is unavailable.
 		}
 
-		this.ensureConnected();
+		this.reconnect = new TerminalReconnectController({
+			connect: () => {
+				this.openSockets();
+			},
+			onStatus: (status) => {
+				this.notifyConnectionStatus(status);
+			},
+		});
+		this.setInputEnabled(false);
+		this.openSockets();
 	}
 
 	private notifyLastError(): void {
@@ -257,9 +278,39 @@ class PersistentTerminal {
 
 	private notifyConnectionReady(): void {
 		this.connectionReady = true;
+		this.reconnect.markConnected();
 		for (const subscriber of this.subscribers) {
 			subscriber.onConnectionReady?.(this.taskId);
 		}
+	}
+
+	private notifyConnectionStatus(status: TerminalConnectionStatus): void {
+		for (const subscriber of this.subscribers) {
+			subscriber.onConnectionStatus?.(status);
+		}
+	}
+
+	// Typed input is blocked, not queued, while the stream socket is down: keys
+	// replayed after a reconnect would land on a screen the user has not seen yet
+	// (an Enter confirming a prompt that changed meanwhile). The header shows
+	// "reconnecting" so the user knows why keys do nothing.
+	private setInputEnabled(enabled: boolean): void {
+		this.terminal.options.disableStdin = !enabled;
+	}
+
+	private isIoOpen(): boolean {
+		return this.ioSocket !== null && this.ioSocket.readyState === WebSocket.OPEN;
+	}
+
+	private markReadyIfConnected(): void {
+		if (!this.restoreCompleted || !this.isIoOpen()) {
+			return;
+		}
+		if (this.lastError !== null) {
+			this.lastError = null;
+			this.notifyLastError();
+		}
+		this.notifyConnectionReady();
 	}
 
 	private sendControlMessage(message: RuntimeTerminalWsClientMessage): void {
@@ -270,7 +321,7 @@ class PersistentTerminal {
 	}
 
 	private sendIoData(data: string | Uint8Array): boolean {
-		if (!this.ioSocket || this.ioSocket.readyState !== WebSocket.OPEN) {
+		if (!this.ioSocket || !this.isIoOpen()) {
 			return false;
 		}
 		this.ioSocket.send(data);
@@ -286,6 +337,7 @@ class PersistentTerminal {
 	): Promise<void> {
 		const ackBytes = options.ackBytes ?? 0;
 		const notifyText = options.notifyText ?? null;
+		const ackGeneration = this.connectionGeneration;
 		this.terminalWriteQueue = this.terminalWriteQueue
 			.catch(() => undefined)
 			.then(
@@ -299,7 +351,7 @@ class PersistentTerminal {
 							if (notifyText) {
 								this.notifyOutputText(notifyText);
 							}
-							if (ackBytes > 0) {
+							if (ackBytes > 0 && ackGeneration === this.connectionGeneration) {
 								this.sendControlMessage({
 									type: "output_ack",
 									bytes: ackBytes,
@@ -357,9 +409,6 @@ class PersistentTerminal {
 	}
 
 	private connectIo(): void {
-		if (this.ioSocket) {
-			return;
-		}
 		const ioSocket = new WebSocket(getTerminalIoWebSocketUrl(this.taskId, this.workspaceId, this.clientId));
 		ioSocket.binaryType = "arraybuffer";
 		ioSocket.addEventListener("message", (event) => {
@@ -381,46 +430,28 @@ class PersistentTerminal {
 			if (this.disposed || this.ioSocket !== ioSocket) {
 				return;
 			}
-			this.lastError = null;
-			this.notifyLastError();
+			this.setInputEnabled(true);
 			if (this.restoreCompleted && this.visibleContainer) {
 				this.requestResize();
 			}
-			if (this.restoreCompleted) {
-				this.notifyConnectionReady();
-			}
+			this.markReadyIfConnected();
 		};
-		ioSocket.onerror = () => {
+		// An error is always followed by a close event, which handles the drop.
+		ioSocket.onclose = (event) => {
 			if (this.disposed || this.ioSocket !== ioSocket) {
 				return;
 			}
-			this.lastError = "Terminal stream failed.";
-			this.notifyLastError();
-		};
-		ioSocket.onclose = () => {
-			if (this.disposed || this.ioSocket !== ioSocket) {
-				return;
-			}
-			this.ioSocket = null;
-			this.outputTextDecoder = new TextDecoder();
-			this.connectionReady = false;
-			this.restoreCompleted = false;
-			this.lastError = "Terminal stream closed. Close and reopen to reconnect.";
-			this.notifyLastError();
+			this.handleSocketDrop("stream", event);
 		};
 	}
 
 	private connectControl(): void {
 		const controlSocket = new WebSocket(getTerminalControlWebSocketUrl(this.taskId, this.workspaceId, this.clientId));
 		this.controlSocket = controlSocket;
-		controlSocket.onopen = () => {
+		controlSocket.onmessage = (event) => {
 			if (this.disposed || this.controlSocket !== controlSocket) {
 				return;
 			}
-			this.lastError = null;
-			this.notifyLastError();
-		};
-		controlSocket.onmessage = (event) => {
 			let payload: RuntimeTerminalWsServerMessage;
 			try {
 				payload = JSON.parse(String(event.data)) as RuntimeTerminalWsServerMessage;
@@ -438,12 +469,10 @@ class PersistentTerminal {
 						}
 						this.restoreCompleted = true;
 						this.sendControlMessage({ type: "restore_complete" });
-						if (this.ioSocket && this.visibleContainer) {
+						if (this.isIoOpen() && this.visibleContainer) {
 							this.requestResize();
 						}
-						if (this.ioSocket) {
-							this.notifyConnectionReady();
-						}
+						this.markReadyIfConnected();
 					})
 					.catch(() => {
 						if (this.disposed || this.controlSocket !== controlSocket) {
@@ -469,32 +498,86 @@ class PersistentTerminal {
 				void this.enqueueTerminalWrite(`\r\n[kanban] ${payload.message}\r\n`);
 			}
 		};
-		controlSocket.onerror = () => {
+		controlSocket.onclose = (event) => {
 			if (this.disposed || this.controlSocket !== controlSocket) {
 				return;
 			}
-			this.lastError = "Terminal control connection failed.";
-			this.notifyLastError();
-		};
-		controlSocket.onclose = () => {
-			if (this.disposed || this.controlSocket !== controlSocket) {
-				return;
-			}
-			this.controlSocket = null;
-			this.lastError = "Terminal control connection closed. Close and reopen to reconnect.";
-			this.notifyLastError();
+			this.handleSocketDrop("control", event);
 		};
 	}
 
-	private ensureConnected(): void {
+	// A dropped stream socket ends the whole connection: output printed while it
+	// was down never reached this viewer, so the control socket is closed too and
+	// both reconnect into a fresh restore. That restore must be applied even when
+	// its generation and size match the last one (applyRestore resets first, so
+	// nothing is duplicated). A dropped control socket alone reconnects by itself:
+	// the server holds this viewer's output until the new restore completes, so
+	// the warm restore may skip the reset.
+	private handleSocketDrop(socket: TerminalSocketKind, event: CloseEvent): void {
+		const close: TerminalCloseInfo = {
+			socket,
+			code: event.code,
+			reason: event.reason,
+			description: describeTerminalWsClose(event.code, event.reason),
+			at: Date.now(),
+		};
+		console.warn(
+			`[kanban][terminal] ${socket} socket closed for ${this.taskId} (code ${close.code}): ${close.description}`,
+		);
+		if (socket === "stream") {
+			this.closeSockets();
+			this.lastRestore = null;
+		} else {
+			this.closeSocket("control");
+		}
+		this.reconnect.handleDrop(close);
+	}
+
+	private closeSockets(): void {
+		this.closeSocket("stream");
+		this.closeSocket("control");
+	}
+
+	private closeSocket(kind: TerminalSocketKind): void {
+		const socket = kind === "stream" ? this.ioSocket : this.controlSocket;
+		// Clear the reference first: the socket's own handlers then see it is stale
+		// and ignore its close event.
+		if (kind === "stream") {
+			this.ioSocket = null;
+			this.outputTextDecoder = new TextDecoder();
+			this.setInputEnabled(false);
+		} else {
+			this.controlSocket = null;
+		}
+		this.connectionReady = false;
+		this.restoreCompleted = false;
+		if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+			socket.close();
+		}
+	}
+
+	// Opens whichever socket is missing; a stream reconnect starts a new
+	// connection generation for output acks.
+	private openSockets(): void {
 		if (this.disposed) {
 			return;
 		}
 		if (!this.ioSocket) {
+			this.connectionGeneration += 1;
 			this.connectIo();
 		}
 		if (!this.controlSocket) {
 			this.connectControl();
+		}
+	}
+
+	// A remount (the user opens the terminal again) retries a terminal that gave up.
+	private ensureConnected(): void {
+		if (this.disposed) {
+			return;
+		}
+		if (this.reconnect.isDisconnected()) {
+			this.reconnect.retryNow();
 		}
 	}
 
@@ -518,6 +601,7 @@ class PersistentTerminal {
 	subscribe(subscriber: PersistentTerminalSubscriber): () => void {
 		this.subscribers.add(subscriber);
 		subscriber.onLastError?.(this.lastError);
+		subscriber.onConnectionStatus?.(this.reconnect.getStatus());
 		if (this.latestSummary) {
 			subscriber.onSummary?.(this.latestSummary);
 		}
@@ -590,8 +674,12 @@ class PersistentTerminal {
 		this.terminal.focus();
 	}
 
+	retryConnection(): void {
+		this.reconnect.retryNow();
+	}
+
 	input(text: string): boolean {
-		if (!this.ioSocket || this.ioSocket.readyState !== WebSocket.OPEN) {
+		if (!this.isIoOpen()) {
 			return false;
 		}
 		this.terminal.input(text);
@@ -599,7 +687,7 @@ class PersistentTerminal {
 	}
 
 	paste(text: string): boolean {
-		if (!this.ioSocket || this.ioSocket.readyState !== WebSocket.OPEN) {
+		if (!this.isIoOpen()) {
 			return false;
 		}
 		this.terminal.paste(text);
@@ -695,11 +783,9 @@ class PersistentTerminal {
 			return;
 		}
 		this.disposed = true;
+		this.reconnect.dispose();
 		this.unmount(this.visibleContainer);
-		this.ioSocket?.close();
-		this.controlSocket?.close();
-		this.ioSocket = null;
-		this.controlSocket = null;
+		this.closeSockets();
 		this.subscribers.clear();
 		this.lastRestore = null;
 		this.terminal.dispose();

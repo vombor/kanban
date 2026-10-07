@@ -7,6 +7,13 @@ import { WebSocket, WebSocketServer } from "ws";
 import type { RuntimeTerminalWsServerMessage } from "../core/api-contract";
 import { parseTerminalWsClientMessage } from "../core/api-validation";
 import { getKanbanRuntimeOrigin } from "../core/runtime-endpoint";
+import {
+	TERMINAL_WS_CLOSE_ACK_STALL,
+	TERMINAL_WS_CLOSE_HEARTBEAT_TIMEOUT,
+	TERMINAL_WS_CLOSE_REASONS,
+	TERMINAL_WS_CLOSE_RESTORE_LIMIT,
+	type TerminalWsCloseCode,
+} from "../core/terminal-ws-close";
 import { handleSocketUpgrade } from "../server/middleware";
 import type { TerminalSessionService } from "./terminal-session-service";
 
@@ -150,6 +157,9 @@ const OUTPUT_VIEWER_PENDING_BUDGET_BYTES = 512 * 1024;
 // forced re-restores; past the limit, terminate the viewer exactly like the
 // ack-stall watchdog does.
 const OUTPUT_VIEWER_FORCED_RESTORE_LIMIT = 3;
+// How long a viewer closed with a code may take to answer the close handshake
+// before its socket is terminated anyway.
+const TERMINAL_WS_CLOSE_HANDSHAKE_TIMEOUT_MS = 1_000;
 
 function getWebSocketTransportSocket(ws: WebSocket): Socket | null {
 	const transportSocket = (ws as WebSocket & { _socket?: Socket })._socket;
@@ -186,6 +196,34 @@ function sendControlMessage(ws: WebSocket, message: RuntimeTerminalWsServerMessa
 	ws.send(JSON.stringify(message));
 }
 
+// ws terminate() drops the TCP connection without a close frame, so the browser
+// only sees 1006 and cannot tell why it was dropped. Where the socket can still
+// carry a frame, close it with a code and reason; a peer that never answers the
+// close handshake is terminated after a short timeout. Dead sockets are terminated.
+function closeViewerSocket(ws: WebSocket, code: TerminalWsCloseCode): void {
+	if (ws.readyState !== WebSocket.OPEN) {
+		if (ws.readyState !== WebSocket.CLOSED) {
+			ws.terminate();
+		}
+		return;
+	}
+	try {
+		ws.close(code, TERMINAL_WS_CLOSE_REASONS[code]);
+	} catch {
+		ws.terminate();
+		return;
+	}
+	const handshakeTimer = setTimeout(() => {
+		if (ws.readyState !== WebSocket.CLOSED) {
+			ws.terminate();
+		}
+	}, TERMINAL_WS_CLOSE_HANDSHAKE_TIMEOUT_MS);
+	handshakeTimer.unref();
+	ws.once("close", () => {
+		clearTimeout(handshakeTimer);
+	});
+}
+
 function buildConnectionKey(workspaceId: string, taskId: string): string {
 	return `${workspaceId}:${taskId}`;
 }
@@ -199,8 +237,9 @@ function getTerminalClientId(url: URL): string {
 // while such a zombie viewer is backpressured it holds pauseOutput() on the shared
 // PTY forever, which blocks the agent process on its stdout writes.
 //
-// Ping every viewer periodically and terminate any socket that misses a pong. The
-// normal close handlers then run and release the viewer's backpressure claim.
+// Ping every viewer periodically and close any socket that misses a pong (with a
+// close code, in case only the pongs were lost). The normal close handlers then
+// run and release the viewer's backpressure claim.
 function startWebSocketHeartbeat(wss: WebSocketServer, intervalMs: number): () => void {
 	const aliveSockets = new WeakSet<WebSocket>();
 	const onConnection = (client: WebSocket) => {
@@ -216,7 +255,7 @@ function startWebSocketHeartbeat(wss: WebSocketServer, intervalMs: number): () =
 				continue;
 			}
 			if (!aliveSockets.has(client)) {
-				client.terminate();
+				closeViewerSocket(client, TERMINAL_WS_CLOSE_HEARTBEAT_TIMEOUT);
 				continue;
 			}
 			aliveSockets.delete(client);
@@ -343,6 +382,7 @@ export function createTerminalWebSocketBridge({
 		taskId: string,
 		terminalManager: TerminalSessionService,
 		onPauseBudgetExceeded: () => void,
+		onAckStall: () => void,
 	): IoOutputState => {
 		let pendingOutputChunks: Buffer[] = [];
 		let outputFlushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -385,10 +425,10 @@ export function createTerminalWebSocketBridge({
 					return;
 				}
 				// This viewer may still be answering pings, but it has acknowledged
-				// nothing for a full timeout while holding the PTY paused. Terminate
-				// it; the normal close handler releases its backpressure claim and
-				// resumes the PTY. A returning tab reconnects and gets a fresh restore.
-				ws.terminate();
+				// nothing for a full timeout while holding the PTY paused. Disconnect
+				// it, which releases its backpressure claim and resumes the PTY. A
+				// returning tab reconnects and gets a fresh restore.
+				onAckStall();
 			}, resolvedAckStallTimeoutMs);
 			ackStallTimer.unref?.();
 		};
@@ -604,7 +644,28 @@ export function createTerminalWebSocketBridge({
 	// everything buffered for it, release its claim on the shared PTY, and resync
 	// it from a snapshot. The socket stays open and no other viewer is affected;
 	// the stalled viewer loses scrollback it never rendered, the agent keeps running.
+	// Drops a viewer's io socket on purpose: releases its output state (and so its
+	// claim on the shared PTY) right away, then closes the socket with the reason.
+	// The io close handler sees the socket is no longer current and does nothing.
+	const disconnectViewerIo = (
+		connectionKey: string,
+		streamState: TerminalStreamState,
+		viewerState: TerminalViewerState,
+		code: TerminalWsCloseCode,
+	): void => {
+		const ioSocket = viewerState.ioSocket;
+		if (!ioSocket) {
+			return;
+		}
+		viewerState.ioSocket = null;
+		viewerState.ioState?.dispose();
+		viewerState.ioState = null;
+		cleanupViewerStateIfUnused(connectionKey, streamState, viewerState);
+		closeViewerSocket(ioSocket, code);
+	};
+
 	const reRestoreViewer = (
+		connectionKey: string,
 		streamState: TerminalStreamState,
 		viewerState: TerminalViewerState,
 		taskId: string,
@@ -622,9 +683,8 @@ export function createTerminalWebSocketBridge({
 			// Every re-restore attempt so far ended with this viewer still unable to
 			// complete restore, so it cannot recover and must not keep generating
 			// snapshot work forever. Fall back to the ack-stall watchdog's behavior:
-			// terminate the io socket and let the normal close path clean up. A
-			// returning tab reconnects and gets a fresh restore.
-			viewerState.ioSocket?.terminate();
+			// disconnect the io socket. A returning tab reconnects and gets a fresh restore.
+			disconnectViewerIo(connectionKey, streamState, viewerState, TERMINAL_WS_CLOSE_RESTORE_LIMIT);
 			return;
 		}
 		viewerState.forcedRestoreCount += 1;
@@ -632,6 +692,7 @@ export function createTerminalWebSocketBridge({
 	};
 
 	const ensureOutputListener = (
+		connectionKey: string,
 		streamState: TerminalStreamState,
 		taskId: string,
 		terminalManager: TerminalSessionService,
@@ -652,7 +713,7 @@ export function createTerminalWebSocketBridge({
 					viewerState.pendingOutputChunks.push(chunk);
 					viewerState.pendingOutputBytes += chunk.byteLength;
 					if (viewerState.pendingOutputBytes > resolvedViewerPendingBudgetBytes) {
-						reRestoreViewer(streamState, viewerState, taskId, terminalManager);
+						reRestoreViewer(connectionKey, streamState, viewerState, taskId, terminalManager);
 					}
 				}
 			},
@@ -715,12 +776,18 @@ export function createTerminalWebSocketBridge({
 		const viewerState = getOrCreateViewerState(streamState, clientId);
 		const previousIoSocket = viewerState.ioSocket;
 		viewerState.ioState?.dispose();
-		viewerState.ioState = createIoOutputState(ws, streamState, clientId, taskId, terminalManager, () =>
-			reRestoreViewer(streamState, viewerState, taskId, terminalManager),
+		viewerState.ioState = createIoOutputState(
+			ws,
+			streamState,
+			clientId,
+			taskId,
+			terminalManager,
+			() => reRestoreViewer(connectionKey, streamState, viewerState, taskId, terminalManager),
+			() => disconnectViewerIo(connectionKey, streamState, viewerState, TERMINAL_WS_CLOSE_ACK_STALL),
 		);
 		viewerState.ioSocket = ws;
 		viewerState.flushPendingOutput();
-		ensureOutputListener(streamState, taskId, terminalManager);
+		ensureOutputListener(connectionKey, streamState, taskId, terminalManager);
 		if (previousIoSocket && previousIoSocket !== ws) {
 			previousIoSocket.close(1000, "Replaced by newer terminal stream.");
 		}
@@ -763,7 +830,7 @@ export function createTerminalWebSocketBridge({
 		viewerState.pendingOutputBytes = 0;
 		viewerState.forcedRestoreCount = 0;
 		viewerState.controlSocket = ws;
-		ensureOutputListener(streamState, taskId, terminalManager);
+		ensureOutputListener(connectionKey, streamState, taskId, terminalManager);
 		viewerState.detachControlListener?.();
 		viewerState.detachControlListener = terminalManager.attach(taskId, {
 			onState: (summary) => {
