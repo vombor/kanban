@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 
 function parseArgs(argv) {
@@ -52,7 +53,8 @@ function main() {
 		fail(`${changelog} is required for releases`);
 	}
 
-	const headingRegex = new RegExp(`^##\\s+\\[?v?${escapeRegex(version)}\\]?\\b`);
+	// The version must end the heading's version text: 0.1.70 must not match `## [0.1.70-fork.4]`.
+	const headingRegex = new RegExp(`^##\\s+(\\[v?${escapeRegex(version)}\\]|v?${escapeRegex(version)})(?=\\s|$)`);
 	const lines = readFileSync(changelog, "utf8").split(/\r?\n/u);
 	const headingIndex = lines.findIndex((line) => headingRegex.test(line.trim()));
 	if (headingIndex === -1) {
@@ -72,7 +74,9 @@ function main() {
 		fail(`Changelog section for version ${version} is empty`);
 	}
 
-	appendFileSync(outputPath, `${outputKey}<<EOF\n${body}\nEOF\n`);
+	// A random delimiter, so a changelog line can never end the value early.
+	const delimiter = `CHANGELOG_${randomBytes(8).toString("hex")}`;
+	appendFileSync(outputPath, `${outputKey}<<${delimiter}\n${body}\n${delimiter}\n`);
 }
 
 main();

@@ -11,20 +11,21 @@ describe("resolveAppendSystemPromptCommandPrefix", () => {
 		const prefix = resolveAppendSystemPromptCommandPrefix({
 			currentVersion: "0.1.10",
 			cwd: "/Users/example/repo",
-			argv: ["node", "/Users/example/.npm/_npx/593b71878a7c70f2/node_modules/kanban/dist/cli.js"],
+			argv: ["node", "/Users/example/.npm/_npx/593b71878a7c70f2/node_modules/@vombor/kanban/dist/cli.js"],
 			resolveRealPath: (path) => path,
 		});
-		expect(prefix).toBe("npx -y kanban");
+		expect(prefix).toBe("npx -y --@vombor:registry=https://npm.pkg.github.com @vombor/kanban");
 	});
 
-	it("returns bun x prefix for bun x transient installs", () => {
+	it("runs a bun x install through node: the scoped registry flag is verified only for npx", () => {
 		const prefix = resolveAppendSystemPromptCommandPrefix({
 			currentVersion: "0.1.10",
 			cwd: "/Users/example/repo",
-			argv: ["node", "/private/tmp/bunx-501-kanban@1.0.0/node_modules/kanban/dist/cli.js"],
+			argv: ["node", "/private/tmp/bunx-501-@vombor/kanban@1.0.0/node_modules/@vombor/kanban/dist/cli.js"],
 			resolveRealPath: (path) => path,
 		});
-		expect(prefix).toBe("bun x kanban");
+		expect(prefix).not.toContain("bun x");
+		expect(prefix).toContain("/node_modules/@vombor/kanban/dist/cli.js");
 	});
 
 	it("falls back to the current runnable invocation for local entrypoints", () => {

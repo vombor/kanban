@@ -6,7 +6,8 @@ See @RELEASE_WORKFLOW.md - you will assist with updating the changelog, bumping 
 
 ```bash
 git fetch origin --tags
-git pull origin main
+git checkout fork/stack
+git pull origin fork/stack   # the fork releases from fork/stack, not main
 ```
 
 Determine the latest tag:
@@ -97,7 +98,7 @@ Wait for their answer.
 
 Update `package.json` version field to the new version.
 
-Run `npm install --package-lock-only` to sync `package-lock.json`.
+Update the two `version` fields at the top of `package-lock.json` by hand (`npm install --package-lock-only` re-indents the whole file with tabs).
 
 Create or prepend to `CHANGELOG.md`. The format must match what `.github/scripts/extract-changelog-entry.mjs` expects:
 
@@ -118,30 +119,20 @@ git commit -m "v<version> release notes"
 git tag v<version>
 ```
 
-### 8. Push to main
+### 8. Push
 
-Push the commit and tag directly to main (repo owner workflow -- non-owners will get a permissions error prompting them to create a PR instead):
+Push the commit to the release branch (the fork releases from `fork/stack`), then the tag. Pushing the tag starts `publish.yml`: it runs the tests, publishes `@vombor/kanban` to GitHub Packages (`next` for a prerelease version, `latest` otherwise) and creates the GitHub release, all with the repo secret `GH_PAT` (docs/fork/github-auth.md).
 
 ```bash
-git push origin main
+git push origin <branch>
 git push origin v<version>
 ```
 
-### 9. Optionally trigger publish
+### 9. Follow the publish run
 
-Ask the user:
+The tag push already started it. Only to re-run it for an existing tag: `gh workflow run publish.yml -f tag=v<version>`.
 
-```
-Want to trigger the publish workflow on GitHub? (This will run tests, publish to npm, and create a GitHub release)
-```
-
-If yes:
-
-```bash
-gh workflow run publish.yml -f tag=v<version>
-```
-
-Then show the link to the workflow run:
+Show the link to the workflow run:
 
 ```bash
 gh run list --workflow=publish.yml --limit=1 --json url --jq '.[0].url'

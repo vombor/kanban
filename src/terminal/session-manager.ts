@@ -205,16 +205,20 @@ function formatShellSpawnFailure(binary: string, error: unknown): string {
 	return `Failed to launch "${binary}": ${message}`;
 }
 
-function buildTerminalEnvironment(
+// A source's `undefined` removes the variable (node-pty would pass it on as the string "undefined").
+export function buildTerminalEnvironment(
 	...sources: Array<Record<string, string | undefined> | undefined>
-): Record<string, string | undefined> {
-	return {
+): Record<string, string> {
+	const merged: Record<string, string | undefined> = {
 		...process.env,
 		...Object.assign({}, ...sources),
 		COLORTERM: "truecolor",
 		TERM: "xterm-256color",
 		TERM_PROGRAM: "kanban",
 	};
+	return Object.fromEntries(
+		Object.entries(merged).filter((entry): entry is [string, string] => entry[1] !== undefined),
+	);
 }
 
 function hasCodexInteractivePrompt(text: string): boolean {

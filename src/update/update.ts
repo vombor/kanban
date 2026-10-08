@@ -2,6 +2,14 @@ import { spawn, spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 
+import {
+	buildPackumentUrl,
+	buildScopeRegistryArgs,
+	KANBAN_PACKAGE_NAME,
+	KANBAN_PACKAGE_REGISTRY,
+	resolveRegistryAuthToken,
+} from "./kanban-package";
+
 export enum UpdatePackageManager {
 	NPM = "npm",
 	PNPM = "pnpm",
@@ -86,6 +94,11 @@ function buildUserFacingInstallCommand(
 	updateTiming: "startup" | "shutdown",
 ): string | null {
 	const packageSpec = `${packageName}@${npmTag}`;
+	const registryArgs = buildScopeRegistryArgs(packageName);
+	if (registryArgs.length > 0 && !supportsScopeRegistryArgs(packageManager)) {
+		return null;
+	}
+	const registryFlag = registryArgs.map((arg) => `${arg} `).join("");
 	// `updateTiming === "shutdown"` is the marker for transient (dlx / npx / bunx) runs:
 	// the user did not perform a global install, so steering them toward `... add -g`
 	// would change their workflow. The right command is just to re-run the same launcher.
@@ -97,10 +110,10 @@ function buildUserFacingInstallCommand(
 		case UpdatePackageManager.BUN:
 			return updateTiming === "shutdown" ? `bunx ${packageName}` : `bun add -g ${packageSpec}`;
 		case UpdatePackageManager.NPX:
-			return `npx ${packageName}`;
+			return `npx ${registryFlag}${packageName}`;
 		case UpdatePackageManager.NPM:
 		case UpdatePackageManager.LOCAL:
-			return `npm install -g ${packageSpec}`;
+			return `npm install -g ${registryFlag}${packageSpec}`;
 		case UpdatePackageManager.UNKNOWN:
 			return null;
 	}
@@ -153,8 +166,12 @@ function isNightlyVersion(version: string): boolean {
 	return version.includes("-nightly.");
 }
 
+// The publish workflow tags prerelease versions (the fork's 0.1.70-fork.N included) `next` and releases `latest`.
 function getNpmTag(currentVersion: string): string {
-	return isNightlyVersion(currentVersion) ? "nightly" : "latest";
+	if (isNightlyVersion(currentVersion)) {
+		return "nightly";
+	}
+	return currentVersion.split("+", 1)[0]?.includes("-") ? "next" : "latest";
 }
 
 function parseVersion(version: string): ParsedVersion {
@@ -174,6 +191,30 @@ function parseVersion(version: string): ParsedVersion {
 		core,
 		prerelease,
 	};
+}
+
+// A scoped package's registry flag (buildScopeRegistryArgs) is verified only for npm and npx. pnpm, yarn and bun
+// installs of such a package get no update offer rather than a command that could resolve against npmjs.
+function supportsScopeRegistryArgs(packageManager: UpdatePackageManager): boolean {
+	return (
+		packageManager === UpdatePackageManager.NPM ||
+		packageManager === UpdatePackageManager.NPX ||
+		packageManager === UpdatePackageManager.LOCAL
+	);
+}
+
+function buildGlobalInstallCommand(
+	packageManager: UpdatePackageManager,
+	command: string,
+	installArgs: string[],
+	packageName: string,
+	npmTag: string,
+): UpdateInstallCommand | null {
+	const registryArgs = buildScopeRegistryArgs(packageName);
+	if (registryArgs.length > 0 && !supportsScopeRegistryArgs(packageManager)) {
+		return null;
+	}
+	return { command, args: [...installArgs, ...registryArgs, `${packageName}@${npmTag}`] };
 }
 
 function buildShutdownCacheRefreshCommand(cacheDirectory: string): UpdateInstallCommand {
@@ -437,10 +478,13 @@ export function detectAutoUpdateInstallation(options: {
 		return {
 			packageManager: UpdatePackageManager.PNPM,
 			npmTag,
-			updateCommand: {
-				command: "pnpm",
-				args: ["add", "-g", `${options.packageName}@${npmTag}`],
-			},
+			updateCommand: buildGlobalInstallCommand(
+				UpdatePackageManager.PNPM,
+				"pnpm",
+				["add", "-g"],
+				options.packageName,
+				npmTag,
+			),
 			updateTiming: "startup",
 		};
 	}
@@ -449,10 +493,13 @@ export function detectAutoUpdateInstallation(options: {
 		return {
 			packageManager: UpdatePackageManager.YARN,
 			npmTag,
-			updateCommand: {
-				command: "yarn",
-				args: ["global", "add", `${options.packageName}@${npmTag}`],
-			},
+			updateCommand: buildGlobalInstallCommand(
+				UpdatePackageManager.YARN,
+				"yarn",
+				["global", "add"],
+				options.packageName,
+				npmTag,
+			),
 			updateTiming: "startup",
 		};
 	}
@@ -461,10 +508,13 @@ export function detectAutoUpdateInstallation(options: {
 		return {
 			packageManager: UpdatePackageManager.BUN,
 			npmTag,
-			updateCommand: {
-				command: "bun",
-				args: ["add", "-g", `${options.packageName}@${npmTag}`],
-			},
+			updateCommand: buildGlobalInstallCommand(
+				UpdatePackageManager.BUN,
+				"bun",
+				["add", "-g"],
+				options.packageName,
+				npmTag,
+			),
 			updateTiming: "startup",
 		};
 	}
@@ -473,10 +523,13 @@ export function detectAutoUpdateInstallation(options: {
 		return {
 			packageManager: UpdatePackageManager.NPM,
 			npmTag,
-			updateCommand: {
-				command: "npm",
-				args: ["install", "-g", `${options.packageName}@${npmTag}`],
-			},
+			updateCommand: buildGlobalInstallCommand(
+				UpdatePackageManager.NPM,
+				"npm",
+				["install", "-g"],
+				options.packageName,
+				npmTag,
+			),
 			updateTiming: "startup",
 		};
 	}
@@ -485,10 +538,13 @@ export function detectAutoUpdateInstallation(options: {
 		return {
 			packageManager: UpdatePackageManager.NPM,
 			npmTag,
-			updateCommand: {
-				command: "npm",
-				args: ["install", "-g", `${options.packageName}@${npmTag}`],
-			},
+			updateCommand: buildGlobalInstallCommand(
+				UpdatePackageManager.NPM,
+				"npm",
+				["install", "-g"],
+				options.packageName,
+				npmTag,
+			),
 			updateTiming: "startup",
 		};
 	}
@@ -514,9 +570,29 @@ function isAutoUpdateDisabled(env: NodeJS.ProcessEnv): boolean {
 	return false;
 }
 
-async function fetchLatestVersionFromRegistry(input: FetchLatestVersionInput): Promise<string | null> {
+export interface RegistryFetchDeps {
+	registry?: string;
+	resolveAuthToken?: () => string | null;
+	fetchImpl?: typeof fetch;
+}
+
+/**
+ * Reads the dist-tag from the package's metadata on GitHub Packages. That registry needs a token even for a public
+ * package, so without one (see `resolveRegistryAuthToken`) there is no request and the check quietly finds nothing.
+ */
+export async function fetchLatestVersionFromRegistry(
+	input: FetchLatestVersionInput,
+	deps: RegistryFetchDeps = {},
+): Promise<string | null> {
 	try {
-		const response = await fetch(`https://registry.npmjs.org/${input.packageName}/${input.npmTag}`, {
+		const registry = deps.registry ?? KANBAN_PACKAGE_REGISTRY;
+		const token = (deps.resolveAuthToken ?? (() => resolveRegistryAuthToken({ registry })))();
+		if (!token) {
+			return null;
+		}
+		const fetchImpl = deps.fetchImpl ?? fetch;
+		const response = await fetchImpl(buildPackumentUrl(registry, input.packageName), {
+			headers: { accept: "application/json", authorization: `Bearer ${token}` },
 			signal: AbortSignal.timeout(2_500),
 		});
 		if (!response.ok) {
@@ -526,7 +602,11 @@ async function fetchLatestVersionFromRegistry(input: FetchLatestVersionInput): P
 		if (!payload || typeof payload !== "object") {
 			return null;
 		}
-		const version = (payload as { version?: unknown }).version;
+		const distTags = (payload as { "dist-tags"?: unknown })["dist-tags"];
+		if (!distTags || typeof distTags !== "object") {
+			return null;
+		}
+		const version = (distTags as Record<string, unknown>)[input.npmTag];
 		if (typeof version !== "string") {
 			return null;
 		}
@@ -619,7 +699,7 @@ export async function runOnDemandUpdate(options: OnDemandUpdateOptions): Promise
 		};
 	}
 
-	const packageName = options.packageName ?? "kanban";
+	const packageName = options.packageName ?? KANBAN_PACKAGE_NAME;
 	const installation = detectAutoUpdateInstallation({
 		currentVersion: options.currentVersion,
 		packageName,
@@ -634,10 +714,13 @@ export async function runOnDemandUpdate(options: OnDemandUpdateOptions): Promise
 					packageManager: UpdatePackageManager.NPM,
 					npmTag: installation.npmTag,
 					updateTiming: "startup",
-					updateCommand: {
-						command: "npm",
-						args: ["install", "-g", `${packageName}@${installation.npmTag}`],
-					},
+					updateCommand: buildGlobalInstallCommand(
+						UpdatePackageManager.NPM,
+						"npm",
+						["install", "-g"],
+						packageName,
+						installation.npmTag,
+					),
 				};
 
 	if (!manualInstallation.updateCommand) {
@@ -661,7 +744,8 @@ export async function runOnDemandUpdate(options: OnDemandUpdateOptions): Promise
 			currentVersion: options.currentVersion,
 			latestVersion: null,
 			packageManager: manualInstallation.packageManager,
-			message: "Could not check the latest Kanban version from npm.",
+			message:
+				"Could not check the latest Kanban version on GitHub Packages (it needs a token with read:packages, see README).",
 		};
 	}
 
@@ -725,7 +809,7 @@ export async function runAutoUpdateCheck(options: UpdateStartupOptions): Promise
 		return;
 	}
 
-	const packageName = options.packageName ?? "kanban";
+	const packageName = options.packageName ?? KANBAN_PACKAGE_NAME;
 	const installation = detectAutoUpdateInstallation({
 		currentVersion: options.currentVersion,
 		packageName,

@@ -19,6 +19,13 @@
 # writable, else stderr; the step lines go to stderr (podman logs) and that log. The restart prepare step gets the
 # command's --port/--host/--home/--https as KANBAN_RUNTIME_PORT/KANBAN_RUNTIME_HOST/KANBAN_HOME/KANBAN_RUNTIME_HTTPS:
 # a CLI started from here would otherwise look for the server on the default port (3484, the image uses 3485).
+# GitHub PAT: with GH_TOKEN set (gh reads it natively; GITHUB_TOKEN is accepted as a fallback), the user's .npmrc
+# ($NPM_CONFIG_USERCONFIG, else $HOME/.npmrc, on the /root volume) gets `@vombor:registry=https://npm.pkg.github.com`
+# and `//npm.pkg.github.com/:_authToken=${GH_TOKEN}`, so npm can install the fork's package from GitHub Packages. The
+# file holds only that reference (npm expands it at read time), never the token. Lines the user set for either key
+# stay as they are. It also runs `gh auth setup-git`, which sets gh as git's credential helper for github.com in the
+# global git config (on /root), so https clones, fetches and pushes use the PAT; remote URLs are never changed.
+# Nothing changes when no token variable is set (gh then uses /root/.config/gh). See docs/fork/github-auth.md.
 # Replaces node's docker-entrypoint.sh, which only prefixes `node` when the command is a flag or not on PATH.
 set -u
 
@@ -35,6 +42,77 @@ log() {
 	printf '%s\n' "$line" >&2
 	if [ -n "$hook_log" ]; then
 		printf '%s\n' "$line" >>"$hook_log" 2>/dev/null
+	fi
+	return 0
+}
+
+# setup_npm_github_auth: the .npmrc lines described above. Never expands the token itself (only ${VAR:+set}), so even
+# `set -x` doesn't print it. Idempotent: an auth line that is one of our references is rewritten to the current one,
+# any other line for those keys is the user's and kept; the file is rewritten in place only when it changes.
+setup_npm_github_auth() {
+	if [ -n "${GH_TOKEN:+set}" ]; then
+		token_var=GH_TOKEN
+	elif [ -n "${GITHUB_TOKEN:+set}" ]; then
+		token_var=GITHUB_TOKEN
+	else
+		return 0
+	fi
+	npmrc=${NPM_CONFIG_USERCONFIG:-${npm_config_userconfig:-${HOME:-/root}/.npmrc}}
+	npmrc_tmp="$npmrc.kanban-entrypoint.$$"
+	if ! (umask 077 && { [ -f "$npmrc" ] || : >"$npmrc"; } && : >"$npmrc_tmp") 2>/dev/null; then
+		log "npm auth for @vombor: cannot write $npmrc"
+		return 0
+	fi
+	# shellcheck disable=SC2016 # the ${...} references are the literal text npm expands.
+	if ! awk -v ref="\${$token_var}" '
+		function trim(text) { sub(/^[ \t]+/, "", text); sub(/[ \t\r]+$/, "", text); return text }
+		{
+			eq = index($0, "=")
+			key = eq ? trim(substr($0, 1, eq - 1)) : ""
+			value = eq ? trim(substr($0, eq + 1)) : ""
+			if (key == "@vombor:registry") has_scope = 1
+			if (key == "//npm.pkg.github.com/:_authToken") {
+				has_auth = 1
+				if (value == "${GH_TOKEN}" || value == "${GITHUB_TOKEN}") {
+					print key "=" ref
+					next
+				}
+			}
+			print
+		}
+		END {
+			if (!has_scope) print "@vombor:registry=https://npm.pkg.github.com"
+			if (!has_auth) print "//npm.pkg.github.com/:_authToken=" ref
+		}
+	' "$npmrc" >"$npmrc_tmp"; then
+		# A partial temp file must never replace the user's .npmrc.
+		log "npm auth for @vombor: could not read $npmrc (awk failed), left it unchanged"
+		rm -f "$npmrc_tmp"
+		return 0
+	fi
+	if cmp -s "$npmrc" "$npmrc_tmp"; then
+		log "npm auth for @vombor: $npmrc already set"
+	elif cat "$npmrc_tmp" >"$npmrc"; then
+		log "npm auth for @vombor: $npmrc references \$$token_var"
+	else
+		log "npm auth for @vombor: cannot write $npmrc"
+	fi
+	rm -f "$npmrc_tmp"
+	return 0
+}
+
+# setup_git_github_auth: gh as git's credential helper for https://github.com (gh reads GH_TOKEN/GITHUB_TOKEN itself).
+# `gh auth setup-git` replaces its own helper lines, so a restart doesn't add more.
+setup_git_github_auth() {
+	[ -n "${GH_TOKEN:+set}${GITHUB_TOKEN:+set}" ] || return 0
+	if ! command -v gh >/dev/null 2>&1; then
+		log "git auth for github.com: no gh on PATH"
+		return 0
+	fi
+	if gh auth setup-git --hostname github.com </dev/null >/dev/null 2>&1; then
+		log "git auth for github.com: gh credential helper set"
+	else
+		log "git auth for github.com: gh auth setup-git failed"
 	fi
 	return 0
 }
@@ -102,6 +180,9 @@ if [ "$#" -eq 0 ]; then
 	log "no command given"
 	exit 64
 fi
+
+setup_npm_github_auth
+setup_git_github_auth
 
 # Signals only set a flag; the main loop (or the pre-stop wait) acts on it once `wait` is interrupted.
 pending=

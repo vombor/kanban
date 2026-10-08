@@ -17,8 +17,10 @@ RUN apt-get update && \
     openssh-client && \
     rm -rf /var/lib/apt/lists/*
 
-# GitHub CLI from GitHub's apt repository (https://cli.github.com/packages). No token or gh config in the image:
-# run `gh auth login` once in the container; its config lives in /root/.config/gh on the persistent /root volume.
+# GitHub CLI from GitHub's apt repository (https://cli.github.com/packages). No token or gh config in the image.
+# Either pass the user's classic PAT as GH_TOKEN (a podman secret, docs/fork/github-auth.md: gh reads it natively, and
+# kanban-entrypoint adds the npm ${GH_TOKEN} reference and gh's git credential helper), or run `gh auth login` once in
+# the container; its config lives in /root/.config/gh on the persistent /root volume.
 RUN mkdir -p -m 755 /etc/apt/keyrings && \
     curl -fsSL -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
       https://cli.github.com/packages/githubcli-archive-keyring.gpg && \
@@ -47,8 +49,8 @@ COPY kanban.tgz /tmp/kanban.tgz
 RUN npm install -g --no-fund /tmp/kanban.tgz && rm /tmp/kanban.tgz
 
 # No self-updates inside the container: the image build is the only update path (daily scheduled build).
-#  KANBAN_NO_AUTO_UPDATE: Kanban would npm-install upstream kanban@latest over this fork (0.1.70-fork.N sorts
-#   below 0.1.70 in semver, so it would "update" right back to upstream).
+#  KANBAN_NO_AUTO_UPDATE: Kanban would npm-install a newer @vombor/kanban from GitHub Packages over the image's build
+#   (with GH_TOKEN set it can read the registry).
 #  CLINE_NO_AUTO_UPDATE: cline 3.x background updates restart its hub daemon under live sessions.
 #  DISABLE_AUTOUPDATER: Claude Code.
 ENV KANBAN_NO_AUTO_UPDATE=1 \

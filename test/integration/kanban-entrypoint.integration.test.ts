@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join, resolve } from "node:path";
 
@@ -18,6 +18,8 @@ trap 'echo "child got INT" >> "$EVENTS"; exit 8' INT
 echo "child ready" >> "$EVENTS"
 while :; do sleep 0.05; done
 `;
+
+const GITHUB_AUTH_ENV = ["GH_TOKEN", "GITHUB_TOKEN"];
 
 let tempDir: { path: string; cleanup: () => void };
 let kitHome: string;
@@ -38,7 +40,15 @@ function startEntrypoint(args: string[], env: Record<string, string | undefined>
 	// Never the real kit or the real `kanban restart prepare` (it would tag this machine's worktrees): KANBAN_KIT_HOME
 	// is a temp dir, no KANBAN_* setting leaks in from this machine, and restart prepare is off unless a test turns it
 	// on (then with the stub `kanban` from writeFakeKanban, first on PATH).
-	const baseEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KANBAN_")));
+	// Nor this machine's GitHub PAT or npm user config: the GitHub auth tests set their own.
+	const baseEnv = Object.fromEntries(
+		Object.entries(process.env).filter(
+			([key]) =>
+				!key.startsWith("KANBAN_") &&
+				!GITHUB_AUTH_ENV.includes(key) &&
+				key.toLowerCase() !== "npm_config_userconfig",
+		),
+	);
 	const childEnv = Object.entries({
 		...baseEnv,
 		PATH: `${binDir}:${process.env.PATH ?? ""}`,
@@ -88,6 +98,27 @@ function writeFakeKanban(body = 'echo "kanban output"'): void {
 	const record = 'echo "kanban $* port=$KANBAN_RUNTIME_PORT home=$KANBAN_HOME" >> "$EVENTS"';
 	writeFileSync(kanban, `#!/bin/sh\n${record}\n${body}\n`);
 	chmodSync(kanban, 0o755);
+}
+
+// Stands in for gh: records the call and sets the credential helper the way `gh auth setup-git` does, without
+// reading the token (the real gh would ask github.com).
+function writeFakeGh(): void {
+	const gh = join(binDir, "gh");
+	writeFileSync(
+		gh,
+		`#!/bin/sh\necho "gh $*" >> "$EVENTS"\ngit config --global --replace-all credential.https://github.com.helper '!gh auth git-credential'\n`,
+	);
+	chmodSync(gh, 0o755);
+}
+
+/** Every file under `dir` (recursive), as [path, content]. */
+function readAllFiles(dir: string): Array<[string, string]> {
+	return readdirSync(dir, { recursive: true, withFileTypes: true })
+		.filter((entry) => entry.isFile())
+		.map((entry) => {
+			const path = join(entry.parentPath, entry.name);
+			return [path, readFileSync(path, "utf8")] as [string, string];
+		});
 }
 
 /** PATH without the directories that have `command`, plus the stub bin dir (for "not installed"). */
@@ -426,5 +457,118 @@ echo "child quit" >> "$EVENTS"
 		expect(await entry.exited).toBe(7);
 		expect(readEvents()).toEqual(["child ready", "hook start", "child got TERM"]);
 		expect(entry.stderr()).not.toContain("restart prepare (timeout");
+	});
+
+	describe("GitHub PAT (GH_TOKEN)", () => {
+		// Built at run time so this file never contains a key-shaped string itself (the secret guard would block its push).
+		const token = ["ghp", `testOnlyNotARealToken${"0".repeat(20)}`].join("_");
+		let home: string;
+		let gitConfig: string;
+
+		beforeEach(() => {
+			home = join(tempDir.path, "home");
+			mkdirSync(home);
+			gitConfig = join(home, ".gitconfig");
+			writeFakeGh();
+		});
+
+		async function runOnce(env: Record<string, string | undefined>): Promise<Entrypoint> {
+			const entry = startEntrypoint(["true"], {
+				KANBAN_START_HOOK: "",
+				HOME: home,
+				GIT_CONFIG_GLOBAL: gitConfig,
+				GIT_CONFIG_NOSYSTEM: "1",
+				...env,
+			});
+			expect(await entry.exited).toBe(0);
+			return entry;
+		}
+
+		function credentialHelpers(): string[] {
+			const result = spawnSync("git", ["config", "--global", "--get-all", "credential.https://github.com.helper"], {
+				env: { ...process.env, HOME: home, GIT_CONFIG_GLOBAL: gitConfig, GIT_CONFIG_NOSYSTEM: "1" },
+				encoding: "utf8",
+			});
+			return result.stdout.split("\n").filter(Boolean);
+		}
+
+		it("adds the npm reference once, keeps the user's lines, sets git's helper, and writes the token nowhere", async () => {
+			writeFileSync(join(home, ".npmrc"), `save-exact=true\n//registry.npmjs.org/:_authToken=\${NPM_TOKEN}`);
+
+			const first = await runOnce({ GH_TOKEN: token });
+			await runOnce({ GH_TOKEN: token });
+
+			const npmrc = readFileSync(join(home, ".npmrc"), "utf8").split("\n").filter(Boolean);
+			expect(npmrc).toEqual([
+				"save-exact=true",
+				`//registry.npmjs.org/:_authToken=\${NPM_TOKEN}`,
+				"@vombor:registry=https://npm.pkg.github.com",
+				`//npm.pkg.github.com/:_authToken=\${GH_TOKEN}`,
+			]);
+			expect(credentialHelpers()).toEqual(["!gh auth git-credential"]);
+			expect(readEvents()).toEqual([
+				"gh auth setup-git --hostname github.com",
+				"gh auth setup-git --hostname github.com",
+			]);
+			expect(first.stderr()).toContain("npm auth for @vombor:");
+			for (const [path, content] of readAllFiles(tempDir.path)) {
+				expect(content.includes(token), path).toBe(false);
+			}
+			expect(first.stderr()).not.toContain(token);
+		});
+
+		it("leaves .npmrc unchanged when awk fails part-way", async () => {
+			const original = "save-exact=true\nregistry=https://example.invalid/\n";
+			writeFileSync(join(home, ".npmrc"), original);
+			// An awk that writes half a file, then fails.
+			writeFileSync(join(binDir, "awk"), "#!/bin/sh\necho partial\nexit 2\n");
+			chmodSync(join(binDir, "awk"), 0o755);
+
+			const entry = await runOnce({ GH_TOKEN: token });
+
+			expect(readFileSync(join(home, ".npmrc"), "utf8")).toBe(original);
+			expect(readdirSync(home).filter((name) => name.includes("kanban-entrypoint"))).toEqual([]);
+			expect(entry.stderr()).toContain("awk failed");
+		});
+
+		it("leaves a user's own auth line for GitHub Packages alone", async () => {
+			writeFileSync(join(home, ".npmrc"), `//npm.pkg.github.com/:_authToken=\${MY_OWN_TOKEN}\n`);
+
+			await runOnce({ GH_TOKEN: token });
+
+			expect(readFileSync(join(home, ".npmrc"), "utf8")).toBe(
+				`//npm.pkg.github.com/:_authToken=\${MY_OWN_TOKEN}\n@vombor:registry=https://npm.pkg.github.com\n`,
+			);
+		});
+
+		it("doesn't print the token under set -x", () => {
+			// `sh -x` prints every command after expansion.
+			const traced = spawnSync("sh", ["-x", ENTRYPOINT, "true"], {
+				cwd: tempDir.path,
+				env: {
+					PATH: `${binDir}:${process.env.PATH ?? ""}`,
+					HOME: home,
+					GIT_CONFIG_GLOBAL: gitConfig,
+					KANBAN_KIT_HOME: kitHome,
+					KANBAN_START_HOOK: "",
+					KANBAN_RESTART_PREPARE_HOOK: "",
+					EVENTS: events,
+					GH_TOKEN: token,
+				},
+				encoding: "utf8",
+			});
+			expect(traced.status).toBe(0);
+			expect(traced.stderr).toContain("setup_npm_github_auth");
+			expect(traced.stderr).not.toContain(token);
+		});
+
+		it("changes nothing without a token", async () => {
+			const entry = await runOnce({});
+
+			expect(existsSync(join(home, ".npmrc"))).toBe(false);
+			expect(existsSync(gitConfig)).toBe(false);
+			expect(readEvents()).toEqual([]);
+			expect(entry.stderr()).not.toContain("auth for");
+		});
 	});
 });

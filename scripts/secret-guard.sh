@@ -6,7 +6,8 @@
 #  1. well-known key shapes (Bedrock ABSK..., AWS AKIA.../ASIA..., sk-... at a token start, so
 #     "task-agent-settings-fields" is not a hit; ghp_/gho_/ghs_/github_pat_..., private key blocks);
 #  2. the EXACT secret values used on this machine, read at run time from the files that hold them
-#     (Claude settings, Cline providers.json, Codex config.toml, $KANBAN_HOME/data/*/*.env).
+#     (Claude settings, Cline providers.json, Codex config.toml, $KANBAN_HOME/data/*/*.env), plus the GitHub PAT in
+#     $GH_TOKEN / $GITHUB_TOKEN and the Bedrock key in $AWS_BEARER_TOKEN_BEDROCK when set (docs/fork/github-auth.md).
 # It never prints a secret, only the commit, the kind of hit and the files.
 #
 # Usage:
@@ -32,6 +33,7 @@ while IFS= read -r v; do [ ${#v} -ge 16 ] && known+=("$v"); done < <(
 		grep -hoE '(bearer_token|api_key|token|key)[[:space:]]*=[[:space:]]*"[^"]+"' "$H/.codex/config.toml" 2>/dev/null |
 			sed -E 's/^[^"]*"([^"]+)".*/\1/'
 		grep -hoE '^[A-Z_]*(KEY|TOKEN|SECRET)[A-Z_]*=.+' "$KH"/data/*/*.env 2>/dev/null | sed -E 's/^[^=]+=//'
+		printf '%s\n' "${GH_TOKEN:-}" "${GITHUB_TOKEN:-}" "${AWS_BEARER_TOKEN_BEDROCK:-}"
 	} | sort -u
 )
 pattern='ABSK[A-Za-z0-9+/=]{20,}|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|(^|[^A-Za-z0-9_-])sk-[A-Za-z0-9_-]{20,}|gh[pos]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'

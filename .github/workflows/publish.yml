@@ -1,30 +1,45 @@
+# Publishes @vombor/kanban to GitHub Packages (npm.pkg.github.com) and creates the GitHub release, on a version tag
+# (vX.Y.Z or vX.Y.Z-prerelease, e.g. v0.1.70-fork.5) or by hand for an existing tag. Pushes to fork/** publish
+# nothing here (image.yml builds the image). How to cut a release: RELEASE_WORKFLOW.md.
+# Every write uses the repo secret GH_PAT (the user's classic PAT, docs/fork/github-auth.md), not GITHUB_TOKEN, so
+# the workflow's own token stays read-only.
 name: Publish
 
 on:
+  push:
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to publish (example: v1.2.3)"
+        description: "Existing tag to publish (example: v0.1.70-fork.5)"
         required: true
         type: string
 
 concurrency:
-  group: publish-${{ github.workflow }}-${{ inputs.tag }}
+  group: publish-${{ github.workflow }}-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
 
 jobs:
   test:
     uses: ./.github/workflows/test.yml
 
   publish:
-    name: Publish npm package and create GitHub release
+    name: Publish to GitHub Packages and create GitHub release
     needs: test
     runs-on: ubuntu-latest
     steps:
+      - name: Require the GH_PAT secret
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          if [ -z "$GH_PAT" ]; then
+            echo "::error::The repository secret GH_PAT is missing. Add the classic PAT (scopes repo, read:packages, write:packages, workflow) as GH_PAT; see docs/fork/github-auth.md."
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -34,10 +49,14 @@ jobs:
       - name: Resolve tag
         id: resolve_tag
         env:
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           if [ -z "$TAG" ]; then
-            echo "Error: tag input is required"
+            echo "Error: no tag (push a vX.Y.Z tag or pass the tag input)"
+            exit 1
+          fi
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Error: tag '$TAG' must match vX.Y.Z (with optional prerelease suffix, e.g. v0.1.70-fork.5)"
             exit 1
           fi
           git fetch origin --tags
@@ -47,18 +66,20 @@ jobs:
           fi
           git checkout --detach "refs/tags/$TAG^{commit}"
 
-          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]]; then
-            echo "Error: tag must match vX.Y.Z (with optional prerelease suffix)"
-            exit 1
+          # Prerelease versions (anything with a "-") go to the `next` dist-tag, releases to `latest`.
+          if [[ "$TAG" == *-* ]]; then
+            echo "dist_tag=next" >> "$GITHUB_OUTPUT"
+          else
+            echo "dist_tag=latest" >> "$GITHUB_OUTPUT"
           fi
-
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "24.x"
-          registry-url: "https://registry.npmjs.org"
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@vombor"
           cache: npm
 
       - name: Install dependencies
@@ -67,10 +88,17 @@ jobs:
       - name: Install web-ui dependencies
         run: npm ci --prefix web-ui
 
-      - name: Verify tag matches package version
+      - name: Verify tag matches package name and version
         id: version
+        env:
+          TAG: ${{ steps.resolve_tag.outputs.tag }}
         run: |
-          TAG="${{ steps.resolve_tag.outputs.tag }}"
+          # A manual run with an upstream tag checks out upstream's package.json: stop before building it.
+          PACKAGE_NAME=$(node -p "require('./package.json').name")
+          if [ "$PACKAGE_NAME" != "@vombor/kanban" ]; then
+            echo "Error: tag '$TAG' has package name '$PACKAGE_NAME', not @vombor/kanban (not a fork release)"
+            exit 1
+          fi
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
           EXPECTED_TAG="v${PACKAGE_VERSION}"
 
@@ -80,6 +108,15 @@ jobs:
           fi
 
           echo "package_version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
+
+      # Before the build, so a release without notes fails in seconds rather than after the build.
+      - name: Extract changelog entry for release
+        id: changelog
+        run: |
+          node .github/scripts/extract-changelog-entry.mjs \
+            --version "${{ steps.version.outputs.package_version }}" \
+            --changelog CHANGELOG.md \
+            --output-key body
 
       - name: Build and validate package
         run: npm run prepublishOnly
@@ -91,9 +128,11 @@ jobs:
       # npm publish re-triggers prepublishOnly as a lifecycle hook, which
       # rebuilds the web-ui from scratch. Without these env vars, the
       # rebuild produces a bundle without the optional Sentry DSNs baked in.
-      - name: Publish to npm (OIDC trusted publishing)
-        run: npm publish --access public
+      # The registry comes from publishConfig and the @vombor scope (setup-node's .npmrc reads NODE_AUTH_TOKEN).
+      - name: Publish to GitHub Packages
+        run: npm publish --tag "${{ steps.resolve_tag.outputs.dist_tag }}"
         env:
+          NODE_AUTH_TOKEN: ${{ secrets.GH_PAT }}
           # Optional fork-owned Sentry. Unset secrets build a bundle that reports nothing.
           KANBAN_SENTRY_DSN: ${{ secrets.KANBAN_SENTRY_DSN }}
           VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
@@ -102,18 +141,11 @@ jobs:
           SENTRY_WEB_PROJECT: ${{ secrets.SENTRY_WEB_PROJECT }}
           SENTRY_NODE_PROJECT: ${{ secrets.SENTRY_NODE_PROJECT }}
 
-      - name: Extract changelog entry for release
-        id: changelog
-        run: |
-          node .github/scripts/extract-changelog-entry.mjs \
-            --version "${{ steps.version.outputs.package_version }}" \
-            --changelog CHANGELOG.md \
-            --output-key body
-
       - name: Compute compare link
         id: compare
+        env:
+          TAG: ${{ steps.resolve_tag.outputs.tag }}
         run: |
-          TAG="${{ steps.resolve_tag.outputs.tag }}"
           PREV_TAG=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)
 
           if [ -n "$PREV_TAG" ]; then
@@ -125,6 +157,7 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
+          token: ${{ secrets.GH_PAT }}
           tag_name: ${{ steps.resolve_tag.outputs.tag }}
           name: ${{ steps.resolve_tag.outputs.tag }}
           body: |
@@ -132,25 +165,3 @@ jobs:
 
             ${{ steps.compare.outputs.link }}
           prerelease: ${{ contains(steps.resolve_tag.outputs.tag, '-') }}
-
-      - name: Post release to Slack
-        uses: slackapi/slack-github-action@v3.0.1
-        with:
-          method: chat.postMessage
-          token: ${{ secrets.SLACK_RELEASE_BOT_TOKEN }}
-          payload: |
-            channel: "C0APVKGGZFC"
-            text: "Kanban ${{ steps.resolve_tag.outputs.tag }}"
-            blocks:
-              - type: "section"
-                text:
-                  type: "mrkdwn"
-                  text: "*Kanban ${{ steps.resolve_tag.outputs.tag }}*"
-              - type: "section"
-                text:
-                  type: "mrkdwn"
-                  text: ${{ toJSON(steps.changelog.outputs.body) }}
-              - type: "context"
-                elements:
-                  - type: "mrkdwn"
-                    text: "${{ steps.compare.outputs.link }}"

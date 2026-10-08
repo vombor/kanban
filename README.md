@@ -1,4 +1,4 @@
-## npx kanban (Research Preview)
+## npx @vombor/kanban (Research Preview)
 
 <p align="center">
   <img src="https://github.com/user-attachments/assets/2aa3dcc7-94e3-4076-bcfe-6d0272007cfe" width="100%" />
@@ -13,7 +13,7 @@ A replacement for your IDE better suited for running many agents in parallel and
 <table>
 <tbody>
 <td align="center">
-<a href="https://www.npmjs.com/package/kanban" target="_blank">NPM</a>
+<a href="https://github.com/vombor/kanban/pkgs/npm/kanban" target="_blank">Package</a>
 </td>
 <td align="center">
 <a href="https://github.com/cline/kanban" target="_blank">GitHub</a>
@@ -35,14 +35,26 @@ A replacement for your IDE better suited for running many agents in parallel and
 </div>
 
 ### 1. Open kanban
-```bash
-# Run directly (no install required)
-npx kanban
+This fork is published to GitHub Packages as `@vombor/kanban`. GitHub Packages needs a token to install, even for a
+public package: a classic personal access token with `read:packages`. Point the `@vombor` scope at it in `~/.npmrc`:
 
-# Or install globally
-npm i -g kanban
+```ini
+@vombor:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
+```
+
+```bash
+export GITHUB_TOKEN=<PAT with read:packages>   # npm expands ${GITHUB_TOKEN} when it reads ~/.npmrc
+
+# Run directly (no install required)
+npx @vombor/kanban@next
+
+# Or install globally (fork versions are prereleases on the `next` tag)
+npm i -g @vombor/kanban@next
 kanban
 ```
+Releases and the dev container's setup: `RELEASE_WORKFLOW.md` and `docs/fork/github-auth.md`.
+
 Run this from the root of any git repo. Kanban will detect your installed CLI agent and launch a local running webserver in your browser. No account or setup required, it works right out of the box.
 
 ### 2. Create tasks

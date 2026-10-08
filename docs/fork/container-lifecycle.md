@@ -36,6 +36,8 @@ AutoUpdate=registry
 # 10 s Kanban + margin.
 StopTimeout=90
 RunInit=true
+# The user's classic PAT as GH_TOKEN, from a podman secret (docs/fork/github-auth.md).
+Secret=gh_pat,type=env,target=GH_TOKEN
 # No Exec= needed: the image's command plus the entrypoint start the kit. Remove the old
 # `Exec=/bin/sh -c '( /root/.kanban/bin/kit boot ... & ); exec kanban ...'` override from docs/RUNBOOK.md
 # (harmless if left: kit boot is idempotent, but it runs twice).
@@ -63,6 +65,7 @@ updates containers that run under a systemd unit (quadlet does that) with a full
 | `KANBAN_RESTART_PREPARE_HOOK` | `kanban restart prepare` if `kanban` is on PATH | `sh -c` command run after the pre-stop hook; empty = none |
 | `KANBAN_RESTART_PREPARE_TIMEOUT` | `20` | seconds; as above |
 | `KANBAN_KIT_HOME` | `/root/.kanban` | where `<kit>` is |
+| `GH_TOKEN` | unset | the user's classic PAT (scopes `repo`, `read:packages`, `write:packages`, `workflow`). gh reads it; at start the entrypoint adds the npm `${GH_TOKEN}` reference for `@vombor` to `~/.npmrc` and runs `gh auth setup-git`. Pass it as a podman secret, not `Environment=`. Agent sessions keep it (PR cards need gh), except Copilot's; see [github-auth.md](github-auth.md) |
 
 E.g. to tag the cards of more than one board before a stop:
 `Environment="KANBAN_PRESTOP_HOOK=/root/.kanban/bin/kit prepare-restart --project foo; /root/.kanban/bin/kit prepare-restart --project kanban-2uge"`

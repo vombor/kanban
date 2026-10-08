@@ -69,12 +69,16 @@ describe("resolveChecksEnabled", () => {
 });
 
 describe("check step environment", () => {
-	it("caps test-runner workers, drops Kanban and git repo variables and NODE_ENV", () => {
+	it("caps test-runner workers, drops Kanban, git repo and secret token variables and NODE_ENV", () => {
 		const previous = { ...process.env };
 		process.env.KANBAN_HOME = "/live/home";
 		process.env.KANBAN_RUNTIME_PORT = "3484";
 		process.env.GIT_DIR = "/elsewhere/.git";
 		process.env.NODE_ENV = "production";
+		process.env.GH_TOKEN = "user-pat";
+		process.env.GITHUB_TOKEN = "user-pat";
+		process.env.AWS_BEARER_TOKEN_BEDROCK = "bedrock-key";
+		process.env.AWS_REGION = "us-east-1";
 		try {
 			const settings = parsePipelineConfig({ pipeline: { checks: { maxWorkers: 3 } } }).config.pipeline.checks;
 			const env = createCheckStepEnv(settings, "/tmp/checks/.npmrc");
@@ -85,7 +89,15 @@ describe("check step environment", () => {
 				VITEST_MAX_THREADS: "3",
 				VITEST_MAX_FORKS: "3",
 			});
-			for (const key of ["KANBAN_HOME", "KANBAN_RUNTIME_PORT", "GIT_DIR", "NODE_ENV"]) {
+			for (const key of [
+				"KANBAN_HOME",
+				"KANBAN_RUNTIME_PORT",
+				"GIT_DIR",
+				"NODE_ENV",
+				"GH_TOKEN",
+				"GITHUB_TOKEN",
+				"AWS_BEARER_TOKEN_BEDROCK",
+			]) {
 				expect(env[key]).toBeUndefined();
 			}
 		} finally {

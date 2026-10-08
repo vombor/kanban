@@ -1,10 +1,9 @@
 {
-	"name": "kanban",
+	"name": "@vombor/kanban",
 	"version": "0.1.70-fork.4",
 	"description": "A kanban foundation for coding agents",
 	"publishConfig": {
-		"access": "public",
-		"provenance": true
+		"registry": "https://npm.pkg.github.com"
 	},
 	"keywords": [
 		"kanban",
@@ -20,7 +19,7 @@
 	"author": "Cline",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/vombor/kanban"
+		"url": "git+https://github.com/vombor/kanban.git"
 	},
 	"type": "module",
 	"bin": {
@@ -53,7 +52,7 @@
 		"dogfood": "node scripts/dogfood.mjs",
 		"shadow-diff": "tsx scripts/pipeline-shadow-diff.ts",
 		"link": "npm run build && npm link",
-		"unlink": "npm unlink -g kanban",
+		"unlink": "npm unlink -g @vombor/kanban",
 		"dev": "NODE_ENV=development tsx watch src/cli.ts",
 		"dev:full": "node scripts/dev-full.mjs",
 		"web:dev": "npm --prefix web-ui run dev",

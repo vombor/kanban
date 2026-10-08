@@ -113,11 +113,9 @@ function hasEntries(value: unknown): boolean {
 }
 
 // 60c5538: don't start a Copilot run signed out (Kanban's Copilot trust write once wiped the login from config.json,
-// 10/06 19:58Z). Copilot keeps the login in its JSONC config.json (authTokens / loggedInUsers); a token env var works too.
-async function isCopilotSignedIn(env: NodeJS.ProcessEnv): Promise<boolean> {
-	if (env.COPILOT_GITHUB_TOKEN || env.GH_TOKEN || env.GITHUB_TOKEN) {
-		return true;
-	}
+// 10/06 19:58Z). Copilot keeps the login in its JSONC config.json (authTokens / loggedInUsers). Its token env vars
+// don't count: Kanban removes them from every Copilot launch (COPILOT_TOKEN_ENV_NAMES).
+export async function isCopilotSignedIn(): Promise<boolean> {
 	let content: string;
 	try {
 		content = await readFile(join(getCopilotHomePath(), "config.json"), "utf8");

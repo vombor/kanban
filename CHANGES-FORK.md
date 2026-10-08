@@ -38,6 +38,22 @@ of this repository is the complete record of changes.
 - `scripts/upload-sentry-sourcemaps.mjs`: no hardcoded upstream Sentry org/projects; skipped unless `SENTRY_AUTH_TOKEN`,
   `SENTRY_ORG`, `SENTRY_WEB_PROJECT` and `SENTRY_NODE_PROJECT` are set.
 - `.github/workflows/publish.yml`: no PostHog/OTEL secrets; passes the optional fork Sentry secrets instead.
+- Package publishing (docs/fork/github-auth.md, `RELEASE_WORKFLOW.md`): the package is `@vombor/kanban` on GitHub
+  Packages (`package.json` `name`, `publishConfig.registry`; `provenance` and `access` dropped, GitHub Packages has
+  no npm provenance and links the package's visibility to the repository). `.github/workflows/publish.yml` runs on
+  `v*` tags (and by hand for an existing tag), publishes only to GitHub Packages (`next` for prerelease versions,
+  `latest` otherwise) and creates the GitHub release, both with the repo secret `GH_PAT`; upstream's npmjs OIDC
+  trusted publishing and the Slack post are removed. `.github/scripts/extract-changelog-entry.mjs` no longer matches
+  `0.1.70` against a `0.1.70-fork.N` heading. `.github/workflows/image.yml` logs in to GHCR with `GH_PAT` and packs
+  the scoped tarball. `src/update/` checks for updates of `@vombor/kanban` on GitHub Packages with the token from
+  `~/.npmrc` (else `GH_TOKEN`), and quietly skips the check without one; `src/prompts/append-system-prompt.ts` uses
+  the scoped name. `README.md`, `RELEASE_WORKFLOW.md` and the release command describe installing and releasing.
+- GitHub PAT in the container: `deploy/kanban-entrypoint.sh` turns `GH_TOKEN` into an npm `${GH_TOKEN}` reference for
+  `@vombor` and gh's git credential helper; `deploy/Containerfile`, `docs/fork/container-lifecycle.md` describe it.
+  `src/pipeline/checks.ts` hides `GH_TOKEN`/`GITHUB_TOKEN`/`AWS_BEARER_TOKEN_BEDROCK` from a project's checks,
+  `scripts/secret-guard.sh` knows their values, and Copilot launches (`src/terminal/agent-session-adapters.ts`, `session-manager.ts`) drop
+  `COPILOT_GITHUB_TOKEN`/`GH_TOKEN`/`GITHUB_TOKEN` so Copilot keeps its own login (`src/doctor/github-auth-checks.ts`
+  reports it).
 - `DEVELOPMENT.md`: replaced the PostHog section with the fork's telemetry/error-reporting notes.
 - `web-ui/src/components/project-navigation-panel.tsx`: sidebar header reads "Kanban v…" instead of "Cline v…".
 - `web-ui/index.html`, `web-ui/public/manifest.json`, `web-ui/public/assets/icon.svg`, `icon-192.png`, `icon-512.png`,

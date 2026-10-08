@@ -8,6 +8,7 @@ import { resolveKanbanCommandParts } from "../core/kanban-command";
 import { buildShellCommandLine } from "../core/shell";
 import { buildIsolationPromptNote, type SessionIsolation } from "../isolation/isolation-paths";
 import { getTaskWorktreeSearchRootPaths } from "../state/kanban-home";
+import { buildScopeRegistryArgs, KANBAN_PACKAGE_NAME } from "../update/kanban-package";
 import { detectAutoUpdateInstallation, UpdatePackageManager } from "../update/update";
 
 const DEFAULT_COMMAND_PREFIX = "kanban";
@@ -119,7 +120,7 @@ export function resolveAppendSystemPromptCommandPrefix(
 
 	const installation = detectAutoUpdateInstallation({
 		currentVersion: options.currentVersion ?? KANBAN_VERSION,
-		packageName: "kanban",
+		packageName: KANBAN_PACKAGE_NAME,
 		entrypointPath,
 		cwd: options.cwd ?? process.cwd(),
 	});
@@ -128,17 +129,10 @@ export function resolveAppendSystemPromptCommandPrefix(
 		return fallbackCommandPrefix;
 	}
 
+	// The scoped package resolves only with its registry flag (buildScopeRegistryArgs, verified for npx). pnpm, yarn
+	// and bun runs keep the direct node invocation instead of a command that could ask registry.npmjs.org.
 	if (installation.packageManager === UpdatePackageManager.NPX) {
-		return "npx -y kanban";
-	}
-	if (installation.packageManager === UpdatePackageManager.PNPM) {
-		return "pnpm dlx kanban";
-	}
-	if (installation.packageManager === UpdatePackageManager.YARN) {
-		return "yarn dlx kanban";
-	}
-	if (installation.packageManager === UpdatePackageManager.BUN) {
-		return "bun x kanban";
+		return ["npx", "-y", ...buildScopeRegistryArgs(KANBAN_PACKAGE_NAME), KANBAN_PACKAGE_NAME].join(" ");
 	}
 
 	return fallbackCommandPrefix;
