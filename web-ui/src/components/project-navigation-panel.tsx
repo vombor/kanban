@@ -1,9 +1,8 @@
 import { Plus } from "lucide-react";
 import { type MouseEvent as ReactMouseEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
-import { KanbanAgentPill } from "@/components/kanban-agent-pill";
+import { KanbanAgentHeader } from "@/components/kanban-agent-header";
 import { ProjectActionsMenu } from "@/components/project-actions-menu";
 import { ProjectSwitcher } from "@/components/project-switcher";
-import { SidebarTipsSection } from "@/components/sidebar-tips-section";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
 import {
@@ -19,9 +18,8 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useIsMobile } from "@/hooks/use-is-mobile";
-import type { RuntimeAgentId, RuntimeProjectSummary } from "@/runtime/types";
-import { LocalStorageKey } from "@/storage/local-storage-store";
-import { useBooleanLocalStorageValue, useUnmount, useWindowEvent } from "@/utils/react-use";
+import type { RuntimeProjectSummary } from "@/runtime/types";
+import { useUnmount, useWindowEvent } from "@/utils/react-use";
 
 const COLLAPSED_WIDTH = 48;
 const SIDEBAR_COLLAPSE_THRESHOLD = 120;
@@ -33,11 +31,7 @@ export function ProjectNavigationPanel({
 	isLoadingProjects = false,
 	currentProjectId,
 	removingProjectId,
-	isAgentOpen,
-	onAgentOpenChange,
-	canShowAgentSection,
 	agentSectionContent,
-	selectedAgentId,
 	agentLabel = null,
 	onSelectProject,
 	onRemoveProject,
@@ -51,13 +45,8 @@ export function ProjectNavigationPanel({
 	isLoadingProjects?: boolean;
 	currentProjectId: string | null;
 	removingProjectId: string | null;
-	/** Whether the sidebar shows the selected project's Kanban Agent below the project dropdown. */
-	isAgentOpen: boolean;
-	onAgentOpenChange: (open: boolean) => void;
-	canShowAgentSection: boolean;
 	agentSectionContent?: ReactNode;
-	selectedAgentId?: RuntimeAgentId | null;
-	/** The selected project's agent (e.g. "Claude Code"), shown on the right of the Kanban Agent pill. */
+	/** The selected project's agent (e.g. "Claude Code"), shown on the right of the Kanban Agent header. */
 	agentLabel?: string | null;
 	onSelectProject: (projectId: string) => void;
 	onRemoveProject: (projectId: string) => Promise<boolean>;
@@ -69,7 +58,6 @@ export function ProjectNavigationPanel({
 }): React.ReactElement {
 	const sortedProjects = [...projects].sort((a, b) => a.path.localeCompare(b.path));
 	const currentProject = sortedProjects.find((project) => project.id === currentProjectId) ?? null;
-	const [isTipsOpen, setIsTipsOpen] = useBooleanLocalStorageValue(LocalStorageKey.SidebarTipsExpanded, false);
 
 	const [pendingProjectRemoval, setPendingProjectRemoval] = useState<RuntimeProjectSummary | null>(null);
 	const isProjectRemovalPending = pendingProjectRemoval !== null && removingProjectId === pendingProjectRemoval.id;
@@ -276,84 +264,55 @@ export function ProjectNavigationPanel({
 					className="absolute top-0 right-0 bottom-0 w-1.5 cursor-ew-resize z-10"
 				/>
 			)}
-			<div style={{ padding: "12px 12px 8px" }}>
-				<div className="flex items-center justify-between">
-					<div className="font-semibold text-base flex items-baseline gap-1.5">
-						Kanban <span className="text-text-secondary font-normal text-xs">v{__APP_VERSION__}</span>
-					</div>
-					{isMobile ? (
-						<Button
-							variant="ghost"
-							size="sm"
-							icon={<Plus size={16} className="rotate-45" />}
-							onClick={() => setCollapsed(true)}
-							aria-label="Close sidebar"
-							className="min-w-[44px] min-h-[44px] -mr-2"
-						/>
-					) : null}
-				</div>
-				<div className="mt-2 flex items-center gap-1">
-					<ProjectSwitcher
-						projects={sortedProjects}
-						currentProjectId={currentProjectId}
-						isLoading={isLoadingProjects}
+			<div
+				className="flex h-10 min-h-[40px] shrink-0 items-center gap-1 pl-3 pr-2"
+				style={{ borderBottom: "1px solid var(--color-divider)" }}
+			>
+				<span className="shrink-0 pr-0.5 text-xs text-text-secondary">Project:</span>
+				<ProjectSwitcher
+					projects={sortedProjects}
+					currentProjectId={currentProjectId}
+					isLoading={isLoadingProjects}
+					disabled={removingProjectId !== null}
+					onSelectProject={onSelectProject}
+				/>
+				{currentProject ? (
+					<ProjectActionsMenu
+						isRemoving={removingProjectId === currentProject.id}
+						disabled={removingProjectId !== null && removingProjectId !== currentProject.id}
+						onRemove={() => setPendingProjectRemoval(currentProject)}
+					/>
+				) : null}
+				<Tooltip content="Add project">
+					<Button
+						variant="ghost"
+						size="sm"
+						className={cn("w-7 shrink-0", isMobile && "min-w-[44px] min-h-[44px]")}
+						icon={<Plus size={14} />}
+						aria-label="Add project"
+						onClick={onAddProject}
 						disabled={removingProjectId !== null}
-						onSelectProject={(projectId) => {
-							onSelectProject(projectId);
-							if (isMobile && !isAgentOpen) {
-								setCollapsed(true);
-							}
-						}}
 					/>
-					{currentProject ? (
-						<ProjectActionsMenu
-							isRemoving={removingProjectId === currentProject.id}
-							disabled={removingProjectId !== null && removingProjectId !== currentProject.id}
-							onRemove={() => setPendingProjectRemoval(currentProject)}
-						/>
-					) : null}
-					<Tooltip content="Add project">
-						<Button
-							variant="ghost"
-							icon={<Plus size={16} />}
-							aria-label="Add project"
-							onClick={onAddProject}
-							disabled={removingProjectId !== null}
-						/>
-					</Tooltip>
-				</div>
-				<div className="mt-2">
-					<KanbanAgentPill
-						agentLabel={agentLabel}
-						isOpen={isAgentOpen}
-						disabled={!canShowAgentSection}
-						title={isAgentOpen ? (isTipsOpen ? "Hide tips" : "Show tips") : undefined}
-						onClick={() => {
-							// First click opens the agent; once it is open, the pill shows or hides the tips below it.
-							if (isAgentOpen) {
-								setIsTipsOpen((open) => !open);
-							} else {
-								onAgentOpenChange(true);
-							}
-						}}
+				</Tooltip>
+				{isMobile ? (
+					<Button
+						variant="ghost"
+						size="sm"
+						icon={<Plus size={16} className="rotate-45" />}
+						onClick={() => setCollapsed(true)}
+						aria-label="Close sidebar"
+						className="min-w-[44px] min-h-[44px] -mr-2"
 					/>
-				</div>
+				) : null}
 			</div>
-			<SidebarTipsSection open={isTipsOpen} onOpenChange={setIsTipsOpen} showAgentHints={Boolean(selectedAgentId)} />
-
-			{isAgentOpen ? (
-				<div className="flex flex-1 min-h-0 flex-col">
-					<div className="flex flex-1 min-h-0 overflow-hidden bg-surface-1 px-2 pb-2 pt-1">
-						{agentSectionContent ?? (
-							<div className="flex w-full items-center justify-center rounded-md border border-border bg-surface-2 px-3 text-center text-sm text-text-secondary">
-								Select a project to use the agent.
-							</div>
-						)}
+			<KanbanAgentHeader agentLabel={agentLabel} />
+			<div className="flex flex-1 min-h-0 overflow-hidden bg-surface-1 p-1.5">
+				{agentSectionContent ?? (
+					<div className="flex w-full items-center justify-center rounded-md border border-border bg-surface-2 px-3 text-center text-sm text-text-secondary">
+						Select a project to use the agent.
 					</div>
-				</div>
-			) : (
-				<div className="flex-1 min-h-0" />
-			)}
+				)}
+			</div>
 			<AlertDialog
 				open={pendingProjectRemoval !== null}
 				onOpenChange={(open) => {

@@ -1,8 +1,10 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Ellipsis } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/components/ui/cn";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip } from "@/components/ui/tooltip";
+import { useIsMobile } from "@/hooks/use-is-mobile";
 
 /** Actions on the selected project (next to the project dropdown). */
 export function ProjectActionsMenu({
@@ -14,13 +16,15 @@ export function ProjectActionsMenu({
 	disabled: boolean;
 	onRemove: () => void;
 }): React.ReactElement {
+	const isMobile = useIsMobile();
 	return (
 		<DropdownMenu.Root>
 			<Tooltip content="Project actions">
 				<DropdownMenu.Trigger asChild>
 					<Button
 						variant="ghost"
-						size="md"
+						size="sm"
+						className={cn("w-7 shrink-0", isMobile && "min-w-[44px] min-h-[44px]")}
 						icon={isRemoving ? <Spinner size={12} /> : <Ellipsis size={14} />}
 						disabled={disabled}
 						aria-label="Project actions"

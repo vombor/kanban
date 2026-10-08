@@ -89,26 +89,15 @@ const TWO_PROJECTS: RuntimeProjectSummary[] = [
 const AGENT_LABELS: Record<string, string> = { alpha: "Claude Code", beta: "Codex" };
 
 /** The panel with App.tsx's project and agent state: one board and one Kanban Agent per project. */
-function SwitchingPanel({
-	initialAgentOpen,
-	onSelectProject,
-}: {
-	initialAgentOpen: boolean;
-	onSelectProject?: (projectId: string) => void;
-}): React.ReactElement {
+function SwitchingPanel({ onSelectProject }: { onSelectProject?: (projectId: string) => void }): React.ReactElement {
 	const [currentProjectId, setCurrentProjectId] = useState("alpha");
-	const [isAgentOpen, setIsAgentOpen] = useState(initialAgentOpen);
 	return (
 		<TooltipProvider>
 			<PanelWithLayout
 				projects={TWO_PROJECTS}
 				currentProjectId={currentProjectId}
 				removingProjectId={null}
-				isAgentOpen={isAgentOpen}
-				onAgentOpenChange={setIsAgentOpen}
-				canShowAgentSection
 				agentSectionContent={<div data-testid="agent-session">{`agent session of ${currentProjectId}`}</div>}
-				selectedAgentId={null}
 				agentLabel={AGENT_LABELS[currentProjectId]}
 				onSelectProject={(projectId) => {
 					setCurrentProjectId(projectId);
@@ -140,16 +129,6 @@ function getResizeHandle(container: HTMLElement): HTMLElement {
 
 function getButtonByTextOrNull(container: HTMLElement, text: string): HTMLButtonElement | null {
 	return Array.from(container.querySelectorAll("button")).find((candidate) => candidate.textContent === text) ?? null;
-}
-
-function getButtonContaining(container: HTMLElement, text: string): HTMLButtonElement {
-	const button = Array.from(container.querySelectorAll("button")).find((candidate) =>
-		candidate.textContent?.includes(text),
-	);
-	if (!(button instanceof HTMLButtonElement)) {
-		throw new Error(`Button containing "${text}" was not rendered`);
-	}
-	return button;
 }
 
 function getButtonByText(container: HTMLElement, text: string): HTMLButtonElement {
@@ -217,10 +196,6 @@ describe("ProjectNavigationPanel width persistence", () => {
 						projects={PROJECTS}
 						currentProjectId="project-1"
 						removingProjectId={null}
-						isAgentOpen={false}
-						onAgentOpenChange={() => {}}
-						canShowAgentSection
-						selectedAgentId={null}
 						onSelectProject={() => {}}
 						onRemoveProject={async () => true}
 						onAddProject={() => {}}
@@ -248,10 +223,6 @@ describe("ProjectNavigationPanel width persistence", () => {
 						projects={PROJECTS}
 						currentProjectId="project-1"
 						removingProjectId={null}
-						isAgentOpen={false}
-						onAgentOpenChange={() => {}}
-						canShowAgentSection
-						selectedAgentId={null}
 						onSelectProject={() => {}}
 						onRemoveProject={async () => true}
 					/>
@@ -315,102 +286,86 @@ describe("ProjectNavigationPanel width persistence", () => {
 		expect(container.textContent).not.toContain("Report issue");
 	});
 
-	it("starts with the tips collapsed and remembers the open state; the shortcuts are inside", () => {
-		renderPanel({ isAgentOpen: true, selectedAgentId: "droid" });
-		const tipsToggle = getButtonByText(container, "Tips");
-		expect(tipsToggle.getAttribute("aria-expanded")).toBe("false");
-		expect(container.textContent).not.toContain("Create tasks.");
-		expect(container.textContent).not.toContain("Start backlog tasks");
-		expect(localStorage.getItem(LocalStorageKey.SidebarTipsExpanded)).toBeNull();
-
-		act(() => {
-			tipsToggle.click();
-		});
-		expect(tipsToggle.getAttribute("aria-expanded")).toBe("true");
-		const tipsContent = document.getElementById(tipsToggle.getAttribute("aria-controls") ?? "");
-		expect(tipsContent?.textContent).toContain("Create tasks.");
-		expect(tipsContent?.querySelector('[aria-label="Keyboard shortcuts"]')?.textContent).toContain(
-			"Start backlog tasks",
-		);
-		expect(localStorage.getItem(LocalStorageKey.SidebarTipsExpanded)).toBe("true");
-
-		act(() => {
-			root.unmount();
-		});
-		root = createRoot(container);
-		renderPanel({ isAgentOpen: true, selectedAgentId: "droid" });
-		expect(getButtonByText(container, "Tips").getAttribute("aria-expanded")).toBe("true");
-
-		act(() => {
-			getButtonByText(container, "Tips").click();
-		});
-		expect(getButtonByText(container, "Tips").getAttribute("aria-expanded")).toBe("false");
-		expect(localStorage.getItem(LocalStorageKey.SidebarTipsExpanded)).toBe("false");
-	});
-
-	it("keeps the shortcuts reachable before the agent is opened", () => {
+	it("has no Kanban wordmark or version: the Project row is the top of the sidebar, at the top bar's height", () => {
 		renderPanel();
-		act(() => {
-			getButtonByText(container, "Tips").click();
-		});
-		expect(container.querySelector('[aria-label="Keyboard shortcuts"]')?.textContent).toContain("New task");
-		expect(container.textContent).not.toContain("Create tasks.");
+		const sidebar = getSidebar(container);
+		expect(sidebar.textContent).not.toContain("vtest");
+		expect(sidebar.textContent?.startsWith("Project:")).toBe(true);
+		const row = container.querySelector('button[aria-label="Project"]')?.parentElement;
+		expect(row?.className).toContain("h-10");
+		const firstRow = Array.from(sidebar.children).find((child) => child.getAttribute("role") !== "separator");
+		expect(firstRow).toBe(row);
+		expect(row?.nextElementSibling?.getAttribute("data-testid")).toBe("kanban-agent-header");
 	});
 
-	it("shows the selected project's Kanban Agent pill below the dropdown: full width, agent name on the right", () => {
+	it("labels the project dropdown with Project: on the same row; the dropdown truncates, not the label", () => {
+		renderPanel();
+		const dropdown = container.querySelector<HTMLButtonElement>('button[aria-label="Project"]');
+		const row = dropdown?.parentElement;
+		const label = row?.firstElementChild;
+		expect(label?.textContent).toBe("Project:");
+		expect(label?.className).toContain("shrink-0");
+		expect(label?.className).toContain("text-text-secondary");
+		expect(label?.compareDocumentPosition(dropdown as Node)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+		expect(dropdown?.className).toContain("min-w-0");
+		expect(dropdown?.querySelector(".truncate")?.textContent).toBe("Kanban");
+		const actions = row?.querySelector('button[aria-label="Project actions"]');
+		const add = row?.querySelector('button[aria-label="Add project"]');
+		expect(dropdown?.compareDocumentPosition(actions as Node)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+		expect(actions?.compareDocumentPosition(add as Node)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+	});
+
+	it("keeps the tips and shortcuts out of the sidebar (they are the top bar's lightbulb now)", () => {
+		renderPanel();
+		expect(getButtonByTextOrNull(container, "Tips")).toBeNull();
+		expect(container.querySelector('[aria-label="Keyboard shortcuts"]')).toBeNull();
+		expect(container.textContent).not.toContain("Start backlog tasks");
+	});
+
+	it("shows a plain Kanban Agent header above the selected project's agent: not a toggle, agent name on the right", () => {
 		act(() => {
-			root.render(<SwitchingPanel initialAgentOpen={false} />);
+			root.render(<SwitchingPanel />);
 		});
-		const pill = getButtonContaining(container, "Kanban Agent");
-		const dropdown = container.querySelector('button[aria-label="Project"]');
-		expect(dropdown?.compareDocumentPosition(pill)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-		expect(pill.className).toContain("w-full");
-		expect(pill.getAttribute("aria-pressed")).toBe("false");
-		const agentName = pill.querySelector('[data-testid="kanban-agent-name"]');
+		const header = container.querySelector<HTMLElement>('[data-testid="kanban-agent-header"]');
+		expect(header?.tagName.toLowerCase()).toBe("div");
+		expect(header?.textContent).toContain("Kanban Agent");
+		expect(header?.querySelector("button")).toBeNull();
+		expect(header?.hasAttribute("aria-pressed")).toBe(false);
+		expect(header?.className).toContain("border-b");
+		expect(header?.className).not.toMatch(/\bbg-/);
+		expect(
+			Array.from(container.querySelectorAll("button")).some((button) =>
+				button.textContent?.includes("Kanban Agent"),
+			),
+		).toBe(false);
+		const agentName = header?.querySelector('[data-testid="kanban-agent-name"]');
 		expect(agentName?.textContent).toBe("Claude Code");
 		expect(agentName?.className).toContain("ml-auto");
-		expect(pill.lastElementChild).toBe(agentName);
-		expect(container.querySelector('[data-testid="agent-session"]')).toBeNull();
+		expect(agentName?.className).toContain("text-text-secondary");
+		expect(header?.lastElementChild).toBe(agentName);
+
+		const dropdown = container.querySelector('button[aria-label="Project"]');
+		const session = container.querySelector('[data-testid="agent-session"]');
+		expect(dropdown?.compareDocumentPosition(header as Node)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+		expect(header?.compareDocumentPosition(session as Node)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+		expect(session?.textContent).toBe("agent session of alpha");
 
 		act(() => {
-			pill.click();
+			header?.click();
 		});
-		expect(pill.getAttribute("aria-pressed")).toBe("true");
 		expect(container.querySelector('[data-testid="agent-session"]')?.textContent).toBe("agent session of alpha");
 	});
 
-	it("toggles the tips on the pill's second click while the agent stays open", () => {
-		act(() => {
-			root.render(<SwitchingPanel initialAgentOpen={false} />);
-		});
-		const pill = getButtonContaining(container, "Kanban Agent");
-		const tipsToggle = getButtonByText(container, "Tips");
-		act(() => {
-			pill.click();
-		});
-		expect(tipsToggle.getAttribute("aria-expanded")).toBe("false");
-		expect(pill.getAttribute("title")).toBe("Show tips");
-
-		act(() => {
-			pill.click();
-		});
-		expect(tipsToggle.getAttribute("aria-expanded")).toBe("true");
-		expect(container.querySelector('[aria-label="Keyboard shortcuts"]')).not.toBeNull();
-		expect(pill.getAttribute("aria-pressed")).toBe("true");
-		expect(container.querySelector('[data-testid="agent-session"]')?.textContent).toBe("agent session of alpha");
-		expect(pill.getAttribute("title")).toBe("Hide tips");
-
-		act(() => {
-			pill.click();
-		});
-		expect(tipsToggle.getAttribute("aria-expanded")).toBe("false");
-		expect(container.querySelector('[data-testid="agent-session"]')).not.toBeNull();
+	it("asks for a project in the agent panel when there is no agent session", () => {
+		renderPanel({ currentProjectId: null });
+		expect(container.querySelector('[data-testid="kanban-agent-header"]')).not.toBeNull();
+		expect(container.textContent).toContain("Select a project to use the agent.");
 	});
 
 	it("switches the board and the Kanban Agent together when another project is picked", async () => {
 		const onSelectProject = vi.fn();
 		act(() => {
-			root.render(<SwitchingPanel initialAgentOpen onSelectProject={onSelectProject} />);
+			root.render(<SwitchingPanel onSelectProject={onSelectProject} />);
 		});
 		expect(container.querySelector('[data-testid="agent-session"]')?.textContent).toBe("agent session of alpha");
 

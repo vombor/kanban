@@ -83,7 +83,6 @@ export default function App(): ReactElement {
 	const [canPersistWorkspaceState, setCanPersistWorkspaceState] = useState(false);
 	const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 	const [settingsInitialSection, setSettingsInitialSection] = useState<RuntimeSettingsSection | null>(null);
-	const [isHomeAgentOpen, setIsHomeAgentOpen] = useState(false);
 	const [isClearTrashDialogOpen, setIsClearTrashDialogOpen] = useState(false);
 	const [isGitHistoryOpen, setIsGitHistoryOpen] = useState(false);
 	const [pendingTaskStartAfterEditId, setPendingTaskStartAfterEditId] = useState<string | null>(null);
@@ -756,11 +755,7 @@ export default function App(): ReactElement {
 							isLoadingProjects={isProjectListLoading}
 							currentProjectId={navigationCurrentProjectId}
 							removingProjectId={removingProjectId}
-							isAgentOpen={isHomeAgentOpen}
-							onAgentOpenChange={setIsHomeAgentOpen}
-							canShowAgentSection={!hasNoProjects && Boolean(currentProjectId)}
 							agentSectionContent={homeSidebarAgentPanel}
-							selectedAgentId={settingsRuntimeProjectConfig?.selectedAgentId ?? null}
 							agentLabel={isProjectSwitching ? null : getSelectedAgentLabel(runtimeProjectConfig)}
 							onSelectProject={(projectId) => {
 								void handleSelectProject(projectId);
@@ -823,6 +818,7 @@ export default function App(): ReactElement {
 							onToggleGitHistory={hasNoProjects ? undefined : handleToggleGitHistory}
 							isGitHistoryOpen={isGitHistoryOpen}
 							hideProjectDependentActions={shouldHideProjectDependentTopBarActions}
+							showAgentHints={Boolean(settingsRuntimeProjectConfig?.selectedAgentId)}
 						/>
 						<div className="relative flex flex-1 min-h-0 min-w-0 overflow-hidden">
 							<div

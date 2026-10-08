@@ -1,7 +1,10 @@
 import * as Collapsible from "@radix-ui/react-collapsible";
-import { ChevronDown, ChevronRight, ChevronUp, Lightbulb } from "lucide-react";
+import * as RadixPopover from "@radix-ui/react-popover";
+import { ChevronDown, ChevronUp, Lightbulb } from "lucide-react";
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
+import { Tooltip } from "@/components/ui/tooltip";
 import { isMacPlatform, modifierKeyLabel } from "@/utils/platform";
 
 const TERMINAL_AGENT_HINTS: readonly { label: string; hint: string }[] = [
@@ -29,33 +32,47 @@ const MORE_SHORTCUTS = [
 	{ keys: ["Esc"], label: "Close / back" },
 ];
 
+const TIPS_LABEL = "Tips & shortcuts";
+
 /**
- * The sidebar's collapsible Tips section below the Kanban Agent pill: the agent tips and the keyboard shortcuts.
- * Collapsed by default; the caller keeps the open state (the pill's second click toggles it too).
+ * The top bar's lightbulb button (left of the settings cog): a popover with the agent tips and the keyboard shortcuts.
+ * Radix Popover moves focus into it and closes it on Esc or an outside click.
  */
-export function SidebarTipsSection({
-	open,
-	onOpenChange,
+export function TipsPopover({
 	showAgentHints,
+	className,
 }: {
-	open: boolean;
-	onOpenChange: (open: boolean) => void;
 	showAgentHints: boolean;
+	className?: string;
 }): React.ReactElement {
 	return (
-		<Collapsible.Root open={open} onOpenChange={onOpenChange} className="shrink-0 px-3">
-			<Collapsible.Trigger asChild>
-				<button
-					type="button"
-					className="flex w-full cursor-pointer items-center gap-1 rounded-sm border-none bg-transparent px-1 py-1 text-[11px] font-medium text-text-secondary outline-none hover:text-text-primary focus-visible:outline focus-visible:outline-1 focus-visible:outline-border-focus"
+		<RadixPopover.Root>
+			<Tooltip side="bottom" content={TIPS_LABEL}>
+				<RadixPopover.Trigger asChild>
+					<Button
+						variant="ghost"
+						size="sm"
+						icon={<Lightbulb size={16} />}
+						aria-label={TIPS_LABEL}
+						data-testid="open-tips-button"
+						className={className}
+					/>
+				</RadixPopover.Trigger>
+			</Tooltip>
+			<RadixPopover.Portal>
+				<RadixPopover.Content
+					side="bottom"
+					align="end"
+					sideOffset={4}
+					collisionPadding={8}
+					aria-label={TIPS_LABEL}
+					className="z-50 flex w-72 max-w-[calc(100vw-16px)] flex-col gap-2 rounded-md border border-border-bright bg-surface-1 px-3 py-2.5 shadow-xl outline-none"
+					style={{ animation: "kb-tooltip-show 100ms ease" }}
 				>
-					{open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-					<Lightbulb size={11} className="text-status-gold" />
-					Tips
-				</button>
-			</Collapsible.Trigger>
-			<Collapsible.Content>
-				<div className="mb-1 flex flex-col gap-2 rounded-md border border-border bg-surface-2/60 px-3 py-2">
+					<div className="flex items-center gap-1.5 text-xs font-semibold text-text-primary">
+						<Lightbulb size={12} className="text-status-gold" />
+						{TIPS_LABEL}
+					</div>
 					{showAgentHints ? (
 						<ul className="m-0 list-none space-y-1 pl-0">
 							{TERMINAL_AGENT_HINTS.map((item) => (
@@ -69,9 +86,9 @@ export function SidebarTipsSection({
 						</ul>
 					) : null}
 					<KeyboardShortcuts />
-				</div>
-			</Collapsible.Content>
-		</Collapsible.Root>
+				</RadixPopover.Content>
+			</RadixPopover.Portal>
+		</RadixPopover.Root>
 	);
 }
 

@@ -36,7 +36,7 @@ export function ProjectSwitcher({
 				aria-label="Project"
 				title={currentProject?.name}
 				className={cn(
-					"flex h-8 min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md border border-border bg-surface-2 px-2.5",
+					"flex h-8 min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md border border-border bg-surface-2 px-2",
 					"text-left text-sm font-medium text-text-primary outline-none hover:bg-surface-3",
 					"focus-visible:border-border-focus data-[state=open]:border-border-focus",
 					"disabled:cursor-default disabled:opacity-60",

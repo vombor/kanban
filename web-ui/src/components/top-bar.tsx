@@ -22,6 +22,7 @@ import {
 	RUNTIME_SHORTCUT_ICON_OPTIONS,
 	type RuntimeShortcutPickerIconId,
 } from "@/components/shared/runtime-shortcut-icons";
+import { TipsPopover } from "@/components/tips-popover";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
 import { Dialog, DialogBody, DialogFooter, DialogHeader } from "@/components/ui/dialog";
@@ -305,6 +306,7 @@ export function TopBar({
 	onRunShortcut,
 	onCreateFirstShortcut,
 	hideProjectDependentActions = false,
+	showAgentHints = false,
 }: {
 	onToggleSidebar?: () => void;
 	onBack?: () => void;
@@ -334,6 +336,8 @@ export function TopBar({
 	onRunShortcut?: (shortcutLabel: string) => void;
 	onCreateFirstShortcut?: (shortcut: RuntimeProjectShortcut) => Promise<CreateShortcutResult>;
 	hideProjectDependentActions?: boolean;
+	/** Whether the tips popover lists the agent tips (a project with a selected agent). */
+	showAgentHints?: boolean;
 }): React.ReactElement {
 	const isMobile = useIsMobile();
 	const displayWorkspacePath = workspacePath ? formatPathForDisplay(workspacePath) : null;
@@ -647,7 +651,8 @@ export function TopBar({
 						</>
 					) : null}
 
-					{/* Settings: always visible */}
+					{/* Tips and settings: always visible */}
+					<TipsPopover showAgentHints={showAgentHints} className={cn("ml-0.5", isMobile && MOBILE_TOUCH_TARGET)} />
 					<Button
 						variant="ghost"
 						size="sm"

@@ -27,6 +27,7 @@ interface UseReviewReadyNotificationsOptions {
 	workspacePath: string | null;
 }
 
+export const APP_TITLE = "Kanban";
 const MAX_HANDLED_READY_EVENT_KEYS = 200;
 const TAB_VISIBILITY_HEARTBEAT_INTERVAL_MS = 5000;
 
@@ -231,8 +232,8 @@ export function useReviewReadyNotifications({
 		setPendingReviewReadyNotificationCount(0);
 	}, [activeWorkspaceId]);
 
-	const baseTitle = workspaceTitle || "Kanban";
+	// The tab is always "Kanban" (the project shows in the sidebar); only the review-ready count is added.
 	const documentTitle =
-		pendingReviewReadyNotificationCount > 0 ? `(${pendingReviewReadyNotificationCount}) ${baseTitle}` : baseTitle;
+		pendingReviewReadyNotificationCount > 0 ? `(${pendingReviewReadyNotificationCount}) ${APP_TITLE}` : APP_TITLE;
 	useDocumentTitle(documentTitle);
 }
