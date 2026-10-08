@@ -685,3 +685,19 @@ of this repository is the complete record of changes.
   `--workspace-root` without the card's ids is refused (the guard cancels the tool with the reason). A Cline launch
   without a workspace id writes no notify step at all, because that would report for the daemon env's card. Cards
   running on old scripts get their own hooks at their next launch or `kanban task resume`.
+- `src/terminal/cline-turn-check.ts`, `src/terminal/cline-session-files.ts`, `src/pipeline/recovery.ts`,
+  `src/pipeline/recovery-prompts.ts`, `src/pipeline/recovery-runtime.ts`, `src/pipeline/watchdog/watchdog.ts`,
+  `src/config/pipeline-config.ts`, `src/config/cline-turn-detector-config.ts`, `src/server/process-reaper.ts`,
+  `src/terminal/agent-session-adapters.ts` (exports `CLINE_CLI_ASK_TOOL_PATTERN`), `AGENTS.md`, `docs/team/CONFIG.md`,
+  tests (silent stalls of Cline cards, foo
+  2026-10-07 22:15Z): four Cline cards sat "running" for 15 min on a tool_use with no result while their TUIs repainted.
+  The cause, a `.cline/hooks` shared through the mirrored `.cline` symlink, is fixed by `ensureCardOwnedClineDir()`
+  (entry above). As a safety net, recovery (mode `on`) now nudges a running Cline card whose session file shows no
+  progress for the new `pipeline.recovery.stallNudgeMin` (default 8). An interrupted step gets a "your last tool call
+  didn't return" note; anything else gets the usual continue. The nudge budget and escalation are those of crash
+  nudges, and the decision cause is `silent_stall`. Each further nudge needs another `stallNudgeMin` of silence, a
+  hook counts as progress, a pending ask tool is no stall, and a `run_commands` call whose command still runs (a
+  descendant of the agent or a Cline hub daemon working in the card's worktree) is never nudged. The watchdog only reports these stalls. Restart resumes are not
+  staggered further: the cards stalled on a guard cancel, not on start-up contention (`resumeGapSec` stays 20).
+  Recovery, the watchdog and the Cline turn detector now resolve `agents.cline.dataDir` the same way, as the Cline CLI
+  does (`~` expanded, `CLINE_DATA_DIR`, `CLINE_DIR/data`).

@@ -93,6 +93,7 @@ function createHarness(options: HarnessOptions = {}) {
 	const deps: RecoveryStageDependencies = {
 		locateWorktree: async (_workspacePath, entry) => `/wt/${entry.id}`,
 		readSessionDetail: async (worktreePath) => options.details?.[worktreePath] ?? null,
+		findRunningTool: async () => null,
 		canProbe: (provider) => provider === "bedrock",
 		probe: vi.fn(async () => ({ up: options.probeUp ?? true, detail: "200" })),
 		act: async (_workspaceId, action) => {

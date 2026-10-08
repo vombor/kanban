@@ -170,6 +170,10 @@ const pipelineSectionSchema = z
 				resumeGapSec: z.number().nonnegative().default(20),
 				// After a nudge, how long the agent gets to pick it up before the card is decided on again.
 				nudgeCheckSec: z.number().positive().default(120),
+				// A running Cline card whose session file shows no progress this long gets a nudge (a silent stall, foo
+				// 10/07). 8 min clears every normal step: the longest tool call in foo's session files took 195 s
+				// (team_await_runs) and run_commands returns after about 32 s.
+				stallNudgeMin: z.number().positive().default(8),
 				outage: z
 					.object({
 						probeEveryMin: z.number().positive().default(5),
@@ -189,6 +193,7 @@ const pipelineSectionSchema = z
 				hungFirstMin: 30,
 				resumeGapSec: 20,
 				nudgeCheckSec: 120,
+				stallNudgeMin: 8,
 				outage: { probeEveryMin: 5, upsToResume: 2, maxMin: 360 },
 			}),
 	})

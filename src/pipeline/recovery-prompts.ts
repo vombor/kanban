@@ -4,6 +4,7 @@
 // Ported from archive/devteam-kit:services/kanban-autoland.mjs@6da71597 (nudgeIfErrored, sendDueRetry) and
 // archive/devteam-kit:lib/resume.mjs@6da71597 (WIP_NOTE) and kit main a2b4695 lib/resume.mjs (RESUME_NOTE).
 import type { RuntimeAgentId } from "../core/api-contract";
+import type { ClineSilentStall } from "../terminal/cline-turn-check";
 import { agentContinuesConversationOnResume } from "../terminal/orchestrator-agents";
 import { OUTPUT_CAP_TOKENS, type PrematureStop } from "./recovery-detect";
 
@@ -61,6 +62,18 @@ export function buildPoisonedHistoryPrompt(cardPrompt: string, error: string, ov
 /** A crash nudge for a turn that stopped on an error that did not poison the history. */
 export function buildCrashNudgePrompt(reason: string, error: string): string {
 	return `Your previous turn stopped (${reason}${error ? `: ${error.slice(0, 200)}` : ""}). Continue the task; your work so far is in this worktree.`;
+}
+
+/**
+ * The nudge for a silent stall (recovery.ts): a step that never returned gets told so, since a plain "continue" left
+ * the agent waiting on a result that would never come; any other stall gets the usual continue.
+ */
+export function buildSilentStallPrompt(stall: Pick<ClineSilentStall, "kind" | "tools">): string {
+	if (stall.kind !== "interrupted_tool") {
+		return CONTINUE_PROMPT;
+	}
+	const tools = stall.tools.length > 0 ? ` (${stall.tools.join(", ")})` : "";
+	return `Your last tool call${tools} didn't return: it was interrupted and no result came back. Check the worktree (git status / git diff) to see whether it took effect, then re-run it or continue. Keep going until the whole task is done; only stop when you're finished.`;
 }
 
 /** The continue sent once a provider-error backoff (or an outage hold) is over. */

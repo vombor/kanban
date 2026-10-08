@@ -6,7 +6,8 @@
 //
 // The order is autoland's (archive/devteam-kit:services/kanban-autoland.mjs@6da71597 qaflowSweep, onDevReview,
 // nudgeIfErrored, providerHold, sendDueRetry, checkOutage, checkHung):
-//   in_progress: a hung model request → Esc, then the provider-error path.
+//   in_progress: a hung model request → Esc, then the provider-error path; a silent stall (the session runs but its
+//                file shows no progress for `stallNudgeMin`) → a nudge, within the nudge budget.
 //   review:      orphaned by a restart → restart recovery owns it; a live session → hold (no nudge, no QA);
 //                an outage hold → probe; a due retry → continue; then why the turn stopped:
 //                STATUS BLOCKED/NEEDS_INPUT → escalate, STATUS DONE → finished,
@@ -24,6 +25,12 @@ import type { RuntimeBoardCard, RuntimeTaskRole } from "../core/api-contract";
 import type { EffectiveModel } from "../core/effective-agent";
 import type { AgentRecoveryProfile } from "../terminal/agent-session-adapters";
 import type { ClineSessionDetail } from "../terminal/cline-session-files";
+import {
+	type ClineSilentStall,
+	describeClineSilentStall,
+	evaluateClineSilentStall,
+	getSessionProgressAt,
+} from "../terminal/cline-turn-check";
 import { getClineFinalReplyText, parseClineStatusLine } from "../terminal/cline-turn-outcome";
 import { getReviewActivityAt, isReviewSettled, type ReviewSettleSession } from "../terminal/review-settle";
 import type { PipelineSessionView } from "./engine";
@@ -43,6 +50,7 @@ import {
 	buildCrashNudgePrompt,
 	buildPoisonedHistoryPrompt,
 	buildProviderRetryPrompt,
+	buildSilentStallPrompt,
 	CONTINUE_PROMPT,
 } from "./recovery-prompts";
 import { isReworkAwaitingStart, type OpenRework, readOpenRework } from "./rework-state";
@@ -183,6 +191,11 @@ export interface RecoveryCardInput {
 	 */
 	slowFirstCall: boolean;
 	/**
+	 * A process the card's agent started (a shell tool's command) still runs in the worktree, e.g. `npm test`; set
+	 * only while a shell tool call is pending (isClineShellToolPending). Its step isn't stalled however long it takes.
+	 */
+	runningTool?: string | null;
+	/**
 	 * Premature-stop continues (an announcement, an empty reply, a rejected image) are part of the QA flow: only on
 	 * landing-`qa` workspaces. Crash nudges, provider retries, outage holds and hung cancels run on any recovery
 	 * workspace (plan §12: recovery on `default` projects continues a crashed card).
@@ -194,7 +207,7 @@ export interface RecoveryCardInput {
 	now: number;
 }
 
-export type RecoveryNudgeCause = "crash" | "poisoned" | "premature" | "retry";
+export type RecoveryNudgeCause = "crash" | "poisoned" | "premature" | "retry" | "silent_stall";
 
 export type RecoveryDecision =
 	/** Nothing for recovery to do. */
@@ -580,17 +593,16 @@ function decideInProgress(input: RecoveryCardInput): RecoveryDecision {
 		return { kind: "none", reason: "no live session with readable turns" };
 	}
 	const cancel = input.profile.cancelTurnInput;
-	if (!cancel) {
-		return { kind: "none", reason: "the agent has no input that cancels a request" };
-	}
-	const hung = detectHungRequest(detail, {
-		now,
-		hungMin: settings.hungMin,
-		hungFirstMin: settings.hungFirstMin,
-		slowFirstCall: input.slowFirstCall,
-	});
-	if (!hung) {
-		return { kind: "none", reason: "not hung" };
+	const hung = cancel
+		? detectHungRequest(detail, {
+				now,
+				hungMin: settings.hungMin,
+				hungFirstMin: settings.hungFirstMin,
+				slowFirstCall: input.slowFirstCall,
+			})
+		: null;
+	if (!cancel || !hung) {
+		return decideSilentStall(input, Boolean(cancel));
 	}
 	if (flow.hung?.dir === hung.sessionId && flow.hung.lastWrite === hung.lastWriteAt) {
 		return { kind: "none", reason: `hung request in ${hung.sessionId} already cancelled` };
@@ -608,6 +620,60 @@ function decideInProgress(input: RecoveryCardInput): RecoveryDecision {
 		followUp: hold ?? {
 			kind: "escalate",
 			reason: `hung model requests on ${label}: retries used up and no outage probe for this provider`,
+		},
+	};
+}
+
+/**
+ * A running session whose Cline file shows no progress for `stallNudgeMin` (evaluateClineSilentStall): a nudge, as
+ * many as the nudge budget allows, then an escalation. A step cut off mid-call gets told so (foo 2026-10-07: four
+ * cards sat 15 min on a tool_use with no result until a human typed "continue"). The clock restarts at every nudge
+ * (`recoverySentAt`), so each further nudge needs another `stallNudgeMin` of silence. A shell tool whose command
+ * still runs (`runningTool`: a long test run or build writes nothing to the session) is never stalled. A model
+ * request in flight (`untouched` and the file still "running") is the hung-request check's when the agent can
+ * cancel one: typing into a TUI that waits on the model doesn't help, and a slow first call may take `hungFirstMin`.
+ */
+function decideSilentStall(input: RecoveryCardInput, canCancel: boolean): RecoveryDecision {
+	const { flow, settings, now } = input;
+	const sentAt = flow.recoverySentAt ? Date.parse(flow.recoverySentAt) : Number.NaN;
+	const stall = evaluateClineSilentStall({
+		detail: input.detail,
+		kanbanProgressAt: Math.max(getSessionProgressAt(input.session) ?? 0, Number.isFinite(sentAt) ? sentAt : 0),
+		now,
+	});
+	if (!stall || stall.idleMs < settings.stallNudgeMin * 60_000) {
+		return { kind: "none", reason: "no silent stall" };
+	}
+	if (stall.kind === "interrupted_tool" && input.runningTool) {
+		return { kind: "none", reason: `the tool's command still runs (${input.runningTool})` };
+	}
+	if (stall.kind === "untouched" && stall.status === "running" && canCancel) {
+		return { kind: "none", reason: "a model request in flight: the hung-request check owns it" };
+	}
+	if (flow.recoverySentAt && now - Date.parse(flow.recoverySentAt) < settings.nudgeCheckSec * 1000) {
+		return { kind: "wait", reason: `waiting for the agent to pick up the message sent at ${flow.recoverySentAt}` };
+	}
+	return nudgeForSilentStall(input, stall);
+}
+
+function nudgeForSilentStall(input: RecoveryCardInput, stall: ClineSilentStall): RecoveryDecision {
+	const { flow, settings, now } = input;
+	const used = sinceBudget(flow.nudges, flow);
+	const label = modelLabel(input.model);
+	const what = describeClineSilentStall(stall);
+	if (used.length >= settings.maxNudges) {
+		return escalate(input, `agent keeps stalling silently (${used.length} nudges, ${label})`, [`last: ${what}`]);
+	}
+	return {
+		kind: "nudge",
+		cause: "silent_stall",
+		// Stable across evaluations (the decision log keeps a record only when it changes): no age in it.
+		reason: `silent stall: ${what}; nudge ${used.length + 1}/${settings.maxNudges} to ${label}`,
+		clear: null,
+		text: buildSilentStallPrompt(stall),
+		overflow: null,
+		patch: {
+			nudges: [...flow.nudges, { at: iso(now), reason: "silent_stall", poisoned: false, warn: what.slice(0, 200) }],
 		},
 	};
 }

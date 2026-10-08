@@ -2,11 +2,27 @@
 // Shared by the turn monitor (cline-turn-monitor.ts: ends turns Cline's TaskComplete hook missed) and session
 // sync (session-column-sync.ts: keeps an idle Cline TUI's card in Review), so both find the session file the same
 // way: the newest cline 3.x session whose cwd / workspace root is the summary's `workspacePath`, not the task id.
+// The silent-stall reader (evaluateClineSilentStall) is shared the same way by recovery (which nudges) and the
+// watchdog (which only reports).
 import type { ClineTurnDetectorSettings } from "../config/cline-turn-detector-config";
 import type { RuntimeTaskSessionSummary } from "../core/api-contract";
 import { isHomeAgentSessionId } from "../core/home-agent-session";
-import { type ClineSessionFileReader, getClineSessionsPath } from "./cline-session-files";
-import { type ClineTurnEndDecision, evaluateClineTurnEnd } from "./cline-turn-outcome";
+import { CLINE_CLI_ASK_TOOL_PATTERN } from "./agent-session-adapters";
+import {
+	type ClineSessionDetail,
+	type ClineSessionDetailMessage,
+	type ClineSessionDetailReader,
+	type ClineSessionFileReader,
+	getClineSessionsPath,
+} from "./cline-session-files";
+import {
+	type ClineTurnEndDecision,
+	evaluateClineTurnEnd,
+	getClineProviderErrorText,
+	hasClineStatusLine,
+	isClineNoImagesRejection,
+	parseClineQaFinalLine,
+} from "./cline-turn-outcome";
 
 export type EndedClineTurn = Extract<ClineTurnEndDecision, { ended: true }>;
 
@@ -53,4 +69,161 @@ export async function readClineTurnEnd(input: ReadClineTurnEndInput): Promise<Cl
 export function describeClineTurnEnd(decision: EndedClineTurn): string {
 	const status = decision.statusLine ? ` STATUS: ${decision.statusLine.kind}` : "";
 	return `${decision.reason}${status}${decision.afterBounce ? " after a bounce to running" : ""}`;
+}
+
+/**
+ * Why a card whose Kanban session is "running" makes no progress in its Cline session file (foo 2026-10-07 22:15Z:
+ * four cards sat 15 min on a tool_use whose result never came, while their TUIs repainted):
+ *   - `interrupted_tool`: the last message is the agent's tool call and no result followed (the step was cut off);
+ *   - `no_status_reply`: the last message is a final reply with no STATUS line (nor any other turn end);
+ *   - `untouched`: the agent owes the reply (the last message is the prompt or a tool result, or there is none).
+ * A pending question to the user (an ask tool) is no stall. `status` is the session file's own (`running` / `idle`): an `untouched` session still "running" is a model
+ * request in flight, which recovery's hung-request check (Esc, `hungMin`) owns.
+ */
+export type ClineSilentStallKind = "interrupted_tool" | "no_status_reply" | "untouched";
+
+export interface ClineSilentStall {
+	kind: ClineSilentStallKind;
+	sessionId: string;
+	status: string | null;
+	/** The newest progress: a message, a write in the session dir, or the Kanban turn's start, whichever is newest. */
+	lastProgressAt: number;
+	idleMs: number;
+	/** The interrupted tool calls' names. */
+	tools: string[];
+}
+
+export interface ClineSilentStallInput {
+	detail: ClineSessionDetail | null;
+	/**
+	 * Kanban's own newest sign of the run (getSessionProgressAt: its start, last switch to "running", last hook; plus,
+	 * for recovery, its last nudge): the stall clock never starts before it.
+	 */
+	kanbanProgressAt: number | null;
+	now: number;
+}
+
+const ASK_TOOL_PATTERN = new RegExp(`^(?:${CLINE_CLI_ASK_TOOL_PATTERN})$`, "u");
+/** Cline's shell tool: its command runs as a child process, and nothing is written to the session while it runs. */
+const SHELL_TOOLS: ReadonlySet<string> = new Set(["run_commands"]);
+
+/** Whether a pending tool call runs a shell command (a child process to look for, see findAgentToolProcess). */
+export function isClineShellTool(name: string): boolean {
+	return SHELL_TOOLS.has(name);
+}
+
+/** Whether the session's last message is a shell tool call still waiting for its result. */
+export function isClineShellToolPending(detail: ClineSessionDetail | null): boolean {
+	const last = detail?.messages.at(-1);
+	return (
+		last?.role === "assistant" &&
+		last.content.some((block) => block.type === "tool_use" && isClineShellTool(block.name ?? ""))
+	);
+}
+
+function isTurnEndReply(text: string): boolean {
+	return (
+		hasClineStatusLine(text) ||
+		parseClineQaFinalLine(text) !== null ||
+		isClineNoImagesRejection(text) ||
+		getClineProviderErrorText(text) !== null
+	);
+}
+
+function classifyLastMessage(
+	last: ClineSessionDetailMessage | undefined,
+): { kind: ClineSilentStallKind; tools: string[] } | null {
+	if (last?.role !== "assistant") {
+		return { kind: "untouched", tools: [] };
+	}
+	const tools = last.content.filter((block) => block.type === "tool_use");
+	if (tools.length > 0) {
+		const names = tools.map((block) => block.name ?? "tool");
+		// A question to the user (or plan mode's reply) waits on a person, not on a tool: not a stall.
+		return names.every((name) => ASK_TOOL_PATTERN.test(name)) ? null : { kind: "interrupted_tool", tools: names };
+	}
+	const text = last.content
+		.filter((block) => block.type === "text")
+		.map((block) => block.text ?? "")
+		.join("\n");
+	// A STATUS line, a QA final line or a provider rejection ends the turn: the turn detector's, not a stall.
+	return isTurnEndReply(text) ? null : { kind: "no_status_reply", tools: [] };
+}
+
+/**
+ * The silent stall of a card's newest Cline session, however long it has been quiet (the caller compares `idleMs`
+ * with its limit), or null when the session shows no stall: no session, a finished or failed session file, or a
+ * final reply that ends the turn. Progress is a new message or a write in the session dir (a teammate's messages
+ * included); Kanban's PTY output never counts, since an idle TUI repaints.
+ */
+export function evaluateClineSilentStall(input: ClineSilentStallInput): ClineSilentStall | null {
+	const { detail, now } = input;
+	if (!detail || (detail.snapshot.status !== "running" && detail.snapshot.status !== "idle")) {
+		return null;
+	}
+	const last = detail.messages.at(-1);
+	const classified = classifyLastMessage(last);
+	if (!classified) {
+		return null;
+	}
+	const lastProgressAt = Math.max(
+		detail.lastWriteAt ?? 0,
+		detail.snapshot.messagesWrittenAt ?? 0,
+		last?.ts ?? 0,
+		input.kanbanProgressAt ?? 0,
+	);
+	if (lastProgressAt <= 0) {
+		return null;
+	}
+	return {
+		...classified,
+		sessionId: detail.snapshot.sessionId,
+		status: detail.snapshot.status,
+		lastProgressAt,
+		idleMs: Math.max(0, now - lastProgressAt),
+	};
+}
+
+export interface ReadClineSilentStallInput {
+	reader: ClineSessionDetailReader;
+	settings: Pick<ClineTurnDetectorSettings, "dataDir">;
+	workspacePath: string;
+	kanbanProgressAt: number | null;
+	now: number;
+}
+
+/** evaluateClineSilentStall on the newest session of `workspacePath` (a card's worktree). */
+export async function readClineSilentStall(input: ReadClineSilentStallInput): Promise<ClineSilentStall | null> {
+	return evaluateClineSilentStall({
+		detail: await input.reader.readLatestSessionDetail(
+			getClineSessionsPath(input.settings.dataDir),
+			input.workspacePath,
+		),
+		kanbanProgressAt: input.kanbanProgressAt,
+		now: input.now,
+	});
+}
+
+/**
+ * Kanban's newest sign of a session's run, for the stall clock: its start, its last switch to "running" or its last
+ * hook (a hook is the agent acting; PTY output is not, since an idle TUI repaints).
+ */
+export function getSessionProgressAt(
+	session: Partial<Pick<RuntimeTaskSessionSummary, "startedAt" | "stateChangedAt" | "lastHookAt">> | null,
+): number | null {
+	const times = [session?.startedAt, session?.stateChangedAt, session?.lastHookAt].filter(
+		(time): time is number => typeof time === "number" && Number.isFinite(time),
+	);
+	return times.length > 0 ? Math.max(...times) : null;
+}
+
+/** For logs: "a tool call (apply_patch) with no result, silent since <iso> (session 1791…, idle)". Stable while it lasts. */
+export function describeClineSilentStall(stall: ClineSilentStall): string {
+	const what =
+		stall.kind === "interrupted_tool"
+			? `a tool call (${stall.tools.join(", ")}) with no result`
+			: stall.kind === "no_status_reply"
+				? "a reply with no STATUS line"
+				: "no reply to the last message";
+	return `${what}, silent since ${new Date(stall.lastProgressAt).toISOString()} (session ${stall.sessionId}, ${stall.status ?? "no status"})`;
 }

@@ -14,6 +14,7 @@ import {
 	recoveryRedoReason,
 	sinceBudget,
 } from "../../../src/pipeline/recovery";
+import { CONTINUE_PROMPT } from "../../../src/pipeline/recovery-prompts";
 import type { ClineSessionDetail, ClineSessionDetailMessage } from "../../../src/terminal/cline-session-files";
 
 const NOW = Date.parse("2026-10-07T12:00:00.000Z");
@@ -385,8 +386,8 @@ describe("decideRecovery: In Progress cards (hung requests, 0261b20)", () => {
 		expect(decision.cause).toBe("retry");
 	});
 
-	it("does nothing without a cancel input", () => {
-		expectKind(
+	it("without a cancel input, a silent request gets the silent-stall continue instead of an Esc", () => {
+		const decision = expectKind(
 			decideRecovery(
 				input({
 					column: "in_progress",
@@ -395,8 +396,9 @@ describe("decideRecovery: In Progress cards (hung requests, 0261b20)", () => {
 					profile: { clearContextCommand: "/clear", cancelTurnInput: null },
 				}),
 			),
-			"none",
+			"nudge",
 		);
+		expect(decision).toMatchObject({ cause: "silent_stall", text: CONTINUE_PROMPT });
 	});
 });
 

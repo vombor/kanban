@@ -22,7 +22,9 @@ import { realpathSync } from "node:fs";
 import type { RuntimeProcessReapAction } from "../core/api-contract";
 import { isPathWithinRoot } from "../workspace/path-sandbox";
 import {
+	createProcProcessTableReader,
 	getTcpPort,
+	isProcessTableSupported,
 	isTcpEstablished,
 	isTcpListening,
 	type ProcessEntry,
@@ -33,7 +35,7 @@ const DEFAULT_GRACE_MS = 5_000;
 const DEFAULT_POLL_MS = 200;
 const KILL_WAIT_MS = 1_000;
 const ALWAYS_PROTECTED_PIDS = [0, 1, 2];
-const CLINE_HUB_DAEMON_FLAG = "--cline-hub-daemon";
+export const CLINE_HUB_DAEMON_FLAG = "--cline-hub-daemon";
 
 export interface ProcessReaperDependencies {
 	/** Null where the process table can't be read (not Linux): every call is a no-op. */
@@ -142,6 +144,50 @@ export function collectDescendantPids(entries: readonly ProcessEntry[], rootPids
 		queue.push(...(childrenByParent.get(pid) ?? []));
 	}
 	return result;
+}
+
+/**
+ * A live process the agent started that works in the card's worktree: a descendant of the agent's own process or of
+ * a Cline hub daemon (which runs every hub-hosted card's tools), whose cwd or exe is inside `worktreePaths`. Recovery
+ * asks this while a shell tool call is pending, so a long `npm test` isn't taken for a stall. A server the agent
+ * detached (nohup/setsid) is reparented away from both and never counts, or it would hold the nudge for good.
+ */
+export function findAgentToolProcess(
+	entries: readonly ProcessEntry[],
+	input: { worktreePaths: readonly string[]; agentPid: number | null },
+): ProcessEntry | null {
+	const roots = entries
+		.filter((entry) => entry.pid === input.agentPid || entry.command.includes(CLINE_HUB_DAEMON_FLAG))
+		.map((entry) => entry.pid);
+	if (roots.length === 0) {
+		return null;
+	}
+	const rootSet = new Set(roots);
+	const descendants = collectDescendantPids(entries, roots);
+	const paths = expandPathVariants(input.worktreePaths);
+	return (
+		entries.find(
+			(entry) =>
+				descendants.has(entry.pid) &&
+				!rootSet.has(entry.pid) &&
+				entry.state !== "Z" &&
+				!entry.kernelThread &&
+				isProcessInPaths(entry, paths),
+		) ?? null
+	);
+}
+
+/** findAgentToolProcess on the live process table, described for logs; null where /proc can't be read. */
+export type AgentToolProcessFinder = (worktreePath: string, agentPid: number | null) => Promise<string | null>;
+
+export function createAgentToolProcessFinder(
+	reader: ProcessTableReader | null = isProcessTableSupported() ? createProcProcessTableReader() : null,
+): AgentToolProcessFinder {
+	return async (worktreePath, agentPid) => {
+		const entries = await reader?.list().catch(() => null);
+		const entry = entries ? findAgentToolProcess(entries, { worktreePaths: [worktreePath], agentPid }) : null;
+		return entry ? `pid ${entry.pid}: ${entry.command.slice(0, 120)}` : null;
+	};
 }
 
 export function formatRss(bytes: number): string {

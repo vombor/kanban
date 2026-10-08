@@ -283,7 +283,8 @@ function buildClineGuardCommandParts(guardrails: TaskGuardrails): string[] {
 function encodeGuardPolicy(policy: CommandGuardPolicy): string {
 	return Buffer.from(JSON.stringify(policy), "utf8").toString("base64");
 }
-const CLINE_CLI_ASK_TOOL_PATTERN = "ask_followup_question|ask_question|plan_mode_respond|submit_and_exit";
+/** Cline's tools that wait on the user (the hooks move the card to Review for them; a pending one is no stall). */
+export const CLINE_CLI_ASK_TOOL_PATTERN = "ask_followup_question|ask_question|plan_mode_respond|submit_and_exit";
 
 /** The card a Cline hook script belongs to: its ids and the worktree its session works in (the launch cwd). */
 interface ClineHookCard extends HookContext {

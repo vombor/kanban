@@ -22,6 +22,8 @@ export interface WatchdogHarnessOptions {
 	headlessPid?: number;
 	/** Per-kind answers; `deliverInput` defaults to delivered. */
 	results?: Partial<{ [Kind in WatchdogActionRequest["kind"]]: WatchdogActionResults[Kind] }>;
+	/** A process the agent started still running in a worktree (default: none; never the real /proc). */
+	findRunningTool?: (worktreePath: string, agentPid: number | null) => Promise<string | null>;
 }
 
 export function deliveryResult(status: RuntimeTaskInputDeliveryResponse["status"]): RuntimeTaskInputDeliveryResponse {
@@ -82,6 +84,7 @@ export function createWatchdogHarness(options: WatchdogHarnessOptions = {}) {
 		headlessPid: async () => headlessPid,
 		startHeadlessRun,
 		probeModel: async () => false,
+		findRunningTool: async (worktreePath, agentPid) => options.findRunningTool?.(worktreePath, agentPid) ?? null,
 		isTrusted: async () => true,
 		now: () => now,
 		log,

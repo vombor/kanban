@@ -5,7 +5,8 @@ import { stat } from "node:fs/promises";
 import { readPipelineConfig } from "../config/pipeline-config";
 import { canProbeProvider, probeModel } from "../models/model-probe";
 import { loadModelProbeDependencies } from "../models/model-probe-setup";
-import { getClineDataPath, getPipelineStatePath } from "../state/kanban-home";
+import { createAgentToolProcessFinder } from "../server/process-reaper";
+import { getClineDataDirPath, getPipelineStatePath } from "../state/kanban-home";
 import { createClineSessionFileReader, getClineSessionsPath } from "../terminal/cline-session-files";
 import { runGit } from "../workspace/git-utils";
 import { getTaskWorkspacePathInfo } from "../workspace/task-worktree";
@@ -77,7 +78,7 @@ export function createWorkerRecoveryStage(options: {
 	const reader = createClineSessionFileReader();
 	const sessionsPath = async (): Promise<string> => {
 		const { config } = await readPipelineConfig();
-		return getClineSessionsPath(config.agents.cline.dataDir ?? getClineDataPath());
+		return getClineSessionsPath(getClineDataDirPath(config.agents.cline.dataDir));
 	};
 	return createRecoveryStage({
 		locateWorktree: async (workspacePath, card) => {
@@ -90,6 +91,7 @@ export function createWorkerRecoveryStage(options: {
 		},
 		readSessionDetail: async (worktreePath) =>
 			await reader.readLatestSessionDetail(await sessionsPath(), worktreePath),
+		findRunningTool: createAgentToolProcessFinder(),
 		canProbe: canProbeProvider,
 		probe: async (target) => {
 			const { config } = await readPipelineConfig();

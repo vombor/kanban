@@ -76,6 +76,7 @@ describe("pipeline worker: a turn recovery redoes", () => {
 				createRecoveryStage({
 					locateWorktree: async (_workspacePath, card) => `/wt/${card.id}`,
 					readSessionDetail: async () => detail,
+					findRunningTool: async () => null,
 					canProbe: () => false,
 					probe: async () => ({ up: true, detail: "200" }),
 					act: async (_workspaceId, action) => {

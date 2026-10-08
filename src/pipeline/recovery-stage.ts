@@ -21,6 +21,7 @@ import type {
 import type { EffectiveModel, EffectiveModelConfig } from "../core/effective-agent";
 import { getAgentRecoveryProfile, getAgentTurnEndSource } from "../terminal/agent-session-adapters";
 import type { ClineSessionDetail } from "../terminal/cline-session-files";
+import { isClineShellToolPending } from "../terminal/cline-turn-check";
 import { evaluateClineTurnEnd } from "../terminal/cline-turn-outcome";
 import type { PipelineDecisionRecord } from "./decision-log";
 import { getRecoveryScope, type PipelineSessionView, type PipelineWorkspaceSnapshot, toEffectiveCard } from "./engine";
@@ -79,6 +80,11 @@ export interface RecoveryStageDependencies {
 	locateWorktree: (workspacePath: string, card: RuntimeBoardCard) => Promise<string | null>;
 	/** The newest Cline CLI session of a worktree. */
 	readSessionDetail: (worktreePath: string) => Promise<ClineSessionDetail | null>;
+	/**
+	 * A process the agent (`agentPid`, or a Cline hub daemon) started that still runs in the worktree, described for
+	 * the log, or null (findAgentToolProcess in process-reaper.ts). Asked only while a shell tool call is pending.
+	 */
+	findRunningTool: (worktreePath: string, agentPid: number | null) => Promise<string | null>;
 	canProbe: (provider: string | null) => boolean;
 	probe: (target: EffectiveModel) => Promise<{ up: boolean; detail: string }>;
 	act: (workspaceId: string, action: RecoveryAction) => Promise<RecoveryActionResult>;
@@ -364,13 +370,23 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 				continue;
 			}
 			const { effective } = context.effective;
+			const detail = effective.role === "dev" ? await readDetail(input, context) : null;
+			const worktree = context.session?.workspacePath ?? null;
+			const runningTool =
+				context.column === "in_progress" &&
+				context.session?.state === "running" &&
+				worktree &&
+				isClineShellToolPending(detail)
+					? await deps.findRunningTool(worktree, context.session.pid ?? null)
+					: null;
 			const decision = decideRecovery({
 				card: context.card,
 				column: context.column,
 				role: effective.role,
 				model: effective.model,
 				session: context.session,
-				detail: effective.role === "dev" ? await readDetail(input, context) : null,
+				detail,
+				runningTool,
 				readsTurnOutcome: getAgentTurnEndSource(effective.agentId) !== null,
 				profile: getAgentRecoveryProfile(effective.agentId),
 				flow,

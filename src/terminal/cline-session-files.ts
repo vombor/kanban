@@ -85,6 +85,8 @@ export interface ClineSessionDetailBlock {
 	size?: number;
 	/** A tool_result's `query` / `command` (the tool call that produced it), cut to 160 characters. */
 	query?: string;
+	/** A tool_use's tool name (`apply_patch`, `run_commands`, …). */
+	name?: string;
 }
 
 export interface ClineSessionDetailMessage {
@@ -135,7 +137,11 @@ function toDetailBlock(block: Record<string, unknown>): ClineSessionDetailBlock 
 			...(typeof query === "string" ? { query: query.slice(0, QUERY_MAX_LENGTH) } : {}),
 		};
 	}
-	return { type, ...(typeof block.text === "string" ? { text: block.text } : {}) };
+	return {
+		type,
+		...(typeof block.text === "string" ? { text: block.text } : {}),
+		...(type === "tool_use" && typeof block.name === "string" ? { name: block.name } : {}),
+	};
 }
 
 function toDetailMessage(value: unknown): ClineSessionDetailMessage | null {

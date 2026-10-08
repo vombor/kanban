@@ -14,7 +14,9 @@
 //     sees; the kanban board's cards sat on the trust dialog for an hour on 10/06, unseen, because it wasn't a kit
 //     project) and `kanban orchestrator wake` requests;
 //   - workspaces the pipeline runs on (landing mode `qa`): also stalls, escalations, PID pressure, pipeline idle, the
-//     orchestrator plan's open steps, prune-done and the feature jobs. A workspace on the `default` kit with landing
+//     orchestrator plan's open steps, prune-done and the feature jobs. A Cline card's silent stall (running, but its
+//     session file shows no progress; cline-turn-check.ts) is only reported: recovery owns its nudge, so where
+//     recovery acts the watchdog just logs it, and elsewhere it becomes an item. A workspace on the `default` kit with landing
 //     `off` gets nothing else, as the legacy kit watched only its configured projects.
 //
 // Ported from archive/devteam-kit:services/review-watch.mjs@6da71597 (tick, finishTick, triage, pruneDone) and kit
@@ -34,13 +36,24 @@ import { resolveIsolationMode, resolveReachIsolationMode } from "../../isolation
 import { KANBAN_SESSION_CREDENTIAL_ENV, KANBAN_SESSION_WORKSPACE_ENV } from "../../isolation/session-identity";
 import { createRoutingPolicy, type RoutingPolicy } from "../../kits/policy";
 import { type KitCatalog, resolveWorkspaceKit } from "../../kits/resolve-kit";
+import { type AgentToolProcessFinder, createAgentToolProcessFinder } from "../../server/process-reaper";
 import {
+	getClineDataDirPath,
 	getOrchestratorLockPath,
 	getPidPressureFlagPaths,
 	getPipelineDecisionLogPath,
 	getWatchdogWorkspacePaths,
 	type WatchdogWorkspacePaths,
 } from "../../state/kanban-home";
+import { getAgentTurnEndSource } from "../../terminal/agent-session-adapters";
+import { createClineSessionFileReader } from "../../terminal/cline-session-files";
+import {
+	type ClineSilentStall,
+	describeClineSilentStall,
+	getSessionProgressAt,
+	isClineShellTool,
+	readClineSilentStall,
+} from "../../terminal/cline-turn-check";
 import {
 	agentHooksOnPromptSubmit,
 	getAgentLabel,
@@ -49,6 +62,7 @@ import {
 } from "../../terminal/orchestrator-agents";
 import { createWorkspaceJsonLinesLog, type WorkspaceJsonLinesLog } from "../decision-log";
 import {
+	getRecoveryScope,
 	isPipelineCandidate,
 	isPipelineWorkspace,
 	type PipelineSessionView,
@@ -155,6 +169,15 @@ export interface WatchdogDependencies {
 	isTrusted?: (agentId: RuntimeAgentId, directory: string) => Promise<boolean | null>;
 	hooksOnPromptSubmit?: (agentId: RuntimeAgentId) => boolean;
 	hasHeadlessRunner?: (agentId: RuntimeAgentId) => boolean;
+	/** A card worktree's silent Cline stall (readClineSilentStall, the reader recovery decides on too). */
+	readSilentStall?: (input: {
+		worktreePath: string;
+		kanbanProgressAt: number | null;
+		dataDir: string;
+		now: number;
+	}) => Promise<ClineSilentStall | null>;
+	/** A process the agent started that still runs in the worktree (recovery asks the same, findAgentToolProcess). */
+	findRunningTool?: AgentToolProcessFinder;
 	now?: () => number;
 	log: (message: string) => void;
 }
@@ -181,6 +204,24 @@ async function readText(path: string): Promise<string> {
 	return await readFile(path, "utf8").catch(() => "");
 }
 
+/** Why recovery doesn't act on a workspace (getRecoveryScope), for an item that nothing else will act on. */
+function describeRecoveryNotActing(
+	config: ParsedPipelineConfig["config"],
+	settings: ReturnType<typeof getWorkspacePipelineSettings>,
+): string {
+	const { mode } = config.pipeline.recovery;
+	if (mode === "off") {
+		return "pipeline.recovery.mode is off";
+	}
+	if (!settings.recovery.enabled) {
+		return "recovery is disabled for this workspace (workspaces.<id>.recovery.enabled)";
+	}
+	if (mode === "report") {
+		return "pipeline.recovery.mode is report";
+	}
+	return "the workspace is a shadow workspace (pipeline.shadow)";
+}
+
 function listCards(
 	snapshot: PipelineWorkspaceSnapshot,
 ): Array<{ column: RuntimeBoardColumnId; card: RuntimeBoardCard }> {
@@ -204,6 +245,20 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 	const isTrusted = deps.isTrusted ?? isAgentWorkspaceTrusted;
 	const hooksOnPromptSubmit = deps.hooksOnPromptSubmit ?? agentHooksOnPromptSubmit;
 	const hasHeadlessRunner = deps.hasHeadlessRunner ?? hasHeadlessOrchestratorRunner;
+	const clineReader = deps.readSilentStall ? null : createClineSessionFileReader();
+	const findRunningTool = deps.findRunningTool ?? createAgentToolProcessFinder();
+	const readSilentStall =
+		deps.readSilentStall ??
+		(async (input: { worktreePath: string; kanbanProgressAt: number | null; dataDir: string; now: number }) =>
+			clineReader
+				? await readClineSilentStall({
+						reader: clineReader,
+						settings: { dataDir: input.dataDir },
+						workspacePath: input.worktreePath,
+						kanbanProgressAt: input.kanbanProgressAt,
+						now: input.now,
+					})
+				: null);
 
 	const snapshots = new Map<string, PipelineWorkspaceSnapshot>();
 	const states = new Map<string, WatchdogWorkspaceState>();
@@ -407,6 +462,65 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 					outcome: result.ok ? "acted" : "failed",
 					note: `In Progress with its session dead for ${resume.minutes} min; sent continue: ${result.status}${result.error ? ` (${result.error})` : ""}`,
 				});
+			}
+			const recoveryActs = getRecoveryScope(config, settings).act;
+			const stallNudgeMs = config.pipeline.recovery.stallNudgeMin * MIN;
+			const clineDataDir = getClineDataDirPath(config.agents.cline.dataDir);
+			for (const { column, card } of cards) {
+				const session = sessions.get(card.id);
+				if (
+					column !== "in_progress" ||
+					roles.get(card.id)?.role !== "dev" ||
+					!session?.live ||
+					session.state !== "running" ||
+					!session.workspacePath
+				) {
+					continue;
+				}
+				const { effective } = toEffectiveCard({
+					card,
+					session,
+					workspaceId,
+					selectedAgentId: snapshot.selectedAgentId,
+					agentDefaultModels: context.agentDefaultModels,
+				});
+				if (getAgentTurnEndSource(effective.agentId) !== "cline-session-files") {
+					continue;
+				}
+				const stall = await readSilentStall({
+					worktreePath: session.workspacePath,
+					kanbanProgressAt: getSessionProgressAt(session),
+					dataDir: clineDataDir,
+					now: context.now,
+				});
+				if (!stall || stall.idleMs < stallNudgeMs) {
+					continue;
+				}
+				// A long test run or build: its shell tool writes nothing to the session until it returns.
+				if (
+					stall.kind === "interrupted_tool" &&
+					stall.tools.some(isClineShellTool) &&
+					(await findRunningTool(session.workspacePath, session.pid ?? null))
+				) {
+					continue;
+				}
+				const issue = `dev card is running but its Cline session is silent: ${describeClineSilentStall(stall)}`;
+				if (recoveryActs) {
+					// One owner: recovery nudges (and escalates) it; a second "continue" from here would double it.
+					record(records, context, {
+						workspaceId,
+						taskId: card.id,
+						kind: "stall",
+						outcome: "skipped",
+						note: `${issue}; recovery owns it`,
+					});
+				} else {
+					queueIssue(
+						`${card.id}:silent-stall`,
+						card.id,
+						`${issue}; nothing nudges it (${describeRecoveryNotActing(config, settings)})`,
+					);
+				}
 			}
 			const qaLog = await readText(paths.qaLog);
 			const columns = new Map(cards.map(({ column, card }) => [card.id, column]));

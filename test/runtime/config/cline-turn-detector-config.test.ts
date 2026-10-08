@@ -10,13 +10,13 @@ import {
 	parseClineTurnDetectorSettings,
 	readClineTurnDetectorSettings,
 } from "../../../src/config/cline-turn-detector-config";
-import { getClineDataPath } from "../../../src/state/kanban-home";
+import { getClineDataDirPath } from "../../../src/state/kanban-home";
 import { createTempDir } from "../../utilities/temp-dir";
 
 describe("cline turn detector settings", () => {
 	it("defaults to report-only every 15 s on Cline's data dir", () => {
 		expect(parseClineTurnDetectorSettings({})).toEqual({
-			settings: { mode: "report", intervalSec: 15, dataDir: getClineDataPath() },
+			settings: { mode: "report", intervalSec: 15, dataDir: getClineDataDirPath() },
 			warning: null,
 		});
 		expect(getDefaultClineTurnDetectorSettings().mode).toBe("report");
@@ -35,6 +35,22 @@ describe("cline turn detector settings", () => {
 		expect(
 			parseClineTurnDetectorSettings({ agents: { cline: { turnDetector: { mode: "off" } } } }).settings.mode,
 		).toBe("off");
+	});
+
+	it("looks where the Cline CLI does, like recovery and the watchdog: CLINE_DATA_DIR, then CLINE_DIR/data", () => {
+		vi.stubEnv("CLINE_DATA_DIR", "/srv/cline-data");
+		try {
+			expect(parseClineTurnDetectorSettings({}).settings.dataDir).toBe("/srv/cline-data");
+			// An explicit agents.cline.dataDir still wins.
+			expect(parseClineTurnDetectorSettings({ agents: { cline: { dataDir: "/x/data" } } }).settings.dataDir).toBe(
+				"/x/data",
+			);
+			vi.stubEnv("CLINE_DATA_DIR", "");
+			vi.stubEnv("CLINE_DIR", "/srv/cline");
+			expect(parseClineTurnDetectorSettings({}).settings.dataDir).toBe("/srv/cline/data");
+		} finally {
+			vi.unstubAllEnvs();
+		}
 	});
 
 	it("only reports when the mode is unknown or config.json is unreadable", async () => {
