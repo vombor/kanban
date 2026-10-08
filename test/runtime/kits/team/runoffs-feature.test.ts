@@ -131,6 +131,27 @@ describe("runoffs feature", () => {
 		expect(await registry.answerOnPass("foo", { dev: runoffCard, verdict })).toBeNull();
 	});
 
+	it("a decided runoff's winner lands its next PASS; a loser's (or a bench-only card's) PASS is held, never landed", async () => {
+		const { registry, qaLog } = setup([
+			{ ...RUNOFF, decided: "2026-10-08T01:04:17.000Z", winner: "b41c8" },
+			{ name: "rerun", cards: ["d3333"], decided: "2026-10-08T01:04:17.000Z", winner: "d3333", benchOnly: true },
+		]);
+		registry.syncWorkspace("foo", teamKit());
+		const verdict = { verdict: "PASS" as const, round: 3 };
+		const answer = async (card: RuntimeBoardCard) =>
+			await registry.answerOnPass("foo", { dev: { ...createEffectiveCard({ agentId: "cline" }), card }, verdict });
+
+		// The winner's land conflicted, it was reworked (a rebase) and QA'd again: the kit answers, so it lands.
+		expect(await answer(sol)).toBeNull();
+		expect(qaLog).toEqual([]);
+		expect(await answer(luna)).toEqual({ action: "hold", group: "tier3-multiregion" });
+		expect(qaLog[0]).toContain("## RUNOFF HOLD 0789a: QA PASS r3 held, never landed");
+		expect(qaLog[0]).toContain("decided (winner b41c8)");
+		expect(qaLog[0]).toContain("kanban task release-hold --task-id 0789a --discard");
+		expect(await answer(createCard({ id: "d3333" }))).toEqual({ action: "hold", group: "rerun" });
+		expect(qaLog[1]).toContain("bench only, nothing lands");
+	});
+
 	it("keeps the rework stage's runoff groups: recorded in runoffs.json, then every racing card's PASS is held", async () => {
 		const { path, registry } = setup([]);
 		expect(registry.runoffGroups.forWorkspace("foo")).toBeNull();
@@ -452,6 +473,83 @@ describe("runoffs feature in the pipeline worker", () => {
 			"qa001",
 			"qa002",
 		]);
+	});
+
+	it("lands a decided runoff's winner after a land conflict once its rebase passes QA; a loser's PASS stays held", async () => {
+		const releaseHold = vi.fn();
+		const harness = createPipelineWorkerHarness({
+			config: { workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" } } } },
+			snapshot: (taskId) => `snap-${taskId}-rebased`,
+			createFeatures: ({ bus, appendQaLog, root }) => {
+				const path = join(root, "data", "foo", "runoffs.json");
+				mkdirSync(dirname(path), { recursive: true });
+				writeFileSync(
+					path,
+					JSON.stringify({
+						runoffs: [
+							{
+								name: "tier2-promos",
+								cards: ["d1111", "d2222"],
+								decided: "2026-10-08T01:04:17.000Z",
+								winner: "d1111",
+								actions: { d1111: "land conflict: sent back for a rebase", d2222: "discarded" },
+							},
+						],
+					}),
+				);
+				const registry = createPipelineFeatureRegistry({ bus, actions: { releaseHold, appendQaLog } });
+				registry.register(createRunoffsFeature({ getRunoffsPath: () => path }));
+				return registry;
+			},
+		});
+		harnesses.push(harness);
+		// What the decision's conflicting land left: the hold released with a conflict, the PASS recorded as a land.
+		await harness.store.update("foo", (state) => {
+			state.cards.d1111 = {
+				holdReleases: [
+					{ at: "2026-10-08T01:04:18.000Z", group: "tier2-promos", decision: "land", tag: null, conflict: true },
+				],
+			};
+			return state;
+		});
+		const send = async (columns: Partial<Record<RuntimeBoardColumnId, RuntimeBoardCard[]>>) =>
+			await harness.send(
+				createSnapshot({ workspaceId: "foo", board: createBoard(columns), selectedAgentId: "claude" }),
+			);
+		const winner = createCard({ id: "d1111", ...DEV });
+		const loser = createCard({ id: "d2222", ...DEV });
+
+		await send({ review: [winner, loser] });
+		await send({
+			backlog: [
+				createCard({ id: "qa001", role: "qa", reviewsTaskId: "d1111" }),
+				createCard({ id: "qa002", role: "qa", reviewsTaskId: "d2222" }),
+			],
+			review: [winner, loser],
+		});
+		harness.setVerdict("/tmp/kanban-qa-out/qa001", { kind: "ok", verdict });
+		harness.setVerdict("/tmp/kanban-qa-out/qa002", { kind: "ok", verdict });
+		await send({
+			review: [
+				winner,
+				loser,
+				createCard({ id: "qa001", role: "qa", reviewsTaskId: "d1111" }),
+				createCard({ id: "qa002", role: "qa", reviewsTaskId: "d2222" }),
+			],
+		});
+
+		const finished = harness.actions.filter((action) => action.kind === "finishTask");
+		expect(finished.filter((action) => action.taskId === "d1111")).toEqual([
+			expect.objectContaining({ taskId: "d1111", landing: "land", trigger: "pipeline" }),
+		]);
+		expect(finished.some((action) => action.taskId === "d2222")).toBe(false);
+		const state = await harness.store.load("foo");
+		expect(state.cards.d1111?.hold).toBeUndefined();
+		expect(state.cards.d2222?.hold).toMatchObject({ group: "tier2-promos" });
+		expect(readFileSync(harness.qaLogPath("foo"), "utf8")).toContain(
+			"RUNOFF HOLD d2222: QA PASS r1 held, never landed",
+		);
+		expect(releaseHold).not.toHaveBeenCalled();
 	});
 
 	it("does nothing on a shadow workspace", async () => {

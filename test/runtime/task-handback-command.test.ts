@@ -195,6 +195,74 @@ describe("kanban task handback", () => {
 		});
 	});
 
+	it("hands back a decided runoff's winner whose land conflicted: it goes to Review for the rebase rework", async () => {
+		await withTemporaryKanbanHome(async () => {
+			harness.store = createWorkspaceStateStore({
+				board: createBoard({ backlog: [createCard({ id: "w0001", title: "BLOCKED: Promos" })] }),
+				sessions: {},
+				revision: 1,
+			});
+			// 6f756 (10/08): the runoff's winner, its land conflicted, and its rebase rework was escalated.
+			await escalate("w0001", {
+				at: "2026-10-08T01:14:38.000Z",
+				round: 2,
+				reason: "the rework came back unchanged",
+				cause: "unchanged",
+				to: "orchestrator",
+			});
+			const runoff = {
+				name: "tier2-promos",
+				cards: ["w0001", "l0001"],
+				decided: "2026-10-08T01:04:17.000Z",
+				winner: "w0001",
+				actions: { w0001: "land conflict: sent back for a rebase", l0001: "discarded, tag preserve/l0001-m" },
+			};
+			const path = writeRunoffs([runoff]);
+
+			const result = await handbackTask({
+				cwd: "/repo",
+				taskId: "w0001",
+				note: "false escalation (#4)",
+				extraRounds: 1,
+			});
+
+			expect(result).toMatchObject({ ok: true, task: { id: "w0001", column: "review" } });
+			expect(result.message).toContain("the pipeline reworks the card's last FAIL once it is in Review");
+			expect(result).not.toHaveProperty("runoffReopened");
+			expect(findCardInBoard(harness.store.stored.board, "w0001")).toMatchObject({
+				columnId: "review",
+				card: { title: "Promos" },
+			});
+			expect(
+				readEscalationRecord(readQaflow((await createPipelineStateStore().load("ws-1")).cards.w0001)),
+			).toBeNull();
+			// The decision stands: the loser stays a loser.
+			expect((await readRunoffs(path)).runoffs).toMatchObject([{ decided: runoff.decided, winner: "w0001" }]);
+			await escalate("l0001");
+			await expect(handbackTask({ cwd: "/repo", taskId: "l0001", note: "retry", extraRounds: 1 })).rejects.toThrow(
+				"which is decided (winner w0001); handing it back would let it land too. The runoff's decision is final: discard it (kanban task done --task-id l0001 --discard), and to use its work, start a new card from its preserve/l0001-<model> tag.",
+			);
+		});
+	});
+
+	it("hands back a card of an open runoff as before, leaving the runoff open", async () => {
+		await withTemporaryKanbanHome(async () => {
+			harness.store = createWorkspaceStateStore({
+				board: createBoard({ backlog: [createCard({ id: "d1111", title: "BLOCKED: Wishlist" })] }),
+				sessions: {},
+				revision: 1,
+			});
+			await escalate("d1111");
+			const path = writeRunoffs([{ name: "tier2-coupons", cards: ["d1111", "s0001"], decided: null }]);
+
+			const result = await handbackTask({ cwd: "/repo", taskId: "d1111", note: "retry", extraRounds: 1 });
+
+			expect(result).toMatchObject({ ok: true, task: { id: "d1111", column: "review" } });
+			expect(result).not.toHaveProperty("runoffReopened");
+			expect((await readRunoffs(path)).runoffs).toMatchObject([{ name: "tier2-coupons", decided: null }]);
+		});
+	});
+
 	it("reopens a runoff decided with no winner, and says so in the QA log", async () => {
 		await withTemporaryKanbanHome(async () => {
 			harness.store = createWorkspaceStateStore({

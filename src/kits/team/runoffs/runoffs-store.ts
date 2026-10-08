@@ -108,6 +108,29 @@ export function findOpenRunoff(runoffs: readonly RunoffEntry[], taskId: string):
 }
 
 /**
+ * The decided runoff in which a card must never land, or null: one whose winner is another card, or a bench-only one
+ * (nothing lands). A decided runoff's landing winner is not barred: a land that conflicted sends it back through
+ * rework and QA, and its next PASS lands like any card's (6f756 in tier2-promos, 10/08). A runoff decided with no
+ * winner bars nothing (handback reopens it). The decision is final: a winner discarded later lets no runner-up land;
+ * a loser's work is used through a new card from its `preserve/<id>-<model>` tag.
+ */
+export function findRunoffBarringLand(runoffs: readonly RunoffEntry[], taskId: string): RunoffEntry | null {
+	return (
+		runoffs.find(
+			(runoff) =>
+				runoff.cards.includes(taskId) &&
+				Boolean(runoff.decided) &&
+				(runoff.benchOnly === true || (Boolean(runoff.winner) && runoff.winner !== taskId)),
+		) ?? null
+	);
+}
+
+/** "decided (winner X)" / "decided (bench only, nothing lands)", for a runoff `findRunoffBarringLand` returned. */
+export function describeRunoffLandBar(runoff: RunoffEntry): string {
+	return `decided (${runoff.benchOnly === true ? "bench only, nothing lands" : `winner ${runoff.winner}`})`;
+}
+
+/**
  * Read-modify-write under the file's lock. `mutate` gets the entries that parse (and may append new ones); the
  * entries that don't parse are written back where they were.
  */

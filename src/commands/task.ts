@@ -33,7 +33,12 @@ import {
 	updateTask,
 } from "../core/task-board-mutations";
 import { type DevAssignmentDecision, recordDevAssignment, resolveDevAssignment } from "../kits/dev-assignment";
-import { readRunoffs, reopenRunoffWithoutWinner } from "../kits/team/runoffs/runoffs-store";
+import {
+	describeRunoffLandBar,
+	findRunoffBarringLand,
+	readRunoffs,
+	reopenRunoffWithoutWinner,
+} from "../kits/team/runoffs/runoffs-store";
 import { BLOCKED_TITLE_PREFIX } from "../pipeline/actions";
 import { handBackTask } from "../pipeline/handback";
 import { clearHold, preserveTaskWork, readPipelineHold } from "../pipeline/hold";
@@ -1028,6 +1033,35 @@ async function trashTaskById(input: {
 	};
 }
 
+/**
+ * Refuses a land for a card that lost a decided runoff (or raced in a bench-only one): the winner lands, a loser
+ * never does. The CLI's land paths ask (done, approve, release-hold); the core never reads runoffs.json.
+ */
+async function assertRunoffAllowsLand(workspaceId: string, taskIds: readonly string[]): Promise<void> {
+	const { runoffs } = await readRunoffs(getWatchdogWorkspacePaths(workspaceId).runoffs);
+	for (const taskId of taskIds) {
+		const runoff = findRunoffBarringLand(runoffs, taskId);
+		if (runoff) {
+			throw new Error(
+				`Task "${taskId}" raced in runoff ${runoff.name}, which is ${describeRunoffLandBar(runoff)}; it must not land. ${await describeRunoffLoserWayOut(workspaceId, taskId)}`,
+			);
+		}
+	}
+}
+
+/**
+ * The way out for a card a decided runoff bars from landing. A held card can only be discarded through
+ * release-hold (the landing gate refuses a plain Done of a held card). The decision is final, even if the winner is
+ * discarded later, so a loser's work is used through a new card.
+ */
+async function describeRunoffLoserWayOut(workspaceId: string, taskId: string): Promise<string> {
+	const held = readPipelineHold((await createPipelineStateStore().peek(workspaceId))?.cards[taskId]) !== null;
+	const discard = held
+		? `kanban task release-hold --task-id ${taskId} --discard`
+		: `kanban task done --task-id ${taskId} --discard`;
+	return `The runoff's decision is final: discard it (${discard}), and to use its work, start a new card from its preserve/${taskId}-<model> tag.`;
+}
+
 function parseLandingChoice(options: { land?: boolean; discard?: boolean }): RuntimeTaskLandingChoice | undefined {
 	if (options.land && options.discard) {
 		throw new Error("Use --land or --discard, not both.");
@@ -1048,6 +1082,9 @@ export async function trashTask(input: {
 	const runtimeClient = createRuntimeTrpcClient(workspaceId);
 
 	if (target.kind === "task") {
+		if (input.landing === "land") {
+			await assertRunoffAllowsLand(workspaceId, [target.taskId]);
+		}
 		const trashed = await trashTaskById({
 			taskId: target.taskId,
 			workspaceRepoPath,
@@ -1092,6 +1129,12 @@ export async function trashTask(input: {
 		};
 	}
 
+	if (input.landing === "land") {
+		await assertRunoffAllowsLand(
+			workspaceId,
+			targetTasks.map(({ task }) => task.id),
+		);
+	}
 	const results: TrashTaskExecutionResult[] = [];
 	for (const { task } of targetTasks) {
 		results.push(
@@ -1133,6 +1176,7 @@ export async function approveTask(input: { cwd: string; taskId: string; projectP
 	const workspaceRepoPath = await resolveWorkspaceRepoPath(input.projectPath, input.cwd);
 	const workspaceId = await ensureRuntimeWorkspace(workspaceRepoPath);
 	const runtimeClient = createRuntimeTrpcClient(workspaceId);
+	await assertRunoffAllowsLand(workspaceId, [input.taskId]);
 	const approved = await trashTaskById({
 		taskId: input.taskId,
 		workspaceRepoPath,
@@ -1171,14 +1215,13 @@ export async function handbackTask(input: {
 	const workspaceId = await ensureRuntimeWorkspace(workspaceRepoPath);
 	const runtimeClient = createRuntimeTrpcClient(workspaceId);
 	const runoffsPath = getWatchdogWorkspacePaths(workspaceId).runoffs;
-	// A card of a decided runoff that has a winner (or lands nothing: benchOnly) must not come back: its next PASS
-	// would land next to the winner. Only a runoff decided with no winner reopens (below).
-	const decidedRunoff = (await readRunoffs(runoffsPath)).runoffs.find(
-		(runoff) => runoff.cards.includes(input.taskId) && runoff.decided && (runoff.winner || runoff.benchOnly === true),
-	);
+	// A loser of a decided runoff (or any card of a bench-only one) must not come back: its next PASS would land next
+	// to the winner. The winner itself comes back like any card (a land that conflicted and was escalated in its
+	// rebase rework: rework, QA, then land), and a runoff decided with no winner reopens (below).
+	const decidedRunoff = findRunoffBarringLand((await readRunoffs(runoffsPath)).runoffs, input.taskId);
 	if (decidedRunoff) {
 		throw new Error(
-			`Task "${input.taskId}" raced in runoff ${decidedRunoff.name}, which is decided (${decidedRunoff.benchOnly === true ? "bench only, nothing lands" : `winner ${decidedRunoff.winner}`}); handing it back would let it land too. Discard it (kanban task done --task-id ${input.taskId} --discard) or start a new card.`,
+			`Task "${input.taskId}" raced in runoff ${decidedRunoff.name}, which is ${describeRunoffLandBar(decidedRunoff)}; handing it back would let it land too. ${await describeRunoffLoserWayOut(workspaceId, input.taskId)}`,
 		);
 	}
 	const result = await handBackTask(createPipelineStateStore(), {
@@ -1266,6 +1309,9 @@ export async function releaseHoldTask(input: {
 	const hold = readPipelineHold((await store.peek(workspaceId))?.cards[input.taskId]);
 	if (!hold) {
 		throw new Error(`Task "${input.taskId}" is not held in the pipeline state of ${workspaceId}.`);
+	}
+	if (input.landing === "land") {
+		await assertRunoffAllowsLand(workspaceId, [input.taskId]);
 	}
 	const tag = input.tag?.trim() || null;
 	if (tag) {

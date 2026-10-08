@@ -15,6 +15,10 @@
 //   on later ticks after a crash; a failing release is retried RUNOFF_ACTION_ATTEMPTS times, then the QA log names
 //   `kanban task release-hold`; a winner whose land conflicts leaves the hold for the rework stage's conflict path
 //   (src/pipeline/hold.ts releaseHold).
+// - a decided runoff's winner whose land conflicted is an ordinary card again: rework, QA, and its next PASS lands
+//   (it may be handed back after an escalation). A loser's (or a bench-only card's) PASS that still comes in, say
+//   after a human restarted it, is held for the decided runoff and never landed: the watchdog lists a card held for a
+//   decided runoff as stuck, and `kanban task release-hold --discard` is the way out (`--land` is refused).
 //
 // The core never reads runoffs.json: only this feature does (and the watchdog's read-only keep/stall checks).
 //
@@ -34,7 +38,15 @@ import { getTeamBenchWorkspacePaths, getWatchdogWorkspacePaths } from "../../../
 import { readScoreboard } from "../scoreboard/scoreboard-line";
 import { buildRunoffEntryFromGroup } from "./runoff-create";
 import { decideRunoff, getRunoffPreserveTag, type RunoffCardFacts, type RunoffDecision } from "./runoff-decision";
-import { findOpenRunoff, isOpenRunoff, type RunoffEntry, readRunoffs, updateRunoffs } from "./runoffs-store";
+import {
+	describeRunoffLandBar,
+	findOpenRunoff,
+	findRunoffBarringLand,
+	isOpenRunoff,
+	type RunoffEntry,
+	readRunoffs,
+	updateRunoffs,
+} from "./runoffs-store";
 
 export interface RunoffsFeatureDependencies {
 	/** runoffs.json of a workspace (default `<home>/data/<ws>/runoffs.json`). */
@@ -377,7 +389,14 @@ export function createRunoffsFeature(deps: RunoffsFeatureDependencies = {}): Pip
 				const { runoffs } = await readRunoffs(getRunoffsPath(context.workspaceId));
 				const runoff = findOpenRunoff(runoffs, dev.card.id);
 				if (!runoff) {
-					return null;
+					const barring = findRunoffBarringLand(runoffs, dev.card.id);
+					if (!barring) {
+						return null;
+					}
+					await context.appendQaLog(
+						`## RUNOFF HOLD ${dev.card.id}: QA PASS r${verdict.round} held, never landed\n- Runoff ${barring.name} is ${describeRunoffLandBar(barring)}. Discard it: kanban task release-hold --task-id ${dev.card.id} --discard`,
+					);
+					return { action: "hold", group: barring.name };
 				}
 				const others = runoff.cards.filter((id) => id !== dev.card.id).join(", ");
 				await context.appendQaLog(

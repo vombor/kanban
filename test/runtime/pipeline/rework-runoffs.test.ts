@@ -12,10 +12,11 @@ import type {
 	PipelineRunoffGroupHandler,
 	PipelineRunoffGroups,
 } from "../../../src/pipeline/features";
+import { handBackTask } from "../../../src/pipeline/handback";
 import { releaseHold } from "../../../src/pipeline/hold";
 import { readEscalationRecord, readQaflow } from "../../../src/pipeline/rework";
 import { createPipelineActionRunner } from "../../../src/server/pipeline-actions";
-import { createReworkHarness, failVerdict, type ReworkHarnessOptions } from "../../utilities/rework-stage";
+import { createReworkHarness, failVerdict, REWORK_T0, type ReworkHarnessOptions } from "../../utilities/rework-stage";
 import {
 	createBoard,
 	createCard,
@@ -190,6 +191,42 @@ describe("rework siblings never let two cards land", () => {
 		expect(update?.kind === "updateTask" ? update.prompt : "").toContain(
 			"rebase onto main: conflicts in src/cart.ts",
 		);
+
+		// Escalated during that rebase rework (the false "came back unchanged" of #4), then handed back (#5): the
+		// decided runoff is no runoff for the rework stage any more, so the rebase rework goes out again.
+		await harness.store.update("foo", (state) => {
+			const entry = state.cards.d1111 ?? {};
+			state.cards.d1111 = {
+				...entry,
+				qaflow: {
+					...readQaflow(entry),
+					escalated: {
+						at: new Date(REWORK_T0 + 60_000).toISOString(),
+						round: 2,
+						reason: "the rework came back unchanged",
+						cause: "unchanged",
+						to: "orchestrator",
+					},
+				},
+			};
+			return state;
+		});
+		harness.actions.length = 0;
+		await harness.tick({ review: [DEV] }, [SESSION]);
+		expect(harness.actions).toEqual([]);
+		await handBackTask(harness.store, {
+			workspaceId: "foo",
+			taskId: "d1111",
+			note: "false escalation",
+			extraRounds: 1,
+			by: "orchestrator",
+			now: REWORK_T0 + 2 * 60_000,
+		});
+		harness.setNow(REWORK_T0 + 3 * 60_000);
+		await harness.tick({ review: [DEV] }, [SESSION]);
+		expect(kinds(harness.actions)).toEqual(["updateTask:d1111", "deliverInput:d1111"]);
+		const again = harness.actions[0];
+		expect(again?.kind === "updateTask" ? again.prompt : "").toContain("rebase onto main: conflicts in src/cart.ts");
 	});
 
 	const runoffAnswer = (): OnFailAnswer => ({
