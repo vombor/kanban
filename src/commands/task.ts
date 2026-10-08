@@ -35,6 +35,7 @@ import {
 import { type DevAssignmentDecision, recordDevAssignment, resolveDevAssignment } from "../kits/dev-assignment";
 import {
 	describeRunoffLandBar,
+	describeRunoffLoserWayOut,
 	findRunoffBarringLand,
 	readRunoffs,
 	reopenRunoffWithoutWinner,
@@ -47,6 +48,7 @@ import { createQaLogAppender } from "../pipeline/qa-log";
 import { type PreparedPlanCard, preparePlanCard, recordPlanCard } from "../plans/plan-card";
 import { createPlanIndexStore } from "../plans/plan-index";
 import { resolveProjectInputPath } from "../projects/project-path";
+import { createLandVetoPrecheck } from "../server/task-landing-gate";
 import { getWatchdogWorkspacePaths } from "../state/kanban-home";
 import { loadWorkspaceContext, mutateWorkspaceState } from "../state/workspace-state";
 import {
@@ -1034,32 +1036,17 @@ async function trashTaskById(input: {
 }
 
 /**
- * Refuses a land for a card that lost a decided runoff (or raced in a bench-only one): the winner lands, a loser
- * never does. The CLI's land paths ask (done, approve, release-hold); the core never reads runoffs.json.
+ * Throws the landing gate's refusal for the first card a kit veto bars from landing (createLandVetoPrecheck), for
+ * commands that would otherwise change something before the gate refuses.
  */
-async function assertRunoffAllowsLand(workspaceId: string, taskIds: readonly string[]): Promise<void> {
-	const { runoffs } = await readRunoffs(getWatchdogWorkspacePaths(workspaceId).runoffs);
-	for (const taskId of taskIds) {
-		const runoff = findRunoffBarringLand(runoffs, taskId);
-		if (runoff) {
-			throw new Error(
-				`Task "${taskId}" raced in runoff ${runoff.name}, which is ${describeRunoffLandBar(runoff)}; it must not land. ${await describeRunoffLoserWayOut(workspaceId, taskId)}`,
-			);
-		}
+async function assertLandVetoPrecheck(
+	workspaceId: string,
+	cards: ReadonlyArray<{ card: RuntimeBoardCard; held: boolean }>,
+): Promise<void> {
+	const refused = await createLandVetoPrecheck()(workspaceId, cards);
+	if (refused) {
+		throw new Error(refused.reason);
 	}
-}
-
-/**
- * The way out for a card a decided runoff bars from landing. A held card can only be discarded through
- * release-hold (the landing gate refuses a plain Done of a held card). The decision is final, even if the winner is
- * discarded later, so a loser's work is used through a new card.
- */
-async function describeRunoffLoserWayOut(workspaceId: string, taskId: string): Promise<string> {
-	const held = readPipelineHold((await createPipelineStateStore().peek(workspaceId))?.cards[taskId]) !== null;
-	const discard = held
-		? `kanban task release-hold --task-id ${taskId} --discard`
-		: `kanban task done --task-id ${taskId} --discard`;
-	return `The runoff's decision is final: discard it (${discard}), and to use its work, start a new card from its preserve/${taskId}-<model> tag.`;
 }
 
 function parseLandingChoice(options: { land?: boolean; discard?: boolean }): RuntimeTaskLandingChoice | undefined {
@@ -1082,9 +1069,6 @@ export async function trashTask(input: {
 	const runtimeClient = createRuntimeTrpcClient(workspaceId);
 
 	if (target.kind === "task") {
-		if (input.landing === "land") {
-			await assertRunoffAllowsLand(workspaceId, [target.taskId]);
-		}
 		const trashed = await trashTaskById({
 			taskId: target.taskId,
 			workspaceRepoPath,
@@ -1129,10 +1113,16 @@ export async function trashTask(input: {
 		};
 	}
 
+	// All or nothing: a card the landing gate would refuse on a kit veto (a decided runoff's loser) refuses the whole
+	// batch before any card moves.
 	if (input.landing === "land") {
-		await assertRunoffAllowsLand(
+		const pipelineState = await createPipelineStateStore().peek(workspaceId);
+		await assertLandVetoPrecheck(
 			workspaceId,
-			targetTasks.map(({ task }) => task.id),
+			targetTasks.map(({ task }) => ({
+				card: task,
+				held: readPipelineHold(pipelineState?.cards[task.id]) !== null,
+			})),
 		);
 	}
 	const results: TrashTaskExecutionResult[] = [];
@@ -1176,7 +1166,6 @@ export async function approveTask(input: { cwd: string; taskId: string; projectP
 	const workspaceRepoPath = await resolveWorkspaceRepoPath(input.projectPath, input.cwd);
 	const workspaceId = await ensureRuntimeWorkspace(workspaceRepoPath);
 	const runtimeClient = createRuntimeTrpcClient(workspaceId);
-	await assertRunoffAllowsLand(workspaceId, [input.taskId]);
 	const approved = await trashTaskById({
 		taskId: input.taskId,
 		workspaceRepoPath,
@@ -1221,7 +1210,7 @@ export async function handbackTask(input: {
 	const decidedRunoff = findRunoffBarringLand((await readRunoffs(runoffsPath)).runoffs, input.taskId);
 	if (decidedRunoff) {
 		throw new Error(
-			`Task "${input.taskId}" raced in runoff ${decidedRunoff.name}, which is ${describeRunoffLandBar(decidedRunoff)}; handing it back would let it land too. ${await describeRunoffLoserWayOut(workspaceId, input.taskId)}`,
+			`Task "${input.taskId}" raced in runoff ${decidedRunoff.name}, which is ${describeRunoffLandBar(decidedRunoff)}; handing it back would let it land too. ${describeRunoffLoserWayOut(input.taskId, readPipelineHold((await createPipelineStateStore().peek(workspaceId))?.cards[input.taskId]) !== null)}`,
 		);
 	}
 	const result = await handBackTask(createPipelineStateStore(), {
@@ -1310,8 +1299,15 @@ export async function releaseHoldTask(input: {
 	if (!hold) {
 		throw new Error(`Task "${input.taskId}" is not held in the pipeline state of ${workspaceId}.`);
 	}
+	// Ask the kit's veto before the hold is lifted, so a refused land leaves the card held, as it was.
 	if (input.landing === "land") {
-		await assertRunoffAllowsLand(workspaceId, [input.taskId]);
+		const record = findTaskRecord(
+			await createRuntimeTrpcClient(workspaceId).workspace.getState.query(),
+			input.taskId,
+		);
+		if (record) {
+			await assertLandVetoPrecheck(workspaceId, [{ card: record.task, held: true }]);
+		}
 	}
 	const tag = input.tag?.trim() || null;
 	if (tag) {

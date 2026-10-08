@@ -17,13 +17,20 @@
 // (the work is not landed; the worktree patch is still saved as on every Done). Without one the move is refused
 // with `landing.decision: "required"`, and the board asks "land or discard?".
 //
+// Before any land (a `land` choice or an approve, whatever the trigger), the kit's features may veto it
+// (src/kits/land-veto.ts; the team kit's runoffs refuse a decided runoff's loser): the Done is refused with
+// `landing.decision: "refused"` and the veto's reason. A discard is never vetoed.
+//
 // Shadow (`workspaces.<id>.pipeline.shadow`) decides and logs only: nothing lands and nothing is refused, so the
 // legacy kit (which lands after Done) keeps working during the shadow day.
 import { getWorkspacePipelineSettings, type ParsedPipelineConfig, readPipelineConfig } from "../config/pipeline-config";
 import type { RuntimeBoardCard, RuntimeTaskLandingOutcome, RuntimeTaskTrashTrigger } from "../core/api-contract";
 import { isKanbanLandedCard, resolveCardRole } from "../core/card-role";
 import { createIssueLandCommenter, type IssueCardFinishedInput } from "../issues/issue-comment";
+import type { KitFeature } from "../kits/kit-schema";
+import { findKitLandVeto, type KitLandVeto, type KitLandVetoAnswer, type KitLandVetoInput } from "../kits/land-veto";
 import { type KitCatalog, loadKitCatalog, resolveWorkspaceKit } from "../kits/resolve-kit";
+import { createTeamKitLandVetoes } from "../kits/team/features";
 import {
 	createPipelineDecisionLog,
 	type PipelineDecisionLog,
@@ -49,6 +56,11 @@ export interface TaskLandingGateDependencies {
 	readConfig?: () => Promise<ParsedPipelineConfig>;
 	loadCatalog?: () => Promise<KitCatalog>;
 	readHold?: (workspaceId: string, taskId: string) => Promise<PipelineHold | null>;
+	/**
+	 * Kit features' landing vetoes (src/kits/land-veto.ts), each asked only where the workspace's kit lists its
+	 * feature. Default: the built-in kits' (`createBuiltInLandVetoes`).
+	 */
+	landVetoes?: readonly KitLandVeto[];
 	/** The card's worktree path when it exists. */
 	findWorktree?: (workspacePath: string, card: RuntimeBoardCard) => Promise<string | null>;
 	/** postLand `stopUnder`: stops the processes under these directories (the process reaper). */
@@ -79,6 +91,61 @@ function requiredReason(card: RuntimeBoardCard): string {
 	return `Task ${card.id} has work that is not on ${card.baseRef}. Land or discard it: Approve & land (kanban task approve --task-id ${card.id}), or Done with "discard" (kanban task done --task-id ${card.id} --discard).`;
 }
 
+/** The kit vetoes this build has (the team kit's runoffs); each is asked only where a workspace's kit lists its feature. */
+export function createBuiltInLandVetoes(): KitLandVeto[] {
+	return createTeamKitLandVetoes();
+}
+
+/**
+ * The kit veto against landing `card`, or null: the one rule the gate asks before a land and the CLI's pre-check
+ * (`createLandVetoPrecheck`) asks before it changes anything. Null for a card the gate doesn't land (not a pipeline
+ * dev/plan card on landing `qa`); in shadow the gate only logs a veto, so the pre-check ignores it there.
+ */
+async function findLandVeto(
+	config: ParsedPipelineConfig["config"],
+	catalog: KitCatalog,
+	vetoes: readonly KitLandVeto[],
+	input: KitLandVetoInput,
+): Promise<(KitLandVetoAnswer & { feature: KitFeature }) | null> {
+	const settings = getWorkspacePipelineSettings(config, input.workspaceId);
+	if (!isKanbanLandedCard(input.card, settings.landing.mode)) {
+		return null;
+	}
+	return await findKitLandVeto(vetoes, resolveWorkspaceKit(config, input.workspaceId, catalog).kit, input);
+}
+
+export type LandVetoPrecheck = (
+	workspaceId: string,
+	cards: ReadonlyArray<{ card: RuntimeBoardCard; held: boolean }>,
+) => Promise<{ taskId: string; reason: string } | null>;
+
+/**
+ * For CLI commands that change state before their Done (release-hold lifts the hold) or finish several cards (a
+ * column with `--land`): the first card the gate would refuse to land on a kit veto, asked before anything changes,
+ * so a refused command has no side effects. The gate stays the authority; this only prevents a partial state.
+ */
+export function createLandVetoPrecheck(
+	deps: Pick<TaskLandingGateDependencies, "readConfig" | "loadCatalog" | "landVetoes"> = {},
+): LandVetoPrecheck {
+	const readConfig = deps.readConfig ?? (async () => await readPipelineConfig());
+	const loadCatalog = deps.loadCatalog ?? (async () => await loadKitCatalog());
+	const vetoes = deps.landVetoes ?? createBuiltInLandVetoes();
+	return async (workspaceId, cards) => {
+		const { config } = await readConfig();
+		if (getWorkspacePipelineSettings(config, workspaceId).pipeline.shadow) {
+			return null;
+		}
+		const catalog = await loadCatalog();
+		for (const { card, held } of cards) {
+			const veto = await findLandVeto(config, catalog, vetoes, { workspaceId, card, held });
+			if (veto) {
+				return { taskId: card.id, reason: veto.reason };
+			}
+		}
+		return null;
+	};
+}
+
 export function createTaskLandingGate(deps: TaskLandingGateDependencies = {}): TaskDoneGate {
 	const readConfig = deps.readConfig ?? (async () => await readPipelineConfig());
 	const loadCatalog = deps.loadCatalog ?? (async () => await loadKitCatalog());
@@ -87,6 +154,7 @@ export function createTaskLandingGate(deps: TaskLandingGateDependencies = {}): T
 		deps.readHold ??
 		(async (workspaceId: string, taskId: string) =>
 			readPipelineHold((await stateStore?.peek(workspaceId))?.cards[taskId]));
+	const landVetoes = deps.landVetoes ?? createBuiltInLandVetoes();
 	const findWorktree = deps.findWorktree ?? defaultFindWorktree;
 	const decisionLog = deps.decisionLog ?? createPipelineDecisionLog();
 	const now = deps.now ?? Date.now;
@@ -168,7 +236,8 @@ export function createTaskLandingGate(deps: TaskLandingGateDependencies = {}): T
 		}
 		const shadow = settings.pipeline.shadow;
 		progress.gated = !shadow;
-		const resolution = resolveWorkspaceKit(parsed.config, input.workspaceId, await loadCatalog());
+		const catalog = await loadCatalog();
+		const resolution = resolveWorkspaceKit(parsed.config, input.workspaceId, catalog);
 		const context = { kit: resolution.kitName, shadow };
 		const baseRef = card.baseRef;
 
@@ -180,6 +249,22 @@ export function createTaskLandingGate(deps: TaskLandingGateDependencies = {}): T
 			return shadow
 				? { proceed: true, landing }
 				: { proceed: false, reason: `Task ${card.id} is ${note}.`, landing };
+		}
+
+		// A kit feature may refuse a land, whoever asks (the board, the CLI, a PASS): the team kit's runoffs never land
+		// a decided runoff's loser. Discard stays allowed; the core never reads the feature's files.
+		if (input.landing === "land" || input.trigger === "approve") {
+			const veto = await findLandVeto(parsed.config, catalog, landVetoes, {
+				workspaceId: input.workspaceId,
+				card,
+				held: hold !== null,
+			});
+			if (veto) {
+				const landing: RuntimeTaskLandingOutcome = { decision: shadow ? "shadow" : "refused", baseRef };
+				const note = `${shadow ? "would refuse" : "refused"} by the kit's ${veto.feature} feature: ${veto.reason}`;
+				await record(input, context, shadow ? "shadow" : "none", landing, note);
+				return shadow ? { proceed: true, landing } : { proceed: false, reason: veto.reason, landing };
+			}
 		}
 
 		if (input.landing === "discard") {

@@ -142,10 +142,11 @@ dev card stops ─▶ Review (settled) ─▶ snapshot refs/kanban/snapshots/<id
   are tagged and discarded. The group is recorded before any card is created, so no card can land outside it. No
   hold is a dead end: `kanban task release-hold --land|--discard` is the human way out. A winner whose land
   conflicts goes back for a rebase rework, then QA, then lands. If that rework is escalated, the winner can be handed
-  back like any card. A loser of a decided runoff (any card of a `benchOnly` one) never lands: handback,
-  `task done --land`, `approve` and `release-hold --land` refuse it, and a PASS it still gets is held, never landed.
-  The decision is final, even if the winner is discarded later: nothing lands the runner-up. To use a loser's work,
-  start a new card from its `preserve/<id>-<model>` tag.
+  back like any card. A loser of a decided runoff (any card of a `benchOnly` one) never lands: the landing gate refuses
+  every land of it (the board's Approve & land and "land or discard?", `task done --land`, `approve`, `release-hold
+  --land`; release-hold and a column `--land` refuse before anything changes), handback refuses it, and a PASS it
+  still gets is held, never landed. The decision is final, even if the winner is discarded later: nothing lands the
+  runner-up. To use a loser's work, start a new card from its `preserve/<id>-<model>` tag.
 
 ## 5. "Review" means the agent stopped, not that the work is done
 

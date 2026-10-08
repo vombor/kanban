@@ -5,12 +5,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { approveTask, releaseHoldTask, trashTask } from "../../src/commands/task";
 import type { RuntimeWorkspaceStateResponse } from "../../src/core/api-contract";
 import { createPipelineStateStore } from "../../src/pipeline/pipeline-state";
+import { createTaskLandingGate } from "../../src/server/task-landing-gate";
 import {
 	createTaskTrashWorkflow,
 	createTrashTaskRequestHandler,
 	type TaskDoneGate,
 } from "../../src/server/task-trash-workflow";
-import { getWatchdogWorkspacePaths } from "../../src/state/kanban-home";
+import { getKanbanGlobalConfigPath, getWatchdogWorkspacePaths } from "../../src/state/kanban-home";
 import type * as WorkspaceStateModule from "../../src/state/workspace-state";
 import { type RuntimeTrpcContext, runtimeAppRouter } from "../../src/trpc/app-router";
 import { createWorkspaceApi } from "../../src/trpc/workspace-api";
@@ -76,7 +77,7 @@ function installRuntime(store: WorkspaceStateStore, doneGate?: TaskDoneGate) {
 			getState: { query: async (): Promise<RuntimeWorkspaceStateResponse> => await store.getWorkspaceState() },
 		},
 	});
-	return { effects, trashTaskSpy };
+	return { effects, trashTaskSpy, caller };
 }
 
 describe("kanban task done", () => {
@@ -171,7 +172,7 @@ describe("kanban task done", () => {
 		expect(findCardInBoard(store.stored.board, "task-1")?.columnId).toBe("review");
 	});
 
-	it("refuses to land a decided runoff's loser (done --land, approve, release-hold --land); the winner lands", async () => {
+	it("the landing gate's runoff veto refuses a loser's land from every caller (CLI, approve, browser), a refused release-hold or column batch changes nothing; discard and the winner go through", async () => {
 		await withTemporaryKanbanHome(async () => {
 			const store = createWorkspaceStateStore({
 				board: createBoard({
@@ -180,12 +181,16 @@ describe("kanban task done", () => {
 				sessions: {},
 				revision: 1,
 			});
-			const doneGate = vi.fn<TaskDoneGate>(async (input) =>
-				input.landing === "land"
-					? { proceed: true, landing: { decision: "landed", baseRef: "main", commit: "abc123" } }
-					: { proceed: true, landing: { decision: "discarded", baseRef: "main" } },
+			// The server's gate with its defaults (config.json, built-in kits and vetoes): landing mode qa on the team kit,
+			// no worktrees (a land is a noop). The CLI's pre-check reads the same config.json.
+			const configPath = getKanbanGlobalConfigPath();
+			mkdirSync(dirname(configPath), { recursive: true });
+			writeFileSync(
+				configPath,
+				JSON.stringify({ workspaces: { "ws-1": { landing: { mode: "qa" }, kit: { name: "team" } } } }),
 			);
-			const { trashTaskSpy } = installRuntime(store, doneGate);
+			const doneGate = createTaskLandingGate({ findWorktree: async () => null });
+			const { trashTaskSpy, caller } = installRuntime(store, doneGate);
 			const path = getWatchdogWorkspacePaths("ws-1").runoffs;
 			mkdirSync(dirname(path), { recursive: true });
 			writeFileSync(
@@ -206,36 +211,55 @@ describe("kanban task done", () => {
 				return state;
 			});
 
-			await expect(trashTask({ cwd: "/repo", taskId: "l0001", landing: "land" })).rejects.toThrow(
-				'Task "l0001" raced in runoff tier2-promos, which is decided (winner w0001); it must not land.',
-			);
-			// Not held: a plain Done discards it. Held: only release-hold does.
-			await expect(approveTask({ cwd: "/repo", taskId: "l0001" })).rejects.toThrow(
-				"The runoff's decision is final: discard it (kanban task done --task-id l0001 --discard), and to use its work, start a new card from its preserve/l0001-<model> tag.",
-			);
+			// Refused commands change nothing: the column batch (the winner w0001 first) moves no card, and release-hold
+			// refuses before it lifts the hold.
 			await expect(trashTask({ cwd: "/repo", column: "review", landing: "land" })).rejects.toThrow(
-				'Task "l0001" raced in runoff tier2-promos',
+				'Task "l0001" raced in runoff tier2-promos, which is decided (winner w0001); it must not land.',
 			);
 			await expect(releaseHoldTask({ cwd: "/repo", taskId: "l0002", landing: "land" })).rejects.toThrow(
 				"it must not land. The runoff's decision is final: discard it (kanban task release-hold --task-id l0002 --discard)",
 			);
-			await expect(trashTask({ cwd: "/repo", taskId: "l0002", landing: "land" })).rejects.toThrow(
-				"discard it (kanban task release-hold --task-id l0002 --discard)",
-			);
 			expect(trashTaskSpy).not.toHaveBeenCalled();
-			// The refused release left the hold where it was.
 			expect((await createPipelineStateStore().load("ws-1")).cards.l0002?.hold).toMatchObject({
 				group: "tier2-promos",
 			});
+			expect(findCardInBoard(store.stored.board, "w0001")?.columnId).toBe("review");
+
+			await expect(trashTask({ cwd: "/repo", taskId: "l0001", landing: "land" })).rejects.toThrow(
+				'Task "l0001" raced in runoff tier2-promos, which is decided (winner w0001); it must not land.',
+			);
+			// Not held: a plain Done discards it.
+			await expect(approveTask({ cwd: "/repo", taskId: "l0001" })).rejects.toThrow(
+				"The runoff's decision is final: discard it (kanban task done --task-id l0001 --discard), and to use its work, start a new card from its preserve/l0001-<model> tag.",
+			);
+			// The board: Approve & land and the "land or discard?" dialog's land.
+			for (const request of [
+				{ taskId: "l0001", landing: "land", trigger: "approve" },
+				{ taskId: "l0001", landing: "land", trigger: "browser" },
+			] as const) {
+				await expect(caller.workspace.trashTask(request)).resolves.toMatchObject({
+					ok: false,
+					landing: { decision: "refused", baseRef: "main" },
+					error: expect.stringContaining("it must not land"),
+				});
+			}
+			// A held loser: the gate's hold check answers first.
+			await expect(trashTask({ cwd: "/repo", taskId: "l0002", landing: "land" })).rejects.toThrow(
+				/only releaseHold lands or discards it/u,
+			);
+			expect(findCardInBoard(store.stored.board, "l0001")?.columnId).toBe("review");
+			expect(findCardInBoard(store.stored.board, "l0002")?.columnId).toBe("review");
+			expect(trashTaskSpy).toHaveBeenCalledWith(expect.objectContaining({ taskId: "l0001", trigger: "approve" }));
 
 			await expect(trashTask({ cwd: "/repo", taskId: "w0001", landing: "land" })).resolves.toMatchObject({
 				ok: true,
-				landing: { decision: "landed" },
+				landing: { decision: "noop" },
 			});
 			await expect(trashTask({ cwd: "/repo", taskId: "l0001", landing: "discard" })).resolves.toMatchObject({
 				ok: true,
-				landing: { decision: "discarded" },
 			});
+			expect(findCardInBoard(store.stored.board, "w0001")?.columnId).toBe("trash");
+			expect(findCardInBoard(store.stored.board, "l0001")?.columnId).toBe("trash");
 		});
 	});
 });

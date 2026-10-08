@@ -1,12 +1,14 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { getWorkspacePipelineSettings, parsePipelineConfig } from "../../../src/config/pipeline-config";
 import type { RuntimeBoardCard, RuntimeBoardColumnId } from "../../../src/core/api-contract";
+import type { KitLandVeto } from "../../../src/kits/land-veto";
 import { createRoutingPolicy } from "../../../src/kits/policy";
 import { getDefaultKit, loadKitCatalog } from "../../../src/kits/resolve-kit";
+import { createRunoffsLandVeto } from "../../../src/kits/team/runoffs/runoffs-land-veto";
 import { createPipelineDecisionLog, type PipelineDecisionRecord } from "../../../src/pipeline/decision-log";
 import { evaluatePipelineWorkspace } from "../../../src/pipeline/engine";
 import type { PipelineEventMap } from "../../../src/pipeline/events";
@@ -39,6 +41,7 @@ function createHarness(input: {
 	cards: Partial<Record<RuntimeBoardColumnId, RuntimeBoardCard[]>>;
 	worktrees?: Record<string, string>;
 	holds?: Record<string, PipelineHold>;
+	landVetoes?: readonly KitLandVeto[];
 }) {
 	const logPath = join(input.repo.root, "data", WORKSPACE_ID, "pipeline-decisions.jsonl");
 	const landed: Array<PipelineEventMap["landed"]> = [];
@@ -47,6 +50,7 @@ function createHarness(input: {
 		loadCatalog: async () => await loadKitCatalog(join(input.repo.root, "kits")),
 		readHold: async (_workspaceId, taskId) => input.holds?.[taskId] ?? null,
 		findWorktree: async (_workspacePath, card) => input.worktrees?.[card.id] ?? null,
+		...(input.landVetoes ? { landVetoes: input.landVetoes } : {}),
 		decisionLog: createPipelineDecisionLog({ getLogPath: () => logPath }),
 		onLanded: (event) => landed.push(event),
 		now: () => Date.parse("2026-10-07T12:00:00.000Z"),
@@ -470,6 +474,109 @@ describe("landing modes", () => {
 			expect(harness.readDecisions().map((record) => [record.outcome, record.note])).toEqual([
 				["shadow", 'would ask "land or discard?" (clean against main)'],
 				["shadow", "would land onto main"],
+			]);
+		});
+	});
+
+	describe("kit landing vetoes (the team kit's runoffs)", () => {
+		/** A decided runoff (winner w0001, loser l0001) in the repo's temp dir, and its veto. */
+		function runoffVeto(root: string): KitLandVeto {
+			const path = join(root, "data", WORKSPACE_ID, "runoffs.json");
+			mkdirSync(join(root, "data", WORKSPACE_ID), { recursive: true });
+			writeFileSync(
+				path,
+				JSON.stringify({
+					runoffs: [
+						{
+							name: "tier2-promos",
+							cards: ["w0001", "l0001"],
+							decided: "2026-10-08T01:04:17.000Z",
+							winner: "w0001",
+						},
+					],
+				}),
+			);
+			return createRunoffsLandVeto({ getRunoffsPath: () => path });
+		}
+
+		function createRunoffHarness(config: unknown) {
+			const created = createLandRepo();
+			repo = created;
+			const winner = created.addWorktree("w0001");
+			created.write(winner, "src/app.ts", "export const value = 2;\n");
+			const loser = created.addWorktree("l0001");
+			created.write(loser, "src/app.ts", "export const value = 3;\n");
+			const harness = createHarness({
+				repo: created,
+				config,
+				cards: { review: [createCard({ id: "w0001" }), createCard({ id: "l0001" })] },
+				worktrees: { w0001: winner, l0001: loser },
+				landVetoes: [runoffVeto(created.root)],
+			});
+			return { repo: created, harness };
+		}
+
+		const teamQa = landingConfig("qa", { kit: { name: "team" } });
+
+		it.each(["approve", "browser", "cli", "pipeline"] as const)(
+			"refuses a decided runoff's loser a land (trigger %s) and lands nothing",
+			async (trigger) => {
+				const { repo: created, harness } = createRunoffHarness(teamQa);
+				const before = created.tip();
+
+				const result = await harness.done("l0001", { landing: "land", trigger });
+
+				expect(result).toMatchObject({ ok: false, status: "blocked", landing: { decision: "refused" } });
+				expect(result.error).toBe(
+					`Task "l0001" raced in runoff tier2-promos, which is decided (winner w0001); it must not land. The runoff's decision is final: discard it (kanban task done --task-id l0001 --discard), and to use its work, start a new card from its preserve/l0001-<model> tag.`,
+				);
+				expect(created.tip()).toBe(before);
+				expect(harness.columnOf("l0001")).toBe("review");
+				expect(harness.readDecisions().map((record) => [record.outcome, record.answer])).toEqual([
+					["none", { trigger, landing: "land", decision: "refused", baseRef: "main" }],
+				]);
+			},
+		);
+
+		it("lets the loser be discarded and the winner land", async () => {
+			const { repo: created, harness } = createRunoffHarness(teamQa);
+			const before = created.tip();
+
+			expect(await harness.done("l0001", { landing: "discard" })).toMatchObject({
+				ok: true,
+				landing: { decision: "discarded" },
+			});
+			expect(created.tip()).toBe(before);
+			expect(await harness.done("w0001", { landing: "land", trigger: "approve" })).toMatchObject({
+				ok: true,
+				landing: { decision: "landed" },
+			});
+			expect(created.git(["show", "main:src/app.ts"])).toBe("export const value = 2;");
+		});
+
+		it("is not asked on a kit without the runoffs feature (the default kit lands the same card)", async () => {
+			const { repo: created, harness } = createRunoffHarness(landingConfig("qa"));
+
+			expect(await harness.done("l0001", { landing: "land", trigger: "approve" })).toMatchObject({
+				ok: true,
+				landing: { decision: "landed" },
+			});
+			expect(created.git(["show", "main:src/app.ts"])).toBe("export const value = 3;");
+		});
+
+		it("shadow only logs the refusal", async () => {
+			const { repo: created, harness } = createRunoffHarness(
+				landingConfig("qa", { kit: { name: "team" }, pipeline: { shadow: true } }),
+			);
+			const before = created.tip();
+
+			expect(await harness.done("l0001", { landing: "land", trigger: "approve" })).toMatchObject({
+				ok: true,
+				landing: { decision: "shadow" },
+			});
+			expect(created.tip()).toBe(before);
+			expect(harness.readDecisions().map((record) => record.note)).toEqual([
+				expect.stringMatching(/^would refuse by the kit's runoffs feature: Task "l0001" raced in runoff/u),
 			]);
 		});
 	});

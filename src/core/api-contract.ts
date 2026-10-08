@@ -692,7 +692,7 @@ export type RuntimeTaskTrashAutoStart = z.infer<typeof runtimeTaskTrashAutoStart
 
 /** What the `qa` landing step did (src/server/task-landing-gate.ts). Absent when the card is not landed by Kanban. */
 export const runtimeTaskLandingOutcomeSchema = z.object({
-	decision: z.enum(["required", "landed", "noop", "discarded", "conflict", "error", "held", "shadow"]),
+	decision: z.enum(["required", "landed", "noop", "discarded", "conflict", "error", "held", "refused", "shadow"]),
 	baseRef: z.string().optional(),
 	/** The commit on the base (`landed`). */
 	commit: z.string().optional(),

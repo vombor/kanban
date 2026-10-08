@@ -131,6 +131,18 @@ export function describeRunoffLandBar(runoff: RunoffEntry): string {
 }
 
 /**
+ * The way out for a card a decided runoff bars from landing. A held card can only be discarded through
+ * release-hold (the landing gate refuses a plain Done of a held card). The decision is final, even if the winner is
+ * discarded later, so a loser's work is used through a new card.
+ */
+export function describeRunoffLoserWayOut(taskId: string, held: boolean): string {
+	const discard = held
+		? `kanban task release-hold --task-id ${taskId} --discard`
+		: `kanban task done --task-id ${taskId} --discard`;
+	return `The runoff's decision is final: discard it (${discard}), and to use its work, start a new card from its preserve/${taskId}-<model> tag.`;
+}
+
+/**
  * Read-modify-write under the file's lock. `mutate` gets the entries that parse (and may append new ones); the
  * entries that don't parse are written back where they were.
  */
