@@ -23,6 +23,13 @@ import {
 	hasLikelyShellPrompt,
 } from "@/terminal/terminal-prompt-heuristics";
 import {
+	hasVisibleTerminalText,
+	isSameTerminalReadiness,
+	resolveTerminalReadiness,
+	TERMINAL_LOADING_TIMEOUT_MS,
+	type TerminalReadiness,
+} from "@/terminal/terminal-readiness";
+import {
 	type TerminalCloseInfo,
 	type TerminalConnectionStatus,
 	TerminalReconnectController,
@@ -47,11 +54,15 @@ interface PersistentTerminalSubscriber {
 	onLastError?: (message: string | null) => void;
 	onSummary?: (summary: RuntimeTaskSessionSummary) => void;
 	onOutputText?: (text: string) => void;
+	onReadiness?: (readiness: TerminalReadiness) => void;
 }
 
 interface MountPersistentTerminalOptions {
 	autoFocus?: boolean;
 	isVisible?: boolean;
+	// The panel starts this session itself when it has none (the sidebar agent),
+	// so an empty terminal without a process is still loading.
+	expectsSessionStart?: boolean;
 }
 
 interface EnsurePersistentTerminalInput extends PersistentTerminalAppearance {
@@ -176,6 +187,14 @@ class PersistentTerminal {
 	private outputTextDecoder = new TextDecoder();
 	private terminalWriteQueue: Promise<void> = Promise.resolve();
 	private lastRestore: AppliedRestore | null = null;
+	// Readiness (terminal-readiness.ts): the stream generation whose restore
+	// completed, whether anything visible is on screen, and the loading timeout.
+	private restoredStreamGeneration: number | null = null;
+	private hasScreenOutput = false;
+	private expectsSessionStart = false;
+	private loadingTimedOut = false;
+	private loadingTimer: ReturnType<typeof setTimeout> | null = null;
+	private readiness: TerminalReadiness = { state: "loading", phase: "connecting" };
 	private disposed = false;
 
 	constructor(
@@ -220,6 +239,9 @@ class PersistentTerminal {
 			this.sendIoData(bytes);
 		});
 		this.terminal.attachCustomKeyEventHandler((event) => {
+			if (!this.isAcceptingUserInput()) {
+				return false;
+			}
 			if (event.key === "Enter" && event.shiftKey) {
 				if (event.type === "keydown") {
 					this.terminal.input(SHIFT_ENTER_SEQUENCE);
@@ -234,6 +256,18 @@ class PersistentTerminal {
 			}
 			return true;
 		});
+
+		// Paste reaches xterm through its textarea's paste event, not the key handler.
+		this.hostElement.addEventListener(
+			"paste",
+			(event) => {
+				if (!this.isAcceptingUserInput()) {
+					event.preventDefault();
+					event.stopPropagation();
+				}
+			},
+			true,
+		);
 
 		try {
 			const webglAddon = new WebglAddon();
@@ -251,10 +285,12 @@ class PersistentTerminal {
 			},
 			onStatus: (status) => {
 				this.notifyConnectionStatus(status);
+				this.updateReadiness();
 			},
 		});
 		this.setInputEnabled(false);
 		this.openSockets();
+		this.updateReadiness();
 	}
 
 	private notifyLastError(): void {
@@ -268,6 +304,7 @@ class PersistentTerminal {
 		for (const subscriber of this.subscribers) {
 			subscriber.onSummary?.(summary);
 		}
+		this.updateReadiness();
 	}
 
 	private notifyOutputText(text: string): void {
@@ -296,6 +333,60 @@ class PersistentTerminal {
 	// "reconnecting" so the user knows why keys do nothing.
 	private setInputEnabled(enabled: boolean): void {
 		this.terminal.options.disableStdin = !enabled;
+	}
+
+	// Keys and pastes are blocked while the terminal is loading: the user cannot
+	// see what they would answer (a black screen, or a TUI that has not drawn its
+	// prompt yet), and before the session has a process the server drops them
+	// anyway. They are blocked, not queued, for the same reason as during a
+	// reconnect. Only the user's input is blocked: xterm's replies to the agent's
+	// startup probes (ESC[c and friends) still go out, so disableStdin stays tied
+	// to the stream socket alone.
+	private isAcceptingUserInput(): boolean {
+		return this.readiness.state !== "loading";
+	}
+
+	private updateReadiness(): void {
+		if (this.disposed) {
+			return;
+		}
+		const readiness = resolveTerminalReadiness({
+			connectionStatus: this.reconnect.getStatus(),
+			streamRestored: this.isIoOpen() && this.restoredStreamGeneration === this.connectionGeneration,
+			hasScreenOutput: this.hasScreenOutput,
+			summary: this.latestSummary,
+			expectsSessionStart: this.expectsSessionStart,
+			loadingTimedOut: this.loadingTimedOut,
+		});
+		if (readiness.state === "loading") {
+			if (this.loadingTimer === null) {
+				this.loadingTimer = setTimeout(() => {
+					this.loadingTimer = null;
+					this.loadingTimedOut = true;
+					this.updateReadiness();
+				}, TERMINAL_LOADING_TIMEOUT_MS);
+			}
+		} else {
+			this.clearLoadingTimer();
+			if (readiness.state === "ready") {
+				// The next loading episode (a dropped stream) gets its own timeout.
+				this.loadingTimedOut = false;
+			}
+		}
+		if (isSameTerminalReadiness(readiness, this.readiness)) {
+			return;
+		}
+		this.readiness = readiness;
+		for (const subscriber of this.subscribers) {
+			subscriber.onReadiness?.(readiness);
+		}
+	}
+
+	private clearLoadingTimer(): void {
+		if (this.loadingTimer !== null) {
+			clearTimeout(this.loadingTimer);
+			this.loadingTimer = null;
+		}
 	}
 
 	private isIoOpen(): boolean {
@@ -378,6 +469,7 @@ class PersistentTerminal {
 		if (cols && rows && (this.terminal.cols !== cols || this.terminal.rows !== rows)) {
 			this.terminal.resize(cols, rows);
 		}
+		this.hasScreenOutput = hasVisibleTerminalText(snapshot);
 		if (snapshot) {
 			for (const chunk of splitRestoreSnapshot(snapshot)) {
 				await this.enqueueTerminalWrite(chunk);
@@ -420,6 +512,10 @@ class PersistentTerminal {
 				return;
 			}
 			const decoded = decodeTerminalSocketChunk(this.outputTextDecoder, event.data);
+			if (!this.hasScreenOutput && hasVisibleTerminalText(decoded)) {
+				this.hasScreenOutput = true;
+				this.updateReadiness();
+			}
 			void this.enqueueTerminalWrite(writeData, {
 				ackBytes: getTerminalSocketChunkByteLength(event.data),
 				notifyText: decoded || null,
@@ -435,6 +531,7 @@ class PersistentTerminal {
 				this.requestResize();
 			}
 			this.markReadyIfConnected();
+			this.updateReadiness();
 		};
 		// An error is always followed by a close event, which handles the drop.
 		ioSocket.onclose = (event) => {
@@ -468,11 +565,13 @@ class PersistentTerminal {
 							return;
 						}
 						this.restoreCompleted = true;
+						this.restoredStreamGeneration = this.connectionGeneration;
 						this.sendControlMessage({ type: "restore_complete" });
 						if (this.isIoOpen() && this.visibleContainer) {
 							this.requestResize();
 						}
 						this.markReadyIfConnected();
+						this.updateReadiness();
 					})
 					.catch(() => {
 						if (this.disposed || this.controlSocket !== controlSocket) {
@@ -554,6 +653,7 @@ class PersistentTerminal {
 		if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
 			socket.close();
 		}
+		this.updateReadiness();
 	}
 
 	// Opens whichever socket is missing; a stream reconnect starts a new
@@ -602,6 +702,7 @@ class PersistentTerminal {
 		this.subscribers.add(subscriber);
 		subscriber.onLastError?.(this.lastError);
 		subscriber.onConnectionStatus?.(this.reconnect.getStatus());
+		subscriber.onReadiness?.(this.readiness);
 		if (this.latestSummary) {
 			subscriber.onSummary?.(this.latestSummary);
 		}
@@ -623,6 +724,8 @@ class PersistentTerminal {
 		}
 		this.ensureConnected();
 		this.updateAppearance(appearance);
+		this.expectsSessionStart = options.expectsSessionStart ?? false;
+		this.updateReadiness();
 		if (this.visibleContainer !== container) {
 			this.visibleContainer = container;
 			container.appendChild(this.hostElement);
@@ -705,7 +808,12 @@ class PersistentTerminal {
 			});
 	}
 
+	// A new session in the same terminal (the hook calls this when startedAt
+	// changes): its screen starts empty, and loading starts over with it.
 	reset(): void {
+		this.hasScreenOutput = false;
+		this.loadingTimedOut = false;
+		this.updateReadiness();
 		this.terminalWriteQueue = this.terminalWriteQueue
 			.catch(() => undefined)
 			.then(() => {
@@ -783,6 +891,7 @@ class PersistentTerminal {
 			return;
 		}
 		this.disposed = true;
+		this.clearLoadingTimer();
 		this.reconnect.dispose();
 		this.unmount(this.visibleContainer);
 		this.closeSockets();

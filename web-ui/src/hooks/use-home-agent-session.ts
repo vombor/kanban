@@ -78,6 +78,22 @@ function pruneWorkspaceHomeAgentSessions(
 	});
 }
 
+// Whether the session this hook started (or a later one) was stopped by Kanban
+// rather than ended by its agent: the server went down with it, or something
+// stopped it (the sidebar has no Stop button). Within one server the session
+// manager restarts an exited sidebar session itself, but its start request lives
+// in memory only, so after a restart nothing starts the sidebar again unless the
+// page is reloaded or the watchdog wakes it: the panel stayed black. A start
+// that finds a live session (the watchdog's) gets that one back unchanged.
+function wasInterruptedSinceStart(summary: RuntimeTaskSessionSummary | null, startedAt: number | null): boolean {
+	return (
+		summary !== null &&
+		summary.state === "interrupted" &&
+		summary.pid === null &&
+		(summary.startedAt ?? 0) >= (startedAt ?? 0)
+	);
+}
+
 function buildHomeAgentSessionKey(session: HomeAgentSessionIdentity): string {
 	return `${session.workspaceId}:${session.taskId}`;
 }
@@ -106,7 +122,8 @@ export function useHomeAgentSession({
 	const latestBaseRefRef = useRef("HEAD");
 	const homeDescriptorByWorkspaceRef = useRef(new Map<string, HomeAgentWorkspaceDescriptor>());
 	const desiredTaskIdByWorkspaceRef = useRef(new Map<string, string>());
-	const startedSessionKeysRef = useRef(new Set<string>());
+	// Session key -> startedAt of the session this hook started.
+	const startedSessionsRef = useRef(new Map<string, number | null>());
 	const pendingStartRequestIdsRef = useRef(new Map<string, number>());
 	const nextStartRequestIdRef = useRef(0);
 	const disposedRef = useRef(false);
@@ -169,7 +186,7 @@ export function useHomeAgentSession({
 
 			homeDescriptorByWorkspaceRef.current.delete(currentProjectId);
 			desiredTaskIdByWorkspaceRef.current.delete(currentProjectId);
-			startedSessionKeysRef.current.delete(
+			startedSessionsRef.current.delete(
 				buildHomeAgentSessionKey({
 					workspaceId: currentProjectId,
 					taskId: previousTaskId,
@@ -194,7 +211,7 @@ export function useHomeAgentSession({
 			return;
 		}
 
-		startedSessionKeysRef.current.delete(
+		startedSessionsRef.current.delete(
 			buildHomeAgentSessionKey({
 				workspaceId: currentProjectId,
 				taskId: previousTaskId,
@@ -221,8 +238,13 @@ export function useHomeAgentSession({
 			return;
 		}
 
-		if (startedSessionKeysRef.current.has(sessionKey)) {
-			return;
+		const startedAt = startedSessionsRef.current.get(sessionKey);
+		if (startedAt !== undefined) {
+			if (!wasInterruptedSinceStart(sessionSummaries[session.taskId] ?? null, startedAt)) {
+				return;
+			}
+			// Start it again below.
+			startedSessionsRef.current.delete(sessionKey);
 		}
 
 		if (pendingStartRequestIdsRef.current.has(sessionKey)) {
@@ -263,7 +285,7 @@ export function useHomeAgentSession({
 					return;
 				}
 
-				startedSessionKeysRef.current.add(sessionKey);
+				startedSessionsRef.current.set(sessionKey, response.summary.startedAt);
 				upsertSessionSummary(response.summary);
 			} catch (error) {
 				if (pendingStartRequestIdsRef.current.get(sessionKey) !== requestId) {
@@ -287,7 +309,7 @@ export function useHomeAgentSession({
 			disposedRef.current = true;
 			desiredTaskIdByWorkspaceRef.current.clear();
 			homeDescriptorByWorkspaceRef.current.clear();
-			startedSessionKeysRef.current.clear();
+			startedSessionsRef.current.clear();
 			pendingStartRequestIdsRef.current.clear();
 		};
 	}, []);

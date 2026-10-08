@@ -86,7 +86,7 @@ class FakeTerminalManager implements TerminalSessionService {
 		this.restoreGeneration += 1;
 	}
 	recoverStaleSession = vi.fn(() => createSummary());
-	writeInput = vi.fn(() => createSummary());
+	writeInput = vi.fn((): RuntimeTaskSessionSummary | null => createSummary());
 	resize = vi.fn(() => true);
 	pauseOutput = vi.fn(() => true);
 	resumeOutput = vi.fn(() => true);
@@ -605,6 +605,34 @@ describe("createTerminalWebSocketBridge", () => {
 		const restoreB = await waitForControlMessage(second, (message) => message.type === "restore");
 		expect(restoreB).toMatchObject({ type: "restore", restoreGeneration: 2 });
 		await closeSocket(second.socket);
+	});
+
+	it("keeps the stream open when input arrives before the session has a process", async () => {
+		// After a restart the sidebar's viewer attaches before its session is started again.
+		terminalManager.writeInput.mockReturnValue(null);
+		const io = await openQueuedWebSocket(
+			`${runtimeUrl}/api/terminal/io?taskId=${TASK_ID}&workspaceId=${WORKSPACE_ID}&clientId=client-a`,
+		);
+		const control = await openQueuedWebSocket(
+			`${runtimeUrl}/api/terminal/control?taskId=${TASK_ID}&workspaceId=${WORKSPACE_ID}&clientId=client-a`,
+		);
+		await waitForControlMessage(control, (message) => message.type === "restore");
+		control.socket.send(JSON.stringify({ type: "restore_complete" }));
+
+		let closed = false;
+		io.socket.once("close", () => {
+			closed = true;
+		});
+		io.socket.send("typed while nothing runs");
+		await vi.waitFor(() => expect(terminalManager.writeInput).toHaveBeenCalled());
+
+		// The session that starts next streams into the same viewer.
+		terminalManager.emitOutput(TASK_ID, "agent started");
+		await expect(waitForIoMessage(io)).resolves.toEqual(Buffer.from("agent started", "utf8"));
+		expect(closed).toBe(false);
+
+		await closeSocket(io.socket);
+		await closeSocket(control.socket);
 	});
 
 	it("terminates an unresponsive viewer and releases its PTY backpressure", async () => {

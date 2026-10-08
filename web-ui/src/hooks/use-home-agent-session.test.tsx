@@ -158,12 +158,15 @@ function HookHarness({
 	onSnapshot,
 	workspaceGit = DEFAULT_WORKSPACE_GIT,
 	seedSessionSummary = false,
+	upsertRef,
 }: {
 	config: RuntimeConfigResponse | null;
 	currentProjectId: string | null;
 	onSnapshot: (snapshot: HookSnapshot) => void;
 	workspaceGit?: RuntimeGitRepositoryInfo | null;
 	seedSessionSummary?: boolean;
+	// Lets a test deliver summaries the way the runtime stream and the terminal do.
+	upsertRef?: { current: ((summary: RuntimeTaskSessionSummary) => void) | null };
 }): null {
 	const [sessionSummaries, setSessionSummaries] = useState<Record<string, RuntimeTaskSessionSummary>>({});
 	const upsertSessionSummary = useCallback((summary: RuntimeTaskSessionSummary) => {
@@ -172,6 +175,9 @@ function HookHarness({
 			[summary.taskId]: summary,
 		}));
 	}, []);
+	if (upsertRef) {
+		upsertRef.current = upsertSessionSummary;
+	}
 	const result = useHomeAgentSession({
 		currentProjectId,
 		runtimeProjectConfig: config,
@@ -289,6 +295,93 @@ describe("useHomeAgentSession", () => {
 			taskId: initialTaskId,
 		});
 		expect(rotatedSnapshot.sessionKeys).toEqual([rotatedSnapshot.taskId]);
+	});
+
+	describe("after the session it started has gone", () => {
+		const startedSummary = (taskId: string): RuntimeTaskSessionSummary => ({
+			...createSummary(taskId, "codex"),
+			startedAt: 1_000,
+			updatedAt: 1_000,
+		});
+
+		async function renderStarted(): Promise<{
+			taskId: string;
+			upsert: (summary: RuntimeTaskSessionSummary) => void;
+		}> {
+			startTaskSessionMutateMock.mockImplementation(async ({ taskId }: { taskId: string }) => ({
+				ok: true,
+				summary: startedSummary(taskId),
+			}));
+			const upsertRef: { current: ((summary: RuntimeTaskSessionSummary) => void) | null } = { current: null };
+			let latestSnapshot: HookSnapshot | null = null;
+			await act(async () => {
+				root.render(
+					<HookHarness
+						config={createRuntimeConfig()}
+						currentProjectId="workspace-1"
+						upsertRef={upsertRef}
+						onSnapshot={(snapshot) => {
+							latestSnapshot = snapshot;
+						}}
+					/>,
+				);
+				await createFlushPromises();
+			});
+			expect(startTaskSessionMutateMock).toHaveBeenCalledTimes(1);
+			const upsert = upsertRef.current;
+			if (!upsert) {
+				throw new Error("Expected the harness upsert.");
+			}
+			return { taskId: requireTaskId(requireSnapshot(latestSnapshot).taskId), upsert };
+		}
+
+		async function deliver(upsert: (summary: RuntimeTaskSessionSummary) => void, summary: RuntimeTaskSessionSummary) {
+			await act(async () => {
+				upsert(summary);
+				await createFlushPromises();
+			});
+		}
+
+		it("starts it again when a server restart interrupted it", async () => {
+			const { taskId, upsert } = await renderStarted();
+			// The new server marks the dead session interrupted (markOrphanedSessionsInterrupted).
+			await deliver(upsert, {
+				...startedSummary(taskId),
+				state: "interrupted",
+				reviewReason: "interrupted",
+				pid: null,
+				updatedAt: 2_000,
+			});
+			expect(startTaskSessionMutateMock).toHaveBeenCalledTimes(2);
+			expect(startTaskSessionMutateMock).toHaveBeenLastCalledWith(expect.objectContaining({ taskId, prompt: "" }));
+		});
+
+		it("leaves it alone when the agent exited by itself", async () => {
+			const { taskId, upsert } = await renderStarted();
+			// The session manager restarts an exited sidebar session itself while a viewer is attached.
+			await deliver(upsert, {
+				...startedSummary(taskId),
+				state: "awaiting_review",
+				reviewReason: "exit",
+				exitCode: 0,
+				pid: null,
+				updatedAt: 2_000,
+			});
+			expect(startTaskSessionMutateMock).toHaveBeenCalledTimes(1);
+		});
+
+		it("ignores an interrupted summary of an older session", async () => {
+			const { taskId, upsert } = await renderStarted();
+			await deliver(upsert, {
+				...startedSummary(taskId),
+				state: "interrupted",
+				reviewReason: "interrupted",
+				pid: null,
+				startedAt: 500,
+				updatedAt: 2_000,
+			});
+			expect(startTaskSessionMutateMock).toHaveBeenCalledTimes(1);
+		});
 	});
 
 	it("does not restart the home terminal session on a no-op rerender", async () => {

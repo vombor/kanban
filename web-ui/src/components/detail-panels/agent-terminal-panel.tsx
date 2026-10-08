@@ -5,11 +5,13 @@ import type { MutableRefObject, ReactElement } from "react";
 import { useMemo } from "react";
 
 import { TerminalConnectionStatusIndicator } from "@/components/detail-panels/terminal-connection-status";
+import { TerminalLoadingOverlay } from "@/components/detail-panels/terminal-loading-overlay";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip } from "@/components/ui/tooltip";
 import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import { useTaskWorkspaceSnapshotValue } from "@/stores/workspace-metadata-store";
+import type { TerminalReadiness } from "@/terminal/terminal-readiness";
 import type { TerminalConnectionStatus } from "@/terminal/terminal-reconnect-controller";
 import { usePersistentTerminalSession } from "@/terminal/use-persistent-terminal-session";
 import { isMacPlatform } from "@/utils/platform";
@@ -20,6 +22,7 @@ interface AgentTerminalSessionControls {
 	containerRef: MutableRefObject<HTMLDivElement | null>;
 	isStopping: boolean;
 	lastError: string | null;
+	readiness: TerminalReadiness | null;
 	retryConnection: () => void;
 	stopTerminal: () => Promise<void>;
 }
@@ -49,6 +52,8 @@ export interface AgentTerminalPanelProps {
 	terminalBackgroundColor?: string;
 	cursorColor?: string;
 	isVisible?: boolean;
+	// The panel's owner starts the session when it has none (the sidebar agent).
+	expectsSessionStart?: boolean;
 	onConnectionReady?: (taskId: string) => void;
 	agentCommand?: string | null;
 	onSendAgentCommand?: () => void;
@@ -169,6 +174,7 @@ function AgentTerminalPanelLayout({
 	terminalBackgroundColor = "var(--color-surface-1)",
 	cursorColor: _cursorColor = "var(--color-text-primary)",
 	isVisible: _isVisible = true,
+	expectsSessionStart: _expectsSessionStart,
 	onConnectionReady: _onConnectionReady,
 	agentCommand,
 	onSendAgentCommand,
@@ -176,8 +182,16 @@ function AgentTerminalPanelLayout({
 	onToggleExpand,
 	sessionControls,
 }: AgentTerminalPanelProps & { sessionControls: AgentTerminalSessionControls }): ReactElement {
-	const { containerRef, lastError, connectionStatus, isStopping, clearTerminal, retryConnection, stopTerminal } =
-		sessionControls;
+	const {
+		containerRef,
+		lastError,
+		connectionStatus,
+		readiness,
+		isStopping,
+		clearTerminal,
+		retryConnection,
+		stopTerminal,
+	} = sessionControls;
 	const hasHeader = showSessionToolbar || Boolean(onClose);
 	const canStop = summary?.state === "running" || summary?.state === "awaiting_review";
 	const statusLabel = useMemo(() => describeState(summary), [summary]);
@@ -319,7 +333,7 @@ function AgentTerminalPanelLayout({
 						status={connectionStatus}
 						onRetry={retryConnection}
 						showWhenConnected={false}
-						className="absolute top-2 right-3 z-10 rounded-md border border-border bg-surface-2 px-2 py-0.5 shadow-lg"
+						className="absolute top-2 right-3 z-20 rounded-md border border-border bg-surface-2 px-2 py-0.5 shadow-lg"
 					/>
 				)}
 				<div
@@ -327,6 +341,7 @@ function AgentTerminalPanelLayout({
 					className="kb-terminal-container"
 					style={{ height: "100%", width: "100%", background: terminalBackgroundColor }}
 				/>
+				<TerminalLoadingOverlay readiness={readiness} />
 			</div>
 			{lastError ? (
 				<div className="flex gap-2 rounded-none border-t border-status-red/30 bg-status-red/10 p-3 text-[13px] text-status-red">
@@ -368,6 +383,7 @@ export function AgentTerminalPanel(props: AgentTerminalPanelProps): ReactElement
 		onConnectionReady: props.onConnectionReady,
 		autoFocus: props.autoFocus,
 		isVisible: props.isVisible,
+		expectsSessionStart: props.expectsSessionStart,
 		sessionStartedAt: props.summary?.startedAt ?? null,
 		terminalBackgroundColor: props.terminalBackgroundColor ?? "var(--color-surface-1)",
 		cursorColor: props.cursorColor ?? "var(--color-text-primary)",

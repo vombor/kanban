@@ -5,6 +5,7 @@ import { getTerminalThemeColors, useTheme } from "@/hooks/use-theme";
 import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import { disposePersistentTerminal, ensurePersistentTerminal } from "@/terminal/persistent-terminal-manager";
 import { registerTerminalController } from "@/terminal/terminal-controller-registry";
+import type { TerminalReadiness } from "@/terminal/terminal-readiness";
 import type { TerminalConnectionStatus } from "@/terminal/terminal-reconnect-controller";
 
 interface UsePersistentTerminalSessionInput {
@@ -15,6 +16,8 @@ interface UsePersistentTerminalSessionInput {
 	onConnectionReady?: (taskId: string) => void;
 	autoFocus?: boolean;
 	isVisible?: boolean;
+	// The panel starts the session itself when it has none (the sidebar agent).
+	expectsSessionStart?: boolean;
 	sessionStartedAt?: number | null;
 	terminalBackgroundColor: string;
 	cursorColor: string;
@@ -24,6 +27,8 @@ export interface UsePersistentTerminalSessionResult {
 	containerRef: MutableRefObject<HTMLDivElement | null>;
 	lastError: string | null;
 	connectionStatus: TerminalConnectionStatus | null;
+	// Null while no terminal is attached (disabled, or no project).
+	readiness: TerminalReadiness | null;
 	isStopping: boolean;
 	clearTerminal: () => void;
 	stopTerminal: () => Promise<void>;
@@ -38,6 +43,7 @@ export function usePersistentTerminalSession({
 	onConnectionReady,
 	autoFocus = false,
 	isVisible = true,
+	expectsSessionStart = false,
 	sessionStartedAt = null,
 	terminalBackgroundColor,
 	cursorColor,
@@ -60,6 +66,7 @@ export function usePersistentTerminalSession({
 	} | null>(null);
 	const [lastError, setLastError] = useState<string | null>(null);
 	const [connectionStatus, setConnectionStatus] = useState<TerminalConnectionStatus | null>(null);
+	const [readiness, setReadiness] = useState<TerminalReadiness | null>(null);
 	const [isStopping, setIsStopping] = useState(false);
 	callbackRef.current = {
 		onSummary,
@@ -77,6 +84,7 @@ export function usePersistentTerminalSession({
 			previousSessionRef.current = null;
 			setLastError(null);
 			setConnectionStatus(null);
+			setReadiness(null);
 			setIsStopping(false);
 			return;
 		}
@@ -91,6 +99,7 @@ export function usePersistentTerminalSession({
 			previousSessionRef.current = null;
 			setLastError("No project selected.");
 			setConnectionStatus(null);
+			setReadiness(null);
 			return;
 		}
 		const container = containerRef.current;
@@ -126,6 +135,7 @@ export function usePersistentTerminalSession({
 			},
 			onConnectionStatus: setConnectionStatus,
 			onLastError: setLastError,
+			onReadiness: setReadiness,
 			onSummary: (summary) => {
 				callbackRef.current.onSummary?.(summary);
 			},
@@ -140,6 +150,7 @@ export function usePersistentTerminalSession({
 			{
 				autoFocus,
 				isVisible,
+				expectsSessionStart,
 			},
 		);
 		setLastError(null);
@@ -155,6 +166,7 @@ export function usePersistentTerminalSession({
 		autoFocus,
 		cursorColor,
 		enabled,
+		expectsSessionStart,
 		isVisible,
 		sessionStartedAt,
 		taskId,
@@ -198,6 +210,7 @@ export function usePersistentTerminalSession({
 		containerRef,
 		lastError,
 		connectionStatus,
+		readiness,
 		isStopping,
 		clearTerminal,
 		stopTerminal,

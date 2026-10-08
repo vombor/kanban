@@ -4,8 +4,9 @@ import {
 	TERMINAL_WS_CLOSE_REASONS,
 } from "@runtime-terminal-ws-close";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
+import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import { disposePersistentTerminal, ensurePersistentTerminal } from "@/terminal/persistent-terminal-manager";
+import { TERMINAL_LOADING_TIMEOUT_MS, type TerminalReadiness } from "@/terminal/terminal-readiness";
 import {
 	TERMINAL_RECONNECT_MAX_ATTEMPTS,
 	type TerminalConnectionStatus,
@@ -25,6 +26,7 @@ const fakeTerminals = vi.hoisted(() => {
 		unicode = { activeVersion: "" };
 		private deferredCallbacks: Array<() => void> = [];
 		private readonly dataListeners: Array<(data: string) => void> = [];
+		private keyEventHandler: ((event: KeyboardEvent) => boolean) | null = null;
 
 		constructor(options: Record<string, unknown>) {
 			this.options = { ...options };
@@ -35,7 +37,20 @@ const fakeTerminals = vi.hoisted(() => {
 
 		loadAddon(): void {}
 		open(): void {}
-		attachCustomKeyEventHandler(): void {}
+		attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean): void {
+			this.keyEventHandler = handler;
+		}
+		// A key the user presses: xterm asks the custom handler first and drops the key when it says no.
+		pressKey(key: string): void {
+			if (this.keyEventHandler && !this.keyEventHandler(new KeyboardEvent("keydown", { key }))) {
+				return;
+			}
+			this.input(key);
+		}
+		// xterm answering a query in the output (ESC[c): the same onData path as keys, without the key handler.
+		reply(data: string): void {
+			this.input(data);
+		}
 		onBinary(): { dispose: () => void } {
 			return { dispose: () => {} };
 		}
@@ -491,5 +506,231 @@ describe("persistent terminal reconnect", () => {
 			.filter((message) => message.type === "output_ack");
 		// The new server viewer never sent the old 6 bytes; only its own are acked.
 		expect(acks).toEqual([{ type: "output_ack", bytes: 7 }]);
+	});
+});
+
+function createSessionSummary(
+	taskId: string,
+	overrides: Partial<RuntimeTaskSessionSummary>,
+): RuntimeTaskSessionSummary {
+	return {
+		taskId,
+		state: "running",
+		agentId: "claude",
+		workspacePath: "/tmp/repo",
+		pid: 4321,
+		startedAt: 1_000,
+		updatedAt: 1_000,
+		lastOutputAt: null,
+		reviewReason: null,
+		exitCode: null,
+		lastHookAt: null,
+		latestHookActivity: null,
+		modelId: null,
+		reasoningEffort: null,
+		latestTurnCheckpoint: null,
+		previousTurnCheckpoint: null,
+		...overrides,
+	};
+}
+
+describe("persistent terminal readiness", () => {
+	const workspaceId = "workspace-1";
+	let taskId: string;
+	let readiness: TerminalReadiness[];
+
+	function createTerminal({ expectsSessionStart = false }: { expectsSessionStart?: boolean } = {}) {
+		const terminal = ensurePersistentTerminal({
+			taskId,
+			workspaceId,
+			cursorColor: "#fff",
+			terminalBackgroundColor: "#000",
+		});
+		terminal.subscribe({
+			onReadiness: (next) => {
+				readiness.push(next);
+			},
+		});
+		terminal.mount(
+			document.createElement("div"),
+			{ cursorColor: "#fff", terminalBackgroundColor: "#000" },
+			{
+				isVisible: false,
+				expectsSessionStart,
+			},
+		);
+		return terminal;
+	}
+
+	function latestReadiness(): TerminalReadiness | undefined {
+		return readiness[readiness.length - 1];
+	}
+
+	// The server sends the session's state on attach, before the restore.
+	function sendState(summary: Partial<RuntimeTaskSessionSummary>): void {
+		latestSocket("control").serverSend(
+			JSON.stringify({ type: "state", summary: createSessionSummary(taskId, summary) }),
+		);
+	}
+
+	beforeEach(() => {
+		vi.useFakeTimers();
+		nextTaskNumber += 1;
+		taskId = `task-${nextTaskNumber}`;
+		readiness = [];
+		FakeWebSocket.instances = [];
+		fakeTerminals.FakeTerminal.instances = [];
+		visibilityState = "visible";
+		online = true;
+		vi.stubGlobal("WebSocket", FakeWebSocket);
+		vi.stubGlobal(
+			"ResizeObserver",
+			class {
+				observe(): void {}
+				disconnect(): void {}
+			},
+		);
+		Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibilityState });
+		Object.defineProperty(navigator, "onLine", { configurable: true, get: () => online });
+		vi.spyOn(Math, "random").mockReturnValue(0);
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+	});
+
+	afterEach(() => {
+		disposePersistentTerminal(workspaceId, taskId);
+		vi.useRealTimers();
+		vi.unstubAllGlobals();
+		vi.restoreAllMocks();
+	});
+
+	it("loads until the stream is open and its restore is complete", async () => {
+		createTerminal();
+		expect(latestReadiness()).toEqual({ state: "loading", phase: "connecting" });
+
+		latestSocket("stream").serverOpen();
+		const control = latestSocket("control");
+		control.serverOpen();
+		sendState({});
+		expect(latestReadiness()).toEqual({ state: "loading", phase: "connecting" });
+
+		control.serverSend(
+			JSON.stringify({ type: "restore", snapshot: "$ prompt", cols: 80, rows: 24, restoreGeneration: 1 }),
+		);
+		await flushMicrotasks();
+		expect(latestReadiness()).toEqual({ state: "ready" });
+	});
+
+	it("waits for the agent's first visible output and blocks keys, not query replies, meanwhile", async () => {
+		createTerminal();
+		sendState({ state: "running", pid: 4321 });
+		await completeConnection({ snapshot: "" });
+		expect(latestReadiness()).toEqual({ state: "loading", phase: "waiting_for_output" });
+
+		const terminal = latestTerminal();
+		const stream = latestSocket("stream");
+		terminal.pressKey("a");
+		// The agent's probes draw nothing: still loading, but xterm's answer goes out.
+		stream.serverSend(encode("\u001b[?u\u001b[c"));
+		await flushMicrotasks();
+		expect(latestReadiness()).toEqual({ state: "loading", phase: "waiting_for_output" });
+		terminal.reply("\u001b[?1;2c");
+		expect(stream.sent).toEqual(["\u001b[?1;2c"]);
+
+		stream.serverSend(encode("\u001b[?1049h Claude Code"));
+		await flushMicrotasks();
+		expect(latestReadiness()).toEqual({ state: "ready" });
+		terminal.pressKey("b");
+		expect(stream.sent).toEqual(["\u001b[?1;2c", "b"]);
+	});
+
+	it("waits for a session the panel starts itself, and treats one nobody starts as idle", async () => {
+		createTerminal({ expectsSessionStart: true });
+		// After a restart: the summary was marked interrupted and there is no process or screen.
+		sendState({ state: "interrupted", reviewReason: "interrupted", pid: null });
+		await completeConnection({ snapshot: "" });
+		expect(latestReadiness()).toEqual({ state: "loading", phase: "starting" });
+
+		// The sidebar starts it: a new process, then its first frame.
+		sendState({ state: "running", pid: 5555, startedAt: 2_000, updatedAt: 2_000 });
+		expect(latestReadiness()).toEqual({ state: "loading", phase: "waiting_for_output" });
+		latestSocket("stream").serverSend(encode("Claude Code"));
+		await flushMicrotasks();
+		expect(latestReadiness()).toEqual({ state: "ready" });
+
+		disposePersistentTerminal(workspaceId, taskId);
+		readiness = [];
+		createTerminal({ expectsSessionStart: false });
+		sendState({ state: "interrupted", reviewReason: "interrupted", pid: null });
+		await completeConnection({ snapshot: "" });
+		expect(latestReadiness()).toEqual({ state: "ready" });
+	});
+
+	it("loads again after the stream drops and is ready once the reconnect has restored", async () => {
+		createTerminal();
+		sendState({});
+		await completeConnection({ snapshot: "screen" });
+		expect(latestReadiness()).toEqual({ state: "ready" });
+
+		latestSocket("stream").serverClose(1006);
+		expect(latestReadiness()).toEqual({ state: "loading", phase: "connecting" });
+		const terminal = latestTerminal();
+		await vi.advanceTimersByTimeAsync(250);
+		latestSocket("stream").serverOpen();
+		latestSocket("control").serverOpen();
+		sendState({});
+		// Open again, but this stream's restore has not completed: still loading, keys still blocked.
+		expect(latestReadiness()).toEqual({ state: "loading", phase: "connecting" });
+		terminal.pressKey("x");
+		expect(latestSocket("stream").sent).toEqual([]);
+
+		latestSocket("control").serverSend(
+			JSON.stringify({ type: "restore", snapshot: "screen, more", cols: 80, rows: 24, restoreGeneration: 1 }),
+		);
+		await flushMicrotasks();
+		expect(latestReadiness()).toEqual({ state: "ready" });
+	});
+
+	it("stays ready while only the control socket reconnects", async () => {
+		createTerminal();
+		sendState({});
+		await completeConnection({ snapshot: "screen" });
+		const before = readiness.length;
+
+		latestSocket("control").serverClose(1006);
+		await vi.advanceTimersByTimeAsync(250);
+		await completeConnection({ snapshot: "screen", openStream: false });
+		expect(readiness.slice(before)).toEqual([]);
+		expect(latestReadiness()).toEqual({ state: "ready" });
+	});
+
+	it("gives up loading after the timeout instead of spinning forever", async () => {
+		createTerminal({ expectsSessionStart: true });
+		sendState({ state: "interrupted", pid: null });
+		await completeConnection({ snapshot: "" });
+		expect(latestReadiness()).toEqual({ state: "loading", phase: "starting" });
+
+		await vi.advanceTimersByTimeAsync(TERMINAL_LOADING_TIMEOUT_MS);
+		expect(latestReadiness()).toEqual({ state: "unavailable", reason: "timeout" });
+		// Keys go through again (the server drops them while there is no process).
+		latestTerminal().pressKey("x");
+		expect(latestSocket("stream").sent).toEqual(["x"]);
+
+		// A session that starts later still loads until its first output.
+		ensurePersistentTerminal({ taskId, workspaceId, cursorColor: "#fff", terminalBackgroundColor: "#000" }).reset();
+		sendState({ state: "running", pid: 5555, startedAt: 2_000 });
+		expect(latestReadiness()).toEqual({ state: "loading", phase: "waiting_for_output" });
+	});
+
+	it("hands over to the retry UI once reconnecting gives up", async () => {
+		createTerminal();
+		sendState({});
+		await completeConnection({ snapshot: "screen" });
+
+		latestSocket("stream").serverClose(1006);
+		for (let attempt = 1; attempt <= TERMINAL_RECONNECT_MAX_ATTEMPTS; attempt += 1) {
+			await vi.advanceTimersByTimeAsync(5_000);
+			latestSocket("stream").serverClose(1006);
+		}
+		expect(latestReadiness()).toEqual({ state: "unavailable", reason: "disconnected" });
 	});
 });

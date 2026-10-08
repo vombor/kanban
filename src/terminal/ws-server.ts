@@ -815,10 +815,11 @@ export function createTerminalWebSocketBridge({
 
 		ws.on("message", (rawMessage: RawData) => {
 			try {
-				const summary = terminalManager.writeInput(taskId, rawDataToBuffer(rawMessage));
-				if (!summary) {
-					ws.close(1011, "Task session is not running.");
-				}
+				// Input for a session without a process (not started yet, or its PTY died with the previous
+				// server) is dropped, not answered with a close: the viewer stays attached, so the session
+				// that starts next (the sidebar's or recovery's) streams into it. Closing here made every
+				// key typed into the black terminal after a restart force a full reconnect.
+				terminalManager.writeInput(taskId, rawDataToBuffer(rawMessage));
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				ws.close(1011, message);

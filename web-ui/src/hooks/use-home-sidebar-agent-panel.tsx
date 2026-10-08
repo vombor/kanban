@@ -87,6 +87,7 @@ export function useHomeSidebarAgentPanel({
 				summary={homeAgentPanelSummary}
 				onSummary={upsertSessionSummary}
 				showSessionToolbar={false}
+				expectsSessionStart
 				autoFocus={!isMobile}
 				panelBackgroundColor="var(--color-surface-1)"
 				terminalBackgroundColor={terminalThemeColors.surfaceRaised}
