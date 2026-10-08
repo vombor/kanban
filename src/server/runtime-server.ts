@@ -24,6 +24,7 @@ import {
 } from "../core/runtime-endpoint";
 import { createIsolationService, type IsolationService } from "../isolation/isolation-service";
 import { createMessageNoticeQueue } from "../isolation/message-notices";
+import { applyIssueSync } from "../issues/issue-apply";
 import type { PipelineActionRequest, PipelineActionResult } from "../pipeline/actions";
 import type { PipelineEventMap } from "../pipeline/events";
 import type { WatchdogActionRequest } from "../pipeline/watchdog/actions";
@@ -404,6 +405,12 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		},
 		onBoardMutated: async (scope) =>
 			await deps.runtimeStateHub.broadcastRuntimeWorkspaceStateUpdated(scope.workspaceId, scope.workspacePath),
+		applyIssues: async (input) =>
+			await applyIssueSync(input, {
+				mutateWorkspaceState,
+				onBoardMutated: async (scope) =>
+					await deps.runtimeStateHub.broadcastRuntimeWorkspaceStateUpdated(scope.workspaceId, scope.workspacePath),
+			}),
 	});
 
 	const createTrpcContext = async (req: IncomingMessage): Promise<RuntimeTrpcContext> => {

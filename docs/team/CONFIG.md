@@ -65,6 +65,40 @@ Nothing is inherited from another workspace.
 | `guardrails.extraDenyCommands`, `.extraWritableDirs` | `[]` | added to the machine-wide lists; a workspace can only tighten them |
 | `isolation.mode` | null (= `isolation.mode`) | project isolation for this workspace: `off`, `report`, `enforce` ([project-isolation.md](../fork/project-isolation.md)) |
 | `isolation.messages` | `deny` | `allow` lets this project's orchestrator send and receive orchestrator messages; both projects must allow |
+| `issues.mode` | `off` | issue import ([WORKFLOW.md §14](WORKFLOW.md)): `off` fetches nothing; `report` fetches and logs what it would import (decision log, stage `issues`), creates nothing; `on` imports matching issues as Backlog cards and wakes the orchestrator |
+| `issues.provider` | `github` | the tracker (only GitHub today) |
+| `issues.repo` | null (from `origin`) | `owner/name`. Must be one of the project's own git remotes (ssh or https form); anything else is refused |
+| `issues.pollMin` | `15` | how often the worker's sync job runs |
+| `issues.filter.trustedAssociations` | `OWNER`, `MEMBER`, `COLLABORATOR` | authors (GitHub author_association) whose issues are imported |
+| `issues.filter.trustLabels` | `kanban` | an issue with one of these labels is imported whoever opened it (applying a label needs triage rights) |
+| `issues.filter.includeLabels` | `[]` | when set, an issue must also carry one of them |
+| `issues.filter.excludeLabels` | `[]` | an issue with one of them is never imported |
+| `issues.planLabel` | `needs-plan` | an issue with this label becomes a plan card when the kit has the plan role |
+| `issues.commentOnLand` | `false` | comment on the issue when its card is landed or discarded (landing `qa`; needs a token with write access) |
+
+**Why the issue filter is strict by default.** An issue's text becomes an agent prompt, and anyone can open an issue
+or comment on a public repository. So only the repository's own people (OWNER, MEMBER, COLLABORATOR) are trusted,
+and an outsider's issue gets in only when someone with triage rights labels it `kanban`. The same
+`trustedAssociations` check applies to every comment: an untrusted user's comment never reaches the prompt, only a
+line saying how many were left out. An untrusted author's later edits to the title or description are never copied
+(GitHub doesn't say who edited, and the label may predate the edit), only noted, and once the trust label is removed
+nothing more is added. The card title is `Issue #N: <short title>` (one line, plain characters, at most 72) for a
+trusted author and just `Issue #N` otherwise, because the title also reaches the QA prompt's intro, the QA card's
+title and the landing commit subject, which are not fenced. Widen `trustedAssociations` (e.g. `CONTRIBUTOR`) only on
+a repository whose contributors you'd let write card prompts.
+
+The worker's sync job runs in the watchdog's job runner, so it needs `watchdog.mode: on`; `kanban issues sync` works
+without it (the user or the project's orchestrator runs it; card sessions are refused, since it uses the user's
+token). Auth: the `gh` CLI's login (`gh auth token`; it also returns a `GH_TOKEN` from the env, such as the
+container's PAT), else `GITHUB_TOKEN` / `GH_TOKEN` from Kanban's env, else anonymous (public repositories, 60
+requests/h, and every anonymous request counts, 304s included; only authenticated 304s are free). Kanban never writes a
+token to a file or a log. State: `data/<ws>/issues-state.json` and `issues-http-cache.json`.
+
+The first sync pins the repository in `issues-state.json`. Task worktrees share `.git/config`, so a card could point
+`origin` elsewhere: a derived repository that no longer matches the pin is refused (doctor FAIL) until the user sets
+`issues.repo`. An `issues-state.json` that can't be parsed is never overwritten (it holds the records that keep Done
+and pruned cards deduped): it is copied to `issues-state.json.corrupt` and issue import stops (doctor FAIL) until the
+file is fixed or removed.
 
 ## `pipeline.*`
 

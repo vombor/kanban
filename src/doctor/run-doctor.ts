@@ -7,6 +7,7 @@ import { listLegacyKitProjects, readLegacyKitConfig, readLegacyKitServices } fro
 import { readLemonadeModelListSettings } from "../config/model-lists-config";
 import { readPipelineConfig, readRawGlobalConfig } from "../config/pipeline-config";
 import { loadGlobalRuntimeConfig } from "../config/runtime-config";
+import { resolveGitHubAuth } from "../issues/issue-auth";
 import { loadKitCatalog } from "../kits/resolve-kit";
 import { resolveProjectRoots } from "../projects/project-roots";
 import { buildLemonadeModelListUrl, planClineModelsSource } from "../setup/cline-models-source";
@@ -39,6 +40,7 @@ import type { DoctorFinding, DoctorFixOutcome, DoctorReport } from "./doctor-rep
 import { checkGuardrails, type GuardrailCheckDeps } from "./guardrail-checks";
 import { checkHomeLocation } from "./home-location-checks";
 import { checkIsolation } from "./isolation-checks";
+import { checkIssueImport, createIssueCheckDeps, type IssueCheckDeps } from "./issue-checks";
 import { checkOneOwner } from "./one-owner-checks";
 
 export interface DoctorOptions {
@@ -53,6 +55,8 @@ export interface DoctorOptions {
 	guardrailDeps?: GuardrailCheckDeps;
 	/** Test hook: the fetch the Lemonade models row asks Lemonade with. */
 	fetch?: typeof fetch;
+	/** Test hook: the issue import rows' remotes, state and auth source. */
+	issueDeps?: IssueCheckDeps;
 }
 
 export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
@@ -148,6 +152,13 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
 
 	findings.push(...(await checkGuardrails(config, options.guardrailDeps)));
 	findings.push(...checkIsolation(config, entries, options.guardrailDeps));
+	findings.push(
+		...(await checkIssueImport(
+			config,
+			liveEntries,
+			options.issueDeps ?? createIssueCheckDeps(async () => (await resolveGitHubAuth()).source),
+		)),
+	);
 
 	if (options.deep) {
 		const runtimeConfig = await loadGlobalRuntimeConfig();

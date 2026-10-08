@@ -5,6 +5,7 @@ import type {
 	RuntimeTaskAgentSettings,
 	RuntimeTaskAutoReviewMode,
 	RuntimeTaskImage,
+	RuntimeTaskIssue,
 	RuntimeTaskPendingGitAction,
 	RuntimeTaskRole,
 } from "@/runtime/types";
@@ -73,6 +74,34 @@ export function normalizeTaskRole(value: unknown): TaskRole | undefined {
 		: undefined;
 }
 
+/** The issue a card was imported from (written by the runtime's issue import), or undefined when it isn't one. */
+export function normalizeTaskIssue(value: unknown): RuntimeTaskIssue | undefined {
+	if (!value || typeof value !== "object") {
+		return undefined;
+	}
+	const issue = value as Record<string, unknown>;
+	if (
+		issue.provider !== "github" ||
+		typeof issue.repo !== "string" ||
+		!issue.repo ||
+		typeof issue.number !== "number" ||
+		!Number.isInteger(issue.number) ||
+		issue.number <= 0 ||
+		typeof issue.url !== "string" ||
+		typeof issue.updatedAt !== "string"
+	) {
+		return undefined;
+	}
+	return {
+		provider: issue.provider,
+		repo: issue.repo,
+		number: issue.number,
+		url: issue.url,
+		updatedAt: issue.updatedAt,
+		...(typeof issue.closedAt === "string" || issue.closedAt === null ? { closedAt: issue.closedAt } : {}),
+	};
+}
+
 /** The badge a non-dev card shows on the board, or null for a dev card. */
 export function getTaskRoleBadgeLabel(role: TaskRole | null | undefined): string | null {
 	if (role === "qa") {
@@ -103,6 +132,8 @@ export interface BoardCard {
 	role?: TaskRole;
 	/** On a QA card: the dev card it reviews (written by the pipeline). */
 	reviewsTaskId?: string;
+	/** On a card imported from an issue (written by the runtime's issue import). */
+	issue?: RuntimeTaskIssue;
 	images?: TaskImage[];
 	agentId?: RuntimeAgentId;
 	agentSettings?: RuntimeTaskAgentSettings;

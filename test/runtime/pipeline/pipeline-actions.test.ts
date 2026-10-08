@@ -56,6 +56,17 @@ describe("pipeline actions on the server", () => {
 		expect(onBoardMutated).toHaveBeenCalledWith(expect.objectContaining(SCOPE));
 	});
 
+	it("keeps the issue of a rework sibling it creates", async () => {
+		const { store, run } = createRunner({});
+		const issue = { provider: "github" as const, repo: "vombor/kanban", number: 3, url: "u", updatedAt: "t" };
+		await run({
+			...SCOPE,
+			kind: "createTask",
+			task: { taskId: "s0001", title: "x", prompt: "x", role: "dev", agentId: "codex", baseRef: "main", issue },
+		});
+		expect(findCardInBoard(store.stored.board, "s0001")?.card.issue).toEqual(issue);
+	});
+
 	it("refuses a task id that already exists", async () => {
 		const { run } = createRunner({ backlog: [createCard({ id: "qa001" })] });
 		const result = await run({

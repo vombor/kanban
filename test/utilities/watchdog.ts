@@ -10,7 +10,7 @@ import { createPipelineFeatureRegistry } from "../../src/pipeline/features";
 import { createPipelineStateStore } from "../../src/pipeline/pipeline-state";
 import type { WatchdogActionRequest, WatchdogActionResults } from "../../src/pipeline/watchdog/actions";
 import type { PidUsage } from "../../src/pipeline/watchdog/pid-pressure";
-import { createWatchdog } from "../../src/pipeline/watchdog/watchdog";
+import { createWatchdog, type WatchdogDependencies } from "../../src/pipeline/watchdog/watchdog";
 import { getPidPressureFlagPaths, getWatchdogWorkspacePaths } from "../../src/state/kanban-home";
 import { createTempDir } from "./temp-dir";
 
@@ -24,6 +24,8 @@ export interface WatchdogHarnessOptions {
 	results?: Partial<{ [Kind in WatchdogActionRequest["kind"]]: WatchdogActionResults[Kind] }>;
 	/** A process the agent started still running in a worktree (default: none; never the real /proc). */
 	findRunningTool?: (worktreePath: string, agentPid: number | null) => Promise<string | null>;
+	coreJobs?: WatchdogDependencies["coreJobs"];
+	takeWakeNotes?: WatchdogDependencies["takeWakeNotes"];
 }
 
 export function deliveryResult(status: RuntimeTaskInputDeliveryResponse["status"]): RuntimeTaskInputDeliveryResponse {
@@ -86,6 +88,8 @@ export function createWatchdogHarness(options: WatchdogHarnessOptions = {}) {
 		probeModel: async () => false,
 		findRunningTool: async (worktreePath, agentPid) => options.findRunningTool?.(worktreePath, agentPid) ?? null,
 		isTrusted: async () => true,
+		coreJobs: options.coreJobs,
+		takeWakeNotes: options.takeWakeNotes,
 		now: () => now,
 		log,
 	});

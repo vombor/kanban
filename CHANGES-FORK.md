@@ -701,3 +701,30 @@ of this repository is the complete record of changes.
   staggered further: the cards stalled on a guard cancel, not on start-up contention (`resumeGapSec` stays 20).
   Recovery, the watchdog and the Cline turn detector now resolve `agents.cline.dataDir` the same way, as the Cline CLI
   does (`~` expanded, `CLINE_DATA_DIR`, `CLINE_DIR/data`).
+- `src/issues/` (new: `issue-provider.ts`, `github-provider.ts`, `issue-auth.ts`, `issue-repo.ts`, `issue-trust.ts`,
+  `issue-prompt.ts`, `issue-state.ts`, `issue-sync-plan.ts`, `issue-apply.ts`, `issue-sync.ts`, `issue-job.ts`,
+  `issue-comment.ts`), `src/commands/issues.ts` (new), `src/doctor/issue-checks.ts` (new), `src/config/pipeline-config.ts`,
+  `src/core/api-contract.ts`, `src/core/task-board-mutations.ts`, `src/pipeline/actions.ts`, `src/pipeline/worker-protocol.ts`,
+  `src/pipeline/worker-host.ts`, `src/pipeline/worker.ts`, `src/pipeline/watchdog/watchdog.ts`, `src/pipeline/decision-log.ts`,
+  `src/server/pipeline-actions.ts`, `src/server/runtime-server.ts`, `src/server/task-landing-gate.ts`, `src/workspace/land.ts`,
+  `src/kits/dev-assignment.ts`, `src/state/kanban-home.ts`, `src/doctor/run-doctor.ts`, `src/doctor/doctor-report.ts`,
+  `src/cli.ts`, `web-ui/src/types/board.ts`, `web-ui/src/state/board-state.ts`, `AGENTS.md`, `docs/team/CONFIG.md`,
+  `docs/team/WORKFLOW.md`, tests (user request 2026-10-07): issue import. A project pulls issues from its own remote
+  repository (GitHub first, `workspaces.<id>.issues`, mode `off`/`report`/`on`, default off) into Backlog cards
+  titled `#N <title>` with an `issue` card field (deduped across all columns and after prune-done). Strict trust
+  filter by default (OWNER/MEMBER/COLLABORATOR authors or the `kanban` label), the issue text fenced and quoted as
+  untrusted in the prompt, the kit's devAssignment (or plan routing for the `needs-plan` label) on creation, never
+  started; Backlog cards get "Update" sections and a closed-upstream marker, started cards' updates go to the
+  orchestrator's next wake. The worker's sync job (a watchdog core job) writes the board through the new
+  `applyIssues` request; `kanban issues sync|list`; conditional requests and rate-limit backoff; auth from `gh`, the
+  env or anonymous, never written anywhere. Kanban's landing commit adds `Fixes #N` for dev cards; optional
+  `issues.commentOnLand`. A doctor row per project.
+- `src/issues/*`, `src/pipeline/rework.ts`, `src/pipeline/actions.ts`, `src/server/pipeline-actions.ts`,
+  `src/isolation/cli-scope.ts`, `src/doctor/issue-checks.ts`, docs, tests (review of the issue import, 2026-10-08):
+  comments by untrusted users never reach a prompt (a count line instead), an untrusted author's edits are only
+  noted and a removed trust label stops updates; card titles are `Issue #N: <sanitised short title>` for trusted
+  authors and `Issue #N` otherwise; the apply step plans under the issues-state lock (no double Update); an
+  unparsable issues-state.json is backed up and never overwritten; the repository is pinned on the first sync
+  (origin changes are refused until `issues.repo` is set); next-page links are cached for 304s and refused off the
+  API origin; report mode fetches comments only for changed issues; rework siblings keep the `issue`; card
+  sessions can't run `kanban issues sync`.

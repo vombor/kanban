@@ -2,7 +2,8 @@
 // code the CLI and the browser use, so a pipeline-made card is an ordinary card: board mutations under the
 // workspace lock and the normal worktree + session start. `resumeTask` restarts a card restart recovery found
 // orphaned or whose rework never started. (Finishing a card is the worker's `finishTask` request, the Done workflow;
-// typing into one is the watchdog's `deliverInput`.)
+// typing into one is the watchdog's `deliverInput`.) `applyIssues` is the issue import's board write
+// (src/issues/issue-apply.ts).
 import { randomUUID } from "node:crypto";
 import type {
 	RuntimeBoardCard,
@@ -13,6 +14,7 @@ import type {
 	RuntimeWorktreeEnsureResponse,
 } from "../core/api-contract";
 import { addTaskToColumn, getTaskColumnId, moveTaskToColumn, updateTask } from "../core/task-board-mutations";
+import type { IssueApplyInput, IssueApplyResult } from "../issues/issue-apply";
 import { BLOCKED_TITLE_PREFIX, type PipelineActionRequest, type PipelineActionResult } from "../pipeline/actions";
 import type { MutateWorkspaceState, TaskTrashWorkspaceScope } from "./task-trash-workflow";
 
@@ -33,6 +35,8 @@ export interface PipelineActionRunnerDependencies {
 	/** How long `replaceLive` waits for a stopped session's process to exit. Default 5 s. */
 	stopTimeoutMs?: number;
 	onBoardMutated?: (scope: TaskTrashWorkspaceScope) => Promise<void> | void;
+	/** The issue import's apply step (applyIssueSync). Without it `applyIssues` is refused. */
+	applyIssues?: (input: IssueApplyInput) => Promise<IssueApplyResult>;
 	randomUuid?: () => string;
 }
 
@@ -103,6 +107,7 @@ export function createPipelineActionRunner(
 					agentId: task.agentId,
 					agentSettings: task.agentSettings,
 					baseRef: task.baseRef,
+					...(task.issue ? { issue: task.issue } : {}),
 					autoReviewEnabled: false,
 				},
 				randomUuid,
@@ -295,6 +300,17 @@ export function createPipelineActionRunner(
 					return await updateTaskText(request);
 				case "blockTask":
 					return await blockTask(request);
+				case "applyIssues": {
+					if (!deps.applyIssues) {
+						return { ok: false, error: "this server does not apply issues" };
+					}
+					const issues = await deps.applyIssues({
+						...request.issues,
+						workspaceId: request.workspaceId,
+						workspacePath: request.workspacePath,
+					});
+					return { ok: true, issues };
+				}
 			}
 		} catch (error) {
 			return { ok: false, error: toErrorMessage(error) };

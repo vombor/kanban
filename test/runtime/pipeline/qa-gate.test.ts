@@ -42,7 +42,10 @@ function kinds(actions: QaGateHarnessAction[]) {
 			(action) =>
 				!REWORK_KINDS.has(action.kind) && !(action.kind === "deliverInput" && !action.taskId.startsWith("qa")),
 		)
-		.map((action) => `${action.kind}:${"taskId" in action ? action.taskId : action.task.taskId}`);
+		.map(
+			(action) =>
+				`${action.kind}:${"taskId" in action ? action.taskId : "task" in action ? action.task.taskId : ""}`,
+		);
 }
 
 describe("QA gate", () => {

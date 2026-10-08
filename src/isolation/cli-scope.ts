@@ -71,6 +71,12 @@ function planApprovalRefusal(taskId: string | undefined): string {
 	return `Plan approval is the user's; ask them to run kanban plan approve ${taskId ?? "<id>"} or use the board.`;
 }
 
+/**
+ * Commands only the user and a project's orchestrator may run, whatever the isolation mode: a card session is
+ * refused. `issues sync` calls GitHub with the user's own token (the `gh` login or `GH_TOKEN`).
+ */
+export const ORCHESTRATOR_OR_USER_COMMANDS = ["issues sync"] as const;
+
 /** The project changes that wait for an approval under `enforce` (src/isolation/approvals.ts). */
 const PROJECT_CHANGE_COMMANDS = { "project add": "project.add", "project create": "project.create" } as const;
 
@@ -268,6 +274,13 @@ export async function applyCliSessionScope(input: {
 		return `\`kanban ${input.commandPath}\` is the user's: an agent session can't run it. Tell the user what you need.`;
 	}
 	const config = await readIsolationConfig();
+	if (matchesCommandPath(input.commandPath, ORCHESTRATOR_OR_USER_COMMANDS)) {
+		// The server says which session this is; a card, or a session it can't confirm as the orchestrator, is refused.
+		const caller = await resolveCliSessionScope({ env, config, client: input.createClient() });
+		if (caller?.role !== "orchestrator") {
+			return `\`kanban ${input.commandPath}\` uses the user's GitHub login, so only the user or the project's orchestrator runs it, never a card session. Tell your orchestrator what you need.`;
+		}
+	}
 	// With isolation off everywhere only the user-only rules apply: nothing is scoped, the server isn't asked.
 	if (!isAnyIsolationOn(config)) {
 		return null;

@@ -604,6 +604,8 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 				agentId: input.agentId,
 				agentSettings: toAgentSettings(input.model),
 				baseRef: card.baseRef,
+				// The sibling does the same issue's work: its land must still close the issue and comment on it.
+				...(card.issue ? { issue: card.issue } : {}),
 			},
 		});
 		if (!created.ok) {

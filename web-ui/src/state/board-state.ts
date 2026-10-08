@@ -13,6 +13,7 @@ import {
 	type BoardDependency,
 	type CardSelection,
 	DEFAULT_TASK_AUTO_REVIEW_MODE,
+	normalizeTaskIssue,
 	normalizeTaskRole,
 	resolveTaskAutoReviewMode,
 	type TaskAutoReviewMode,
@@ -186,6 +187,7 @@ function normalizeCard(rawCard: unknown): BoardCard | null {
 		autoReviewMode?: unknown;
 		role?: unknown;
 		reviewsTaskId?: unknown;
+		issue?: unknown;
 		images?: unknown;
 		baseRef?: unknown;
 		agentId?: unknown;
@@ -218,10 +220,11 @@ function normalizeCard(rawCard: unknown): BoardCard | null {
 
 	const now = Date.now();
 	const pendingGitAction = normalizeTaskPendingGitAction(card.pendingGitAction);
-	// The runtime writes the role (QA, TRIAGE and calibration cards) and a QA card's reviewsTaskId; a browser save
-	// must keep them.
+	// The runtime writes the role (QA, TRIAGE and calibration cards), a QA card's reviewsTaskId and an imported card's
+	// issue; a browser save must keep them.
 	const role = normalizeTaskRole(card.role);
 	const reviewsTaskId = typeof card.reviewsTaskId === "string" && card.reviewsTaskId ? card.reviewsTaskId : null;
+	const issue = normalizeTaskIssue(card.issue);
 
 	return {
 		id: typeof card.id === "string" && card.id ? card.id : createShortTaskId(createBrowserUuid),
@@ -234,6 +237,7 @@ function normalizeCard(rawCard: unknown): BoardCard | null {
 		),
 		...(role ? { role } : {}),
 		...(reviewsTaskId ? { reviewsTaskId } : {}),
+		...(issue ? { issue } : {}),
 		images: normalizeTaskImages(card.images),
 		baseRef,
 		...(typeof card.agentId === "string" && card.agentId ? { agentId: card.agentId as RuntimeAgentId } : {}),

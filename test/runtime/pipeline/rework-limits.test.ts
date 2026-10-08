@@ -22,7 +22,9 @@ const DEV = createCard({
 const SESSION = { taskId: "d1111", agentId: "cline" as const, modelId: "us.openai.gpt-6.1-sol" };
 
 function kinds(actions: ReturnType<typeof createReworkHarness>["actions"]) {
-	return actions.map((action) => `${action.kind}:${"taskId" in action ? action.taskId : action.task.taskId}`);
+	return actions.map(
+		(action) => `${action.kind}:${"taskId" in action ? action.taskId : "task" in action ? action.task.taskId : ""}`,
+	);
 }
 
 describe("rework limits", () => {
@@ -219,6 +221,27 @@ describe("rework limits", () => {
 		await untagged.tick({ review: [DEV] }, [SESSION]);
 		expect(kinds(untagged.actions)).toEqual(["blockTask:d1111"]);
 		expect(readEscalationRecord(readQaflow(await untagged.entry("d1111")))).toMatchObject({ to: "orchestrator" });
+	});
+
+	it("an escalation sibling of an imported card carries its issue, so its land still closes the issue", async () => {
+		const issue = {
+			provider: "github" as const,
+			repo: "vombor/kanban",
+			number: 12,
+			url: "https://github.com/vombor/kanban/issues/12",
+			updatedAt: "2026-10-07T00:00:00Z",
+		};
+		const harness = createHarness({
+			onFail: () => ({
+				action: "escalate",
+				to: { agentId: "cline", model: { provider: "bedrock", model: "us.anthropic.claude-sonnet-5-5" } },
+				requireApproval: true,
+				reason: "tier 2",
+			}),
+		});
+		await harness.seed("d1111", { qaVerdicts: [failVerdict(1)] });
+		await harness.tick({ review: [{ ...DEV, issue }] }, [SESSION]);
+		expect(harness.actions[0]).toMatchObject({ kind: "createTask", task: { taskId: "s0001", issue } });
 	});
 
 	it("escalates a runoff when no feature holds the siblings' PASSes (a kit without runoffs), creating no card", async () => {

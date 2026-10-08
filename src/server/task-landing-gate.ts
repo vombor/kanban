@@ -22,6 +22,7 @@
 import { getWorkspacePipelineSettings, type ParsedPipelineConfig, readPipelineConfig } from "../config/pipeline-config";
 import type { RuntimeBoardCard, RuntimeTaskLandingOutcome, RuntimeTaskTrashTrigger } from "../core/api-contract";
 import { isKanbanLandedCard, resolveCardRole } from "../core/card-role";
+import { createIssueLandCommenter, type IssueCardFinishedInput } from "../issues/issue-comment";
 import { type KitCatalog, loadKitCatalog, resolveWorkspaceKit } from "../kits/resolve-kit";
 import {
 	createPipelineDecisionLog,
@@ -55,6 +56,11 @@ export interface TaskLandingGateDependencies {
 	decisionLog?: PipelineDecisionLog;
 	/** Kanban landed a card: the pipeline worker emits `landed` for kit features. */
 	onLanded?: (event: PipelineEventMap["landed"]) => void;
+	/**
+	 * A card imported from an issue was landed or discarded (`issues.commentOnLand`, src/issues/issue-comment.ts).
+	 * Runs in the background: the Done never waits for it.
+	 */
+	onIssueCardFinished?: (input: IssueCardFinishedInput) => Promise<unknown>;
 	now?: () => number;
 	log?: (message: string) => void;
 }
@@ -85,6 +91,30 @@ export function createTaskLandingGate(deps: TaskLandingGateDependencies = {}): T
 	const decisionLog = deps.decisionLog ?? createPipelineDecisionLog();
 	const now = deps.now ?? Date.now;
 	const log = deps.log ?? (() => {});
+	const onIssueCardFinished = deps.onIssueCardFinished ?? createIssueLandCommenter({ log });
+	const notifyIssue = (
+		input: TaskDoneGateInput,
+		outcome: IssueCardFinishedInput["outcome"],
+		commit?: string,
+	): void => {
+		if (!input.card.issue) {
+			return;
+		}
+		void onIssueCardFinished({
+			workspaceId: input.workspaceId,
+			workspacePath: input.workspacePath,
+			card: input.card,
+			outcome,
+			baseRef: input.card.baseRef,
+			...(commit ? { commit } : {}),
+		})
+			.then((done) => {
+				if (typeof done === "string") {
+					log(`land ${input.card.id}: ${done}`);
+				}
+			})
+			.catch((error: unknown) => log(`land ${input.card.id}: issue comment failed: ${String(error)}`));
+	};
 	// One land at a time per repository: two squash merges in the same checkout (or two stashes) would collide.
 	const repoChains = new Map<string, Promise<unknown>>();
 
@@ -155,6 +185,9 @@ export function createTaskLandingGate(deps: TaskLandingGateDependencies = {}): T
 		if (input.landing === "discard") {
 			const landing: RuntimeTaskLandingOutcome = { decision: shadow ? "shadow" : "discarded", baseRef };
 			await record(input, context, shadow ? "shadow" : "acted", landing, "discarded: Done without landing");
+			if (!shadow) {
+				notifyIssue(input, "discarded");
+			}
 			return { proceed: true, landing };
 		}
 
@@ -220,6 +253,7 @@ export function createTaskLandingGate(deps: TaskLandingGateDependencies = {}): T
 				`land ${card.id}: ${baseRef} -> ${result.commit.slice(0, 8)}${result.checkout ? ` in ${result.checkout}` : ""}`,
 			);
 			await record(input, context, "acted", landing, `${approved}landed onto ${baseRef} as ${result.commit}`);
+			notifyIssue(input, "landed", result.commit);
 			// Kit features (the scoreboard's HUMAN_APPROVED line) score dev work; a plan card's spec is not one.
 			if (resolveCardRole(card) === "dev") {
 				deps.onLanded?.({

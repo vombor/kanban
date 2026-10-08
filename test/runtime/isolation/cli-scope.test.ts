@@ -139,6 +139,46 @@ describe("applyCliSessionScope", () => {
 		});
 	});
 
+	it("refuses issues sync from a card session (isolation off included), allows the orchestrator and the user", async () => {
+		await withTemporaryKanbanHome(async () => {
+			const asRole = (role: "card" | "orchestrator") => () => ({
+				isolation: {
+					whoami: {
+						query: vi.fn(async () => ({
+							caller: "session",
+							workspaceId: "a",
+							taskId: role === "card" ? "t1" : null,
+							role,
+							mode: "off",
+							reachable: ["a"],
+						})),
+					},
+					requestApproval: { mutate: vi.fn(down) },
+				},
+			});
+			const run = async (createClient: () => unknown, env: NodeJS.ProcessEnv = SESSION_ENV) =>
+				await applyCliSessionScope({
+					commandPath: "issues sync",
+					options: {},
+					createClient: createClient as never,
+					env,
+				});
+			expect(await run(asRole("card"))).toContain("never a card session");
+			// A session the server can't confirm as the orchestrator is refused too.
+			expect(await run(noServer)).toContain("never a card session");
+			expect(await run(asRole("orchestrator"))).toBeNull();
+			expect(await run(noServer, {})).toBeNull();
+			expect(
+				await applyCliSessionScope({
+					commandPath: "issues list",
+					options: {},
+					createClient: asRole("card") as never,
+					env: SESSION_ENV,
+				}),
+			).toBeNull();
+		});
+	});
+
 	it("refuses machine-wide commands under enforce only; doctor without --fix stays allowed", async () => {
 		await withTemporaryKanbanHome(async () => {
 			const env = { ...SESSION_ENV, [KANBAN_SESSION_WORKSPACE_ENV]: "a" };

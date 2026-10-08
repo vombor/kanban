@@ -166,6 +166,17 @@ export interface WatchdogDependencies {
 		env?: Record<string, string>;
 	}) => { ok: boolean; pid?: number; error?: string };
 	probeModel?: (provider: string, model: string) => Promise<boolean>;
+	/**
+	 * Core jobs of every workspace (not only pipeline ones), such as the issue import's sync (src/issues/issue-job.ts);
+	 * they run through the same job runner as prune-done and the kit features' jobs.
+	 */
+	coreJobs?: (input: {
+		workspaceId: string;
+		getSnapshot: () => PipelineWorkspaceSnapshot;
+		config: ParsedPipelineConfig["config"];
+	}) => PipelineFeatureJob[];
+	/** Items that only ride along when the orchestrator is woken anyway (the issue import's started-card updates). */
+	takeWakeNotes?: (workspaceId: string) => Promise<string[]>;
 	isTrusted?: (agentId: RuntimeAgentId, directory: string) => Promise<boolean | null>;
 	hooksOnPromptSubmit?: (agentId: RuntimeAgentId) => boolean;
 	hasHeadlessRunner?: (agentId: RuntimeAgentId) => boolean;
@@ -672,12 +683,17 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 			),
 			...queued,
 		];
+		if (context.act && wakeItems.length > 0 && deps.takeWakeNotes) {
+			const notes = await deps.takeWakeNotes(workspaceId).catch(() => []);
+			queued.push(...notes);
+			wakeItems.push(...notes);
+		}
 		if (wakeItems.length > 0 || state.wakeRetry.length > 0 || state.wakeEnter) {
 			await wake(snapshot, paths, state, wakeItems, queued, context, records);
 		}
 
+		const jobs: PipelineFeatureJob[] = [];
 		if (full) {
-			const jobs: PipelineFeatureJob[] = [];
 			if (config.watchdog.pruneDone.enabled) {
 				jobs.push({
 					name: "prune-done",
@@ -696,9 +712,16 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 				});
 			}
 			jobs.push(...deps.features.listJobs(workspaceId));
-			for (const job of jobs) {
-				await runJob(job, { workspaceId, state, context, records });
-			}
+		}
+		jobs.push(
+			...(deps.coreJobs?.({
+				workspaceId,
+				getSnapshot: () => snapshots.get(workspaceId) ?? snapshot,
+				config,
+			}) ?? []),
+		);
+		for (const job of jobs) {
+			await runJob(job, { workspaceId, state, context, records });
 		}
 
 		if (context.act) {

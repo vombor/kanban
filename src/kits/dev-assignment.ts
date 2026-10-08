@@ -177,8 +177,11 @@ export async function resolveDevAssignment(
 	}
 }
 
-/** Who created the card: `kanban task create`, or the browser's create dialog (logged by the server on save). */
-export type DevAssignmentLogSource = "cli" | "browser";
+/**
+ * Who created the card: `kanban task create`, the browser's create dialog (logged by the server on save), or the
+ * issue import (src/issues/issue-apply.ts).
+ */
+export type DevAssignmentLogSource = "cli" | "browser" | "issues";
 
 export interface DevAssignmentLogEntry {
 	at: string;

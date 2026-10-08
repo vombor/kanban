@@ -568,6 +568,35 @@ describe("board dependency state", () => {
 		]);
 	});
 
+	it("keeps an imported card's issue through a browser normalize and drops a malformed one", () => {
+		const issue = {
+			provider: "github",
+			repo: "vombor/kanban",
+			number: 12,
+			url: "https://github.com/vombor/kanban/issues/12",
+			updatedAt: "2026-10-07T12:00:00Z",
+			closedAt: null,
+		};
+		const normalized = normalizeBoardData({
+			columns: [
+				{
+					id: "backlog",
+					cards: [
+						{ id: "i-1", prompt: "Issue", baseRef: "main", issue },
+						{ id: "i-2", prompt: "Bad", baseRef: "main", issue: { provider: "github", number: "12" } },
+					],
+				},
+				{ id: "in_progress", cards: [] },
+				{ id: "review", cards: [] },
+				{ id: "trash", cards: [] },
+			],
+			dependencies: [],
+		});
+		const backlog = normalized?.columns.find((column) => column.id === "backlog")?.cards ?? [];
+		expect(backlog[0]?.issue).toEqual(issue);
+		expect(backlog[1]).not.toHaveProperty("issue");
+	});
+
 	it("keeps a card's role, reviewsTaskId and qa mode when the browser normalizes and edits the board", () => {
 		const normalized = normalizeBoardData({
 			columns: [

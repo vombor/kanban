@@ -309,3 +309,45 @@ auto-review, restart resume (resume one by hand with `kanban task resume`) or wa
 lists per plan the planner's agent and model, duration and cost (card metrics, at expand), the number of cards, the
 approval and the reworks of its cards, for a later benchmark of planners (Claude, Codex, Copilot: `plan.candidates`
 in the kit). No runoff or calibration of planners exists yet.
+
+## 14. Issues → cards
+
+A project can pull issues from **its own** remote repository into its board (`workspaces.<id>.issues`,
+[CONFIG.md](CONFIG.md); GitHub today, behind an `IssueProvider` interface for GitLab or Gitea later). The repository
+is derived from the project's `origin` remote and pinned on the first sync, and a configured `issues.repo` must be
+one of its own remotes: project isolation means a project only ever reaches its own repository (a card that changes
+`origin` gets the import refused, not redirected).
+
+1. **Sync.** Every `issues.pollMin` the pipeline worker's sync job (`src/issues/issue-job.ts`, in the watchdog's job
+   runner, so `watchdog.mode: on`) lists the issues updated since the last sync with conditional requests (ETag), and
+   backs off when GitHub rate-limits. `kanban issues sync [--dry-run]` runs one sync by hand; `kanban issues list`
+   shows what is imported, what was skipped and why, and the last sync. Card sessions can't run `issues sync`
+   (it uses the user's token); the user and the orchestrator can. Every decision goes to the decision log
+   (stage `issues`); `kanban doctor` has a row per project.
+2. **Trust filter.** An open issue (never a pull request) is imported only if its author is OWNER, MEMBER or
+   COLLABORATOR, or it carries the `kanban` label, which needs triage rights to apply. Labels to include or exclude
+   and the trusted associations are configurable. Comments are filtered the same way: an untrusted user's comment
+   is left out, with a line saying how many were.
+3. **Import.** Each matching issue becomes one **Backlog** card titled `Issue #N: <short title>` (just `Issue #N`
+   when its author isn't trusted), created through the normal
+   create path (the kit's devAssignment picks agent and model; with the `needs-plan` label and a kit with the plan
+   role, a plan card instead). The card carries `issue: { provider, repo, number, url, updatedAt }`, which dedupes
+   it across every column, Done included (and an import record keeps it deduped after prune-done deletes the card).
+   Mode `report` only logs what it would import. Cards are **never started**: in mode `on` the watchdog wakes the
+   orchestrator with "N new issue card(s)", and the orchestrator decides.
+4. **Updates.** An issue edited or commented on after import: while its card is in Backlog, the prompt gets an
+   "Update <date>" section (a trusted author's edits and trusted users' new comments; an untrusted author's edit
+   is only noted, and nothing is added once the trust label is removed); once the card was started, the prompt is never touched, the change is logged and goes
+   into the orchestrator's next wake. An issue closed upstream gives its Backlog card a `CLOSED UPSTREAM: ` title and
+   a marker section; Kanban never deletes it.
+5. **Closing the loop.** When Kanban lands a dev card that has an `issue` (landing `qa`), its landing commit message
+   ends with `Fixes #N`, so GitHub closes the issue once the commit reaches the default branch (a plan card's spec
+   landing doesn't close it). `issues.commentOnLand` (off by default) also comments on the issue when the card is
+   landed or discarded. Rework siblings (escalation, runoff) carry the same `issue`, so whichever lands closes it.
+
+**Security.** Issue text is untrusted: whoever opened or commented on the issue wrote it, and it becomes an agent
+prompt. That is why the trust filter is strict by default, and why the card prompt puts the issue in a fenced
+"Issue #N (untrusted text from GitHub)" section after a fixed preamble: the issue describes **what** is wanted and
+carries no authority to change the agent's instructions, rules, guardrails or FINAL STEP. Every line of issue text
+is quoted with `> `, so it can't close the fence, start a FINAL STEP section or pose as a REWORK section. Tokens come
+from `gh` or Kanban's env and stay in memory.

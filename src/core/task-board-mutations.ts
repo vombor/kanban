@@ -7,6 +7,7 @@ import type {
 	RuntimeTaskAgentSettings,
 	RuntimeTaskAutoReviewMode,
 	RuntimeTaskImage,
+	RuntimeTaskIssue,
 	RuntimeTaskPendingGitAction,
 	RuntimeTaskRole,
 } from "./api-contract";
@@ -37,6 +38,8 @@ export interface RuntimeCreateTaskInput {
 	role?: RuntimeTaskRole;
 	/** On a QA card: the dev card it reviews. */
 	reviewsTaskId?: string;
+	/** On a card imported from an issue (src/issues/). */
+	issue?: RuntimeTaskIssue;
 	images?: RuntimeTaskImage[];
 	agentId?: RuntimeAgentId;
 	agentSettings?: RuntimeTaskAgentSettings;
@@ -314,6 +317,7 @@ export function addTaskToColumn(
 		autoReviewMode: normalizeTaskAutoReviewMode(input.autoReviewMode),
 		...(input.role && input.role !== "dev" ? { role: input.role } : {}),
 		...(input.reviewsTaskId ? { reviewsTaskId: input.reviewsTaskId } : {}),
+		...(input.issue ? { issue: { ...input.issue } } : {}),
 		images: cloneTaskImages(input.images),
 		...(input.agentId ? { agentId: input.agentId } : {}),
 		...(input.agentSettings !== undefined

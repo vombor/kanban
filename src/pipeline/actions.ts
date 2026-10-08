@@ -1,11 +1,12 @@
 // Card actions the pipeline worker asks the Kanban server for: the QA gate creates and starts QA cards, restart
 // recovery resumes orphaned cards, and the rework stage updates, resumes and blocks dev cards and creates sibling
-// cards.
+// cards; the issue import's sync job applies fetched issues to the board (`applyIssues`, src/issues/).
 // They travel as worker `request`s next to the watchdog's actions (worker-protocol.ts); finishing a card is the
 // `finishTask` request (the Done workflow) and typing into one is the watchdog's `deliverInput`. The worker never
 // writes the board or touches a session itself: the server stays the only writer (plan §5), and each request runs
 // through the same code the CLI and the browser use (src/server/pipeline-actions.ts).
-import type { RuntimeAgentId, RuntimeTaskAgentSettings, RuntimeTaskRole } from "../core/api-contract";
+import type { RuntimeAgentId, RuntimeTaskAgentSettings, RuntimeTaskIssue, RuntimeTaskRole } from "../core/api-contract";
+import type { IssueApplyInput, IssueApplyResult } from "../issues/issue-apply";
 
 /** The title prefix of an escalated card parked in Backlog (the legacy kit's, which people and the watchdog read). */
 export const BLOCKED_TITLE_PREFIX = "BLOCKED: ";
@@ -25,6 +26,8 @@ export interface PipelineCreateTaskInput {
 	agentId: RuntimeAgentId;
 	agentSettings?: RuntimeTaskAgentSettings;
 	baseRef: string;
+	/** A rework sibling of an imported card carries its issue (`Fixes #N`, the land comment). */
+	issue?: RuntimeTaskIssue;
 }
 
 export type PipelineActionRequest =
@@ -55,9 +58,16 @@ export type PipelineActionRequest =
 	/** Replaces a card's prompt and/or title (the rework stage's REWORK section). */
 	| (PipelineActionScope & { kind: "updateTask"; taskId: string; prompt?: string; title?: string })
 	/** An escalated card leaves Review / In Progress for Backlog with a `BLOCKED: ` title prefix (kept once). */
-	| (PipelineActionScope & { kind: "blockTask"; taskId: string });
+	| (PipelineActionScope & { kind: "blockTask"; taskId: string })
+	/**
+	 * The issue import's fetched issues (src/issues/issue-sync.ts): the server creates, updates and marks cards under
+	 * the board lock (src/issues/issue-apply.ts). Only for a workspace whose `issues.mode` is `on`; never starts a card.
+	 */
+	| (PipelineActionScope & { kind: "applyIssues"; issues: Omit<IssueApplyInput, "workspaceId" | "workspacePath"> });
 
-export type PipelineActionResult = { ok: true; detail?: string } | { ok: false; error: string };
+export type PipelineActionResult =
+	| { ok: true; detail?: string; issues?: IssueApplyResult }
+	| { ok: false; error: string };
 
 export interface PipelineActions {
 	run: (request: PipelineActionRequest) => Promise<PipelineActionResult>;

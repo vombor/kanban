@@ -14,6 +14,7 @@ import { registerDoctorCommand } from "./commands/doctor";
 import { registerHomeCommand } from "./commands/home";
 import { registerHooksCommand } from "./commands/hooks";
 import { registerIsolationCommand } from "./commands/isolation";
+import { registerIssuesCommand } from "./commands/issues";
 import { registerKitCommand } from "./commands/kit";
 import { registerMessageCommand } from "./commands/message";
 import { registerModelsCommand } from "./commands/models";
@@ -911,6 +912,7 @@ function createProgram(invocationArgs: string[]): Command {
 	registerDoctorCommand(program, KANBAN_VERSION);
 	registerQaCommand(program);
 	registerIsolationCommand(program);
+	registerIssuesCommand(program);
 	registerMessageCommand(program);
 
 	program

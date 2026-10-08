@@ -29,13 +29,15 @@
 import { getWorkspacePipelineSettings, type ParsedPipelineConfig, readPipelineConfig } from "../config/pipeline-config";
 import type { RuntimeTaskTrashResponse } from "../core/api-contract";
 import { type EffectiveModelConfig, readClineDefaultModel } from "../core/effective-agent";
+import { createIssueSyncJobs, takeWorkspaceIssueWakeNotes } from "../issues/issue-job";
+import type { IssueSyncDependencies } from "../issues/issue-sync";
 import { createRoutingPolicy } from "../kits/policy";
 import { type KitCatalog, loadKitCatalog, resolveWorkspaceKit } from "../kits/resolve-kit";
 import { registerTeamKitFeatures } from "../kits/team/features";
 import { readClineProvidersFile } from "../models/cline-providers";
 import { getClineProvidersSettingsPath } from "../state/kanban-home";
 import { getAgentClearCommand, readAgentSessionSize } from "../terminal/orchestrator-agents";
-import type { PipelineActions } from "./actions";
+import type { PipelineActionResult, PipelineActions } from "./actions";
 import {
 	CHECKS_VERSION,
 	type ChecksResult,
@@ -70,7 +72,7 @@ import { createReworkStage, type ReworkStage } from "./rework";
 import { stopScratchProcesses } from "./scratch-processes";
 import { createSubmissionStage, type SubmissionInspector } from "./submission-stage";
 import type { WatchdogActionRequest, WatchdogActionResult, WatchdogActions } from "./watchdog/actions";
-import { createWatchdog, type Watchdog } from "./watchdog/watchdog";
+import { createWatchdog, type Watchdog, type WatchdogDependencies } from "./watchdog/watchdog";
 import {
 	isPipelineHostMessage,
 	type PipelineFinishTaskRequest,
@@ -103,8 +105,12 @@ export interface PipelineWorkerDependencies {
 		store: PipelineStateStore;
 		features: PipelineFeatureRegistry;
 		loadAgentDefaultModels: (config: ParsedPipelineConfig) => Promise<EffectiveModelConfig["agentDefaultModels"]>;
+		coreJobs: WatchdogDependencies["coreJobs"];
+		takeWakeNotes: WatchdogDependencies["takeWakeNotes"];
 		log: (message: string) => void;
 	}) => Watchdog;
+	/** The issue import's job dependencies (tests inject a fake GitHub). */
+	issueSync?: IssueSyncDependencies;
 	/** How long a watchdog request waits for the server's answer. */
 	requestTimeoutMs?: number;
 	/** The QA gate's card actions. Default: `request`s to the server over IPC. */
@@ -401,6 +407,11 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 		store,
 		features,
 		loadAgentDefaultModels,
+		coreJobs: createIssueSyncJobs({
+			request: async (request) => (await sendRequest(request)) as PipelineActionResult,
+			sync: deps.issueSync,
+		}),
+		takeWakeNotes: takeWorkspaceIssueWakeNotes,
 		log,
 	});
 	let watchdogTimer: NodeJS.Timeout | null = null;

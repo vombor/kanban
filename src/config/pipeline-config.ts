@@ -46,6 +46,54 @@ export type WorkspaceKitRef = z.infer<typeof workspaceKitRefSchema>;
 export const isolationModeSchema = z.enum(["off", "report", "enforce"]);
 export type IsolationMode = z.infer<typeof isolationModeSchema>;
 
+/**
+ * Issue import (src/issues/, docs/team/WORKFLOW.md "Issues → cards"). `off` (default): nothing is fetched. `report`:
+ * fetch and log what would be imported or updated (decision log, stage `issues`), create nothing. `on`: import
+ * matching issues as Backlog cards (never started) and wake the orchestrator.
+ */
+export const issuesModeSchema = z.enum(["off", "report", "on"]);
+export type IssuesMode = z.infer<typeof issuesModeSchema>;
+
+export const issueProviderIdSchema = z.enum(["github"]);
+export type IssueProviderId = z.infer<typeof issueProviderIdSchema>;
+
+/** GitHub's author_association values for a repository's own people (a label needs triage rights to apply). */
+export const DEFAULT_TRUSTED_ISSUE_ASSOCIATIONS = ["OWNER", "MEMBER", "COLLABORATOR"] as const;
+export const DEFAULT_ISSUE_TRUST_LABELS = ["kanban"] as const;
+export const DEFAULT_ISSUE_PLAN_LABEL = "needs-plan";
+
+// Issue text becomes an agent prompt, so the default trusts only the repository's own people: an issue is imported
+// when its author is OWNER/MEMBER/COLLABORATOR, or when someone with triage rights applied a trust label. Anyone can
+// open an issue on a public repository; nobody without triage rights can label it.
+const issuesFilterSchema = z
+	.object({
+		/** Authors whose issues are imported (GitHub author_association). */
+		trustedAssociations: z.array(z.string().min(1)).default(() => [...DEFAULT_TRUSTED_ISSUE_ASSOCIATIONS]),
+		/** An issue with one of these labels is imported whoever opened it. */
+		trustLabels: z.array(z.string().min(1)).default(() => [...DEFAULT_ISSUE_TRUST_LABELS]),
+		/** When not empty, an issue must also carry one of these labels. */
+		includeLabels: z.array(z.string().min(1)).default([]),
+		/** An issue with one of these labels is never imported. */
+		excludeLabels: z.array(z.string().min(1)).default([]),
+	})
+	.strict();
+
+export const workspaceIssuesSettingsSchema = z
+	.object({
+		provider: issueProviderIdSchema.default("github"),
+		/** `owner/name`; null = derived from the project's `origin` remote. Must be one of the project's remotes. */
+		repo: z.string().min(1).nullable().default(null),
+		mode: issuesModeSchema.default("off"),
+		pollMin: z.number().positive().default(15),
+		filter: issuesFilterSchema.default(() => issuesFilterSchema.parse({})),
+		/** An issue with this label becomes a plan card when the project's kit has the plan role. */
+		planLabel: z.string().min(1).default(DEFAULT_ISSUE_PLAN_LABEL),
+		/** Comment on the issue when its card lands or is discarded (needs a token with write access). */
+		commentOnLand: z.boolean().default(false),
+	})
+	.strict();
+export type WorkspaceIssuesSettings = z.infer<typeof workspaceIssuesSettingsSchema>;
+
 export const workspacePipelineSettingsSchema = z
 	.object({
 		name: z.string().nullable().default(null),
@@ -92,6 +140,8 @@ export const workspacePipelineSettingsSchema = z
 			})
 			.strict()
 			.default({ mode: null, messages: "deny" }),
+		// Issue import from the project's own remote (src/issues/).
+		issues: workspaceIssuesSettingsSchema.default(() => workspaceIssuesSettingsSchema.parse({})),
 	})
 	.strict();
 export type WorkspacePipelineSettings = z.infer<typeof workspacePipelineSettingsSchema>;

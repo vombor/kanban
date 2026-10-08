@@ -133,7 +133,7 @@ describe("pipeline worker: a turn recovery redoes", () => {
 			h.actions
 				.filter((action) => action.kind !== "deliverInput")
 				.map((action: QaGateHarnessAction) => {
-					const taskId = "taskId" in action ? action.taskId : action.task.taskId;
+					const taskId = "taskId" in action ? action.taskId : "task" in action ? action.task.taskId : "";
 					return `${action.kind}:${taskId}${action.kind === "finishTask" ? `:${action.landing}` : ""}`;
 				});
 		return {

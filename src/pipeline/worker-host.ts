@@ -23,7 +23,8 @@
 //   as of the last sweep; anything else is refused, also while the watchdog has every workspace. `resumeTask`
 //   (restart recovery runs on landing-off workspaces too, plan §12; the rework stage only runs on `qa` ones) and every
 //   other `request` (a watchdog action, `handleWatchdogRequest`) are
-//   accepted for any workspace the worker has.
+//   accepted for any workspace the worker has. `applyIssues` (the issue import's sync job) only for a workspace the
+//   worker has whose `issues.mode` is `on` as of the last sweep.
 // - Every snapshot carries `pidPressure` (src/state/pid-pressure-flags.ts), read here when it is sent: the QA gate
 //   and restart recovery hold new work on it, and the sweep's snapshot tells them within 30 s that it cleared.
 import { type ChildProcess, fork } from "node:child_process";
@@ -178,13 +179,20 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 	let pipelineWorkspaces = new Map<string, string>();
 	/** The subset of `pipelineWorkspaces` on landing mode `qa`: the only ones the QA gate's card actions may touch. */
 	let cardActionWorkspaces = new Map<string, string>();
+	/** The subset of `pipelineWorkspaces` with `issues.mode: "on"`: the only ones `applyIssues` may write. */
+	let issueWorkspaces = new Map<string, string>();
 	const coalesceTimers = new Map<string, NodeJS.Timeout>();
 	/** `workspaceId:taskId` → the snapshot sent once that session's Review has settled. */
 	const settleTimers = new Map<string, NodeJS.Timeout>();
 	const lastSessionStates = new Map<string, RuntimeTaskSessionState>();
 
 	const runAction = async (request: PipelineActionRequest): Promise<PipelineActionResult> => {
-		const allowed = request.kind === "resumeTask" ? pipelineWorkspaces : cardActionWorkspaces;
+		const allowed =
+			request.kind === "resumeTask"
+				? pipelineWorkspaces
+				: request.kind === "applyIssues"
+					? issueWorkspaces
+					: cardActionWorkspaces;
 		if (allowed.get(request.workspaceId) !== request.workspacePath) {
 			return { ok: false, error: `workspace ${request.workspaceId} does not run the pipeline` };
 		}
@@ -376,6 +384,7 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 		const config = parsed.config;
 		const next = new Map<string, string>();
 		const nextCardActions = new Map<string, string>();
+		const nextIssues = new Map<string, string>();
 		const watchdogOn = config.watchdog.mode !== "off";
 		for (const workspace of deps.listWorkspaces()) {
 			const settings = getWorkspacePipelineSettings(config, workspace.workspaceId);
@@ -387,10 +396,14 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 			if (workspace.workspacePath && qa) {
 				nextCardActions.set(workspace.workspaceId, workspace.workspacePath);
 			}
+			if (workspace.workspacePath && next.has(workspace.workspaceId) && settings.issues.mode === "on") {
+				nextIssues.set(workspace.workspaceId, workspace.workspacePath);
+			}
 		}
 		const previous = pipelineWorkspaces;
 		pipelineWorkspaces = next;
 		cardActionWorkspaces = nextCardActions;
+		issueWorkspaces = nextIssues;
 		if (next.size === 0) {
 			if (child) {
 				deps.log(
@@ -481,6 +494,7 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 				coalesceTimers.delete(workspaceId);
 			}
 			cardActionWorkspaces.delete(workspaceId);
+			issueWorkspaces.delete(workspaceId);
 			if (pipelineWorkspaces.delete(workspaceId)) {
 				child?.send({ type: "forget", workspaceId });
 			}

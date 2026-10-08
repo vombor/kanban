@@ -162,6 +162,21 @@ export const runtimeTaskPendingGitActionSchema = z.object({
 });
 export type RuntimeTaskPendingGitAction = z.infer<typeof runtimeTaskPendingGitActionSchema>;
 
+/**
+ * The issue a card was imported from (src/issues/). Dedupe key: provider + repo + number. `updatedAt` is the issue's
+ * `updated_at` the card's prompt reflects; `closedAt` is set once the card got the "closed upstream" marker.
+ */
+export const runtimeTaskIssueSchema = z.object({
+	provider: z.enum(["github"]),
+	/** `owner/name`. */
+	repo: z.string().min(1),
+	number: z.number().int().positive(),
+	url: z.string(),
+	updatedAt: z.string(),
+	closedAt: z.string().nullable().optional(),
+});
+export type RuntimeTaskIssue = z.infer<typeof runtimeTaskIssueSchema>;
+
 export const runtimeBoardCardSchema = z
 	.object({
 		id: z.string(),
@@ -173,6 +188,8 @@ export const runtimeBoardCardSchema = z
 		role: runtimeTaskRoleSchema.optional(),
 		/** On a QA card (`role: "qa"`): the dev card it reviews. */
 		reviewsTaskId: z.string().optional(),
+		/** On a card imported from an issue: which one. */
+		issue: runtimeTaskIssueSchema.optional(),
 		images: z.array(runtimeTaskImageSchema).optional(),
 		agentId: runtimeAgentIdSchema.optional(),
 		agentSettings: runtimeAgentSettingsSchema.optional(),

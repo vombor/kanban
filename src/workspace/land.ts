@@ -12,7 +12,10 @@
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 
+import type { RuntimeTaskIssue } from "../core/api-contract";
+import { type CardRoleInput, resolveCardRole } from "../core/card-role";
 import { createGitProcessEnv } from "../core/git-process-env";
+import { buildIssueClosingLine } from "../issues/issue-provider";
 import { SNAPSHOT_GIT_IDENTITY } from "../pipeline/snapshots";
 import { runGit } from "./git-utils";
 
@@ -107,12 +110,22 @@ async function commitIdentityEnv(cwd: string): Promise<NodeJS.ProcessEnv> {
 	return createGitProcessEnv(SNAPSHOT_GIT_IDENTITY);
 }
 
-export function buildLandCommitMessage(card: { id: string; title?: string; prompt: string }): {
+/**
+ * The landing commit's message. A dev card imported from an issue closes it (`Fixes #N` for GitHub, once the commit
+ * reaches the default branch); a plan card made from an issue lands only its spec, so it doesn't.
+ */
+export function buildLandCommitMessage(
+	card: { id: string; title?: string; prompt: string; issue?: RuntimeTaskIssue } & CardRoleInput,
+): {
 	title: string;
 	body: string;
 } {
 	const firstLine = (card.title?.trim() || card.prompt.trim() || card.id).split("\n")[0]?.trim() ?? card.id;
-	return { title: firstLine.slice(0, COMMIT_TITLE_MAX), body: `Landed by Kanban from task ${card.id}.` };
+	const closing = card.issue && resolveCardRole(card) === "dev" ? buildIssueClosingLine(card.issue) : null;
+	return {
+		title: firstLine.slice(0, COMMIT_TITLE_MAX),
+		body: [`Landed by Kanban from task ${card.id}.`, ...(closing ? ["", closing] : [])].join("\n"),
+	};
 }
 
 /** Would `commit` squash cleanly onto `baseRef`? Read-only: merge-tree writes objects, never a worktree. */

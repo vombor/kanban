@@ -35,7 +35,9 @@ const SESSION = { taskId: "d1111", agentId: "cline" as const, modelId: "us.opena
 const TIER2 = { agentId: "cline" as const, model: { provider: "bedrock", model: "us.moonshotai.kimi-k3" } };
 
 function kinds(actions: ReturnType<typeof createReworkHarness>["actions"]) {
-	return actions.map((action) => `${action.kind}:${"taskId" in action ? action.taskId : action.task.taskId}`);
+	return actions.map(
+		(action) => `${action.kind}:${"taskId" in action ? action.taskId : "task" in action ? action.task.taskId : ""}`,
+	);
 }
 
 function teamPolicy(overrides: Record<string, unknown>) {

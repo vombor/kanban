@@ -514,6 +514,19 @@ export function getIsolationWorkspacePaths(
 	return { log: join(dataDir, "isolation.jsonl"), messages: join(dataDir, "messages.jsonl") };
 }
 
+/**
+ * Issue import's files for one workspace (src/issues/): `issues-state.json` (the imported and skipped issues, the
+ * sync cursor, the rate-limit backoff, the last sync) and `issues-http-cache.json` (ETags and bodies of the
+ * provider's answers, for conditional requests). Neither ever holds a token.
+ */
+export function getIssueWorkspacePaths(
+	workspaceId: string,
+	homePath = getKanbanHomePath(),
+): { state: string; httpCache: string } {
+	const dataDir = getKanbanWorkspaceDataPath(workspaceId, homePath);
+	return { state: join(dataDir, "issues-state.json"), httpCache: join(dataDir, "issues-http-cache.json") };
+}
+
 /** The workspace's QA log (`<home>/data/<workspaceId>/qa-log.md`): check results, verdicts; people and agents read it. */
 export function getPipelineQaLogPath(workspaceId: string, homePath = getKanbanHomePath()): string {
 	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), QA_LOG_FILENAME);

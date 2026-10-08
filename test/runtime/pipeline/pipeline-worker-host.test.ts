@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { parsePipelineConfig } from "../../../src/config/pipeline-config";
 import type { RuntimeTaskSessionSummary } from "../../../src/core/api-contract";
+import type { PipelineActionRequest, PipelineActionResult } from "../../../src/pipeline/actions";
 import type { WatchdogActionRequest } from "../../../src/pipeline/watchdog/actions";
 import { createPipelineWorkerHost, type PipelineWorkerChild } from "../../../src/pipeline/worker-host";
 import type { PipelineHostMessage } from "../../../src/pipeline/worker-protocol";
@@ -54,6 +55,7 @@ function createHostHarness(
 		handleWatchdogRequest?: (request: WatchdogActionRequest) => Promise<unknown>;
 		reviewSettleMs?: number;
 		readPidPressure?: () => Promise<{ pressure: boolean; brownout: boolean }>;
+		runAction?: (request: PipelineActionRequest) => Promise<PipelineActionResult>;
 	} = {},
 ) {
 	let rawConfig = initialConfig;
@@ -79,6 +81,7 @@ function createHostHarness(
 		coalesceMs: 2_000,
 		restartDelaysMs: [1_000, 5_000],
 		handleWatchdogRequest: options.handleWatchdogRequest,
+		runAction: options.runAction,
 		reviewSettleMs: options.reviewSettleMs,
 		readPidPressure: options.readPidPressure ?? (async () => ({ pressure: false, brownout: false })),
 		log,
@@ -328,6 +331,38 @@ describe("pipeline worker host: the watchdog", () => {
 		expect(child?.sent.filter((message) => message.type === "response")).toEqual([
 			{ type: "response", id: 7, ok: true, result: { ok: true, taskId: "x" } },
 			{ type: "response", id: 8, ok: false, error: "no /proc" },
+		]);
+		await harness.host.close();
+	});
+
+	it("accepts applyIssues only for a workspace whose issues.mode is on", async () => {
+		const runAction = vi.fn(async (_request: PipelineActionRequest): Promise<PipelineActionResult> => ({ ok: true }));
+		const harness = createHostHarness(
+			{
+				watchdog: { mode: "on" },
+				workspaces: { foo: { issues: { mode: "on" } }, "kanban-2uge": { issues: { mode: "report" } } },
+			},
+			{ runAction },
+		);
+		await harness.startReady();
+		const child = harness.children[0];
+		const issues = { provider: "github" as const, repo: "vombor/kanban", issues: [] };
+		child?.emitMessage({
+			type: "request",
+			id: 1,
+			request: { kind: "applyIssues", workspaceId: "foo", workspacePath: "/repos/foo", issues },
+		});
+		child?.emitMessage({
+			type: "request",
+			id: 2,
+			request: { kind: "applyIssues", workspaceId: "kanban-2uge", workspacePath: "/repos/kanban-2uge", issues },
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		expect(runAction).toHaveBeenCalledTimes(1);
+		const responses = (child?.sent ?? []).flatMap((message) => (message.type === "response" ? [message] : []));
+		expect(responses.sort((left, right) => left.id - right.id)).toEqual([
+			{ type: "response", id: 1, ok: true, result: { ok: true } },
+			{ type: "response", id: 2, ok: false, error: "workspace kanban-2uge does not run the pipeline" },
 		]);
 		await harness.host.close();
 	});

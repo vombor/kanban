@@ -14,6 +14,7 @@ export type DoctorArea =
 	| "owner"
 	| "guardrails"
 	| "isolation"
+	| "issues"
 	| "deep";
 
 export interface DoctorFinding {
