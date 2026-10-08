@@ -35,10 +35,13 @@ describe("pipeline worker", () => {
 
 		await harness.send(snapshot);
 		await harness.send(snapshot);
+		await harness.send(snapshot);
 
+		// The creation, then (once) that the snapshot already has its QA card.
 		const records = harness.readDecisions("foo");
 		expect(records.map((record) => [record.stage, record.taskId])).toEqual([
 			["worker", null],
+			["qa_gate", "dev-1"],
 			["qa_gate", "dev-1"],
 		]);
 		expect(records[0]?.note).toContain("watching: landing qa, kit team");
@@ -53,8 +56,36 @@ describe("pipeline worker", () => {
 			outcome: "acted",
 		});
 		expect(records[1]?.note).toContain("QA card qa001 was created for snapshot snap-dev");
+		expect(records[2]).toMatchObject({ outcome: "none" });
+		expect(records[2]?.note).toContain("snapshot snap-dev already has QA card qa001 (round 1, created ");
+		expect(records[2]?.note).toContain("queued); no new QA card");
 		expect(harness.messages).toContainEqual({ type: "evaluated", workspaceId: "foo", decisions: 1, logged: 0 });
 		expect(harness.events).toEqual([]);
+	});
+
+	it("with recovery report-only, never QAs a Review dev card whose session the restart cut off (interrupted at startup)", async () => {
+		const serverStartedAt = Date.parse("2026-10-07T09:59:00.000Z");
+		const harness = createHarness({ config: { workspaces: { foo: QA_WORKSPACE } } });
+		const send = async (state: "interrupted" | "awaiting_review", startedAt: number) =>
+			await harness.send({
+				...createSnapshot({
+					workspaceId: "foo",
+					board: createBoard({ review: [createCard({ id: "dev-1" })] }),
+					selectedAgentId: "claude",
+					sessions: [{ taskId: "dev-1", state, startedAt, live: false }],
+				}),
+				serverStartedAt,
+			});
+
+		await send("interrupted", serverStartedAt - 60_000);
+		expect(harness.actions).toEqual([]);
+		expect(harness.readCardDecisions("foo")).toMatchObject([
+			{ taskId: "dev-1", outcome: "none", note: expect.stringContaining("cut off by the Kanban restart") },
+		]);
+
+		// Once it has run again under this server and finished, it is QA'd as usual.
+		await send("awaiting_review", serverStartedAt + 1_000);
+		expect(harness.actions.filter((action) => action.kind === "createTask")).toHaveLength(1);
 	});
 
 	it("marks decisions on a shadow workspace as shadow", async () => {
@@ -208,6 +239,8 @@ describe("pipeline worker", () => {
 			["worker", null],
 			["snapshot", "dev-1"],
 			["checks", "dev-1"],
+			["qa_gate", "dev-1"],
+			// The second evaluation: the snapshot already has its QA card.
 			["qa_gate", "dev-1"],
 		]);
 		expect(harness.readCardDecisions("foo", "snapshot")[0]).toMatchObject({

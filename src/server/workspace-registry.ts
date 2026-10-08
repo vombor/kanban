@@ -36,6 +36,10 @@ export interface CreateWorkspaceRegistryDependencies {
 	/** Loud problems the operator must act on (an unhealthy project). */
 	logError: (message: string) => void;
 	onTerminalManagerReady?: (workspaceId: string, manager: TerminalSessionManager) => void;
+	/** The server's session sync setting: with it on, an interrupted session never moves its card (task counts). */
+	sessionSyncEnabled?: boolean;
+	/** A new manager has its stored summaries, and nothing follows it yet (cli.ts marks the dead ones interrupted). */
+	onTerminalManagerHydrated?: (workspaceId: string, manager: TerminalSessionManager) => void;
 }
 
 export interface DisposeWorkspaceRegistryOptions {
@@ -144,10 +148,17 @@ export function collectProjectWorktreeTaskIdsForRemoval(board: RuntimeBoardData)
 	return taskIds;
 }
 
-function applyLiveSessionStateToProjectTaskCounts(
+/**
+ * The project list's counts with the moves the session states are about to cause. An interrupted session moves its
+ * card to Done only when the browser makes the moves (session sync off: use-board-interactions.ts); session sync
+ * leaves it where it is, and the server marks every session a restart cut off interrupted, so counting those as Done
+ * would show every orphan of a restart as Done.
+ */
+export function applyLiveSessionStateToProjectTaskCounts(
 	counts: RuntimeProjectTaskCounts,
 	board: RuntimeBoardData,
 	sessionSummaries: RuntimeWorkspaceStateResponse["sessions"],
+	options: { sessionSyncEnabled: boolean },
 ): RuntimeProjectTaskCounts {
 	const taskColumnById = new Map<string, RuntimeBoardColumnId>();
 	for (const column of board.columns) {
@@ -168,7 +179,7 @@ function applyLiveSessionStateToProjectTaskCounts(
 			next.review += 1;
 			continue;
 		}
-		if (summary.state === "interrupted" && columnId !== "trash") {
+		if (!options.sessionSyncEnabled && summary.state === "interrupted" && columnId !== "trash") {
 			next[columnId] = Math.max(0, next[columnId] - 1);
 			next.trash += 1;
 		}
@@ -263,6 +274,7 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 			try {
 				const existingWorkspace = await loadWorkspaceState(repoPath);
 				manager.hydrateFromRecord(existingWorkspace.sessions);
+				deps.onTerminalManagerHydrated?.(workspaceId, manager);
 			} catch {
 				// Workspace state will be created on demand.
 			}
@@ -329,7 +341,9 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 			for (const summary of terminalManager.listSummaries()) {
 				liveSessionsByTaskId[summary.taskId] = summary;
 			}
-			const nextCounts = applyLiveSessionStateToProjectTaskCounts(persistedCounts, board, liveSessionsByTaskId);
+			const nextCounts = applyLiveSessionStateToProjectTaskCounts(persistedCounts, board, liveSessionsByTaskId, {
+				sessionSyncEnabled: deps.sessionSyncEnabled ?? false,
+			});
 			projectTaskCountsByWorkspaceId.set(workspaceId, nextCounts);
 			return nextCounts;
 		} catch {

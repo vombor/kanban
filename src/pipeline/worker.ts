@@ -566,6 +566,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 					state: gateState,
 					limits: { maxFailRounds: parsed.config.pipeline.rework.maxFailRounds },
 					recoveryNudgeCheckMs: parsed.config.pipeline.recovery.nudgeCheckSec * 1000,
+					restartRecoveryActs: recoveryScope.act,
 					agentDefaultModels,
 					inspectSubmission: async (input) =>
 						await inspectSubmission(

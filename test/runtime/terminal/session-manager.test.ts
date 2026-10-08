@@ -91,6 +91,42 @@ describe("TerminalSessionManager", () => {
 		}
 	});
 
+	it("marks every hydrated running session interrupted after a restart, newer than the stored summary", () => {
+		vi.useFakeTimers();
+		try {
+			const t0 = Date.parse("2026-10-07T23:03:00.000Z");
+			vi.setSystemTime(t0);
+			const manager = new TerminalSessionManager();
+			manager.hydrateFromRecord({
+				qa: createSummary({ taskId: "qa", state: "running", pid: 4242, updatedAt: t0 - 60_000 }),
+				review: createSummary({ taskId: "review", state: "awaiting_review", updatedAt: t0 - 60_000 }),
+				done: createSummary({ taskId: "done", state: "idle", pid: null, updatedAt: t0 - 60_000 }),
+			});
+			const emitted: string[] = [];
+			manager.onSummary((summary) => emitted.push(`${summary.taskId}:${summary.state}`));
+
+			const marked = manager.markOrphanedSessionsInterrupted();
+
+			expect(marked).toEqual([
+				expect.objectContaining({
+					taskId: "qa",
+					state: "interrupted",
+					reviewReason: "interrupted",
+					pid: null,
+					updatedAt: t0,
+					stateChangedAt: t0,
+				}),
+			]);
+			expect(emitted).toEqual(["qa:interrupted"]);
+			expect(manager.getSummary("review")?.state).toBe("awaiting_review");
+			expect(manager.getSummary("done")?.state).toBe("idle");
+			// Once marked, nothing is left to mark.
+			expect(manager.markOrphanedSessionsInterrupted()).toEqual([]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("resets stale running sessions without active processes", () => {
 		const manager = new TerminalSessionManager();
 		manager.hydrateFromRecord({

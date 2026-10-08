@@ -34,6 +34,11 @@
 //   the turn recovery had redone);
 // - no QA card is created or started while the snapshot says `pidPressure` (pumpQa's pid-pressure hold: zombies
 //   filling pids.max wiped a board, 10/05), logged once per hold; ingest and PASS landing go on.
+// - a QA card that can no longer give a verdict (describeDeadQaCard: its session died with the previous server, or
+//   it went to Done or off the board with none ingested) neither "already reviews" its dev card nor holds a slot: it
+//   is superseded like a resent turn's, and the dev card gets a new QA card for the same snapshot. After the
+//   23:02:56Z restart on 2026-10-07 the gate trusted the column and the dead "running" summaries of a5e91 and 257a4,
+//   and their dev cards sat in Review without QA until the watchdog flagged them.
 // New since the legacy kit (user's choice "D", 2026-10-07): the QA card is created only once the scripted checks of
 // its snapshot have finished, or after `checksWaitMin`, and its prompt gets their report (qa-checks-report.ts).
 import { randomUUID } from "node:crypto";
@@ -89,7 +94,7 @@ import {
 	type QaVerdict,
 	type QaVerdictRead,
 } from "./qa-verdict";
-import { readRecoveryFlow } from "./recovery";
+import { type RecoveryFlowState, readRecoveryFlow } from "./recovery";
 import { getSnapshotRef, readTaskSnapshot } from "./snapshots";
 import type { PipelineFinishTaskRequest } from "./worker-protocol";
 
@@ -249,11 +254,71 @@ function describeModel(model: EffectiveModel | null): string {
 	return model ? model.model : "its default model";
 }
 
-/** The same note on every evaluation, so the decision log has the creation once. */
-function describeCreated(qaTaskId: string, entry: QaGateEntry | null, shortSnapshot: string): string {
-	const details = entry ? ` (round ${entry.round}, ${entry.agentId} on ${describeModel(entry.model)})` : "";
-	const checks = entry ? describeQaChecksOutcome(entry.checks) : null;
-	return `QA card ${qaTaskId} was created for snapshot ${shortSnapshot}${details}${checks ? ` with ${checks}` : ""}`;
+function describeCreated(qaTaskId: string, entry: QaGateEntry, shortSnapshot: string): string {
+	const checks = describeQaChecksOutcome(entry.checks);
+	return `QA card ${qaTaskId} was created for snapshot ${shortSnapshot} (round ${entry.round}, ${entry.agentId} on ${describeModel(entry.model)})${checks ? ` with ${checks}` : ""}`;
+}
+
+/**
+ * For a snapshot that already has its QA card: the same note on every evaluation (so the decision log has it once),
+ * and one that can't be read as a new creation (after a worker restart it is logged again for a card made long ago).
+ */
+function describeExisting(qaTaskId: string, entry: QaGateEntry | null, shortSnapshot: string): string {
+	if (!entry) {
+		return `snapshot ${shortSnapshot} already had QA card ${qaTaskId}; no new QA card`;
+	}
+	const status = entry.status === "ingested" ? `ingested, ${entry.verdict ?? "no verdict"}` : entry.status;
+	return `snapshot ${shortSnapshot} already has QA card ${qaTaskId} (round ${entry.round}, created ${new Date(entry.createdAt).toISOString()}, ${status}); no new QA card`;
+}
+
+/** How long a QA card the gate created may be missing from the snapshots (one may predate it) before it is gone. */
+export const QA_CARD_MISSING_GRACE_MS = 2 * 60_000;
+
+/**
+ * Why a QA card the gate queued or started can no longer run to its verdict, or null while it still can: queued in
+ * Backlog, a session with a process, a Review waiting for ingest (`awaiting_review`, whatever server it ended under),
+ * or a session this server started (its end is the ingest's: nudge, then STALLED). A session that started before
+ * this server and has no process now died with the old one: its summary may still say "running" (or "interrupted",
+ * src/terminal/session-manager.ts markOrphanedSessionsInterrupted; "idle" for an agent that exited), and nothing will
+ * nudge it. It may have written its verdict first: the caller reads verdict.json before it supersedes the card
+ * (supersedeDeadQaCard in createQaGate).
+ */
+export function describeDeadQaCard(input: {
+	column: RuntimeBoardColumnId | null;
+	session: PipelineSessionView | null;
+	entry: QaGateEntry;
+	/** The QA card's recovery flow: restart recovery marks the QA cards a restart orphaned (`orphan`). */
+	flow: RecoveryFlowState;
+	serverStartedAt: number | undefined;
+	now: number;
+}): string | null {
+	const { column, session, entry, serverStartedAt } = input;
+	if (entry.status !== "queued" && entry.status !== "running") {
+		return null;
+	}
+	if (column === "trash") {
+		return "went to Done before its verdict was ingested";
+	}
+	if (column === null) {
+		return input.now - entry.createdAt > QA_CARD_MISSING_GRACE_MS
+			? "is no longer on the board, and its verdict was never ingested"
+			: null;
+	}
+	if (column === "backlog" || session?.live) {
+		return null;
+	}
+	if (column === "review" && session?.state === "awaiting_review") {
+		return null;
+	}
+	if (serverStartedAt === undefined) {
+		return null;
+	}
+	const startedAt = session?.startedAt ?? entry.startedAt ?? entry.createdAt;
+	if (startedAt >= serverStartedAt) {
+		return null;
+	}
+	const orphaned = input.flow.orphan && Date.parse(input.flow.orphan.kanbanStart) === serverStartedAt;
+	return `(${column}) lost its session with the previous Kanban server (summary ${session?.state ?? "missing"}, no process now)${orphaned ? "; restart recovery handed it to the QA gate" : ""}`;
 }
 
 function listCards(
@@ -283,6 +348,8 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 	const runningByWorkspace = new Map<string, number>();
 	/** Workspaces whose queued QA cards are held for PID pressure (already logged). */
 	const pressureHolds = new Set<string>();
+	/** workspaceId → the dead QA cards retired since the last tick (submit and the sweep), for one summary line. */
+	const retiredByWorkspace = new Map<string, string[]>();
 
 	const record = (
 		context: QaGateContext,
@@ -322,25 +389,128 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		});
 	};
 
-	const submit: QaGate["submit"] = async ({ context, card, session, dev, answer }) => {
+	const deadReasonOf = (
+		context: QaGateContext,
+		state: PipelineWorkspaceState,
+		qaTaskId: string,
+		entry: QaGateEntry,
+	): string | null =>
+		describeDeadQaCard({
+			column: findColumn(context.snapshot, qaTaskId),
+			session: context.snapshot.sessions.find((session) => session.taskId === qaTaskId) ?? null,
+			entry,
+			flow: readRecoveryFlow(state.cards[qaTaskId]),
+			serverStartedAt: context.snapshot.serverStartedAt,
+			now: context.now,
+		});
+
+	const stopQaScratch = async (entry: QaGateEntry): Promise<number> =>
+		await deps.stopScratchProcesses([entry.scratchDir, `${entry.scratchDir}-${entry.baseRef}`]).catch(() => 0);
+
+	/**
+	 * Marks the QA card `superseded` (never started, ingested or counted for a slot again; the tick moves it to Done)
+	 * and drops the dev card's `qaCreated`, so the dev card's next settled Review gets a QA card of its own.
+	 */
+	const markSuperseded = async (context: QaGateContext, qaTaskId: string, entry: QaGateEntry): Promise<number> => {
+		const workspaceId = context.snapshot.workspaceId;
+		await updateQaEntry(workspaceId, qaTaskId, { status: "superseded", supersededAt: context.now });
+		await updateCard(workspaceId, entry.reviewsTaskId, (dev) => {
+			if (dev.qaCard !== qaTaskId) {
+				return dev;
+			}
+			const { qaCreated: _created, qaCard: _card, ...rest } = dev;
+			return rest;
+		});
+		return entry.status === "running" ? await stopQaScratch(entry) : 0;
+	};
+
+	/**
+	 * Retires a QA card whose session can't give a verdict any more (describeDeadQaCard); returns the note. A verdict.json
+	 * it finished first (before the restart, or before a human dragged the card to Done) is recorded as usual and the
+	 * card goes to Done; only one without a verdict is superseded, so its dev card gets a new QA card for the snapshot.
+	 */
+	const supersedeDeadQaCard = async (
+		context: QaGateContext,
+		qaTaskId: string,
+		entry: QaGateEntry,
+		reason: string,
+	): Promise<string> => {
+		const retired = retiredByWorkspace.get(context.snapshot.workspaceId) ?? [];
+		retired.push(`${qaTaskId} (for ${entry.reviewsTaskId})`);
+		retiredByWorkspace.set(context.snapshot.workspaceId, retired);
+		const read = await deps.readVerdict(entry.outboxDir);
+		if (read.kind === "ok") {
+			const recorded = await recordVerdict(
+				context,
+				qaTaskId,
+				entry,
+				read.verdict,
+				`read after the QA card ${reason}`,
+			);
+			return `QA card ${qaTaskId} ${reason}, with its verdict written: ${recorded}; ${await trashQaCard(context, qaTaskId)}`;
+		}
+		const stopped = await markSuperseded(context, qaTaskId, entry);
+		deps.log(`qa ${entry.reviewsTaskId}: QA card ${qaTaskId} ${reason}; superseded`);
+		return `QA card ${qaTaskId} of round ${entry.round} for snapshot ${entry.snapshot.slice(0, 8)} ${reason}: superseded${stopped > 0 ? ` (stopped ${stopped} scratch process(es))` : ""}, and ${entry.reviewsTaskId} gets a new QA card for its snapshot`;
+	};
+
+	/**
+	 * The QA cards of the gate's that review `card` but can't give a verdict any more (describeDeadQaCard) are
+	 * superseded, so they neither block a new QA card nor hold a slot; the tick moves them to Done. Returns the QA card
+	 * that does still review the card (a legacy-kit one, without an entry, always counts), and a note per superseded one.
+	 */
+	const supersedeDeadReviewers = async (
+		context: QaGateContext,
+		card: RuntimeBoardCard,
+	): Promise<{ reviewer: string | null; notes: string[] }> => {
+		const state = await deps.store.load(context.snapshot.workspaceId);
+		const candidates = listCards(context.snapshot)
+			.filter(
+				({ columnId, card: other }) =>
+					columnId !== "trash" &&
+					other.id !== card.id &&
+					resolveCardRole(other) === "qa" &&
+					resolveReviewedTaskId(other) === card.id,
+			)
+			.map(({ columnId, card: other }) => ({ qaTaskId: other.id, columnId }));
+		// The dev card's own QA card may be off the board's work columns: moved to Done by hand, or deleted.
+		const recorded = state.cards[card.id]?.qaCard;
+		if (typeof recorded === "string" && !candidates.some((candidate) => candidate.qaTaskId === recorded)) {
+			candidates.push({ qaTaskId: recorded, columnId: findColumn(context.snapshot, recorded) ?? "trash" });
+		}
+		const notes: string[] = [];
+		for (const { qaTaskId, columnId } of candidates) {
+			const entry = readQaGateEntry(state.cards[qaTaskId]);
+			const onBoard = columnId !== "trash";
+			if (!entry) {
+				if (onBoard) {
+					return { reviewer: `QA card ${qaTaskId} (${columnId})`, notes };
+				}
+				continue;
+			}
+			if (entry.status === "superseded" || (entry.status === "ingested" && !onBoard)) {
+				continue;
+			}
+			const dead = deadReasonOf(context, state, qaTaskId, entry);
+			if (!dead) {
+				if (onBoard) {
+					return { reviewer: `QA card ${qaTaskId} (${columnId})`, notes };
+				}
+				continue;
+			}
+			notes.push(await supersedeDeadQaCard(context, qaTaskId, entry, dead));
+		}
+		return { reviewer: null, notes };
+	};
+
+	const queueQa = async ({
+		context,
+		card,
+		dev,
+		answer,
+	}: QaGateSubmitInput): Promise<{ outcome: PipelineDecisionOutcome; note: string }> => {
 		const { snapshot } = context;
 		const workspaceId = snapshot.workspaceId;
-		if (!isReviewSettled(session, context.now, snapshot.reviewSettleMs)) {
-			return { outcome: "none", note: describeUnsettledReview(session) };
-		}
-		const reviewer = listCards(snapshot).find(
-			({ columnId, card: other }) =>
-				columnId !== "trash" &&
-				other.id !== card.id &&
-				resolveCardRole(other) === "qa" &&
-				resolveReviewedTaskId(other) === card.id,
-		);
-		if (reviewer) {
-			return {
-				outcome: "none",
-				note: `QA card ${reviewer.card.id} (${reviewer.columnId}) already reviews this card`,
-			};
-		}
 		// The submission stage snapshotted the card and found work in it before the kit was asked.
 		const snapshotCommit = await readSnapshot(snapshot.workspacePath, card.id);
 		if (!snapshotCommit) {
@@ -352,7 +522,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		const devEntry = state.cards[card.id];
 		if (devEntry?.qaCreated === qaSnapshot.commit) {
 			const qaTaskId = String(devEntry.qaCard ?? "?");
-			return { outcome: "acted", note: describeCreated(qaTaskId, readQaGateEntry(state.cards[qaTaskId]), short) };
+			return { outcome: "none", note: describeExisting(qaTaskId, readQaGateEntry(state.cards[qaTaskId]), short) };
 		}
 		if (readQaVerdictRecords(devEntry).some((verdict) => verdict.snapshot === qaSnapshot.commit)) {
 			return { outcome: "none", note: `snapshot ${short} already has a QA verdict` };
@@ -472,6 +642,19 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			`qa ${card.id}: created QA card ${qaTaskId} (round ${round}) for snapshot ${short}${checksNote ? ` with ${checksNote}` : ""}; queued`,
 		);
 		return { outcome: "acted", note: describeCreated(qaTaskId, entry, short) };
+	};
+
+	const submit: QaGate["submit"] = async (input) => {
+		const { context, card, session } = input;
+		if (!isReviewSettled(session, context.now, context.snapshot.reviewSettleMs)) {
+			return { outcome: "none", note: describeUnsettledReview(session) };
+		}
+		const { reviewer, notes } = await supersedeDeadReviewers(context, card);
+		if (reviewer) {
+			return { outcome: "none", note: `${reviewer} already reviews this card` };
+		}
+		const queued = await queueQa(input);
+		return notes.length === 0 ? queued : { outcome: "acted", note: `${notes.join("; ")}; ${queued.note}` };
 	};
 
 	const recordVerdict = async (
@@ -763,6 +946,15 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 				continue;
 			}
 			if (entry.status === "superseded") {
+				// Deleted from the board: there is nothing to move to Done.
+				if (
+					findColumn(context.snapshot, qaTaskId) === null &&
+					context.now - entry.createdAt > QA_CARD_MISSING_GRACE_MS
+				) {
+					await updateQaEntry(workspaceId, qaTaskId, { trashed: true });
+					records.push(record(context, qaTaskId, "qa_start", "superseded QA card: no longer on the board"));
+					continue;
+				}
 				records.push(
 					record(context, qaTaskId, "qa_start", `superseded QA card: ${await trashQaCard(context, qaTaskId)}`),
 				);
@@ -773,20 +965,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			if (!Number.isFinite(sent) || sent <= entry.createdAt) {
 				continue;
 			}
-			await updateQaEntry(workspaceId, qaTaskId, { status: "superseded", supersededAt: context.now });
-			await updateCard(workspaceId, entry.reviewsTaskId, (dev) => {
-				if (dev.qaCard !== qaTaskId) {
-					return dev;
-				}
-				const { qaCreated: _created, qaCard: _card, ...rest } = dev;
-				return rest;
-			});
-			const stopped =
-				entry.status === "running"
-					? await deps
-							.stopScratchProcesses([entry.scratchDir, `${entry.scratchDir}-${entry.baseRef}`])
-							.catch(() => 0)
-					: 0;
+			const stopped = await markSuperseded(context, qaTaskId, entry);
 			const was =
 				entry.status === "running"
 					? `running; stopped${stopped > 0 ? `, with ${stopped} scratch process(es)` : ""}`
@@ -803,11 +982,46 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		return records;
 	};
 
+	/**
+	 * QA cards that can't give a verdict any more (describeDeadQaCard) are superseded on every tick too, not only when
+	 * their dev card is submitted: a dead QA card would otherwise hold its QA slot until `timeoutMin` (after a restart
+	 * every slot), or wait for good when its dev card has left Review. supersedeResentTurns then moves them to Done.
+	 */
+	const supersedeDeadQaCards = async (context: QaGateContext): Promise<PipelineDecisionRecord[]> => {
+		const state = await deps.store.load(context.snapshot.workspaceId);
+		const records: PipelineDecisionRecord[] = [];
+		for (const [qaTaskId, rawEntry] of Object.entries(state.cards)) {
+			const entry = readQaGateEntry(rawEntry);
+			const dead = entry && !entry.trashed ? deadReasonOf(context, state, qaTaskId, entry) : null;
+			if (entry && dead) {
+				records.push(
+					record(context, qaTaskId, "qa_start", await supersedeDeadQaCard(context, qaTaskId, entry, dead)),
+				);
+			}
+		}
+		// One line per evaluation, the submits' retirements included: after a restart (or the first start of this build)
+		// many go at once.
+		const retired = retiredByWorkspace.get(context.snapshot.workspaceId) ?? [];
+		retiredByWorkspace.delete(context.snapshot.workspaceId);
+		if (retired.length > 0) {
+			records.unshift(
+				record(
+					context,
+					null,
+					"qa_start",
+					`retired ${retired.length} QA card(s) that can no longer give a verdict: ${retired.join(", ")}; each verdict already written is recorded, the rest are superseded and their dev cards get new QA cards for the same snapshots`,
+				),
+			);
+		}
+		return records;
+	};
+
 	const tick: QaGate["tick"] = async (context) => {
 		const { snapshot, qa } = context;
 		const workspaceId = snapshot.workspaceId;
 		const records: PipelineDecisionRecord[] = [];
 		const sessions = new Map(snapshot.sessions.map((session) => [session.taskId, session]));
+		records.push(...(await supersedeDeadQaCards(context)));
 		records.push(...(await supersedeResentTurns(context)));
 		let state = await deps.store.load(workspaceId);
 
@@ -817,7 +1031,9 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			if (!entry || findColumn(snapshot, qaTaskId) !== "review") {
 				continue;
 			}
-			if (entry.status === "ingested" && entry.trashed) {
+			// Superseded: dropped, never ingested (supersedeResentTurns moves it to Done); a dead one with a verdict was
+			// recorded when it was retired (supersedeDeadQaCard).
+			if ((entry.status === "ingested" && entry.trashed) || entry.status === "superseded") {
 				continue;
 			}
 			// A QA card whose turn ended moments ago may still be writing its verdict.
@@ -941,6 +1157,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		forget: (workspaceId) => {
 			runningByWorkspace.delete(workspaceId);
 			pressureHolds.delete(workspaceId);
+			retiredByWorkspace.delete(workspaceId);
 		},
 	};
 }

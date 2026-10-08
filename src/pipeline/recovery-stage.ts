@@ -27,6 +27,7 @@ import type { PipelineDecisionRecord } from "./decision-log";
 import { getRecoveryScope, type PipelineSessionView, type PipelineWorkspaceSnapshot, toEffectiveCard } from "./engine";
 import type { PipelineWorkspaceState } from "./pipeline-state";
 import { type CapacityCard, findProviderCapacityHold } from "./provider-capacity";
+import { readQaGateEntry } from "./qa-gate";
 import {
 	applyOutageProbe,
 	decideRecovery,
@@ -555,6 +556,12 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 		}
 	};
 
+	const orphanMarks = (orphans: RestartOrphan[], serverStartedAt: number): Map<string, RecoveryFlowPatch> => {
+		const at = new Date(deps.now()).toISOString();
+		const kanbanStart = new Date(serverStartedAt).toISOString();
+		return new Map(orphans.map((orphan) => [orphan.taskId, { orphan: { at, kanbanStart, kind: orphan.role } }]));
+	};
+
 	const evaluateRestart = async (
 		input: RecoveryEvaluationInput,
 		acting: boolean,
@@ -576,10 +583,13 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 		const contexts = contextsOf(input);
 		const ended = new Set<string>();
 		for (const context of contexts) {
+			// "interrupted" too: the server marks a "running" summary whose process died with the old server interrupted
+			// when it loads it (markOrphanedSessionsInterrupted), which may be before this plan.
+			const state = context.session?.state;
 			if (
 				(context.column === "in_progress" || context.column === "review") &&
-				context.session?.state === "running" &&
-				!context.session.live
+				(state === "running" || state === "interrupted") &&
+				!context.session?.live
 			) {
 				const detail = await readDetail(input, context);
 				const decision = evaluateClineTurnEnd({
@@ -618,21 +628,47 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 			},
 		];
 		const devOrphans = plan.orphans.filter((orphan) => orphan.role === "dev");
+		// An orphaned QA card is never resumed: its replacement is the QA gate's, which creates and starts QA cards
+		// within its slots and PID pressure. Recovery hands the gate's own QA cards over with an orphan mark; the gate
+		// supersedes them (qa-gate.ts describeDeadQaCard reads its session too, so it does this without the mark in
+		// report mode) and queues a new QA card for the same snapshot. A legacy-kit QA card stays the legacy kit's.
+		const qaOrphans: RestartOrphan[] = [];
 		for (const orphan of plan.orphans) {
 			const context = byId.get(orphan.taskId) ?? null;
-			const dev = orphan.role === "dev";
-			records.push({
+			if (orphan.role === "dev") {
+				records.push({
+					...baseRecord(input, context, "restart"),
+					taskId: orphan.taskId,
+					answer: { kind: "resume" },
+					outcome: acting ? "acted" : notActing,
+					note: `orphaned (${orphan.column}): ${orphan.reason}; ${acting ? "resuming" : "would resume"} on the same model`,
+				});
+				continue;
+			}
+			const gate = readQaGateEntry(input.state.cards[orphan.taskId]);
+			const record = {
 				...baseRecord(input, context, "restart"),
 				taskId: orphan.taskId,
-				answer: { kind: dev ? "resume" : "recreate_qa" },
-				outcome: dev ? (acting ? "acted" : notActing) : "not_implemented",
-				note: dev
-					? `orphaned (${orphan.column}): ${orphan.reason}; ${acting ? "resuming" : "would resume"} on the same model`
-					: `orphaned QA card (${orphan.column}): ${orphan.reason}; the QA gate recreates it for the same snapshot`,
+				answer: { kind: "recreate_qa" },
+			};
+			if (!gate || (gate.status !== "queued" && gate.status !== "running")) {
+				records.push({
+					...record,
+					outcome: "none",
+					note: `orphaned QA card (${orphan.column}): ${orphan.reason}; ${gate ? `its QA gate entry is ${gate.status}` : "not made by the QA gate (the legacy kit's)"}, so it is left alone`,
+				});
+				continue;
+			}
+			qaOrphans.push(orphan);
+			const replacement = `a new QA card for ${gate.reviewsTaskId}'s snapshot ${gate.snapshot.slice(0, 8)} (QA slots and PID pressure apply)`;
+			records.push({
+				...record,
+				outcome: acting ? "acted" : notActing,
+				note: `orphaned QA card (${orphan.column}): ${orphan.reason}; ${acting ? `handed to the QA gate, which supersedes it and queues ${replacement}` : `the QA gate supersedes it on its own and queues ${replacement}`}`,
 			});
 		}
 		// Marks from an earlier plan that this one doesn't list (resumed, finished or moved since) go.
-		const planned = new Set(devOrphans.map((orphan) => orphan.taskId));
+		const planned = new Set([...devOrphans, ...qaOrphans].map((orphan) => orphan.taskId));
 		const staleMarks = acting
 			? Object.entries(input.state.cards)
 					.filter(([taskId, entry]) => !planned.has(taskId) && readRecoveryFlow(entry).orphan)
@@ -641,13 +677,11 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 		if (staleMarks.length > 0) {
 			await deps.updateCards(workspaceId, new Map(staleMarks));
 		}
+		if (acting && qaOrphans.length > 0) {
+			await deps.updateCards(workspaceId, orphanMarks(qaOrphans, serverStartedAt));
+		}
 		if (acting && devOrphans.length > 0) {
-			const at = new Date(deps.now()).toISOString();
-			const kanbanStart = new Date(serverStartedAt).toISOString();
-			await deps.updateCards(
-				workspaceId,
-				new Map(devOrphans.map((orphan) => [orphan.taskId, { orphan: { at, kanbanStart, kind: orphan.role } }])),
-			);
+			await deps.updateCards(workspaceId, orphanMarks(devOrphans, serverStartedAt));
 			for (const orphan of devOrphans) {
 				plannedNow.add(orphan.taskId);
 			}

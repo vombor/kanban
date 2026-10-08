@@ -83,12 +83,14 @@ interface HarnessOptions {
 	sleep?: (ms: number) => Promise<void>;
 	consumeRecoverRequest?: () => Promise<boolean>;
 	capacity?: Record<string, { maxLoadedModels: number }>;
+	/** pipeline-state.json's cards before the first evaluation. */
+	cards?: Record<string, Record<string, unknown>>;
 }
 
 function createHarness(options: HarnessOptions = {}) {
 	const actions: RecoveryAction[] = [];
 	const records: PipelineDecisionRecord[] = [];
-	let cards: Record<string, Record<string, unknown>> = {};
+	let cards: Record<string, Record<string, unknown>> = options.cards ?? {};
 	const removedManifests: string[] = [];
 	const deps: RecoveryStageDependencies = {
 		locateWorktree: async (_workspacePath, entry) => `/wt/${entry.id}`,
@@ -302,7 +304,8 @@ describe("recovery stage", () => {
 		expect(restart.map((record) => [record.taskId, record.outcome])).toEqual([
 			[null, "none"],
 			["dev1", "acted"],
-			["qa1", "not_implemented"],
+			// A legacy-kit QA card (no QA gate entry) is left alone.
+			["qa1", "none"],
 			["dev1", "acted"],
 		]);
 		expect(restart.at(-1)?.note).toContain("WIP tag preserve/dev1-wip-20261007T1200-restart");
@@ -311,6 +314,62 @@ describe("recovery stage", () => {
 		const again = await harness.evaluate(snapshot);
 		expect(again.filter((record) => record.stage === "restart")).toEqual([]);
 		expect(harness.actions.filter((action) => action.kind === "resume")).toHaveLength(1);
+	});
+
+	it("counts a Cline card whose summary the server marked interrupted as finished when its turn had ended", async () => {
+		const harness = createHarness({
+			manifest: null,
+			details: { "/wt/dev1": finalReply("Implemented and tested.\nSTATUS: DONE") },
+		});
+		const records = await harness.evaluate({
+			board: board({ review: [card("dev1")] }),
+			sessions: [session("dev1", { state: "interrupted", live: false, startedAt: SERVER_START - 60_000 })],
+			serverStartedAt: SERVER_START,
+		});
+		expect(harness.actions).toEqual([]);
+		expect(records.filter((record) => record.stage === "restart")).toEqual([]);
+	});
+
+	it("hands an orphaned QA card of the QA gate's to the gate with an orphan mark, and never resumes it", async () => {
+		const qaGate = {
+			reviewsTaskId: "dev1",
+			round: 1,
+			snapshot: "abcdef0123456789",
+			snapshotRef: "refs/kanban/snapshots/dev1",
+			outboxDir: "/tmp/kanban-qa-out/qa2",
+			scratchDir: "/tmp/kanban-qa/dev1",
+			baseRef: "main",
+			agentId: "codex",
+			model: null,
+			devAgentId: "cline",
+			devModel: null,
+			route: null,
+			status: "running",
+			createdAt: SERVER_START - 120_000,
+			startedAt: SERVER_START - 120_000,
+		};
+		const harness = createHarness({ manifest: null, cards: { qa2: { qaGate } } });
+		const records = await harness.evaluate({
+			board: board({ in_progress: [card("qa2", { role: "qa", reviewsTaskId: "dev1" })], review: [card("dev1")] }),
+			sessions: [
+				session("qa2", { agentId: "codex", state: "interrupted", live: false, startedAt: SERVER_START - 60_000 }),
+				session("dev1", { state: "awaiting_review", live: false, startedAt: SERVER_START - 60_000 }),
+			],
+			serverStartedAt: SERVER_START,
+		});
+		expect(harness.actions).toEqual([]);
+		expect(records.filter((record) => record.stage === "restart").at(-1)).toMatchObject({
+			taskId: "qa2",
+			answer: { kind: "recreate_qa" },
+			outcome: "acted",
+			note: expect.stringContaining(
+				"handed to the QA gate, which supersedes it and queues a new QA card for dev1's snapshot abcdef01",
+			),
+		});
+		expect((harness.getCards().qa2?.qaflow as Record<string, unknown>).orphan).toMatchObject({
+			kind: "qa",
+			kanbanStart: new Date(SERVER_START).toISOString(),
+		});
 	});
 
 	it("resumes an orphaned Claude card by continuing its conversation, with the resume note instead of the card prompt", async () => {

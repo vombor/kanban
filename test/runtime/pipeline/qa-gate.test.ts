@@ -107,7 +107,8 @@ describe("QA gate", () => {
 		expect(state.cards.d1111).toMatchObject({ qaCreated: "snap-d1111", qaCard: "qa001" });
 		expect(readQaGateEntry(state.cards.qa001)).toMatchObject({ status: "queued", round: 1, reviewsTaskId: "d1111" });
 		expect(harness.readCardDecisions("foo").filter((record) => record.stage === "qa_gate")).toMatchObject([
-			{ taskId: "d1111", outcome: "acted" },
+			{ taskId: "d1111", outcome: "acted", note: expect.stringContaining("QA card qa001 was created for snapshot") },
+			{ taskId: "d1111", outcome: "none", note: expect.stringContaining("already has QA card qa001") },
 		]);
 	});
 
@@ -527,6 +528,117 @@ describe("QA gate", () => {
 		expect(kinds(harness.actions)).toEqual(["finishTask:qa001"]);
 		const [record] = readQaVerdictRecords((await harness.store.load("foo")).cards.d1111);
 		expect(record).toMatchObject({ verdict: "STALLED", notes: expect.stringContaining("unusable verdict.json") });
+	});
+
+	it("a QA card moved to Done without a verdict does not block QA: it is superseded and the snapshot gets a new one", async () => {
+		const harness = createHarness({ config: { workspaces: { foo: QA_WORKSPACE } } });
+		await startQa(harness);
+
+		await send(harness, {
+			review: [createCard({ id: "d1111", ...OPENAI_DEV })],
+			trash: [createCard({ id: "qa001", role: "qa", reviewsTaskId: "d1111" })],
+		});
+
+		expect(kinds(harness.actions)).toEqual(["createTask:qa002", "finishTask:qa001"]);
+		const state = await harness.store.load("foo");
+		expect(readQaGateEntry(state.cards.qa001)).toMatchObject({ status: "superseded", supersededAt: T0 });
+		expect(readQaGateEntry(state.cards.qa002)).toMatchObject({ status: "queued", snapshot: "snap-d1111", round: 1 });
+		expect(state.cards.d1111).toMatchObject({ qaCreated: "snap-d1111", qaCard: "qa002" });
+		expect(harness.readCardDecisions("foo").at(-1)?.note).toContain(
+			"QA card qa001 of round 1 for snapshot snap-d11 went to Done before its verdict was ingested: superseded",
+		);
+	});
+
+	it("after a restart, a QA card settled in Review still gets ingested, and one this server started is not dead", async () => {
+		const harness = createHarness({ config: { workspaces: { foo: QA_WORKSPACE } } });
+		await startQa(harness);
+		harness.setNow(T0 + 10 * 60_000);
+		const restarted = {
+			...createSnapshot({
+				workspaceId: "foo",
+				board: createBoard(qaInReview),
+				selectedAgentId: "claude",
+				sessions: [{ taskId: "qa001", state: "awaiting_review", startedAt: T0, stateChangedAt: T0, live: false }],
+			}),
+			serverStartedAt: T0 + 5 * 60_000,
+		};
+		harness.setVerdict("/tmp/kanban-qa-out/qa001", { kind: "ok", verdict: createVerdict({ verdict: "FAIL" }) });
+		await harness.send(restarted);
+		expect(kinds(harness.actions)).toEqual(["finishTask:qa001"]);
+		expect(readQaGateEntry((await harness.store.load("foo")).cards.qa001)).toMatchObject({ status: "ingested" });
+
+		// Started under this server, In Progress with no summary yet (the snapshot predates the session): still alive.
+		const fresh = createHarness({ config: { workspaces: { foo: QA_WORKSPACE } } });
+		await startQa(fresh);
+		await fresh.send({
+			...createSnapshot({
+				workspaceId: "foo",
+				board: createBoard({
+					in_progress: [createCard({ id: "qa001", role: "qa", reviewsTaskId: "d1111" })],
+					review: [createCard({ id: "d1111", ...OPENAI_DEV })],
+				}),
+				selectedAgentId: "claude",
+			}),
+			serverStartedAt: T0 - 60_000,
+		});
+		expect(fresh.actions).toEqual([]);
+		expect(readQaGateEntry((await fresh.store.load("foo")).cards.qa001)).toMatchObject({ status: "running" });
+	});
+
+	for (const state of ["interrupted", "idle"] as const) {
+		it(`after a restart, a Review QA card whose ${state} session died with the old server is ingested once from its verdict, with no second QA card`, async () => {
+			const harness = createHarness({ config: { workspaces: { foo: QA_WORKSPACE } } });
+			await startQa(harness);
+			harness.setVerdict("/tmp/kanban-qa-out/qa001", { kind: "ok", verdict: createVerdict() });
+			harness.setNow(T0 + 10 * 60_000);
+			const restarted = {
+				...createSnapshot({
+					workspaceId: "foo",
+					board: createBoard(qaInReview),
+					selectedAgentId: "claude",
+					sessions: [{ taskId: "qa001", state, startedAt: T0, stateChangedAt: T0, live: false }],
+				}),
+				serverStartedAt: T0 + 5 * 60_000,
+			};
+
+			await harness.send(restarted);
+			await harness.send(restarted);
+
+			// startQa cleared the actions: no second QA card.
+			expect(createdTasks(harness.actions)).toEqual([]);
+			const stored = await harness.store.load("foo");
+			expect(readQaVerdictRecords(stored.cards.d1111)).toMatchObject([{ qaTaskId: "qa001", verdict: "PASS" }]);
+			expect(readQaGateEntry(stored.cards.qa001)).toMatchObject({ status: "ingested", trashed: true });
+			expect(harness.events.filter((event) => event.name === "verdictRecorded")).toHaveLength(1);
+			expect(kinds(harness.actions).filter((kind) => kind.startsWith("finishTask"))).toEqual([
+				"finishTask:qa001",
+				"finishTask:d1111",
+			]);
+		});
+	}
+
+	it("never ingests a superseded QA card, even one still in Review", async () => {
+		const harness = createHarness({ config: { workspaces: { foo: QA_WORKSPACE } } });
+		await startQa(harness);
+		harness.setNow(T0 + 10 * 60_000);
+		const restarted = {
+			...createSnapshot({
+				workspaceId: "foo",
+				board: createBoard(qaInReview),
+				selectedAgentId: "claude",
+				sessions: [{ taskId: "qa001", state: "interrupted", startedAt: T0, stateChangedAt: T0, live: false }],
+			}),
+			serverStartedAt: T0 + 5 * 60_000,
+		};
+		// No verdict yet: superseded, and a new QA card queued.
+		await harness.send(restarted);
+		expect(readQaGateEntry((await harness.store.load("foo")).cards.qa001)).toMatchObject({ status: "superseded" });
+		// A verdict.json appearing later (the old QA run) is never read.
+		harness.setVerdict("/tmp/kanban-qa-out/qa001", { kind: "ok", verdict: createVerdict() });
+		await harness.send(restarted);
+		expect(readQaVerdictRecords((await harness.store.load("foo")).cards.d1111)).toEqual([]);
+		expect(createdTasks(harness.actions).map((task) => task.taskId)).toEqual(["qa002"]);
+		expect(harness.actions.filter((action) => action.kind === "deliverInput")).toEqual([]);
 	});
 
 	it("does not ingest a QA card it did not create (the legacy kit's)", async () => {

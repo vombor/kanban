@@ -315,6 +315,28 @@ export class TerminalSessionManager implements TerminalSessionService {
 		}
 	}
 
+	/**
+	 * Marks every summary that says "running" but has no process in this manager interrupted (pid gone, newer
+	 * `updatedAt`, so the summary merge keeps the mark over the stored one), and returns the marked summaries. The
+	 * server calls it once, right after hydrating a workspace's summaries at startup: those sessions' PTYs died with
+	 * the previous server, and a dead "running" summary misled the QA gate, the watchdog, session sync and the
+	 * browser after the 2026-10-07 23:02:56Z restart. Restart recovery counts "interrupted" as an orphan state like
+	 * "running" (restart-recovery.ts), so marking before or after it plans changes nothing there.
+	 */
+	markOrphanedSessionsInterrupted(): RuntimeTaskSessionSummary[] {
+		const marked: RuntimeTaskSessionSummary[] = [];
+		for (const entry of this.entries.values()) {
+			if (entry.active || entry.summary.state !== "running") {
+				continue;
+			}
+			marked.push(
+				cloneSummary(updateSummary(entry, { state: "interrupted", reviewReason: "interrupted", pid: null })),
+			);
+			this.emitSummary(entry.summary);
+		}
+		return marked;
+	}
+
 	getSummary(taskId: string): RuntimeTaskSessionSummary | null {
 		const entry = this.entries.get(taskId);
 		return entry ? cloneSummary(entry.summary) : null;

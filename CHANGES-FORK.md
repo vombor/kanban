@@ -728,3 +728,20 @@ of this repository is the complete record of changes.
   (origin changes are refused until `issues.repo` is set); next-page links are cached for 304s and refused off the
   API origin; report mode fetches comments only for changed issues; rework siblings keep the `issue`; card
   sessions can't run `kanban issues sync`.
+- `src/terminal/session-manager.ts`, `src/server/workspace-registry.ts`, `src/cli.ts`, `src/pipeline/qa-gate.ts`,
+  `src/pipeline/recovery-stage.ts`, `src/pipeline/engine.ts`, `src/pipeline/worker.ts`, `AGENTS.md`, tests: QA cards
+  and stale sessions survive an unexpected restart (foo, 2026-10-07 23:02:56Z). When the server loads a workspace's
+  session summaries (only once it has bound the port, and only with session sync on), every `running` summary with
+  no process is marked `interrupted` with a newer `updatedAt` and persisted. Restart recovery treats `interrupted` like
+  `running`, including the Cline turn-end check. With session sync on, the project list no longer counts interrupted
+  cards as Done. With restart recovery not acting (`pipeline.recovery.mode: "report"`), a Review dev card whose session
+  the restart cut off is not snapshotted or QA'd. The QA gate decides liveness itself: one of its QA cards that went
+  to Done without an ingested verdict, left the board, or whose session started before this server and has no process
+  is retired, both when its dev card is submitted and on every tick, so it no longer blocks a new QA card or holds a
+  QA slot. A verdict.json the card had already written is recorded as usual; otherwise the card is superseded and its
+  dev card gets a new QA card for the same snapshot. A superseded card is never ingested. Restart recovery's
+  `recreate_qa` hands the gate's orphaned QA cards over with an orphan mark (`kind: "qa"`) and never resumes them.
+  For an existing QA card the gate's note now reads "snapshot X already has QA card Y (... created <time>, <status>);
+  no new QA card" instead of "was created". On the first tick after this deploys, the gate retires every stale
+  `running`/`queued` entry at once (foo's a5e91 and 257a4 among them), logged as one summary line per workspace
+  (`qa_start`, no task) plus one line per card, so dev cards still in Review get new QA cards in one burst.

@@ -393,6 +393,28 @@ async function startServer(): Promise<{
 			console.warn(`[kanban] ${message}`);
 		},
 	});
+	// A "running" summary loaded at startup has no process in this server (its PTY died with the old one): it is marked
+	// interrupted and persisted at once. Only once this process has bound the server: one that loses the port to a
+	// running server must not mark that server's live sessions. Not with session sync off: the browser then makes the
+	// moves, and it trashes a card whose session turns interrupted (use-board-interactions.ts), every orphan included.
+	let serverBound = false;
+	const markOrphanedSessions = (workspaceId: string, manager: TerminalSessionManager): void => {
+		if (!sessionSyncSetting.enabled) {
+			return;
+		}
+		const summaries = manager.markOrphanedSessionsInterrupted();
+		if (summaries.length === 0) {
+			return;
+		}
+		void persistWorkspaceSessionSummaries(
+			workspaceId,
+			Object.fromEntries(summaries.map((summary) => [summary.taskId, summary])),
+		).catch((error: unknown) => {
+			console.warn(
+				`[kanban] could not persist the interrupted sessions of ${workspaceId}: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		});
+	};
 	const workspaceRegistry = await createWorkspaceRegistry({
 		cwd: process.cwd(),
 		loadGlobalRuntimeConfig,
@@ -402,6 +424,12 @@ async function startServer(): Promise<{
 		pathIsDirectory,
 		logError: (message) => {
 			console.error(`[kanban] ${message}`);
+		},
+		sessionSyncEnabled: sessionSyncSetting.enabled,
+		onTerminalManagerHydrated: (workspaceId, manager) => {
+			if (serverBound) {
+				markOrphanedSessions(workspaceId, manager);
+			}
 		},
 		onTerminalManagerReady: (workspaceId, manager) => {
 			runtimeStateHub?.trackTerminalManager(workspaceId, manager);
@@ -493,6 +521,11 @@ async function startServer(): Promise<{
 			};
 		},
 	});
+	// Bound: managers loaded from here on mark their orphaned sessions as they hydrate, the earlier ones now.
+	serverBound = true;
+	for (const { workspaceId, terminalManager } of workspaceRegistry.listManagedWorkspaces()) {
+		markOrphanedSessions(workspaceId, terminalManager);
+	}
 
 	// Session sync moves cards between In Progress and Review on session state changes, with or without a
 	// browser open (src/server/session-column-sync.ts). Like auto-review, only the process that bound the server
@@ -584,7 +617,10 @@ async function startServer(): Promise<{
 			if (!state) {
 				return null;
 			}
-			const terminalManager = workspaceRegistry.getTerminalManagerForWorkspace(workspaceId);
+			// Loaded once if no request has loaded it yet, so its orphaned sessions are marked before the worker reads them.
+			const terminalManager =
+				workspaceRegistry.getTerminalManagerForWorkspace(workspaceId) ??
+				(await workspaceRegistry.ensureTerminalManagerForWorkspace(workspaceId, workspacePath).catch(() => null));
 			const liveSummaries = terminalManager?.listSummaries();
 			const config = await workspaceRegistry.loadScopedRuntimeConfig({ workspaceId, workspacePath });
 			return {

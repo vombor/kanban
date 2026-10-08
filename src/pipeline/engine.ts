@@ -88,6 +88,12 @@ export interface PipelineEvaluationInput {
 	limits: { maxFailRounds: number };
 	/** `pipeline.recovery.nudgeCheckSec` in ms: how long a turn recovery resent is held back (recoveryRedoReason). */
 	recoveryNudgeCheckMs: number;
+	/**
+	 * Restart recovery acts on this workspace (getRecoveryScope().act): it marks the Review cards a restart orphaned,
+	 * and the hold above skips them. Without it nothing tells an orphan from finished work, so a Review dev card whose
+	 * session died with the old server is not QA'd (isRestartInterrupted). Absent: false.
+	 */
+	restartRecoveryActs?: boolean;
 	agentDefaultModels?: EffectiveModelConfig["agentDefaultModels"];
 	/** The submission stage for one Review card (snapshot, checks, has it work). Only called on a `qa` workspace. */
 	inspectSubmission: (input: SubmissionCardInput) => Promise<SubmissionInspection>;
@@ -221,6 +227,19 @@ function describeQaAnswer(answer: QaPolicyAnswer): string {
 	return `QA by ${answer.agentId}${model} (${answer.route ?? "qa.default"})`;
 }
 
+/** A session the restart cut off: interrupted, no process, started before this server (the startup mark). */
+export function isRestartInterrupted(
+	session: PipelineSessionView | null,
+	snapshot: Pick<PipelineWorkspaceSnapshot, "serverStartedAt">,
+): boolean {
+	return (
+		session?.state === "interrupted" &&
+		!session.live &&
+		snapshot.serverStartedAt !== undefined &&
+		(session.startedAt ?? 0) < snapshot.serverStartedAt
+	);
+}
+
 export async function evaluatePipelineWorkspace(input: PipelineEvaluationInput): Promise<PipelineDecisionRecord[]> {
 	const { snapshot, settings } = input;
 	if (!isPipelineWorkspace(settings)) {
@@ -271,6 +290,19 @@ export async function evaluatePipelineWorkspace(input: PipelineEvaluationInput):
 				answer: null,
 				outcome: "none",
 				note: `escalated ${escalatedAt}: not QA'd or landed until \`kanban task handback\` gives it back to the pipeline`,
+			});
+			continue;
+		}
+		// The server marks a summary still "running" when it starts interrupted (markOrphanedSessionsInterrupted), and the
+		// settle rule counts interrupted as settled. Before that mark the summary said running and never settled, so a
+		// turn the restart cut off was never QA'd; without restart recovery acting it still isn't.
+		if (effective.role === "dev" && !input.restartRecoveryActs && isRestartInterrupted(session, snapshot)) {
+			decisions.push({
+				...common,
+				stage: "qa_gate",
+				answer: null,
+				outcome: "none",
+				note: `its session was cut off by the Kanban restart (interrupted, no process now) and restart recovery does not act here (it needs pipeline.recovery.mode "on"), so its turn may be half done: not snapshotted or QA'd until it runs again (kanban task resume ${card.id})`,
 			});
 			continue;
 		}

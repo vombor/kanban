@@ -5,7 +5,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { loadGlobalRuntimeConfig, loadRuntimeConfig } from "../../../src/config/runtime-config";
-import { createWorkspaceRegistry } from "../../../src/server/workspace-registry";
+import {
+	applyLiveSessionStateToProjectTaskCounts,
+	createWorkspaceRegistry,
+} from "../../../src/server/workspace-registry";
 import {
 	getWorkspaceDirectoryPath,
 	listWorkspaceIndexEntries,
@@ -15,6 +18,7 @@ import { describeBrokenGitRepository, hasGitRepository } from "../../../src/work
 import { createRepoWithWorktree, git } from "../../utilities/git-repo";
 import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
 import { createTempDir } from "../../utilities/temp-dir";
+import { createBoard, createCard } from "../../utilities/workspace-state-store";
 
 async function pathIsDirectory(path: string): Promise<boolean> {
 	try {
@@ -35,6 +39,28 @@ async function createRegistry(cwd: string, logError: (message: string) => void =
 		logError,
 	});
 }
+
+describe("workspace registry: project task counts", () => {
+	it("counts an interrupted card as Done only with session sync off (a restart's orphans stay where they are)", () => {
+		const board = createBoard({
+			in_progress: [createCard({ id: "orphan" })],
+			review: [createCard({ id: "finished" })],
+		});
+		const counts = { backlog: 0, in_progress: 1, review: 1, trash: 0 };
+		const sessions = {
+			orphan: { taskId: "orphan", state: "interrupted" },
+			finished: { taskId: "finished", state: "awaiting_review" },
+		} as unknown as Parameters<typeof applyLiveSessionStateToProjectTaskCounts>[2];
+		expect(applyLiveSessionStateToProjectTaskCounts(counts, board, sessions, { sessionSyncEnabled: true })).toEqual(
+			counts,
+		);
+		expect(applyLiveSessionStateToProjectTaskCounts(counts, board, sessions, { sessionSyncEnabled: false })).toEqual({
+			...counts,
+			in_progress: 0,
+			trash: 1,
+		});
+	});
+});
 
 describe("workspace registry: stream resolution", () => {
 	const cleanups: Array<() => void> = [];
