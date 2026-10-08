@@ -15,6 +15,7 @@
 	},
 	"plan": { "enabled": false, "startInPlanMode": false, "rules": {}, "candidates": [] },
 	"onFail": { "rework": "none", "reworkRounds": 0, "conflict": "stop", "then": "stop", "runoff": null },
+	"onOutage": { "then": "orchestrator" },
 	"escalate": { "to": "orchestrator", "requireApproval": false },
 	"land": { "postLand": [] },
 	"features": []

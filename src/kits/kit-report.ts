@@ -13,6 +13,7 @@ import {
 	type DevAssignmentAnswer,
 	type EffectiveCard,
 	type OnFailAnswer,
+	type OnOutageAnswer,
 	type OnPassAnswer,
 	type PlanAssignmentAnswer,
 	type QaPolicyAnswer,
@@ -34,6 +35,8 @@ export interface KitReport {
 	qa: Array<{ devAgentId: RuntimeAgentId; devModel: EffectiveModel | null; answer: QaPolicyAnswer }>;
 	onFail: Array<{ case: string; answer: OnFailAnswer }>;
 	onPass: OnPassAnswer;
+	/** The answer for a card held `minutes` for a provider outage: its takeover time, or recovery's give-up time. */
+	onOutage: { minutes: number; answer: OnOutageAnswer };
 	/** QA answers the kit refuses (for example a route whose QA vendor equals the dev vendor). */
 	warnings: string[];
 	/** Shown, never applied without `kanban kit apply --landing`. */
@@ -93,6 +96,8 @@ export function buildKitReport(input: {
 	workspaceId: string;
 	selectedAgentId: RuntimeAgentId;
 	maxFailRounds: number;
+	/** `pipeline.recovery.outage.maxMin`: when recovery gives an outage hold up. */
+	outageMaxMin: number;
 }): KitReport {
 	const { kit } = input.resolved;
 	const policy = createRoutingPolicy(kit);
@@ -114,6 +119,7 @@ export function buildKitReport(input: {
 		{ case: "merge conflict at land", cause: "conflict", failRounds: [1] },
 		{ case: "QA STALLED", cause: "stalled", failRounds: [] },
 	];
+	const outageMinutes = Math.min(kit.onOutage?.afterMin ?? input.outageMaxMin, input.outageMaxMin);
 	const onFail = failCases.map((failCase) => ({
 		case: failCase.case,
 		answer: policy.onFail({
@@ -133,6 +139,10 @@ export function buildKitReport(input: {
 		qa,
 		onFail,
 		onPass: policy.onPass({ dev: sample, verdict: { verdict: "PASS", round: 1 } }),
+		onOutage: {
+			minutes: outageMinutes,
+			answer: policy.onOutage({ dev: sample, heldMin: outageMinutes, maxMin: input.outageMaxMin }),
+		},
 		warnings,
 		recommendedLandingMode: kit.recommends?.landingMode ?? null,
 	};
@@ -184,6 +194,14 @@ export function formatKitReport(report: KitReport): string[] {
 		lines.push(`  ${failCase}: ${formatOnFail(answer)}`);
 	}
 	lines.push(`After a PASS: ${report.onPass.action}`);
+	const outage = report.onOutage.answer;
+	lines.push(
+		`After ${report.onOutage.minutes} min of provider outage: ${
+			outage.action === "escalate"
+				? `take over on ${outage.to.agentId} ${formatModel(outage.to.model)}${outage.requireApproval ? " (needs approval)" : ""}`
+				: `keep holding (${outage.reason}); the orchestrator once the hold gives up`
+		}`,
+	);
 	if (report.recommendedLandingMode) {
 		lines.push(
 			"",

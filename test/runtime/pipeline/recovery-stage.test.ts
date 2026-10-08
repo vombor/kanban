@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { getWorkspacePipelineSettings, parsePipelineConfig } from "../../../src/config/pipeline-config";
 import type { RuntimeBoardCard, RuntimeBoardData } from "../../../src/core/api-contract";
+import { createRoutingPolicy } from "../../../src/kits/policy";
+import { getDefaultKit, resolveKitLayers } from "../../../src/kits/resolve-kit";
 import type { PipelineDecisionRecord } from "../../../src/pipeline/decision-log";
 import type { PipelineSessionView, PipelineWorkspaceSnapshot } from "../../../src/pipeline/engine";
 import type { PipelineWorkspaceState } from "../../../src/pipeline/pipeline-state";
@@ -287,6 +289,60 @@ describe("recovery stage", () => {
 			{ kind: "probe_result", up: true },
 		]);
 		expect((harness.getCards().dev1?.qaflow as Record<string, unknown>).outage).toMatchObject({ ups: 1 });
+	});
+
+	it("asks the kit's onOutage for a held card and ends the hold with a takeover request when it escalates (#8)", async () => {
+		const resolved = resolveKitLayers(getDefaultKit(), getDefaultKit(), {
+			"onOutage.then": "escalate",
+			"onOutage.afterMin": 30,
+			"escalate.to": { agent: "codex", provider: "bedrock", model: "us.moonshotai.kimi-k3" },
+		});
+		if (!resolved.ok) {
+			throw new Error(resolved.error);
+		}
+		const policy = createRoutingPolicy(resolved.kit);
+		const outage = (minutes: number) => ({
+			outage: {
+				since: new Date(NOW - minutes * 60_000).toISOString(),
+				model: "m",
+				warn: "503",
+				ups: 0,
+				lastProbe: null,
+			},
+		});
+		const devCard = card("dev1", { agentSettings: { providerId: "bedrock", modelId: "us.openai.gpt-6.1-sol" } });
+		const young = createHarness({ cards: { dev1: { qaflow: outage(10) } } });
+		await young.stage.evaluate({
+			...young.inputFor({ board: board({ review: [devCard] }), sessions: [session("dev1")] }),
+			takeoverPolicy: policy,
+		});
+		await young.stage.idle();
+		expect(young.deps.probe).toHaveBeenCalled();
+
+		const held = createHarness({ cards: { dev1: { qaflow: outage(31) } } });
+		const records = await held.stage.evaluate({
+			...held.inputFor({ board: board({ review: [devCard] }), sessions: [session("dev1")] }),
+			takeoverPolicy: policy,
+		});
+		expect(records.map((record) => [record.answer, record.outcome])).toEqual([
+			[
+				{
+					kind: "takeover",
+					to: { agentId: "codex", model: { provider: "bedrock", model: "us.moonshotai.kimi-k3" } },
+				},
+				"acted",
+			],
+		]);
+		expect(held.deps.probe).not.toHaveBeenCalled();
+		expect(held.getCards().dev1?.qaflow).toMatchObject({
+			outage: null,
+			takeover: { cause: "outage", requireApproval: false },
+		});
+
+		// Without the policy (no rework loop for the workspace) the hold just goes on.
+		const plain = createHarness({ cards: { dev1: { qaflow: outage(31) } } });
+		await plain.evaluate({ board: board({ review: [devCard] }), sessions: [session("dev1")] });
+		expect(plain.deps.probe).toHaveBeenCalled();
 	});
 
 	it("resumes cards a restart orphaned, once per server start, with the WIP note", async () => {

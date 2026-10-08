@@ -223,6 +223,81 @@ describe("rework limits", () => {
 		expect(readEscalationRecord(readQaflow(await untagged.entry("d1111")))).toMatchObject({ to: "orchestrator" });
 	});
 
+	it("never takes a task over onto the card's own model, nor a second time in the same chain (#8)", async () => {
+		const kimi = { agentId: "codex" as const, model: { provider: "bedrock", model: "us.moonshotai.kimi-k3" } };
+		const escalateToKimi = (): OnFailAnswer => ({
+			action: "escalate",
+			to: kimi,
+			requireApproval: false,
+			reason: "3 FAIL rounds",
+		});
+		// The sibling on kimi fails its rounds: escalate.to is kimi again, so the orchestrator gets it.
+		const sameModel = createHarness({ onFail: escalateToKimi });
+		const sibling = {
+			...DEV,
+			id: "s2222",
+			agentId: "codex" as const,
+			agentSettings: { providerId: "bedrock", modelId: "us.moonshotai.kimi-k3" },
+		};
+		await sameModel.seed("s2222", { qaVerdicts: [failVerdict(1, { snapshot: "snap-s2222" })] });
+		await sameModel.tick({ review: [sibling] }, [
+			{ taskId: "s2222", agentId: "codex", modelId: "us.moonshotai.kimi-k3" },
+		]);
+		expect(kinds(sameModel.actions)).toEqual(["blockTask:s2222"]);
+		expect(sameModel.preservedTags).toEqual([]);
+		expect(readEscalationRecord(readQaflow(await sameModel.entry("s2222")))).toMatchObject({
+			to: "orchestrator",
+			reason: expect.stringContaining("it already runs on bedrock/us.moonshotai.kimi-k3"),
+		});
+
+		// A sibling that took the task over hands it to nobody else, even on another model.
+		const chain = createHarness({ onFail: escalateToKimi });
+		await chain.seed("d1111", {
+			qaVerdicts: [failVerdict(1)],
+			sibling: { of: "a0000", kind: "escalation", at: new Date(REWORK_T0 - 60_000).toISOString() },
+		});
+		await chain.tick({ review: [DEV] }, [SESSION]);
+		expect(kinds(chain.actions)).toEqual(["blockTask:d1111"]);
+		expect(readEscalationRecord(readQaflow(await chain.entry("d1111")))).toMatchObject({
+			to: "orchestrator",
+			reason: expect.stringContaining("it already took the task over from a0000"),
+		});
+	});
+
+	it("carries out recovery's outage takeover request: a sibling on the target, the card blocked, in any column (#8)", async () => {
+		const kimi = { agentId: "codex" as const, model: { provider: "bedrock", model: "us.moonshotai.kimi-k3" } };
+		const harness = createHarness();
+		const takeover = {
+			at: new Date(REWORK_T0).toISOString(),
+			cause: "outage",
+			reason: "provider outage on us.openai.gpt-6.1-sol for 360 min",
+			to: kimi,
+			requireApproval: false,
+			details: ["last error: 503"],
+		};
+		await harness.seed("d1111", { qaflow: { takeover } });
+		await harness.tick({ in_progress: [DEV] }, [SESSION]);
+
+		expect(harness.preservedTags).toEqual(["preserve/d1111-gpt-6.1-sol"]);
+		expect(kinds(harness.actions)).toEqual(["createTask:s0001", "startTask:s0001", "blockTask:d1111"]);
+		expect(harness.actions[0]).toMatchObject({
+			task: { agentId: "codex", agentSettings: { providerId: "bedrock", modelId: "us.moonshotai.kimi-k3" } },
+		});
+		const qaflow = readQaflow(await harness.entry("d1111"));
+		expect(qaflow.takeover).toBeUndefined();
+		expect(readEscalationRecord(qaflow)).toMatchObject({
+			cause: "outage",
+			to: kimi,
+			sibling: { taskId: "s0001", started: true },
+		});
+		expect(harness.onFailCalls).toEqual([]);
+		expect(harness.readQaLog()).toContain("last error: 503");
+
+		// Acted on once: the next tick finds no request.
+		await harness.tick({ backlog: [DEV] }, [SESSION]);
+		expect(harness.actions).toHaveLength(3);
+	});
+
 	it("an escalation sibling of an imported card carries its issue, so its land still closes the issue", async () => {
 		const issue = {
 			provider: "github" as const,

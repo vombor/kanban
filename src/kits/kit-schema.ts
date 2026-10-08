@@ -204,6 +204,15 @@ export const kitDocumentObjectSchema = z
 			})
 			.strict()
 			.optional(),
+		onOutage: z
+			.object({
+				// biome-ignore lint/suspicious/noThenProperty: named like onFail.then; kits are plain data, never awaited.
+				then: z.enum(["escalate", "orchestrator"]).optional(),
+				/** Minutes of outage hold before the takeover; none = `pipeline.recovery.outage.maxMin`. */
+				afterMin: z.number().positive().optional(),
+			})
+			.strict()
+			.optional(),
 		escalate: z
 			.object({
 				to: escalateTargetSchema.optional(),

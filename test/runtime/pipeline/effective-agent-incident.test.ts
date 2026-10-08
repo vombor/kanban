@@ -48,6 +48,7 @@ function createStubPolicy() {
 		qaPolicy: vi.fn<RoutingPolicy["qaPolicy"]>(() => QA_STUB_ANSWER),
 		onFail: vi.fn<RoutingPolicy["onFail"]>(() => ({ action: "stop", reason: "stub" })),
 		onPass: vi.fn<RoutingPolicy["onPass"]>(() => ({ action: "land" })),
+		onOutage: vi.fn<RoutingPolicy["onOutage"]>(() => ({ action: "hold", reason: "stub" })),
 	} satisfies RoutingPolicy;
 }
 

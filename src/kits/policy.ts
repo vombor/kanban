@@ -92,6 +92,16 @@ export type OnFailAnswer =
 
 export type OnPassAnswer = { action: "land" } | { action: "hold"; group: string };
 
+/** While recovery holds a dev card for a provider outage: keep holding, or hand the task to another model now. */
+export type OnOutageAnswer =
+	| { action: "hold"; reason: string }
+	| {
+			action: "escalate";
+			to: Exclude<EscalationTarget, "orchestrator">;
+			requireApproval: boolean;
+			reason: string;
+	  };
+
 export interface RoutingPolicy {
 	/** At card creation, only when the creator set no agent/model. null = leave it (the card runs on the selected agent). */
 	devAssignment(input: { workspaceId: string; title: string; prompt: string; role: "dev" }): DevAssignmentAnswer;
@@ -107,6 +117,23 @@ export interface RoutingPolicy {
 	}): OnFailAnswer;
 	/** After a PASS, before land. Only the team `runoffs` feature answers "hold". */
 	onPass(input: { dev: EffectiveCard; verdict: KitVerdict }): OnPassAnswer;
+	/**
+	 * While recovery holds a dev card for a provider outage (`heldMin` so far; recovery gives up at `maxMin`).
+	 * "escalate": the rework loop hands the task to that model now.
+	 */
+	onOutage(input: { dev: EffectiveCard; heldMin: number; maxMin: number }): OnOutageAnswer;
+}
+
+/**
+ * Whether an escalation target is the model the card already runs on, where a takeover changes nothing (the same
+ * outage, the same FAILs). Providers count only when both sides name one: a model id on another provider is another
+ * model, and a model without a provider matches either.
+ */
+export function isSameEscalationModel(current: EffectiveModel | null, target: EffectiveModel): boolean {
+	if (!current || current.model.trim() !== target.model.trim()) {
+		return false;
+	}
+	return !current.provider || !target.provider || current.provider === target.provider;
 }
 
 const BEDROCK_REGION_PREFIX = /^(?:us|eu|apac|ap|jp|au|ca|us-gov|global)\./u;
@@ -320,6 +347,32 @@ export function createRoutingPolicy(kit: KitDocument): RoutingPolicy {
 
 		onPass() {
 			return { action: "land" };
+		},
+
+		onOutage({ dev, heldMin, maxMin }) {
+			if ((kit.onOutage?.then ?? "orchestrator") !== "escalate") {
+				return { action: "hold", reason: "the kit waits out outages (onOutage.then: orchestrator)" };
+			}
+			const afterMin = kit.onOutage?.afterMin ?? maxMin;
+			if (heldMin < afterMin) {
+				return { action: "hold", reason: `the kit hands the card over after ${afterMin} min of outage` };
+			}
+			const reason = `provider outage on ${dev.model?.model ?? "its model"} for ${Math.floor(heldMin)} min`;
+			const answer = escalate(dev, reason);
+			// Nothing to take it over: the hold runs to maxMin and goes to the orchestrator, as without the key.
+			if (answer.action !== "escalate" || answer.to === "orchestrator") {
+				return {
+					action: "hold",
+					reason: "onOutage.then is escalate, but escalate.to resolves to the orchestrator",
+				};
+			}
+			if (isSameEscalationModel(dev.model, answer.to.model)) {
+				return {
+					action: "hold",
+					reason: `escalate.to is ${answer.to.model.model}, the model the card already runs on`,
+				};
+			}
+			return { action: "escalate", to: answer.to, requireApproval: answer.requireApproval, reason };
 		},
 	};
 }

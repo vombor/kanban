@@ -69,6 +69,7 @@ function stubPolicy(reworkRounds = 3): RoutingPolicy & { onFailCalls: Array<{ fa
 				: { action: "rework", clearContext: "auto" };
 		},
 		onPass: () => ({ action: "land" }),
+		onOutage: () => ({ action: "hold", reason: "stub" }),
 	};
 }
 

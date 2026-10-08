@@ -19,7 +19,11 @@
 // - escalate to the orchestrator: `qaflow.escalated`, `## ESCALATE` in the QA log, the card to Backlog as
 //   `BLOCKED: …`; the watchdog lists it in ATTENTION.md and wakes the orchestrator. Escalate to a model: the work is
 //   kept as `preserve/<id>-<model>`, a sibling card takes the task over on that model (started at once, or left in
-//   Backlog for the orchestrator or the user when the kit says `requireApproval`), and the original is blocked.
+//   Backlog for the orchestrator or the user when the kit says `requireApproval`), and the original is blocked. A
+//   takeover onto the model the card runs on, or by a card that took its task over itself, goes to the orchestrator
+//   instead (#8: the sibling on `escalate.to` would escalate to `escalate.to` again, sibling after sibling).
+// - outage takeover: recovery ends an outage hold with `qaflow.takeover` when the kit's `onOutage` says so; the
+//   request is cleared and escalated to its target like a FAIL escalation (any column, no FAIL round counted).
 // - runoff: sibling cards on the kit's models race the failed card, which is reworked as usual. The group is recorded
 //   with the feature that holds every racing card's PASS (the team kit's `runoffs`, through
 //   PipelineRunoffGroups) before any sibling is created, so neither the failed card nor a sibling can land before
@@ -57,14 +61,15 @@ import type {
 import { resolveCardRole } from "../core/card-role";
 import type { EffectiveModel, EffectiveModelConfig } from "../core/effective-agent";
 import { createUniqueTaskId } from "../core/task-id";
-import type {
-	CardHistory,
-	EffectiveCard,
-	EscalationTarget,
-	FailCause,
-	KitVerdict,
-	OnFailAnswer,
-	RoutingPolicy,
+import {
+	type CardHistory,
+	type EffectiveCard,
+	type EscalationTarget,
+	type FailCause,
+	isSameEscalationModel,
+	type KitVerdict,
+	type OnFailAnswer,
+	type RoutingPolicy,
 } from "../kits/policy";
 import { getPipelineQaLogPath, getQaArtifactsPath } from "../state/kanban-home";
 import type { ClineSessionSize } from "../terminal/cline-session-files";
@@ -84,7 +89,7 @@ import { readPipelineHold } from "./hold";
 import type { PipelineCardState, PipelineStateStore } from "./pipeline-state";
 import { readQaPassEntry, readQaVerdictRecords } from "./qa-gate";
 import { type AppendQaLog, getQaLogSection, readQaLog } from "./qa-log";
-import { recoveryHoldReason, recoveryRedoReason } from "./recovery";
+import { type RecoveryTakeoverRequest, readRecoveryFlow, recoveryHoldReason, recoveryRedoReason } from "./recovery";
 import { findTaskWorktree, readStaleBase, type StageQaNotesInput, stageQaNotes } from "./rework-notes";
 import { REWORK_STARTED_CHECK_MS } from "./rework-state";
 import {
@@ -138,7 +143,7 @@ export interface ReworkRecord {
 	clearContext?: "auto" | "always" | "never";
 }
 
-export type EscalationCause = FailCause | "never_started" | "rework_impossible" | "rework_failed";
+export type EscalationCause = FailCause | "never_started" | "rework_impossible" | "rework_failed" | "outage";
 
 /** `qaflow.escalated`: the watchdog lists it in ATTENTION.md until a handback clears it. */
 export interface EscalationRecord {
@@ -467,11 +472,9 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 		const requireApproval = input.requireApproval ?? false;
 		let sibling: EscalationRecord["sibling"];
 		if (to !== "orchestrator") {
-			// A card racing in a runoff never hands its task to a sibling: the sibling would race outside the group and
-			// could land next to the runoff's winner. The orchestrator decides instead.
-			const racing = await findRunoffGroup(workspaceId, card.id);
-			if (racing) {
-				reason = `${reason}; it races in runoff ${racing}, so it goes to the orchestrator instead of ${describeTarget(to)}`;
+			const refused = await refuseTakeover(scope, to);
+			if (refused) {
+				reason = `${reason}; ${refused}, so it goes to the orchestrator instead of ${describeTarget(to)}`;
 				to = "orchestrator";
 			}
 		}
@@ -528,6 +531,29 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 			reason,
 			round: input.round,
 		});
+	};
+
+	/**
+	 * Why the card can't hand its task to `target`, or null. A takeover onto the model the card runs on changes
+	 * nothing, and a card that took the task over itself would hand it on again and again (a sibling on the kit's
+	 * target escalates to the same target), so both go to the orchestrator. A card racing in a runoff never hands
+	 * its task to a sibling either: the sibling would race outside the group and could land next to the winner.
+	 */
+	const refuseTakeover = async (
+		scope: CardScope,
+		target: Exclude<EscalationTarget, "orchestrator">,
+	): Promise<string | null> => {
+		const workspaceId = scope.context.snapshot.workspaceId;
+		const { card } = scope.entry;
+		if (isSameEscalationModel(scope.dev.model, target.model)) {
+			return `it already runs on ${describeModel(target.model)}`;
+		}
+		const sibling = (await loadEntry(workspaceId, card.id))?.sibling as Partial<SiblingRecord> | undefined;
+		if (sibling?.kind === "escalation" && typeof sibling.of === "string") {
+			return `it already took the task over from ${sibling.of}`;
+		}
+		const racing = await findRunoffGroup(workspaceId, card.id);
+		return racing ? `it races in runoff ${racing}` : null;
 	};
 
 	/** A sibling card on another model takes the task over; the original's work is kept as `tag` first. */
@@ -1354,11 +1380,44 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 		return records;
 	};
 
+	/** Recovery's takeover request, cleared before acting (like a handled trigger), then escalated to its target. */
+	const takeOverAfterOutage = async (
+		scope: CardScope,
+		entry: PipelineCardState,
+		takeover: RecoveryTakeoverRequest,
+	): Promise<void> => {
+		const workspaceId = scope.context.snapshot.workspaceId;
+		const qaflow = readQaflow(entry);
+		await updateFlow(workspaceId, scope.entry.card.id, (current) => {
+			const next = { ...current };
+			delete next.takeover;
+			return next;
+		});
+		if (readEscalationRecord(qaflow)) {
+			return;
+		}
+		await escalate(scope, {
+			round: typeof qaflow.lastRound === "number" ? qaflow.lastRound : 0,
+			reason: takeover.reason,
+			cause: takeover.cause,
+			to: takeover.to,
+			requireApproval: takeover.requireApproval,
+			details: takeover.details,
+			answer: { recovery: "takeover", ...takeover },
+		});
+	};
+
 	const tickCard = async (scope: CardScope, since: number): Promise<void> => {
 		const workspaceId = scope.context.snapshot.workspaceId;
 		const { card, columnId } = scope.entry;
 		let entry = await loadEntry(workspaceId, card.id);
 		if (!entry) {
+			return;
+		}
+		// Recovery ended an outage hold for the kit's takeover (`qaflow.takeover`): hand the task over, in any column.
+		const takeover = readRecoveryFlow(entry).takeover;
+		if (takeover) {
+			await takeOverAfterOutage(scope, entry, takeover);
 			return;
 		}
 		// Recovery owns a card it holds (orphaned by a restart, an outage, a provider retry, a live session): no

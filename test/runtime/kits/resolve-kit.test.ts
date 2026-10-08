@@ -180,6 +180,7 @@ describe("kanban kit show report", () => {
 			workspaceId: "foo",
 			selectedAgentId: "claude",
 			maxFailRounds: 3,
+			outageMaxMin: 360,
 		});
 		const sourceOf = (key: string) => report.values.find((row) => row.key === key)?.source;
 		expect(sourceOf("qa.blurb")).toBe("override");
@@ -194,5 +195,29 @@ describe("kanban kit show report", () => {
 		expect(report.recommendedLandingMode).toBe("qa");
 		expect(report.warnings).toEqual([]);
 		expect(formatKitReport(report).join("\n")).toContain('qa.blurb = "Project: Pawsome"  [override]');
+		expect(formatKitReport(report).join("\n")).toContain("After 360 min of provider outage: keep holding");
+	});
+
+	it("shows the outage takeover a kit's onOutage asks for", async () => {
+		const resolved = resolveKitByName(await builtInCatalog(), "team", {
+			"onOutage.then": "escalate",
+			"onOutage.afterMin": 45,
+			"escalate.to": { agent: "codex", provider: "bedrock", model: "us.moonshotai.kimi-k3" },
+			"escalate.requireApproval": false,
+		});
+		if (!resolved.ok) {
+			throw new Error(resolved.error);
+		}
+		const lines = formatKitReport(
+			buildKitReport({
+				kitName: "team",
+				resolved,
+				workspaceId: "foo",
+				selectedAgentId: "claude",
+				maxFailRounds: 3,
+				outageMaxMin: 360,
+			}),
+		);
+		expect(lines).toContain("After 45 min of provider outage: take over on codex bedrock/us.moonshotai.kimi-k3");
 	});
 });

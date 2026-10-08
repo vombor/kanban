@@ -18,6 +18,7 @@ function stubPolicy(onPass: ReturnType<RoutingPolicy["onPass"]>): RoutingPolicy 
 		qaPolicy: () => ({ kind: "none", reason: "stub" }),
 		onFail: () => ({ action: "stop", reason: "stub" }),
 		onPass: () => onPass,
+		onOutage: () => ({ action: "hold", reason: "stub" }),
 	};
 }
 

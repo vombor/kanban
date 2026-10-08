@@ -175,6 +175,7 @@ export function registerKitCommand(program: Command): void {
 					workspaceId: target?.workspaceId ?? "(none)",
 					selectedAgentId: runtimeConfig.selectedAgentId,
 					maxFailRounds: config.pipeline.rework.maxFailRounds,
+					outageMaxMin: config.pipeline.recovery.outage.maxMin,
 				});
 				const landingMode = target ? getWorkspacePipelineSettings(config, target.workspaceId).landing.mode : null;
 				if (options.json) {

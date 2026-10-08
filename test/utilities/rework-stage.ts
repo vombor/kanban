@@ -114,6 +114,7 @@ export function createReworkHarness(options: ReworkHarnessOptions = {}) {
 			return options.onFail?.(input) ?? { action: "rework", clearContext: "auto" };
 		},
 		onPass: () => ({ action: "land" }),
+		onOutage: () => ({ action: "hold", reason: "stub" }),
 	};
 	const config = parsePipelineConfig({
 		pipeline: options.pipeline ?? {},

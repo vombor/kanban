@@ -19,6 +19,7 @@ import type {
 	RuntimeTaskInputDeliveryEvidence,
 } from "../core/api-contract";
 import type { EffectiveModel, EffectiveModelConfig } from "../core/effective-agent";
+import type { RoutingPolicy } from "../kits/policy";
 import { getAgentRecoveryProfile, getAgentTurnEndSource } from "../terminal/agent-session-adapters";
 import type { ClineSessionDetail } from "../terminal/cline-session-files";
 import { isClineShellToolPending } from "../terminal/cline-turn-check";
@@ -113,6 +114,11 @@ export interface RecoveryEvaluationInput {
 	kitName: string;
 	state: PipelineWorkspaceState;
 	agentDefaultModels?: EffectiveModelConfig["agentDefaultModels"];
+	/**
+	 * The kit, given only where the rework loop runs (landing `qa`, not shadow) and so can carry out a takeover:
+	 * an outage hold then asks its `onOutage`.
+	 */
+	takeoverPolicy?: RoutingPolicy | null;
 }
 
 export interface RecoveryStage {
@@ -139,6 +145,8 @@ function describeDecision(decision: RecoveryDecision): unknown {
 			return { kind: decision.kind, followUp: decision.followUp.kind };
 		case "probe":
 			return { kind: decision.kind, target: decision.target };
+		case "takeover":
+			return { kind: decision.kind, to: decision.to };
 		default:
 			return { kind: decision.kind };
 	}
@@ -297,6 +305,9 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 			case "probe":
 				startProbe(input, context, decision.target);
 				return { outcome: "acted", note: decision.reason };
+			case "takeover":
+				patches.set(taskId, decision.patch);
+				return { outcome: "acted", note: `${decision.reason}; outage hold ended, the rework loop hands it over` };
 			case "escalate":
 				patches.set(taskId, decision.patch);
 				return {
@@ -401,6 +412,15 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 				}),
 				slowFirstCall: Boolean(effective.model?.provider && capacity[effective.model.provider]),
 				continuesPrematureStops: input.settings.landing.mode === "qa",
+				canTakeOver: Boolean(input.takeoverPolicy),
+				outageAnswer:
+					flow.outage && input.takeoverPolicy && effective.role === "dev"
+						? input.takeoverPolicy.onOutage({
+								dev: effective,
+								heldMin: (deps.now() - Date.parse(flow.outage.since)) / 60_000,
+								maxMin: settings.outage.maxMin,
+							})
+						: null,
 				settings,
 				reviewSettleMs: input.snapshot.reviewSettleMs,
 				now: deps.now(),

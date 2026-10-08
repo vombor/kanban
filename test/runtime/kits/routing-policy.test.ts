@@ -140,6 +140,39 @@ describe("routing policy evaluator", () => {
 		});
 		expect(answer).toEqual({ action: "runoff", models: [{ agentId: "cline", provider: null, model: "m1" }] });
 	});
+
+	it("hands an outage-held card to escalate.to after onOutage.afterMin (default maxMin), never onto its own model", () => {
+		const fallback = { agent: "codex", model: "us.moonshotai.kimi-k3", provider: "bedrock" };
+		const dev = createEffectiveCard({
+			agentId: "codex",
+			model: { provider: "bedrock", model: "us.openai.gpt-6.1-sol" },
+		});
+		const ask = (overrides: Record<string, unknown>, heldMin: number, card = dev) =>
+			teamPolicy({ "escalate.to": fallback, "escalate.requireApproval": false, ...overrides }).onOutage({
+				dev: card,
+				heldMin,
+				maxMin: 360,
+			});
+
+		// Without the key (the default kit's "orchestrator") an outage is waited out, as before.
+		expect(ask({}, 400)).toMatchObject({ action: "hold" });
+		const on = { "onOutage.then": "escalate" };
+		expect(ask(on, 359)).toMatchObject({ action: "hold" });
+		expect(ask(on, 360)).toEqual({
+			action: "escalate",
+			to: { agentId: "codex", model: { provider: "bedrock", model: "us.moonshotai.kimi-k3" } },
+			requireApproval: false,
+			reason: "provider outage on us.openai.gpt-6.1-sol for 360 min",
+		});
+		expect(ask({ ...on, "onOutage.afterMin": 30 }, 31)).toMatchObject({ action: "escalate" });
+		// The fallback itself in an outage: nothing to hand over to, so it is held (and goes to the orchestrator at maxMin).
+		const kimi = createEffectiveCard({
+			agentId: "codex",
+			model: { provider: "bedrock", model: "us.moonshotai.kimi-k3" },
+		});
+		expect(ask(on, 400, kimi)).toMatchObject({ action: "hold", reason: expect.stringContaining("already runs on") });
+		expect(ask({ ...on, "escalate.to": "orchestrator" }, 400)).toMatchObject({ action: "hold" });
+	});
 });
 
 describe("getModelVendor", () => {

@@ -11,6 +11,7 @@ import {
 	type RecoveryCardInput,
 	type RecoveryDecision,
 	readRecoveryFlow,
+	recoveryHoldReason,
 	recoveryRedoReason,
 	sinceBudget,
 } from "../../../src/pipeline/recovery";
@@ -198,6 +199,39 @@ describe("decideRecovery: Review cards", () => {
 		const old = { ...outage, since: new Date(NOW - 361 * MIN).toISOString() };
 		const escalated = expectKind(decideRecovery(input({ flow: flow({ outage: old }) })), "escalate");
 		expect(escalated.patch.outage).toBeNull();
+	});
+
+	it("ends an outage hold with a takeover request when the kit answers escalate, and holds the card for it", () => {
+		const outage = {
+			since: new Date(NOW - 30 * MIN).toISOString(),
+			model: "m",
+			warn: "503",
+			ups: 0,
+			lastProbe: null,
+		};
+		const to = { agentId: "codex" as const, model: { provider: "bedrock", model: "us.moonshotai.kimi-k3" } };
+		const outageAnswer = { action: "escalate" as const, to, requireApproval: false, reason: "provider outage" };
+		const takeover = expectKind(
+			decideRecovery(input({ flow: flow({ outage }), canTakeOver: true, outageAnswer })),
+			"takeover",
+		);
+		expect(takeover.patch).toMatchObject({
+			outage: null,
+			takeover: { cause: "outage", to, requireApproval: false, details: ["last error: 503"] },
+		});
+		expect(takeover.patch.outages?.at(-1)).toMatchObject({
+			result: "taken over by codex on bedrock/us.moonshotai.kimi-k3",
+		});
+		// Only where the rework loop runs: elsewhere the hold goes on (a probe).
+		expectKind(decideRecovery(input({ flow: flow({ outage }), canTakeOver: false, outageAnswer })), "probe");
+
+		const pending = { qaflow: { takeover: takeover.patch.takeover } };
+		expect(recoveryHoldReason(pending)).toContain("handing the task to codex");
+		expectKind(decideRecovery(input({ flow: readRecoveryFlow(pending), canTakeOver: true })), "none");
+		// Landing qa switched off before the rework loop acted: the orchestrator decides.
+		const stranded = expectKind(decideRecovery(input({ flow: readRecoveryFlow(pending) })), "escalate");
+		expect(stranded.patch).toMatchObject({ takeover: null, escalated: { reason: expect.stringContaining("codex") } });
+		expect(leftReviewPatch(readRecoveryFlow(pending), NOW)).toMatchObject({ takeover: null });
 	});
 
 	it("resumes after upsToResume good probes in a row; a bad probe resets the count", () => {

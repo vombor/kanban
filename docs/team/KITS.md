@@ -17,7 +17,7 @@ evaluator), `kits/default.json`, `kits/team.json`. Plan: `docs/fork/kit-merge-pl
 
 ## The questions
 
-The core asks four questions (`RoutingPolicy` in `src/kits/policy.ts`). It always passes the card's **effective**
+The core asks five questions (`RoutingPolicy` in `src/kits/policy.ts`). It always passes the card's **effective**
 agent and model: the agent the card's session ran on, else `card.agentId`, else the agent selected in Kanban
 settings (`resolveEffectiveAgent()`). It never passes the literal `card.agentId`. A card with no `agentId` runs on
 the selected agent, and on 2026-10-06 misreading that QA'd and landed a whole board that was meant to be landed
@@ -29,6 +29,7 @@ by hand.
 | `qaPolicy` | the QA gate | a dev card is submitted (settled in Review with work) on a landing-`qa` project | `none` |
 | `onFail` | the rework loop | a FAIL or STALLED verdict, a merge conflict at land, or a rework that came back unchanged | `stop` |
 | `onPass` | the QA gate | a PASS for the card's current snapshot | `land` |
+| `onOutage` | recovery (where the rework loop runs: landing `qa`, not shadow) | a dev card is in a provider outage hold | `hold`: the hold runs to `pipeline.recovery.outage.maxMin`, then goes to the orchestrator |
 | `planAssignment` | plan card creation (`kanban task create --role plan`), never the pipeline (`answerPlanAssignment()`) | a plan card is created | `disabled`: no plan cards |
 
 The core keeps these guarantees whatever the kit says:
@@ -44,6 +45,9 @@ The core keeps these guarantees whatever the kit says:
   cap the core still asks the kit, so that it can keep the kit's escalation target.
 - **A rework can't switch model.** It is refused (and escalated) when the card's session ran on a different agent
   or model than the card names, or when there is nothing to resume on that model.
+- **A takeover never repeats itself.** An escalation to a model (a FAIL, an outage) goes to the orchestrator
+  instead when the target is the model the card runs on, or when the card is itself a sibling that took the task
+  over: otherwise the sibling on `escalate.to` would escalate to `escalate.to` again, sibling after sibling.
 - **`requireApproval` parks the card.** It goes to Backlog as `BLOCKED: …` until the orchestrator or the user acts.
 - **Only a hold stops a PASS from landing.** The hold is answered by the team kit's `runoffs` feature;
   `kanban task release-hold` is the human way out.
@@ -111,6 +115,8 @@ user kit file), never a silent no-op. A missing key means "no answer", so the `d
 | `onFail.conflict` | `stop` \| `rework` | `onFail`: a merge conflict at land | `stop` | `rework` |
 | `onFail.then` | `escalate` \| `stop` | `onFail`: after the rounds run out, after STALLED, after an unchanged rework | `stop` | `escalate` |
 | `onFail.runoff` | `{ models: [{ agent, model, provider? }] }` or null | `onFail`: race sibling cards on these models (needs the `runoffs` feature, else escalates) | `null` | `null` |
+| `onOutage.then` | `escalate` \| `orchestrator` | `onOutage`: hand an outage-held card to `escalate.to` (a sibling card, work kept), or wait the outage out | `orchestrator` | (default) |
+| `onOutage.afterMin` | number | `onOutage`: minutes of outage hold before the takeover | `pipeline.recovery.outage.maxMin` | (default) |
 | `escalate.to` | `"orchestrator"` \| `{ tier }` \| `{ agent, model, provider? }` | who takes an escalated card. `{ tier }` needs the `tiers` feature, else it goes to the orchestrator | `orchestrator` | `orchestrator` |
 | `escalate.requireApproval` | boolean | park the escalated card in Backlog `BLOCKED:` | `false` | `true` |
 | `land.postLand[]` | `{ paths, run, stopUnder? }` | commands the core runs after a land that touched a file matching `paths` (regex) | `[]` | `[]` (foo overrides it) |
@@ -163,6 +169,18 @@ puts them into its QA prompt skeleton (`src/pipeline/qa-prompt.ts`).
 
 `onFail.then: "escalate"` answers with `escalate.to` and `escalate.requireApproval`, and `"stop"` answers `stop`.
 A stopped card stays in Review: one ATTENTION.md line, and the orchestrator is woken.
+
+**`onOutage`**, asked for a dev card in a provider outage hold (recovery holds a card once its provider-error
+retries are used up and the provider has a probe):
+
+- `onOutage.then` not `escalate` → `hold`: the hold probes on, and at `pipeline.recovery.outage.maxMin` the card
+  goes to the orchestrator.
+- held less than `onOutage.afterMin` (default `maxMin`) → `hold`.
+- `escalate.to` resolves to the orchestrator, or to the model the card runs on → `hold` (nothing to take it over).
+- otherwise → `escalate` with `escalate.to` and `escalate.requireApproval`. Recovery ends the hold
+  (`qaflow.takeover`) and the rework loop hands the task to a sibling card on that model, as for a FAIL
+  escalation; no FAIL round is counted. A provider outage is the only recovery stop that takes a card over: an
+  agent's `STATUS: BLOCKED`, repeated crashes or stalls still go to the orchestrator.
 
 **`planAssignment`.** `plan.enabled` not `true` → `disabled`, and `kanban task create --role plan` is refused (the
 dev agent plans its own work). Otherwise `plan.agent` (or the selected agent), `plan.model` resolved like

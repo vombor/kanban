@@ -19,10 +19,13 @@
 // session files) get the stop/hung checks: for the others Kanban's summary doesn't say why a turn stopped. A
 // session without a live process is never nudged (there is no TUI to type into); restart recovery resumes those.
 // Escalation itself (BLOCKED + Backlog, ATTENTION.md, the orchestrator wake) is the rework loop's mechanics
-// (P4-5); recovery records the escalation and stops touching the card.
+// (P4-5); recovery records the escalation and stops touching the card. So is a takeover: when the kit's `onOutage`
+// says so, an outage hold ends with `qaflow.takeover`, and the rework loop hands the task to the kit's escalation
+// target (a sibling card on that model) in the same evaluation.
 import type { PipelineConfig } from "../config/pipeline-config";
 import type { RuntimeBoardCard, RuntimeTaskRole } from "../core/api-contract";
 import type { EffectiveModel } from "../core/effective-agent";
+import type { EscalationTarget, OnOutageAnswer } from "../kits/policy";
 import type { AgentRecoveryProfile } from "../terminal/agent-session-adapters";
 import type { ClineSessionDetail } from "../terminal/cline-session-files";
 import {
@@ -75,6 +78,8 @@ export interface RecoveryFlowState {
 	outage: { since: string; model: string; warn: string; ups: number; lastProbe: string | null } | null;
 	outages: unknown[];
 	outageEndedAt: string | null;
+	/** An outage hold the kit hands to another model (`onOutage`); the rework loop carries it out and clears it. */
+	takeover: RecoveryTakeoverRequest | null;
 	hung: { dir: string; lastWrite: number; at: string } | null;
 	liveHold: string | null;
 	orphan: { at: string; kanbanStart: string; kind: RuntimeTaskRole } | null;
@@ -90,6 +95,16 @@ export interface RecoveryFlowState {
 	lastReworkAt: string | null;
 	lastVerdictAt: string | null;
 	handbacks: StampedEntry[];
+}
+
+/** `qaflow.takeover`: recovery's request to hand a held card's task to the kit's escalation target. */
+export interface RecoveryTakeoverRequest {
+	at: string;
+	cause: "outage";
+	reason: string;
+	to: Exclude<EscalationTarget, "orchestrator">;
+	requireApproval: boolean;
+	details: string[];
 }
 
 export type RecoveryFlowPatch = Partial<RecoveryFlowState>;
@@ -128,6 +143,13 @@ function newestVerdictAt(legacy: string | null, verdicts: unknown): string | nul
 	);
 }
 
+function readTakeoverRequest(value: unknown): RecoveryTakeoverRequest | null {
+	if (!isRecord(value) || typeof value.at !== "string" || !isRecord(value.to) || !isRecord(value.to.model)) {
+		return null;
+	}
+	return value as unknown as RecoveryTakeoverRequest;
+}
+
 /** Reads the recovery fields of a pipeline-state card entry; missing or malformed fields read as empty. */
 export function readRecoveryFlow(entry: Record<string, unknown> | undefined): RecoveryFlowState {
 	const flow = isRecord(entry?.qaflow) ? entry.qaflow : {};
@@ -140,6 +162,7 @@ export function readRecoveryFlow(entry: Record<string, unknown> | undefined): Re
 		outage: recordOrNull(flow.outage),
 		outages: Array.isArray(flow.outages) ? flow.outages : [],
 		outageEndedAt: stringOrNull(flow.outageEndedAt),
+		takeover: readTakeoverRequest(flow.takeover),
 		hung: recordOrNull(flow.hung),
 		liveHold: stringOrNull(flow.liveHold),
 		orphan: recordOrNull(flow.orphan),
@@ -201,6 +224,13 @@ export interface RecoveryCardInput {
 	 * workspace (plan §12: recovery on `default` projects continues a crashed card).
 	 */
 	continuesPrematureStops: boolean;
+	/**
+	 * The rework loop runs for the workspace (landing `qa`, not shadow), so a takeover request is carried out. Without
+	 * it a pending request goes to the orchestrator.
+	 */
+	canTakeOver?: boolean;
+	/** The kit's `onOutage` answer for a card in an outage hold, asked only when `canTakeOver`. */
+	outageAnswer?: OnOutageAnswer | null;
 	settings: RecoverySettings;
 	/** The snapshot's `reviewSettleMs` (isReviewSettled); absent: the default. */
 	reviewSettleMs?: number;
@@ -237,6 +267,8 @@ export type RecoveryDecision =
 			patch: RecoveryFlowPatch;
 			followUp: { kind: "hold"; reason: string; patch: RecoveryFlowPatch } | { kind: "escalate"; reason: string };
 	  }
+	/** End the outage hold and ask the rework loop to hand the task to the kit's target (`qaflow.takeover`). */
+	| { kind: "takeover"; reason: string; to: RecoveryTakeoverRequest["to"]; patch: RecoveryFlowPatch }
 	| { kind: "escalate"; reason: string; details: string[]; patch: RecoveryFlowPatch };
 
 function iso(ms: number): string {
@@ -321,6 +353,25 @@ function outageDecision(input: RecoveryCardInput): RecoveryDecision {
 	}
 	const { settings, now } = input;
 	const sinceMs = Date.parse(outage.since);
+	// Asked first: a takeover at maxMin (the kit's default afterMin) wins over giving up to the orchestrator.
+	const answer = input.canTakeOver ? input.outageAnswer : null;
+	if (answer?.action === "escalate") {
+		const target = `${answer.to.agentId} on ${modelLabel(answer.to.model)}`;
+		const takeover: RecoveryTakeoverRequest = {
+			at: iso(now),
+			cause: "outage",
+			reason: answer.reason,
+			to: answer.to,
+			requireApproval: answer.requireApproval,
+			details: [`last error: ${outage.warn}`],
+		};
+		return {
+			kind: "takeover",
+			reason: `${answer.reason}: the kit hands the task to ${target}`,
+			to: answer.to,
+			patch: { ...endOutagePatch(input.flow, now, `taken over by ${target}`), takeover },
+		};
+	}
 	if (now - sinceMs > settings.outage.maxMin * 60_000) {
 		return escalate(
 			input,
@@ -691,6 +742,18 @@ export function decideRecovery(input: RecoveryCardInput): RecoveryDecision {
 			reason: `escalated${flow.escalated.at ? ` at ${flow.escalated.at}` : ""}: ${flow.escalated.reason}`,
 		};
 	}
+	if (flow.takeover) {
+		const target = `${flow.takeover.to.agentId} on ${modelLabel(flow.takeover.to.model)}`;
+		// Landing qa was switched off (or shadow on) since the request: nothing hands it over, so a human decides.
+		return input.canTakeOver
+			? { kind: "none", reason: `handing the task to ${target}: the rework loop's` }
+			: escalate(
+					input,
+					`${flow.takeover.reason}; the kit hands it to ${target}, but the pipeline doesn't run here any more`,
+					flow.takeover.details,
+					{ takeover: null },
+				);
+	}
 	if (flow.orphan) {
 		return { kind: "none", reason: "orphaned by a Kanban restart: restart recovery resumes it" };
 	}
@@ -715,6 +778,9 @@ export function recoveryHoldReason(entry: Record<string, unknown> | undefined): 
 	}
 	if (flow.outage) {
 		return `provider outage hold on ${flow.outage.model}`;
+	}
+	if (flow.takeover) {
+		return `provider outage: handing the task to ${flow.takeover.to.agentId} on ${modelLabel(flow.takeover.to.model)}`;
 	}
 	if (flow.retryAt) {
 		return `provider-error retry due at ${flow.retryAt}`;
@@ -752,6 +818,7 @@ export function leftReviewPatch(flow: RecoveryFlowState, now: number): RecoveryF
 	return {
 		...(flow.retryAt ? { retryAt: null } : {}),
 		...(flow.outage ? endOutagePatch(flow, now, "card moved by hand") : {}),
+		...(flow.takeover ? { takeover: null } : {}),
 		...(flow.liveHold ? { liveHold: null } : {}),
 		// An orphan resumed (or finished, or trashed) by hand is not one any more.
 		...(flow.orphan ? { orphan: null } : {}),

@@ -538,6 +538,8 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			kitName: resolution.kitName,
 			state,
 			agentDefaultModels,
+			// The rework loop below carries out an outage takeover only here.
+			takeoverPolicy: pipelineOn && !shadow ? policy : null,
 		});
 		// Recovery runs first and may have marked cards (an orphan, a hold, a turn it resent) that the submission stage
 		// and the QA gate must skip in this same evaluation, so the gate reads the state as recovery left it, on a

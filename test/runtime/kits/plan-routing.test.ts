@@ -112,6 +112,7 @@ describe("plan routing (the kit's plan section)", () => {
 					workspaceId: "ws",
 					selectedAgentId: "claude",
 					maxFailRounds: 3,
+					outageMaxMin: 360,
 				}),
 			).join("\n");
 		expect(report("team")).toContain(
