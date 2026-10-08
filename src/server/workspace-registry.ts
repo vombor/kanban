@@ -210,8 +210,12 @@ async function trustWorkspaceForTerminalAgents(repoPath: string): Promise<void> 
 }
 
 export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDependencies): Promise<WorkspaceRegistry> {
+	// Opens the cwd only when it is a registered project: the registry never registers one. A starting server registers
+	// a new cwd itself once it has bound the port, after `resolveLaunchProject()`'s checks (cli.ts).
 	const launchedFromGitRepo = deps.hasGitRepository(deps.cwd);
-	const initialWorkspace = launchedFromGitRepo ? await loadWorkspaceContext(deps.cwd) : null;
+	const initialWorkspace = launchedFromGitRepo
+		? await loadWorkspaceContext(deps.cwd, { autoCreateIfMissing: false }).catch(() => null)
+		: null;
 	let indexedWorkspace: RuntimeWorkspaceIndexEntry | null = null;
 	if (!initialWorkspace) {
 		const indexedWorkspaces = await listWorkspaceIndexEntries();

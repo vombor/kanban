@@ -269,7 +269,13 @@ async function waitForExit(childProcess: ChildProcess, timeoutMs: number): Promi
 	});
 }
 
-async function startKanbanServer(input: { cwd: string; homeDir: string; port: number; extraArgs?: string[] }): Promise<{
+async function startKanbanServer(input: {
+	cwd: string;
+	homeDir: string;
+	port: number;
+	extraArgs?: string[];
+	env?: Record<string, string>;
+}): Promise<{
 	runtimeUrl: string;
 	stop: () => Promise<void>;
 }> {
@@ -293,6 +299,7 @@ async function startKanbanServer(input: { cwd: string; homeDir: string; port: nu
 				HOME: input.homeDir,
 				USERPROFILE: input.homeDir,
 				KANBAN_RUNTIME_PORT: String(input.port),
+				...input.env,
 			}),
 			stdio: ["ignore", "pipe", "pipe", "ipc"],
 		},
@@ -546,6 +553,50 @@ describe.sequential("runtime state stream integration", () => {
 			cleanupHome();
 		}
 	}, 30_000);
+
+	it("registers an unregistered launch repo only from the user's shell, never for an agent session", async () => {
+		const { path: tempHome, cleanup: cleanupHome } = createTempDir("kanban-home-launch-register-");
+		const { path: tempRoot, cleanup: cleanupRoot } = createTempDir("kanban-launch-register-");
+		const projectPath = join(tempRoot, "project");
+		mkdirSync(projectPath, { recursive: true });
+		initGitRepository(projectPath);
+		const listProjects = async (port: number) =>
+			await requestJson<RuntimeProjectsResponse>({
+				baseUrl: `http://127.0.0.1:${port}`,
+				procedure: "projects.list",
+				type: "query",
+			});
+		try {
+			const agentPort = await getAvailablePort();
+			const agentServer = await startKanbanServer({
+				cwd: projectPath,
+				homeDir: tempHome,
+				port: agentPort,
+				env: { KANBAN_SESSION_CREDENTIAL: "c".repeat(48) },
+			});
+			try {
+				expect(new URL(agentServer.runtimeUrl).pathname).toBe("/");
+				expect((await listProjects(agentPort)).payload.projects).toEqual([]);
+			} finally {
+				await agentServer.stop();
+			}
+
+			const userPort = await getAvailablePort();
+			const userServer = await startKanbanServer({ cwd: projectPath, homeDir: tempHome, port: userPort });
+			try {
+				const workspaceId = decodeURIComponent(new URL(userServer.runtimeUrl).pathname.slice(1));
+				expect(workspaceId).not.toBe("");
+				const projects = (await listProjects(userPort)).payload;
+				expect(projects.currentProjectId).toBe(workspaceId);
+				expect(projects.projects.map((project) => project.path)).toEqual([await realpath(projectPath)]);
+			} finally {
+				await userServer.stop();
+			}
+		} finally {
+			cleanupRoot();
+			cleanupHome();
+		}
+	}, 45_000);
 
 	it("launches outside git using the first indexed project", async () => {
 		const { path: tempHome, cleanup: cleanupHome } = createTempDir("kanban-home-first-project-");

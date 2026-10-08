@@ -270,16 +270,11 @@ function isAddressInUseError(error: unknown): error is NodeJS.ErrnoException {
 	);
 }
 
-async function canReachKanbanServer(workspaceId: string | null): Promise<boolean> {
+async function canReachKanbanServer(): Promise<boolean> {
 	try {
-		const headers: Record<string, string> = {};
-		if (workspaceId) {
-			headers["x-kanban-workspace-id"] = workspaceId;
-		}
 		const runtimeFetch = await getRuntimeFetch();
 		const response = await runtimeFetch(buildKanbanRuntimeUrl("/api/trpc/projects.list"), {
 			method: "GET",
-			headers,
 			signal: AbortSignal.timeout(1_500),
 		});
 		if (response.status === 404) {
@@ -296,16 +291,26 @@ async function canReachKanbanServer(workspaceId: string | null): Promise<boolean
 }
 
 async function tryOpenExistingServer(options: { noOpen: boolean; shouldAutoOpenBrowser: boolean }): Promise<boolean> {
-	let workspaceId: string | null = null;
-	if (hasGitRepository(process.cwd())) {
-		const { loadWorkspaceContext } = await import("./state/workspace-state.js");
-		const context = await loadWorkspaceContext(process.cwd());
-		workspaceId = context.workspaceId;
-	}
-	const running = await canReachKanbanServer(workspaceId);
+	const running = await canReachKanbanServer();
 	if (!running) {
 		return false;
 	}
+	// Never registers the cwd in-process: a new project goes through the running server's projects.add.
+	const [{ registerLaunchProjectThroughServer }, { createRuntimeTrpcClient }] = await Promise.all([
+		import("./projects/launch-project.js"),
+		import("./commands/runtime-trpc-client.js"),
+	]);
+	const workspaceId = await registerLaunchProjectThroughServer({
+		cwd: process.cwd(),
+		hasGitRepository,
+		client: createRuntimeTrpcClient(null),
+		log: (message) => {
+			console.log(message);
+		},
+		warn: (message) => {
+			console.warn(message);
+		},
+	});
 	const projectUrl = workspaceId
 		? buildKanbanRuntimeUrl(`/${encodeURIComponent(workspaceId)}`)
 		: getKanbanRuntimeOrigin();
@@ -361,6 +366,7 @@ async function startServer(): Promise<{
 		{ loadWorkspaceStateById, mutateWorkspaceState, persistWorkspaceSessionSummaries },
 		{ collectProjectWorktreeTaskIdsForRemoval, createWorkspaceRegistry },
 		{ clearPendingUpdateNotification, getPendingUpdateNotification },
+		{ registerLaunchProjectInProcess },
 	] = await Promise.all([
 		import("./config/cline-turn-detector-config.js"),
 		import("./config/session-sync-config.js"),
@@ -379,6 +385,7 @@ async function startServer(): Promise<{
 		import("./state/workspace-state.js"),
 		import("./server/workspace-registry.js"),
 		import("./update/update.js"),
+		import("./projects/launch-project.js"),
 	]);
 	let runtimeStateHub: RuntimeStateHub | undefined;
 	let autoReviewReconciler: AutoReviewReconciler | undefined;
@@ -531,6 +538,19 @@ async function startServer(): Promise<{
 	for (const { workspaceId, terminalManager } of workspaceRegistry.listManagedWorkspaces()) {
 		markOrphanedSessions(workspaceId, terminalManager);
 	}
+	// An unregistered cwd becomes a project only now that this process owns the server, and only through the rules of
+	// projects.add (src/projects/launch-project.ts): never a task worktree or for an agent session, only inside a root.
+	const launchProject = await registerLaunchProjectInProcess({
+		cwd: process.cwd(),
+		hasGitRepository,
+		setActiveWorkspace: workspaceRegistry.setActiveWorkspace,
+		log: (message) => {
+			console.log(message);
+		},
+		warn: (message) => {
+			console.warn(`[kanban] ${message}`);
+		},
+	});
 
 	// Session sync moves cards between In Progress and Review on session state changes, with or without a
 	// browser open (src/server/session-column-sync.ts). Like auto-review, only the process that bound the server
@@ -747,7 +767,10 @@ async function startServer(): Promise<{
 	};
 
 	return {
-		url: runtimeServer.url,
+		// The server computed its URL before the launch project was registered.
+		url: launchProject
+			? buildKanbanRuntimeUrl(`/${encodeURIComponent(launchProject.workspaceId)}`)
+			: runtimeServer.url,
 		close,
 		shutdown,
 	};

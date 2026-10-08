@@ -163,6 +163,20 @@ project that isn't registered asks the server's `projects.add`, which applies th
 (for the user's shell too), and then reads the project back from the index. Re-registering the session's own project
 is a no-op and allowed. A message can't get around this: the receiving orchestrator is refused the same way.
 
+Launching Kanban in a directory follows the same rules (`src/projects/launch-project.ts`). Bare `kanban` and server
+startup open a registered cwd as before (one outside the projects roots too; doctor warns). An unregistered git repo
+is registered only when it is strictly inside a projects root (`resolvePathInsideProjectRoots()`, refused with its
+message otherwise), is not a Kanban task worktree, and no session credential is in the env:
+
+- a starting server registers it only once it has bound the port (the workspace registry itself never registers
+  anything), so a `kanban` that loses the port to a running server has written nothing;
+- a bare `kanban` that finds a server running sends it to that server's `projects.add`, so the server's isolation
+  rule also refuses a session that dropped its credential (traced through `/proc`).
+
+From the user's own shell a git repo under `/projects` still opens and registers. A task worktree (anything under
+`<home>/worktrees` or a legacy worktree root) is never a project, whoever asks: `resolvePathInsideProjectRoots()`
+refuses it for every add path (Open folder, `kanban project add`, New project, clone, launch).
+
 While some workspace is in `enforce`, the user's own changes need the console code (next section) too, because a
 reparented agent process looks like the user: `kanban project add|create` asks for it before it writes, and a
 browser add/create/remove is refused with the approval id to complete. A passcode-authenticated browser (remote mode)

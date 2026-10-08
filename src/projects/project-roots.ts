@@ -1,8 +1,9 @@
 // The projects roots (`projects.roots` in config.json, schema in src/config/pipeline-config.ts): every project Kanban
 // creates (New project), clones or opens (Open folder, `kanban project add`) must be strictly inside one of them. In
 // the container that is `/projects`, the projects volume; /root holds config, the Kanban home and task worktrees.
-// Worktrees are not projects and never go through this check. Already registered projects outside a root keep
-// working (doctor warns). This module is the one check; the browser only pre-validates names.
+// Worktree creation never goes through this check, and a task worktree (anything under the Kanban home's worktree
+// roots) is refused here even inside a root: it is never a project, whoever asks. Already registered projects
+// outside a root keep working (doctor warns). This module is the one check; the browser only pre-validates names.
 import { existsSync } from "node:fs";
 import { lstat, readdir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -10,6 +11,7 @@ import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:pa
 
 import { readPipelineConfig } from "../config/pipeline-config";
 import { hasParentDirectorySegment, validateProjectDirectoryName } from "../core/project-paths";
+import { getTaskWorktreeSearchRootPaths } from "../state/kanban-home";
 import { isPathWithinRoot } from "../workspace/path-sandbox";
 import { resolveProjectInputPath } from "./project-path";
 
@@ -99,6 +101,17 @@ function errorCode(error: unknown): string | undefined {
 	return error instanceof Error && "code" in error ? String((error as NodeJS.ErrnoException).code) : undefined;
 }
 
+/** The task worktree root (current or legacy, as a real path) that `path` lies in, or null. */
+export async function findTaskWorktreesRoot(path: string): Promise<string | null> {
+	for (const root of getTaskWorktreeSearchRootPaths()) {
+		const real = await realpath(root).catch(() => resolve(root));
+		if (isPathWithinRoot(real, path)) {
+			return real;
+		}
+	}
+	return null;
+}
+
 /**
  * Resolves `rawPath` the way the OS will (realpath of its deepest existing ancestor, so a symlink anywhere in the
  * existing part is followed) and accepts it only strictly inside a root. `..` segments are refused outright: they
@@ -167,6 +180,14 @@ export async function resolvePathInsideProjectRoots(
 			ok: false,
 			path: target,
 			error: `${target} is the projects root itself${resolvedNote}; a project must be a directory inside it.`,
+		};
+	}
+	const worktreesRoot = await findTaskWorktreesRoot(target);
+	if (worktreesRoot) {
+		return {
+			ok: false,
+			path: target,
+			error: `${target} is a Kanban task worktree (under ${worktreesRoot})${resolvedNote}, never a project; add the project's main checkout instead.`,
 		};
 	}
 	const root = projectRoots.roots.find((candidate) => isPathWithinRoot(candidate, target));
