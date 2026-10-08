@@ -9,7 +9,9 @@ import { selectNewestTaskSessionSummary } from "@/hooks/home-sidebar-agent-panel
 import { estimateTaskSessionGeometry } from "@/runtime/task-session-geometry";
 import { getRuntimeTrpcClient } from "@/runtime/trpc-client";
 import type {
+	RuntimeBoardColumnId,
 	RuntimeTaskLandingChoice,
+	RuntimeTaskRole,
 	RuntimeTaskSessionSummary,
 	RuntimeTaskTrashResponse,
 	RuntimeTaskWorkspaceInfoResponse,
@@ -52,6 +54,12 @@ interface StartTaskSessionOptions {
 	resumeFromTrash?: boolean;
 }
 
+export interface TaskWorkspaceCleanupDetails {
+	fromColumnId: RuntimeBoardColumnId;
+	role: RuntimeTaskRole;
+	title?: string;
+}
+
 export interface UseTaskSessionsResult {
 	upsertSession: (summary: RuntimeTaskSessionSummary) => void;
 	ensureTaskWorkspace: (task: BoardCard) => Promise<EnsureTaskWorkspaceResult>;
@@ -62,7 +70,11 @@ export interface UseTaskSessionsResult {
 		text: string,
 		options?: SendTerminalInputOptions,
 	) => Promise<SendTaskSessionInputResult>;
-	cleanupTaskWorkspace: (taskId: string) => Promise<RuntimeWorktreeDeleteResponse | null>;
+	/** A deleted card's cleanup (Clear Done); `deleted` says what was deleted, for the runtime's task history. */
+	cleanupTaskWorkspace: (
+		taskId: string,
+		deleted?: TaskWorkspaceCleanupDetails,
+	) => Promise<RuntimeWorktreeDeleteResponse | null>;
 	/** Runs the runtime's Done workflow for a card the browser moved to Done. */
 	/** The runtime's Done workflow. `landing`: land or discard a landing-mode-qa card's work (Approve & land). */
 	trashTask: (taskId: string, options?: TaskTrashOptions) => Promise<RuntimeTaskTrashResponse | null>;
@@ -228,13 +240,17 @@ export function useTaskSessions({ currentProjectId, setSessions }: UseTaskSessio
 	);
 
 	const cleanupTaskWorkspace = useCallback(
-		async (taskId: string): Promise<RuntimeWorktreeDeleteResponse | null> => {
+		async (taskId: string, deleted?: TaskWorkspaceCleanupDetails): Promise<RuntimeWorktreeDeleteResponse | null> => {
 			if (!currentProjectId) {
 				return null;
 			}
 			try {
 				const trpcClient = getRuntimeTrpcClient(currentProjectId);
-				const payload = await trpcClient.workspace.deleteWorktree.mutate({ taskId });
+				const payload = await trpcClient.workspace.deleteWorktree.mutate({
+					taskId,
+					trigger: "browser",
+					...deleted,
+				});
 				if (!payload.ok) {
 					const message = payload.error ?? "Could not clean up task workspace.";
 					console.error(`[cleanupTaskWorkspace] ${message}`);

@@ -18,11 +18,16 @@
 // did. The gate is the `qa` landing step (src/server/task-landing-gate.ts:
 // land on the base before Done, kit-merge plan §4.2); it decides on the
 // request's `landing` choice and acts only on landing-mode-`qa` workspaces.
+// Every run, whatever its status, appends one line to the workspace's task history (src/state/task-history-log.ts):
+// who asked (trigger, and the caller project isolation identified), from which column, the landing choice and
+// outcome, the sessions stopped and whether the worktree went.
 
 import type {
 	RuntimeBoardCard,
 	RuntimeBoardColumnId,
 	RuntimeBoardData,
+	RuntimeTaskHistoryCaller,
+	RuntimeTaskHistoryEntry,
 	RuntimeTaskLandingChoice,
 	RuntimeTaskLandingOutcome,
 	RuntimeTaskSessionStartRequest,
@@ -35,12 +40,15 @@ import type {
 	RuntimeWorktreeDeleteResponse,
 	RuntimeWorktreeEnsureResponse,
 } from "../core/api-contract";
+import { resolveCardRole } from "../core/card-role";
 import { getDetailTerminalTaskId } from "../core/detail-terminal-session";
 import {
 	getTaskColumnId,
 	moveTaskToTopOfColumn,
 	trashTaskAndGetReadyLinkedTaskIds,
 } from "../core/task-board-mutations";
+import type { RuntimeCaller } from "../isolation/session-identity";
+import { startTaskHistoryCallerLookup } from "../state/task-history-log";
 import type {
 	RuntimeWorkspaceAtomicMutationResponse,
 	RuntimeWorkspaceAtomicMutationResult,
@@ -64,6 +72,8 @@ export interface TaskTrashRequest extends TaskTrashWorkspaceScope {
 	 * completes cards that are still armed in Review).
 	 */
 	canTrash?: (card: RuntimeBoardCard, columnId: RuntimeBoardColumnId) => boolean;
+	/** Who asked, for the task history (tRPC callers); absent = an in-process trigger. Called once, after the run. */
+	resolveCaller?: () => Promise<RuntimeCaller>;
 }
 
 export type TaskTrashResult = RuntimeTaskTrashResponse;
@@ -112,6 +122,8 @@ export interface CreateTaskTrashWorkflowDependencies {
 	/** Broadcasts the new board to connected browsers. Awaited before sessions are stopped. */
 	onBoardMutated?: (scope: TaskTrashWorkspaceScope) => Promise<void> | void;
 	doneGate?: TaskDoneGate;
+	/** Appends the run's task history entry (src/state/task-history-log.ts). A failure only warns. */
+	recordHistory?: (entry: RuntimeTaskHistoryEntry) => Promise<void>;
 	now?: () => number;
 	warn?: (message: string) => void;
 }
@@ -122,9 +134,16 @@ export interface TaskTrashWorkflow {
 
 type BoardStepValue =
 	| { kind: "not_found" }
-	| { kind: "skipped"; columnId: RuntimeBoardColumnId }
-	| { kind: "already_done" }
-	| { kind: "moved"; previousColumnId: RuntimeBoardColumnId; readyTaskIds: string[] };
+	| { kind: "skipped"; columnId: RuntimeBoardColumnId; card: RuntimeBoardCard }
+	| { kind: "already_done"; card: RuntimeBoardCard }
+	| { kind: "moved"; previousColumnId: RuntimeBoardColumnId; readyTaskIds: string[]; card: RuntimeBoardCard };
+
+/** What one run saw and did beyond its result, for the task history entry. */
+interface TaskTrashTrace {
+	card: RuntimeBoardCard | null;
+	fromColumnId: RuntimeBoardColumnId | null;
+	sessionsStopped: string[];
+}
 
 interface CardLocation {
 	columnId: RuntimeBoardColumnId;
@@ -221,6 +240,7 @@ export function createTaskTrashWorkflow(deps: CreateTaskTrashWorkflowDependencie
 	/** A blocked result, or the landing outcome to report once the card is Done. */
 	const runDoneGate = async (
 		request: TaskTrashRequest,
+		trace: TaskTrashTrace,
 	): Promise<{ blocked: TaskTrashResult } | { landing?: RuntimeTaskLandingOutcome }> => {
 		if (!deps.doneGate) {
 			return {};
@@ -231,6 +251,10 @@ export function createTaskTrashWorkflow(deps: CreateTaskTrashWorkflowDependencie
 			save: false,
 		}));
 		const location = snapshot.value;
+		if (location) {
+			trace.card = location.card;
+			trace.fromColumnId = location.columnId;
+		}
 		if (!location || location.columnId === "trash") {
 			return {};
 		}
@@ -265,18 +289,24 @@ export function createTaskTrashWorkflow(deps: CreateTaskTrashWorkflowDependencie
 				return { board: state.board, value: { kind: "not_found" }, save: false };
 			}
 			if (location.columnId === "trash") {
-				return { board: state.board, value: { kind: "already_done" }, save: false };
+				return { board: state.board, value: { kind: "already_done", card: location.card }, save: false };
 			}
+			const skipped: BoardStepValue = { kind: "skipped", columnId: location.columnId, card: location.card };
 			if (request.canTrash && !request.canTrash(location.card, location.columnId)) {
-				return { board: state.board, value: { kind: "skipped", columnId: location.columnId }, save: false };
+				return { board: state.board, value: skipped, save: false };
 			}
 			const trashed = trashTaskAndGetReadyLinkedTaskIds(state.board, request.taskId, timestamp);
 			if (!trashed.moved) {
-				return { board: state.board, value: { kind: "skipped", columnId: location.columnId }, save: false };
+				return { board: state.board, value: skipped, save: false };
 			}
 			return {
 				board: clearPendingGitAction(trashed.board, request.taskId),
-				value: { kind: "moved", previousColumnId: location.columnId, readyTaskIds: trashed.readyTaskIds },
+				value: {
+					kind: "moved",
+					previousColumnId: location.columnId,
+					readyTaskIds: trashed.readyTaskIds,
+					card: location.card,
+				},
 			};
 		});
 		return response.value;
@@ -290,20 +320,27 @@ export function createTaskTrashWorkflow(deps: CreateTaskTrashWorkflowDependencie
 		}
 	};
 
-	const stopSessions = async (request: TaskTrashRequest, previousColumnId: RuntimeBoardColumnId): Promise<void> => {
+	/** The ids of the sessions it stopped. */
+	const stopSessions = async (
+		request: TaskTrashRequest,
+		previousColumnId: RuntimeBoardColumnId,
+	): Promise<string[]> => {
 		const sessionIds = [getDetailTerminalTaskId(request.taskId)];
 		if (columnCanHaveLiveTaskSession(previousColumnId)) {
 			sessionIds.unshift(request.taskId);
 		}
-		await Promise.all(
+		const stopped = await Promise.all(
 			sessionIds.map(async (sessionId) => {
 				try {
 					await deps.stopTaskSession(request, sessionId);
+					return sessionId;
 				} catch (error) {
 					deps.warn?.(`Could not stop session ${sessionId}: ${toErrorMessage(error)}`);
+					return null;
 				}
 			}),
 		);
+		return stopped.filter((sessionId): sessionId is string => sessionId !== null);
 	};
 
 	const prepareProcessReap = async (request: TaskTrashRequest): Promise<() => Promise<void>> => {
@@ -409,14 +446,18 @@ export function createTaskTrashWorkflow(deps: CreateTaskTrashWorkflowDependencie
 		}
 	};
 
-	const runTrashTask = async (request: TaskTrashRequest): Promise<TaskTrashResult> => {
-		const gate = await runDoneGate(request);
+	const runTrashTask = async (request: TaskTrashRequest, trace: TaskTrashTrace): Promise<TaskTrashResult> => {
+		const gate = await runDoneGate(request, trace);
 		if ("blocked" in gate) {
 			return gate.blocked;
 		}
 		const landing = gate.landing ? { landing: gate.landing } : {};
 
 		const boardStep = await moveCardToDone(request);
+		if (boardStep.kind !== "not_found") {
+			trace.card = boardStep.card;
+			trace.fromColumnId = boardStep.kind === "moved" ? boardStep.previousColumnId : null;
+		}
 		if (boardStep.kind === "not_found") {
 			return createResult(request, "not_found", {
 				...landing,
@@ -424,15 +465,17 @@ export function createTaskTrashWorkflow(deps: CreateTaskTrashWorkflowDependencie
 			});
 		}
 		if (boardStep.kind === "skipped") {
+			trace.fromColumnId = boardStep.columnId;
 			return createResult(request, "skipped", { ...landing, previousColumnId: boardStep.columnId });
 		}
 		if (boardStep.kind === "already_done") {
+			trace.fromColumnId = "trash";
 			return createResult(request, "already_done", { previousColumnId: "trash" });
 		}
 		await broadcast(request);
 
 		const reapProcesses = await prepareProcessReap(request);
-		await stopSessions(request, boardStep.previousColumnId);
+		trace.sessionsStopped = await stopSessions(request, boardStep.previousColumnId);
 
 		const autoStartedTasks: RuntimeTaskTrashAutoStart[] = [];
 		for (const readyTaskId of boardStep.readyTaskIds) {
@@ -458,6 +501,61 @@ export function createTaskTrashWorkflow(deps: CreateTaskTrashWorkflowDependencie
 		});
 	};
 
+	const recordHistory = async (
+		request: TaskTrashRequest,
+		trace: TaskTrashTrace,
+		caller: Promise<RuntimeTaskHistoryCaller | null>,
+		result: TaskTrashResult | null,
+		failure: unknown,
+	): Promise<void> => {
+		if (!deps.recordHistory) {
+			return;
+		}
+		try {
+			const error = failure === undefined ? result?.error : toErrorMessage(failure);
+			await deps.recordHistory({
+				at: new Date(now()).toISOString(),
+				action: "done",
+				workspaceId: request.workspaceId,
+				taskId: request.taskId,
+				title: trace.card?.title ?? null,
+				role: trace.card ? resolveCardRole(trace.card) : null,
+				fromColumnId: trace.fromColumnId,
+				trigger: request.trigger,
+				caller: await caller,
+				status: result?.status ?? "failed",
+				landing:
+					request.landing || result?.landing
+						? { choice: request.landing ?? null, outcome: result?.landing ?? null }
+						: null,
+				sessionsStopped: trace.sessionsStopped,
+				worktreeDeleted: result?.worktreeDeleted ?? false,
+				...(result?.worktreeDeleteError ? { worktreeDeleteError: result.worktreeDeleteError } : {}),
+				...(error ? { error } : {}),
+			});
+		} catch (error) {
+			deps.warn?.(
+				`Could not record the Done of task ${request.taskId} in the task history: ${toErrorMessage(error)}`,
+			);
+		}
+	};
+
+	const runAndRecord = async (request: TaskTrashRequest): Promise<TaskTrashResult> => {
+		// The caller is traced through /proc when asked, so ask before any work: a card session that runs
+		// `kanban task done` on its own card is gone once its sessions stop, and would read as unknown.
+		const caller = startTaskHistoryCallerLookup(request.resolveCaller);
+		const trace: TaskTrashTrace = { card: null, fromColumnId: null, sessionsStopped: [] };
+		let result: TaskTrashResult;
+		try {
+			result = await runTrashTask(request, trace);
+		} catch (error) {
+			await recordHistory(request, trace, caller, null, error);
+			throw error;
+		}
+		await recordHistory(request, trace, caller, result, undefined);
+		return result;
+	};
+
 	return {
 		trashTask: (request) => {
 			const key = `${request.workspaceId}\u0000${request.taskId}`;
@@ -465,7 +563,7 @@ export function createTaskTrashWorkflow(deps: CreateTaskTrashWorkflowDependencie
 			if (existing) {
 				return existing;
 			}
-			const run = runTrashTask(request).finally(() => {
+			const run = runAndRecord(request).finally(() => {
 				inFlight.delete(key);
 			});
 			inFlight.set(key, run);
@@ -477,13 +575,18 @@ export function createTaskTrashWorkflow(deps: CreateTaskTrashWorkflowDependencie
 /** Adapts the tRPC `workspace.trashTask` request (CLI and browser callers) to the workflow. */
 export function createTrashTaskRequestHandler(
 	workflow: TaskTrashWorkflow,
-): (scope: TaskTrashWorkspaceScope, input: RuntimeTaskTrashRequest) => Promise<TaskTrashResult> {
-	return async (scope, input) =>
+): (
+	scope: TaskTrashWorkspaceScope,
+	input: RuntimeTaskTrashRequest,
+	resolveCaller?: () => Promise<RuntimeCaller>,
+) => Promise<TaskTrashResult> {
+	return async (scope, input, resolveCaller) =>
 		await workflow.trashTask({
 			workspaceId: scope.workspaceId,
 			workspacePath: scope.workspacePath,
 			taskId: input.taskId,
 			trigger: input.trigger ?? "cli",
 			landing: input.landing,
+			resolveCaller,
 		});
 }

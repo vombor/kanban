@@ -44,6 +44,8 @@ import {
 	runtimeWorktreeDeleteRequestSchema,
 	runtimeWorktreeEnsureRequestSchema,
 } from "./api-contract";
+import { isDetailTerminalTaskId } from "./detail-terminal-session";
+import { isHomeAgentSessionId } from "./home-agent-session";
 
 const trimmedStringSchema = z.string().transform((value) => value.trim());
 const positiveIntegerFromQuerySchema = z.coerce.number().int().positive();
@@ -147,8 +149,18 @@ export function parseWorktreeDeleteRequest(value: unknown): RuntimeWorktreeDelet
 	if (!taskId) {
 		throw new Error("Invalid worktree delete payload.");
 	}
+	// The route stops the task's session and its detail terminal: a synthetic session id is never a card to delete.
+	if (isHomeAgentSessionId(taskId) || isDetailTerminalTaskId(taskId)) {
+		throw new Error(`Invalid worktree delete payload: "${taskId}" is not a card's task id.`);
+	}
+	// trigger, fromColumnId, role and title are reported by the client: the task history's diagnostics only, never
+	// a decision.
 	return {
 		taskId,
+		...(parsed.trigger ? { trigger: parsed.trigger } : {}),
+		...(parsed.fromColumnId ? { fromColumnId: parsed.fromColumnId } : {}),
+		...(parsed.role ? { role: parsed.role } : {}),
+		...(parsed.title !== undefined ? { title: parsed.title } : {}),
 	};
 }
 

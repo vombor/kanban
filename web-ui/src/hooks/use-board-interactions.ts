@@ -1,11 +1,12 @@
 import type { DropResult } from "@hello-pangea/dnd";
+import { resolveCardRole } from "@runtime-card-role";
 import pLimit from "p-limit";
 import type { Dispatch, SetStateAction } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { notifyError, showAppToast } from "@/components/app-toaster";
 import { type LandingDecisionRequest, useLinkedBacklogTaskActions } from "@/hooks/use-linked-backlog-task-actions";
 import { useProgrammaticCardMoves } from "@/hooks/use-programmatic-card-moves";
-import type { UseTaskSessionsResult } from "@/hooks/use-task-sessions";
+import type { TaskWorkspaceCleanupDetails, UseTaskSessionsResult } from "@/hooks/use-task-sessions";
 import type {
 	RuntimeTaskLandingChoice,
 	RuntimeTaskSessionSummary,
@@ -32,7 +33,7 @@ import {
 	requestBrowserNotificationPermission,
 } from "@/utils/notification-permission";
 
-// Clearing the Done column fires stopTaskSession + cleanupTaskWorkspace per task.
+// Clearing the Done column fires cleanupTaskWorkspace per task (the runtime stops its sessions, reaps, deletes).
 // The tRPC client batches same-tick calls into one request, so an unbounded
 // Promise.all makes the server run every stop/worktree-delete concurrently —
 // with a large column that means 100+ simultaneous git operations against the
@@ -62,8 +63,7 @@ interface UseBoardInteractionsInput {
 	setSelectedTaskId: Dispatch<SetStateAction<string | null>>;
 	setIsClearTrashDialogOpen: Dispatch<SetStateAction<boolean>>;
 	setIsGitHistoryOpen: Dispatch<SetStateAction<boolean>>;
-	stopTaskSession: (taskId: string) => Promise<void>;
-	cleanupTaskWorkspace: (taskId: string) => Promise<unknown>;
+	cleanupTaskWorkspace: (taskId: string, deleted?: TaskWorkspaceCleanupDetails) => Promise<unknown>;
 	trashTask: UseTaskSessionsResult["trashTask"];
 	workspacePersistence: UseWorkspacePersistenceResult;
 	ensureTaskWorkspace: UseTaskSessionsResult["ensureTaskWorkspace"];
@@ -119,7 +119,6 @@ export function useBoardInteractions({
 	setSelectedTaskId,
 	setIsClearTrashDialogOpen,
 	setIsGitHistoryOpen,
-	stopTaskSession,
 	cleanupTaskWorkspace,
 	trashTask,
 	workspacePersistence,
@@ -264,11 +263,11 @@ export function useBoardInteractions({
 		[sendTaskSessionInput],
 	);
 
-	const trashTaskIds = useMemo(() => {
-		const trashColumn = board.columns.find((column) => column.id === "trash");
-		return trashColumn ? trashColumn.cards.map((card) => card.id) : [];
-	}, [board.columns]);
-	const trashTaskCount = trashTaskIds.length;
+	const trashCards = useMemo(
+		() => board.columns.find((column) => column.id === "trash")?.cards ?? [],
+		[board.columns],
+	);
+	const trashTaskCount = trashCards.length;
 
 	const maybeRequestNotificationPermissionForTaskStart = useCallback(() => {
 		const shouldPromptForNotificationPermission =
@@ -833,7 +832,8 @@ export function useBoardInteractions({
 	}, [setIsClearTrashDialogOpen, trashTaskCount]);
 
 	const handleConfirmClearTrash = useCallback(() => {
-		const taskIds = [...trashTaskIds];
+		const cards = [...trashCards];
+		const taskIds = cards.map((card) => card.id);
 		setIsClearTrashDialogOpen(false);
 		if (taskIds.length === 0) {
 			return;
@@ -855,10 +855,14 @@ export function useBoardInteractions({
 		const limitCleanup = pLimit(CLEAR_TRASH_CLEANUP_CONCURRENCY);
 		void (async () => {
 			await Promise.all(
-				taskIds.map((taskId) =>
+				cards.map((card) =>
+					// The runtime's cleanup stops the card's sessions itself, after it captured their process trees.
 					limitCleanup(async () => {
-						await stopTaskSession(taskId);
-						await cleanupTaskWorkspace(taskId);
+						await cleanupTaskWorkspace(card.id, {
+							fromColumnId: "trash",
+							role: resolveCardRole(card),
+							...(card.title ? { title: card.title } : {}),
+						});
 					}),
 				),
 			);
@@ -870,8 +874,7 @@ export function useBoardInteractions({
 		setIsClearTrashDialogOpen,
 		setSelectedTaskId,
 		setSessions,
-		stopTaskSession,
-		trashTaskIds,
+		trashCards,
 	]);
 
 	const resetBoardInteractionsState = useCallback(() => {

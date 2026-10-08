@@ -6,3 +6,7 @@ const DETAIL_TERMINAL_TASK_PREFIX = "__detail_terminal__:";
 export function getDetailTerminalTaskId(taskId: string): string {
 	return `${DETAIL_TERMINAL_TASK_PREFIX}${taskId}`;
 }
+
+export function isDetailTerminalTaskId(sessionId: string): boolean {
+	return sessionId.startsWith(DETAIL_TERMINAL_TASK_PREFIX);
+}

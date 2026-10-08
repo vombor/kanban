@@ -6,11 +6,14 @@ import type {
 	RuntimeGitSummaryResponse,
 	RuntimeGitSyncAction,
 	RuntimeGitSyncResponse,
+	RuntimeTaskHistoryEntry,
+	RuntimeTaskHistoryResponse,
 	RuntimeTaskTrashRequest,
 	RuntimeTaskTrashResponse,
 	RuntimeWorkspaceChangesMode,
 	RuntimeWorkspaceFileSearchResponse,
 	RuntimeWorkspaceStateResponse,
+	RuntimeWorktreeDeleteResponse,
 } from "../core/api-contract";
 import {
 	parseGitCheckoutRequest,
@@ -18,9 +21,12 @@ import {
 	parseWorktreeDeleteRequest,
 	parseWorktreeEnsureRequest,
 } from "../core/api-validation";
+import { getDetailTerminalTaskId } from "../core/detail-terminal-session";
+import type { RuntimeCaller } from "../isolation/session-identity";
 import { recordBrowserDevAssignments } from "../kits/browser-dev-assignment-log";
 import { resolveDevAssignment } from "../kits/dev-assignment";
 import type { PreparedWorktreeReap } from "../server/process-reaper";
+import { appendTaskHistory, readTaskHistory, startTaskHistoryCallerLookup } from "../state/task-history-log";
 import { saveWorkspaceStateReportingAddedCards, WorkspaceStateConflictError } from "../state/workspace-state";
 import type { TerminalSessionManager } from "../terminal/session-manager";
 import {
@@ -49,7 +55,13 @@ export interface CreateWorkspaceApiDependencies {
 	trashTask: (
 		scope: { workspaceId: string; workspacePath: string },
 		input: RuntimeTaskTrashRequest,
+		resolveCaller?: () => Promise<RuntimeCaller>,
 	) => Promise<RuntimeTaskTrashResponse>;
+	/** Appends a task delete to the task history; default the home's log (src/state/task-history-log.ts). */
+	recordTaskHistory?: (entry: RuntimeTaskHistoryEntry) => Promise<void>;
+	/** Reads the task history; default the home's log. */
+	readTaskHistory?: typeof readTaskHistory;
+	now?: () => number;
 	/** Process reaping before the worktree is deleted (src/server/process-reaper.ts). */
 	prepareTaskProcessReap?: (
 		scope: { workspaceId: string; workspacePath: string },
@@ -180,6 +192,7 @@ function isMissingTaskWorktreeError(error: unknown): boolean {
 }
 
 export function createWorkspaceApi(deps: CreateWorkspaceApiDependencies): RuntimeTrpcContext["workspaceApi"] {
+	const recordTaskHistory = deps.recordTaskHistory ?? (async (entry) => await appendTaskHistory(entry));
 	return {
 		loadGitSummary: async (workspaceScope, input) => {
 			try {
@@ -305,23 +318,69 @@ export function createWorkspaceApi(deps: CreateWorkspaceApiDependencies): Runtim
 				baseRef: body.baseRef,
 			});
 		},
-		deleteWorktree: async (workspaceScope, input) => {
+		// A task delete's cleanup (`kanban task delete`, the browser's Clear Done; the caller removed the card from
+		// the board first): capture the session trees, stop the task's sessions, reap, delete the worktree, and log it.
+		deleteWorktree: async (workspaceScope, input, resolveCaller) => {
 			const body = parseWorktreeDeleteRequest(input);
+			// Before any stop: a card session deleting its own card is gone afterwards (startTaskHistoryCallerLookup).
+			const caller = startTaskHistoryCallerLookup(resolveCaller);
+			let reap: PreparedWorktreeReap | undefined;
 			try {
-				const reap = await deps.prepareTaskProcessReap?.(workspaceScope, body.taskId);
-				await reap?.reap();
+				reap = await deps.prepareTaskProcessReap?.(workspaceScope, body.taskId);
 			} catch {
 				// Best effort: the orphan sweeper finds anything left once the worktree is gone.
 			}
-			return await deleteTaskWorktree({
-				repoPath: workspaceScope.workspacePath,
-				taskId: body.taskId,
-			});
+			const sessionsStopped: string[] = [];
+			try {
+				const terminalManager = await deps.ensureTerminalManagerForWorkspace(
+					workspaceScope.workspaceId,
+					workspaceScope.workspacePath,
+				);
+				for (const sessionId of [body.taskId, getDetailTerminalTaskId(body.taskId)]) {
+					if (terminalManager.hasLiveProcess(sessionId)) {
+						terminalManager.stopTaskSession(sessionId);
+						sessionsStopped.push(sessionId);
+					}
+				}
+			} catch {
+				// Best effort, as the reap: the delete goes ahead.
+			}
+			await reap?.reap().catch(() => {});
+			let deleted: RuntimeWorktreeDeleteResponse;
+			try {
+				deleted = await deleteTaskWorktree({
+					repoPath: workspaceScope.workspacePath,
+					taskId: body.taskId,
+				});
+			} catch (error) {
+				deleted = { ok: false, removed: false, error: error instanceof Error ? error.message : String(error) };
+			}
+			try {
+				await recordTaskHistory({
+					at: new Date(deps.now?.() ?? Date.now()).toISOString(),
+					action: "delete",
+					workspaceId: workspaceScope.workspaceId,
+					taskId: body.taskId,
+					title: body.title ?? null,
+					role: body.role ?? null,
+					fromColumnId: body.fromColumnId ?? null,
+					trigger: body.trigger ?? "cli",
+					caller: await caller,
+					status: deleted.ok ? "deleted" : "failed",
+					landing: null,
+					sessionsStopped,
+					worktreeDeleted: deleted.removed,
+					...(deleted.error ? { worktreeDeleteError: deleted.error } : {}),
+				});
+			} catch {
+				// The history is diagnostics; a failed write never fails the delete.
+			}
+			return deleted;
 		},
-		trashTask: async (workspaceScope, input) => {
+		trashTask: async (workspaceScope, input, resolveCaller) => {
 			const body = parseTaskTrashRequest(input);
 			try {
-				return await deps.trashTask(workspaceScope, body);
+				return await deps.trashTask(workspaceScope, body, resolveCaller);
 			} catch (error) {
 				return {
 					ok: false,
@@ -335,6 +394,11 @@ export function createWorkspaceApi(deps: CreateWorkspaceApiDependencies): Runtim
 				} satisfies RuntimeTaskTrashResponse;
 			}
 		},
+		loadTaskHistory: async (workspaceScope, input): Promise<RuntimeTaskHistoryResponse> =>
+			await (deps.readTaskHistory ?? readTaskHistory)(workspaceScope.workspaceId, {
+				taskId: input?.taskId?.trim() || undefined,
+				limit: input?.limit,
+			}),
 		loadTaskContext: async (workspaceScope, input) => {
 			const normalizedInput = normalizeRequiredTaskWorkspaceScopeInput(input);
 			return await getTaskWorkspaceInfo({

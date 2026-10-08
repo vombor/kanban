@@ -7,6 +7,7 @@ import { pruneDoneCards } from "../../../../src/pipeline/watchdog/prune-done";
 import { checkWakeRequests, type WakeRequest } from "../../../../src/pipeline/watchdog/wake-requests";
 import { restoreBoardFromBackup } from "../../../../src/state/board-restore";
 import { getBoardBackupsPath, getWatchdogWorkspacePaths } from "../../../../src/state/kanban-home";
+import { readTaskHistory } from "../../../../src/state/task-history-log";
 import {
 	getWorkspaceDirectoryPath,
 	loadWorkspaceBoardById,
@@ -52,12 +53,21 @@ describe("prune-done", () => {
 			);
 			writeFileSync(paths.runoffs, JSON.stringify({ runoffs: [{ decided: false, cards: ["run01"] }] }));
 
-			const dry = await pruneDoneCards({ workspaceId, repoPath, days: 3, dryRun: true, now: NOW });
+			const dry = await pruneDoneCards({
+				workspaceId,
+				repoPath,
+				days: 3,
+				dryRun: true,
+				now: NOW,
+				trigger: "watchdog",
+			});
 			expect(dry.pruned.map((card) => card.id)).toEqual(["old01"]);
 			expect(dry.kept.sort()).toEqual(["cal01", "run01"]);
 			expect(dry.backupPath).toBeNull();
 
-			const result = await pruneDoneCards({ workspaceId, repoPath, days: 3, now: NOW });
+			expect((await readTaskHistory(workspaceId)).entries).toEqual([]);
+
+			const result = await pruneDoneCards({ workspaceId, repoPath, days: 3, now: NOW, trigger: "watchdog" });
 			expect(result.pruned.map((card) => card.id)).toEqual(["old01"]);
 			const board = await loadWorkspaceBoardById(workspaceId);
 			expect(board.columns.find((column) => column.id === "trash")?.cards.map((card) => card.id)).toEqual([
@@ -72,6 +82,20 @@ describe("prune-done", () => {
 				expect.objectContaining({ id: "old01" }),
 			]);
 			expect(result.summary).toContain("deleted 1 older than 3 d (kept 2 runoff/calibration)");
+			// Each deleted card is in the task history, as the watchdog's delete.
+			expect((await readTaskHistory(workspaceId)).entries).toEqual([
+				expect.objectContaining({
+					at: new Date(NOW).toISOString(),
+					action: "delete",
+					taskId: "old01",
+					role: "dev",
+					fromColumnId: "trash",
+					trigger: "watchdog",
+					caller: null,
+					status: "deleted",
+					worktreeDeleted: false,
+				}),
+			]);
 		});
 	});
 });

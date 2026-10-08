@@ -19,6 +19,7 @@ import {
 	runtimeTaskAutoReviewModeSchema,
 	runtimeTaskRoleSchema,
 } from "../core/api-contract";
+import { resolveCardRole } from "../core/card-role";
 import { getKanbanRuntimeOrigin } from "../core/runtime-endpoint";
 import { cloneRuntimeTaskAgentSettings } from "../core/task-agent-settings";
 import {
@@ -456,6 +457,32 @@ function findTasksInColumn(
 	}));
 }
 
+/** Who moved cards to Done or deleted them, and what that did (src/state/task-history-log.ts), oldest first. */
+async function listTaskHistory(input: {
+	cwd: string;
+	projectPath?: string;
+	taskId?: string;
+	limit?: number;
+}): Promise<JsonRecord> {
+	const workspace = await resolveRuntimeWorkspace(input.projectPath, input.cwd, {
+		autoCreateIfMissing: false,
+	});
+	const runtimeClient = createRuntimeTrpcClient(workspace.workspaceId);
+	const history = await runtimeClient.workspace.getTaskHistory.query({
+		...(input.taskId ? { taskId: input.taskId } : {}),
+		// Without a task, the newest 50; a task's history is short and shown whole unless --limit says otherwise.
+		...(input.limit || !input.taskId ? { limit: input.limit ?? 50 } : {}),
+	});
+	return {
+		ok: true,
+		workspacePath: workspace.repoPath,
+		taskId: input.taskId ?? null,
+		path: history.path,
+		entries: history.entries,
+		count: history.entries.length,
+	};
+}
+
 async function listTasks(input: { cwd: string; projectPath?: string; column?: ListTaskColumn }): Promise<JsonRecord> {
 	const workspace = await resolveRuntimeWorkspace(input.projectPath, input.cwd, {
 		autoCreateIfMissing: false,
@@ -483,21 +510,25 @@ async function listTasks(input: { cwd: string; projectPath?: string; column?: Li
 	};
 }
 
-async function stopTaskRuntimeSession(runtimeClient: RuntimeTrpcClient, taskId: string): Promise<void> {
-	await runtimeClient.runtime.stopTaskSession
-		.mutate({
-			taskId,
-		})
-		.catch(() => null);
+interface DeletedCardRecord {
+	taskId: string;
+	columnId: RuntimeBoardColumnId;
+	role: RuntimeTaskRole;
+	title: string | null;
 }
 
+/** Stops the task's sessions, reaps, deletes the worktree and logs the delete in the task history (server side). */
 async function deleteTaskWorkspace(
 	runtimeClient: RuntimeTrpcClient,
-	taskId: string,
+	card: DeletedCardRecord,
 ): Promise<{ removed: boolean; error?: string }> {
 	try {
 		const deleted = await runtimeClient.workspace.deleteWorktree.mutate({
-			taskId,
+			taskId: card.taskId,
+			trigger: "cli",
+			fromColumnId: card.columnId,
+			role: card.role,
+			...(card.title ? { title: card.title } : {}),
 		});
 		return {
 			removed: deleted.removed,
@@ -940,10 +971,6 @@ interface TrashTaskExecutionResult {
 	alreadyInTrash: boolean;
 }
 
-function columnCanHaveLiveTaskSession(columnId: ListTaskColumn): boolean {
-	return columnId === "in_progress" || columnId === "review";
-}
-
 function formatAutoStartedTask(
 	state: RuntimeWorkspaceStateResponse,
 	workspaceRepoPath: string,
@@ -1286,8 +1313,7 @@ async function deleteTaskCommand(input: {
 			return {
 				board: latestState.board,
 				value: {
-					deletedTaskIds: [] as string[],
-					taskIdsRequiringStop: [] as string[],
+					deletedCards: [] as DeletedCardRecord[],
 					deletedTasks: [] as JsonRecord[],
 				},
 				save: false,
@@ -1302,8 +1328,7 @@ async function deleteTaskCommand(input: {
 			return {
 				board: latestState.board,
 				value: {
-					deletedTaskIds: [] as string[],
-					taskIdsRequiringStop: [] as string[],
+					deletedCards: [] as DeletedCardRecord[],
 					deletedTasks: [] as JsonRecord[],
 				},
 				save: false,
@@ -1313,14 +1338,19 @@ async function deleteTaskCommand(input: {
 		const deletedTasks = latestTargetRecords.map(({ task, columnId }) =>
 			formatTaskRecord(latestState, task, columnId),
 		);
-		const taskIdsRequiringStop = latestTargetRecords
-			.filter(({ columnId }) => columnCanHaveLiveTaskSession(columnId))
-			.map(({ task }) => task.id);
+		const deletedIds = new Set(deleted.deletedTaskIds);
+		const deletedCards = latestTargetRecords
+			.filter(({ task }) => deletedIds.has(task.id))
+			.map(({ task, columnId }) => ({
+				taskId: task.id,
+				columnId,
+				role: resolveCardRole(task),
+				title: task.title ?? null,
+			}));
 		return {
 			board: deleted.board,
 			value: {
-				deletedTaskIds: deleted.deletedTaskIds,
-				taskIdsRequiringStop,
+				deletedCards,
 				deletedTasks,
 			},
 		};
@@ -1330,7 +1360,7 @@ async function deleteTaskCommand(input: {
 		await notifyRuntimeWorkspaceStateUpdated(runtimeClient);
 	}
 
-	if (mutation.value.deletedTaskIds.length === 0) {
+	if (mutation.value.deletedCards.length === 0) {
 		return {
 			ok: true,
 			workspacePath: workspaceRepoPath,
@@ -1340,14 +1370,11 @@ async function deleteTaskCommand(input: {
 		};
 	}
 
-	await Promise.all(
-		mutation.value.taskIdsRequiringStop.map(async (taskId) => await stopTaskRuntimeSession(runtimeClient, taskId)),
-	);
-
+	// The server stops the sessions (the task's and its detail terminal) with the worktree cleanup.
 	const workspaceCleanupResults = await Promise.all(
-		mutation.value.deletedTaskIds.map(async (taskId) => ({
-			taskId,
-			...(await deleteTaskWorkspace(runtimeClient, taskId)),
+		mutation.value.deletedCards.map(async (card) => ({
+			taskId: card.taskId,
+			...(await deleteTaskWorkspace(runtimeClient, card)),
 		})),
 	);
 
@@ -1356,7 +1383,7 @@ async function deleteTaskCommand(input: {
 		workspacePath: workspaceRepoPath,
 		column: target.kind === "column" ? target.column : null,
 		deletedTasks: mutation.value.deletedTasks,
-		count: mutation.value.deletedTaskIds.length,
+		count: mutation.value.deletedCards.length,
 		worktreeCleanup: workspaceCleanupResults,
 	};
 }
@@ -1397,6 +1424,14 @@ function parseOptionalBooleanOption(value: unknown, flagName: string): boolean |
 	throw new Error(`Invalid boolean value for ${flagName}: "${value}". Use true or false.`);
 }
 
+function parsePositiveIntegerOption(value: string): number {
+	const number = Number(value);
+	if (!Number.isInteger(number) || number <= 0) {
+		throw new Error(`Expected a positive whole number, got "${value}".`);
+	}
+	return number;
+}
+
 async function runTaskCommand(handler: () => Promise<JsonRecord>): Promise<void> {
 	try {
 		printJson(await handler());
@@ -1428,6 +1463,26 @@ export function registerTaskCommand(program: Command): void {
 						cwd: process.cwd(),
 						projectPath: options.projectPath,
 						column: options.column,
+					}),
+			);
+		});
+
+	task
+		.command("history")
+		.description(
+			"Show who moved cards to Done or deleted them: trigger, caller, from-column, landing, sessions stopped, worktree deleted.",
+		)
+		.argument("[taskId]", "Only this task's entries.")
+		.option("--project-path <path>", "Workspace path. Defaults to current directory workspace.")
+		.option("--limit <n>", "Only the newest n entries (default 50 without a task id).", parsePositiveIntegerOption)
+		.action(async (taskId: string | undefined, options: { projectPath?: string; limit?: number }) => {
+			await runTaskCommand(
+				async () =>
+					await listTaskHistory({
+						cwd: process.cwd(),
+						projectPath: options.projectPath,
+						taskId: taskId?.trim() || undefined,
+						limit: options.limit,
 					}),
 			);
 		});

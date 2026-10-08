@@ -40,6 +40,7 @@ const LEGACY_KIT_BOARD_BACKUPS_DIR = "board-backups";
 const LEGACY_KIT_BOARD_LATEST_FILENAME = "board-latest.json";
 const PIPELINE_STATE_FILENAME = "pipeline-state.json";
 const PIPELINE_DECISIONS_FILENAME = "pipeline-decisions.jsonl";
+const TASK_HISTORY_FILENAME = "task-history.jsonl";
 /** Names kept from the legacy kit (plan §1.2): people, prompts and history use them. */
 const QA_LOG_FILENAME = "qa-log.md";
 const QA_ARTIFACTS_DIR = "qa-artifacts";
@@ -500,6 +501,14 @@ export function getPlanIndexPath(workspaceId: string, homePath = getKanbanHomePa
 /** The pipeline's decision log, one JSON line per decision (`<home>/data/<workspaceId>/pipeline-decisions.jsonl`). */
 export function getPipelineDecisionLogPath(workspaceId: string, homePath = getKanbanHomePath()): string {
 	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), PIPELINE_DECISIONS_FILENAME);
+}
+
+/**
+ * Every Done move and task delete, one JSON line each (`<home>/data/<workspaceId>/task-history.jsonl`,
+ * src/state/task-history-log.ts). Inside the workspace's data dir, so `getWorkspaceIdKeyedPaths` moves it with that.
+ */
+export function getTaskHistoryLogPath(workspaceId: string, homePath = getKanbanHomePath()): string {
+	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), TASK_HISTORY_FILENAME);
 }
 
 /**

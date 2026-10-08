@@ -128,6 +128,7 @@ export function createWatchdogActionHandler(
 					workspaceId: request.workspaceId,
 					repoPath: scope.workspacePath,
 					days: request.days,
+					trigger: "watchdog",
 				});
 				if (result.pruned.length > 0 && result.backupPath) {
 					await deps.onBoardMutated(scope);

@@ -55,7 +55,6 @@ function createBoard(): BoardData {
 	};
 }
 
-const NOOP_STOP_SESSION = async (): Promise<void> => {};
 const NOOP_CLEANUP_WORKSPACE = async (): Promise<null> => null;
 const NOOP_TRASH_TASK = async (): Promise<null> => null;
 const NOOP_WORKSPACE_PERSISTENCE = {
@@ -93,7 +92,6 @@ function HookHarness({
 	setBoard,
 	ensureTaskWorkspace,
 	startTaskSession,
-	stopTaskSession = NOOP_STOP_SESSION,
 	cleanupTaskWorkspace = NOOP_CLEANUP_WORKSPACE,
 	trashTask = NOOP_TRASH_TASK,
 	selectedCard = null,
@@ -106,8 +104,7 @@ function HookHarness({
 	setBoard: Dispatch<SetStateAction<BoardData>>;
 	ensureTaskWorkspace: UseTaskSessionsResult["ensureTaskWorkspace"];
 	startTaskSession: UseTaskSessionsResult["startTaskSession"];
-	stopTaskSession?: (taskId: string) => Promise<void>;
-	cleanupTaskWorkspace?: (taskId: string) => Promise<unknown>;
+	cleanupTaskWorkspace?: (taskId: string, deleted?: unknown) => Promise<unknown>;
 	trashTask?: UseTaskSessionsResult["trashTask"];
 	selectedCard?: { card: BoardCard; column: { id: "backlog" | "in_progress" | "review" | "trash" } } | null;
 	setSelectedTaskIdOverride?: Dispatch<SetStateAction<string | null>>;
@@ -131,7 +128,6 @@ function HookHarness({
 		setSelectedTaskId: setSelectedTaskIdOverride ?? setSelectedTaskId,
 		setIsClearTrashDialogOpen,
 		setIsGitHistoryOpen,
-		stopTaskSession,
 		cleanupTaskWorkspace,
 		trashTask,
 		workspacePersistence: NOOP_WORKSPACE_PERSISTENCE,
@@ -840,15 +836,13 @@ describe("useBoardInteractions", () => {
 			dependencies: [],
 		};
 
-		// Track how many per-task cleanup chains (stop -> cleanup) run at once.
+		// Track how many per-task cleanups run at once (each stops the card's sessions on the runtime).
 		let inFlight = 0;
 		let maxInFlight = 0;
-		const stopTaskSession = vi.fn(async (_taskId: string) => {
+		const cleanupTaskWorkspace = vi.fn(async (_taskId: string, _deleted?: unknown) => {
 			inFlight += 1;
 			maxInFlight = Math.max(maxInFlight, inFlight);
 			await Promise.resolve();
-		});
-		const cleanupTaskWorkspace = vi.fn(async (_taskId: string) => {
 			await Promise.resolve();
 			inFlight -= 1;
 			return null;
@@ -861,7 +855,6 @@ describe("useBoardInteractions", () => {
 					setBoard={() => board}
 					ensureTaskWorkspace={async () => ({ ok: true as const })}
 					startTaskSession={async () => ({ ok: true as const })}
-					stopTaskSession={stopTaskSession}
 					cleanupTaskWorkspace={cleanupTaskWorkspace}
 					onSnapshot={(snapshot) => {
 						latestSnapshot = snapshot;
@@ -878,13 +871,14 @@ describe("useBoardInteractions", () => {
 			latestSnapshot!.handleConfirmClearTrash();
 		});
 
-		expect(stopTaskSession).toHaveBeenCalledTimes(trashTaskCount);
 		expect(cleanupTaskWorkspace).toHaveBeenCalledTimes(trashTaskCount);
 		expect(maxInFlight).toBeGreaterThan(0);
 		expect(maxInFlight).toBeLessThanOrEqual(4);
 		for (const task of trashTasks) {
-			expect(stopTaskSession).toHaveBeenCalledWith(task.id);
-			expect(cleanupTaskWorkspace).toHaveBeenCalledWith(task.id);
+			expect(cleanupTaskWorkspace).toHaveBeenCalledWith(
+				task.id,
+				expect.objectContaining({ fromColumnId: "trash", role: "dev" }),
+			);
 		}
 	});
 });

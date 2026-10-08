@@ -46,6 +46,7 @@ export function registerBoardCommand(program: Command): void {
 					repoPath: target.repoPath,
 					days,
 					dryRun: options.dryRun === true,
+					trigger: "cli",
 				});
 				if (result.backupPath) {
 					await notifyRuntimeWorkspaceStateUpdated(createRuntimeTrpcClient(target.workspaceId));

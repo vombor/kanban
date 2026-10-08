@@ -3,7 +3,8 @@
 // board/sessions/meta files plus an index of what was deleted (`<home>/backups/boards/<ws>/prune-done-<ts>/`). Their
 // results are in the pipeline data (QA log, scoreboard, runoffs, calibration) and their code in git (snapshot refs,
 // preserve/* tags), so nothing lives only on the card. Done cards' worktrees are already gone (the Done workflow
-// deletes them), so this only edits the board.
+// deletes them), so this only edits the board. Each deleted card gets a `delete` line in the task history
+// (src/state/task-history-log.ts), trigger `watchdog` or `cli`.
 //
 // Skips cards of an undecided runoff and of a calibration that is still running. Used by `kanban board prune-done`
 // (in-process) and by the watchdog's hourly job (through the server, which owns the board).
@@ -13,8 +14,10 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { RuntimeBoardCard } from "../../core/api-contract";
+import { resolveCardRole } from "../../core/card-role";
 import { deleteTasksFromBoard } from "../../core/task-board-mutations";
 import { getBoardBackupsPath, getWatchdogWorkspacePaths } from "../../state/kanban-home";
+import { appendTaskHistory, type TaskHistoryEntry } from "../../state/task-history-log";
 import { mutateWorkspaceState } from "../../state/workspace-state";
 import { readCalibrationRunIds, readUndecidedRunoffCardIds } from "./workspace-data";
 
@@ -26,6 +29,10 @@ export interface PruneDoneOptions {
 	days: number;
 	dryRun?: boolean;
 	now?: number;
+	/** Who runs it, for the task history: the watchdog's hourly job or `kanban board prune-done`. */
+	trigger: "watchdog" | "cli";
+	/** Default: the home's task history. */
+	recordHistory?: (entry: TaskHistoryEntry) => Promise<void>;
 }
 
 export interface PruneDoneResult {
@@ -113,6 +120,24 @@ export async function pruneDoneCards(options: PruneDoneOptions): Promise<PruneDo
 			"utf8",
 		);
 		backedUp = true;
+		const recordHistory = options.recordHistory ?? appendTaskHistory;
+		for (const { card } of pruned) {
+			await recordHistory({
+				at: new Date(now).toISOString(),
+				action: "delete",
+				workspaceId: options.workspaceId,
+				taskId: card.id,
+				title: card.title ?? null,
+				role: resolveCardRole(card),
+				fromColumnId: "trash",
+				trigger: options.trigger,
+				caller: null,
+				status: "deleted",
+				landing: null,
+				sessionsStopped: [],
+				worktreeDeleted: false,
+			}).catch(() => {});
+		}
 	}
 	const summary = options.dryRun
 		? `prune-done ${options.workspaceId}: ${doneCount} Done card(s), ${pruned.length} older than ${options.days} d would be deleted${kept.length ? ` (kept ${kept.length} runoff/calibration)` : ""}`

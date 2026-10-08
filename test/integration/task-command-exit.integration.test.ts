@@ -553,6 +553,47 @@ describe("source task commands", () => {
 				).toBe(true);
 				expect(listedTrash.exitCode).toBe(0);
 				expect(listedTrash.stdout).toContain('"count": 0');
+
+				// Every Done and delete above is in the task history, with its trigger, caller and column.
+				const history = await runCliCommandAndCollectOutput({
+					args: ["task", "history", taskIds[0] ?? "", "--project-path", projectPath],
+					cwd: projectPath,
+					env,
+				});
+				expect(
+					history.exitCode,
+					`task history failed.\nstdout:\n${history.stdout}\nstderr:\n${history.stderr}`,
+				).toBe(0);
+				const historyPayload = JSON.parse(history.stdout) as {
+					ok: boolean;
+					entries: Array<Record<string, unknown>>;
+				};
+				expect(historyPayload.ok).toBe(true);
+				expect(historyPayload.entries).toEqual([
+					expect.objectContaining({
+						action: "done",
+						taskId: taskIds[0],
+						fromColumnId: "backlog",
+						trigger: "cli",
+						caller: { kind: "user" },
+						status: "trashed",
+					}),
+					expect.objectContaining({
+						action: "delete",
+						taskId: taskIds[0],
+						fromColumnId: "trash",
+						trigger: "cli",
+						caller: { kind: "user" },
+						status: "deleted",
+						role: "dev",
+					}),
+				]);
+				const allHistory = await runCliCommandAndCollectOutput({
+					args: ["task", "history", "--project-path", projectPath],
+					cwd: projectPath,
+					env,
+				});
+				expect((JSON.parse(allHistory.stdout) as { count: number }).count).toBe(6);
 			} finally {
 				await requestGracefulShutdown(serverProcess);
 				const stopped = await waitForExit(serverProcess, 5_000);

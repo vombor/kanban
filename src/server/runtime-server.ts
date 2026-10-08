@@ -41,6 +41,7 @@ import {
 	validateSession,
 } from "../security/passcode-manager";
 import { getTaskWorktreeSearchRootPaths } from "../state/kanban-home";
+import { appendTaskHistory } from "../state/task-history-log";
 import {
 	listWorkspaceIndexEntries,
 	loadWorkspaceBoardById,
@@ -387,6 +388,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			onLanded: deps.onTaskLanded,
 			log: deps.warn,
 		}),
+		recordHistory: async (entry) => await appendTaskHistory(entry),
 		warn: deps.warn,
 	});
 	const handleTrashTaskRequest = createTrashTaskRequestHandler(taskTrashWorkflow);

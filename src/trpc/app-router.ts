@@ -43,6 +43,8 @@ import type {
 	RuntimeRunUpdateResponse,
 	RuntimeShellSessionStartRequest,
 	RuntimeShellSessionStartResponse,
+	RuntimeTaskHistoryRequest,
+	RuntimeTaskHistoryResponse,
 	RuntimeTaskInputDeliveryRequest,
 	RuntimeTaskInputDeliveryResponse,
 	RuntimeTaskSessionInputRequest,
@@ -106,6 +108,8 @@ import {
 	runtimeRunUpdateResponseSchema,
 	runtimeShellSessionStartRequestSchema,
 	runtimeShellSessionStartResponseSchema,
+	runtimeTaskHistoryRequestSchema,
+	runtimeTaskHistoryResponseSchema,
 	runtimeTaskInputDeliveryRequestSchema,
 	runtimeTaskInputDeliveryResponseSchema,
 	runtimeTaskSessionInputRequestSchema,
@@ -242,14 +246,21 @@ export interface RuntimeTrpcContext {
 			scope: RuntimeTrpcWorkspaceScope,
 			input: RuntimeWorktreeEnsureRequest,
 		) => Promise<RuntimeWorktreeEnsureResponse>;
+		/** `resolveCaller`: who asked, for the task history (called once, after the work). */
 		deleteWorktree: (
 			scope: RuntimeTrpcWorkspaceScope,
 			input: RuntimeWorktreeDeleteRequest,
+			resolveCaller?: () => Promise<RuntimeCaller>,
 		) => Promise<RuntimeWorktreeDeleteResponse>;
 		trashTask: (
 			scope: RuntimeTrpcWorkspaceScope,
 			input: RuntimeTaskTrashRequest,
+			resolveCaller?: () => Promise<RuntimeCaller>,
 		) => Promise<RuntimeTaskTrashResponse>;
+		loadTaskHistory: (
+			scope: RuntimeTrpcWorkspaceScope,
+			input: RuntimeTaskHistoryRequest | undefined,
+		) => Promise<RuntimeTaskHistoryResponse>;
 		loadTaskContext: (
 			scope: RuntimeTrpcWorkspaceScope,
 			input: RuntimeTaskWorkspaceInfoRequest,
@@ -534,13 +545,20 @@ export const runtimeAppRouter = t.router({
 			.input(runtimeWorktreeDeleteRequestSchema)
 			.output(runtimeWorktreeDeleteResponseSchema)
 			.mutation(async ({ ctx, input }) => {
-				return await ctx.workspaceApi.deleteWorktree(ctx.workspaceScope, input);
+				return await ctx.workspaceApi.deleteWorktree(ctx.workspaceScope, input, () => readStrictCaller(ctx));
 			}),
 		trashTask: workspaceProcedure
 			.input(runtimeTaskTrashRequestSchema)
 			.output(runtimeTaskTrashResponseSchema)
 			.mutation(async ({ ctx, input }) => {
-				return await ctx.workspaceApi.trashTask(ctx.workspaceScope, input);
+				return await ctx.workspaceApi.trashTask(ctx.workspaceScope, input, () => readStrictCaller(ctx));
+			}),
+		// Every Done move and task delete of the workspace (src/state/task-history-log.ts), oldest first.
+		getTaskHistory: workspaceProcedure
+			.input(runtimeTaskHistoryRequestSchema.optional())
+			.output(runtimeTaskHistoryResponseSchema)
+			.query(async ({ ctx, input }) => {
+				return await ctx.workspaceApi.loadTaskHistory(ctx.workspaceScope, input);
 			}),
 		getTaskContext: workspaceProcedure
 			.input(runtimeTaskWorkspaceInfoRequestSchema)

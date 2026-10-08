@@ -619,8 +619,17 @@ export const runtimeWorktreeEnsureResponseSchema = z.union([
 ]);
 export type RuntimeWorktreeEnsureResponse = z.infer<typeof runtimeWorktreeEnsureResponseSchema>;
 
+/** Who asked for a task delete's worktree cleanup (`kanban task delete`, the browser's Clear Done). Logged only. */
+export const runtimeTaskDeleteTriggerSchema = z.enum(["cli", "browser"]);
+
 export const runtimeWorktreeDeleteRequestSchema = z.object({
 	taskId: z.string(),
+	trigger: runtimeTaskDeleteTriggerSchema.optional(),
+	/** The column the card was deleted from (the caller removed it from the board first). Logged only. */
+	fromColumnId: runtimeBoardColumnIdSchema.optional(),
+	/** The deleted card's role (the caller has the card; the board no longer does). Logged only. */
+	role: runtimeTaskRoleSchema.optional(),
+	title: z.string().optional(),
 });
 export type RuntimeWorktreeDeleteRequest = z.infer<typeof runtimeWorktreeDeleteRequestSchema>;
 
@@ -705,6 +714,67 @@ export const runtimeTaskTrashResponseSchema = z.object({
 	error: z.string().optional(),
 });
 export type RuntimeTaskTrashResponse = z.infer<typeof runtimeTaskTrashResponseSchema>;
+
+/**
+ * Every card that went to Done or was deleted (`<home>/data/<workspaceId>/task-history.jsonl`,
+ * src/state/task-history-log.ts): who asked, from where, and what the move did. `watchdog` is prune-done's hourly job.
+ */
+export const runtimeTaskHistoryTriggerSchema = z.enum([...runtimeTaskTrashTriggerSchema.options, "watchdog"]);
+export type RuntimeTaskHistoryTrigger = z.infer<typeof runtimeTaskHistoryTriggerSchema>;
+
+/** The caller as project isolation identified it (src/isolation/session-identity.ts `RuntimeCaller`). */
+export const runtimeTaskHistoryCallerSchema = z.discriminatedUnion("kind", [
+	z.object({ kind: z.literal("user") }),
+	z.object({
+		kind: z.literal("session"),
+		workspaceId: z.string(),
+		taskId: z.string(),
+		role: z.enum(["orchestrator", "card"]),
+		agentId: z.string(),
+		via: z.enum(["credential", "cwd", "process"]),
+	}),
+	z.object({ kind: z.literal("unknown"), reason: z.string() }),
+]);
+export type RuntimeTaskHistoryCaller = z.infer<typeof runtimeTaskHistoryCallerSchema>;
+
+export const runtimeTaskHistoryEntrySchema = z.object({
+	at: z.string(),
+	action: z.enum(["done", "delete"]),
+	workspaceId: z.string(),
+	taskId: z.string(),
+	title: z.string().nullable(),
+	role: runtimeTaskRoleSchema.nullable(),
+	fromColumnId: runtimeBoardColumnIdSchema.nullable(),
+	trigger: runtimeTaskHistoryTriggerSchema,
+	/** null: an in-process trigger (auto_review, pipeline, hold_release, watchdog, the in-process CLI); the trigger names it. */
+	caller: runtimeTaskHistoryCallerSchema.nullable(),
+	/** A Done's workflow status, or `deleted` / `failed` for a delete. */
+	status: z.enum([...runtimeTaskTrashStatusSchema.options, "deleted"]),
+	landing: z
+		.object({
+			choice: runtimeTaskLandingChoiceSchema.nullable(),
+			outcome: runtimeTaskLandingOutcomeSchema.nullable(),
+		})
+		.nullable(),
+	/** Sessions this step stopped (the task's own and its detail terminal). */
+	sessionsStopped: z.array(z.string()),
+	worktreeDeleted: z.boolean(),
+	worktreeDeleteError: z.string().optional(),
+	error: z.string().optional(),
+});
+export type RuntimeTaskHistoryEntry = z.infer<typeof runtimeTaskHistoryEntrySchema>;
+
+export const runtimeTaskHistoryRequestSchema = z.object({
+	taskId: z.string().optional(),
+	limit: z.number().int().positive().max(10_000).optional(),
+});
+export type RuntimeTaskHistoryRequest = z.infer<typeof runtimeTaskHistoryRequestSchema>;
+
+export const runtimeTaskHistoryResponseSchema = z.object({
+	path: z.string(),
+	entries: z.array(runtimeTaskHistoryEntrySchema),
+});
+export type RuntimeTaskHistoryResponse = z.infer<typeof runtimeTaskHistoryResponseSchema>;
 
 // The routing kit's agent/model for a new card the creator set nothing on (src/kits/dev-assignment.ts).
 export const runtimeDevAssignmentRequestSchema = z.object({
