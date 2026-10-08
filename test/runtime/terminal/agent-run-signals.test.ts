@@ -2,7 +2,12 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { countToolUse, createAgentRunSignals, findRepeatedToolCall } from "../../../src/terminal/agent-run-signals";
+import {
+	countToolUse,
+	createAgentRunSignals,
+	endsOnImageRejection,
+	findRepeatedToolCall,
+} from "../../../src/terminal/agent-run-signals";
 import type { ClineSessionFileReader } from "../../../src/terminal/cline-session-files";
 import { createTempDir } from "../../utilities/temp-dir";
 
@@ -44,6 +49,17 @@ describe("tool-call signals", () => {
 			toolCall("read_file", { path: "a" }),
 		];
 		expect(countToolUse(messages)).toEqual({ native: 1, textual: 2, turns: 3 });
+	});
+
+	it("tells a final 'no images' rejection from a reply that made a tool call or said something else", () => {
+		const rejection = {
+			role: "assistant",
+			content: [{ type: "text", text: "This model doesn't support the image field for user messages." }],
+		};
+		expect(endsOnImageRejection([toolCall("read_files", {}), rejection])).toBe(true);
+		expect(endsOnImageRejection([rejection, toolCall("read_files", {})])).toBe(false);
+		expect(endsOnImageRejection([rejection, { role: "assistant", content: "Done. STATUS: ok" }])).toBe(false);
+		expect(endsOnImageRejection([{ role: "user", content: "hi" }])).toBe(false);
 	});
 });
 

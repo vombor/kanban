@@ -21,11 +21,15 @@
 // - no native tool call after 2 nudges = the serving stack can't do tool calls for that model: DNF (94247a7);
 // - no run on an agent that is signed out (60c5538; a rerun retries it), and DNF for one that never started a turn in
 //   10 min (de83bf8);
+// - a stop on the model's "no images" rejection gets the pipeline's image recovery (clear + the run prompt resent with
+//   the no-images note) instead of "continue", and the same rejection right after it is DNF "model rejects images"
+//   (issue #7: Bedrock's OpenAI models spent all 6 nudges resending the image-poisoned history);
 // - the card's session state wins; the agent's own session file decides when Kanban has no summary (b5744b3).
 import { join } from "node:path";
 
 import type {
 	RuntimeAgentId,
+	RuntimeBoardCard,
 	RuntimeBoardColumnId,
 	RuntimeTaskAgentSettings,
 	RuntimeWorkspaceStateResponse,
@@ -36,8 +40,10 @@ import {
 	type QaVerdict,
 	type QaVerdictRead,
 } from "../../../pipeline/qa-verdict";
+import { buildClearedPrematurePrompt, CLEAR_SETTLE_MS } from "../../../pipeline/recovery-prompts";
 import type { CalibrationPaths } from "../../../state/kanban-home";
 import type { AgentRunSignals } from "../../../terminal/agent-run-signals";
+import { getAgentRecoveryProfile } from "../../../terminal/agent-session-adapters";
 import type { QaPromptParts } from "../../policy";
 import { buildCalibrationCardTitle, buildCalibrationPrompt } from "./calibration-prompt";
 import {
@@ -62,6 +68,8 @@ const TURN_START_GRACE_MS = 600_000;
 const TOOL_LOOP_WINDOW = 60;
 /** Nudges after which a run with no native tool call is DNF. */
 const NATIVE_TOOL_NUDGES = 2;
+/** The DNF reason of a run whose model rejects images even after the image recovery. */
+export const IMAGE_REJECTION_REASON = "model rejects images";
 
 export type CalibrationBoardState = Pick<RuntimeWorkspaceStateResponse, "board" | "sessions">;
 
@@ -130,6 +138,16 @@ function toErrorMessage(error: unknown): string {
 
 function columnOf(state: CalibrationBoardState, taskId: string): RuntimeBoardColumnId | null {
 	return state.board.columns.find((column) => column.cards.some((card) => card.id === taskId))?.id ?? null;
+}
+
+function cardOf(state: CalibrationBoardState, taskId: string): RuntimeBoardCard | null {
+	for (const column of state.board.columns) {
+		const card = column.cards.find((entry) => entry.id === taskId);
+		if (card) {
+			return card;
+		}
+	}
+	return null;
 }
 
 function toAgentSettings(run: CalibrationRunPlan): RuntimeTaskAgentSettings | undefined {
@@ -309,6 +327,52 @@ export async function runCalibration(
 		await finishIfTimedOut(run, entry, read.kind === "ok" ? read.verdict : null, " (board unreadable)");
 	};
 
+	/**
+	 * The model rejected an image, which stays in its history and fails every later request, so "continue" can't help:
+	 * the pipeline's image recovery (clear the conversation, resend the run prompt with the no-images note). A
+	 * rejection right after one, or with no nudge left, ends the run DNF.
+	 */
+	const recoverFromImageRejection = async (
+		run: CalibrationRunPlan,
+		entry: CalibrationRunState,
+		board: CalibrationBoardState,
+		taskId: string,
+	): Promise<void> => {
+		const nudges = entry.nudges ?? 0;
+		const clear = getAgentRecoveryProfile(run.model.agent).clearContextCommand;
+		const prompt = cardOf(board, taskId)?.prompt ?? "";
+		if (entry.imageRecoverySent) {
+			await finish(run, entry, null, IMAGE_REJECTION_REASON);
+			return;
+		}
+		if (nudges >= spec.maxNudges || !clear || !prompt) {
+			const detail = !clear
+				? `${run.model.agent} can't clear its conversation`
+				: !prompt
+					? "the card prompt can't be read to resend"
+					: `after ${nudges} nudges`;
+			await finish(run, entry, null, `${IMAGE_REJECTION_REASON} (${detail})`);
+			return;
+		}
+		entry.nudges = nudges + 1;
+		entry.lastNudge = deps.now();
+		entry.imageRecoverySent = true;
+		entry.imageRecoveries = (entry.imageRecoveries ?? 0) + 1;
+		const deliver = async (text: string) =>
+			await deps.board
+				.deliverInput(taskId, text)
+				.catch((error: unknown) => ({ ok: false, error: toErrorMessage(error) }));
+		let sent = await deliver(clear);
+		if (sent.ok) {
+			await deps.sleep(CLEAR_SETTLE_MS);
+			sent = await deliver(buildClearedPrematurePrompt(prompt, { kind: "no_images", text: "" }));
+		}
+		deps.log(
+			`${run.key}: ${IMAGE_REJECTION_REASON}; ${clear} + run prompt without images, nudge ${entry.nudges}/${spec.maxNudges} ${sent.ok ? "sent" : `FAILED (${sent.error ?? "not delivered"})`}`,
+		);
+		await save();
+	};
+
 	/** One look at a started, unfinished run. */
 	const checkRun = async (
 		run: CalibrationRunPlan,
@@ -362,6 +426,11 @@ export async function runCalibration(
 		if (running || column !== "review" || verdict || pid.brownout || now - (entry.lastNudge ?? 0) <= NUDGE_GAP_MS) {
 			return;
 		}
+		if (workspacePath && (await deps.signals.hasImageRejection(agentId, workspacePath)) === true) {
+			await recoverFromImageRejection(run, entry, board, taskId);
+			return;
+		}
+		entry.imageRecoverySent = false;
 		const verdictPath = getQaVerdictPath(outDir);
 		const bad = read.kind === "invalid" ? read.error : null;
 		if (bad && !entry.badVerdict) {

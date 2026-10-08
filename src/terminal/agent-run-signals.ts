@@ -1,6 +1,6 @@
 // What an agent's own files say about a run, for runners that watch cards they started (the team kit's calibration
 // runner): whether the session is running when Kanban has no summary, a tool-call loop, tool calls written as text,
-// whether a turn ever started, and whether the agent is signed in. Each fact is per agent, so it lives here (the
+// whether a turn ever started, whether the model rejected an image, and whether the agent is signed in. Each fact is per agent, so it lives here (the
 // incident gate forbids agent-id literals in src/kits and src/pipeline); an agent without a profile entry answers
 // null ("can't tell"), and the caller then decides on Kanban's own state alone.
 //
@@ -12,6 +12,7 @@ import { join } from "node:path";
 import type { RuntimeAgentId } from "../core/api-contract";
 import { findCopilotSessionIdForCwd, getCopilotHomePath, parseCopilotConfig } from "./agent-session-adapters";
 import { type ClineSessionFileReader, createClineSessionFileReader, getClineSessionsPath } from "./cline-session-files";
+import { isClineNoImagesRejection } from "./cline-turn-outcome";
 
 /** The same tool call (name + input) filling `count` of the last `of` calls of the newest session. */
 export interface ToolCallLoop {
@@ -32,6 +33,8 @@ export interface AgentRunSignals {
 	isSessionRunning: (agentId: RuntimeAgentId, workspacePath: string) => Promise<boolean | null>;
 	findToolCallLoop: (agentId: RuntimeAgentId, workspacePath: string, last?: number) => Promise<ToolCallLoop | null>;
 	countToolUse: (agentId: RuntimeAgentId, workspacePath: string) => Promise<ToolUseCounts | null>;
+	/** The newest session's last reply is the model's "no images" rejection (the image stays in its history). */
+	hasImageRejection: (agentId: RuntimeAgentId, workspacePath: string) => Promise<boolean | null>;
 	/** Whether the agent ever started a turn in this worktree (it wrote its event log). */
 	hasStartedTurn: (agentId: RuntimeAgentId, workspacePath: string) => Promise<boolean | null>;
 	/** Whether the agent has a login it can start a run with. */
@@ -104,6 +107,26 @@ export function countToolUse(messages: readonly unknown[]): ToolUseCounts {
 		}
 	}
 	return { native, textual, turns };
+}
+
+/**
+ * The last assistant reply is a "model doesn't support images" rejection with no tool call, the text the pipeline's
+ * recovery reads too (isClineNoImagesRejection): every later request of that conversation fails the same way.
+ */
+export function endsOnImageRejection(messages: readonly unknown[]): boolean {
+	const last = messages.filter((message) => roleOf(message) === "assistant").at(-1);
+	if (!last) {
+		return false;
+	}
+	const blocks = contentBlocks(last);
+	if (blocks.some((block) => block.type === "tool_use")) {
+		return false;
+	}
+	const text = blocks
+		.filter((block) => block.type === "text" && typeof block.text === "string")
+		.map((block) => block.text)
+		.join("\n");
+	return isClineNoImagesRejection(text);
 }
 
 function hasEntries(value: unknown): boolean {
@@ -188,6 +211,10 @@ export function createAgentRunSignals(
 		countToolUse: async (agentId, workspacePath) => {
 			const messages = await readMessages(agentId, workspacePath);
 			return messages ? countToolUse(messages) : null;
+		},
+		hasImageRejection: async (agentId, workspacePath) => {
+			const messages = await readMessages(agentId, workspacePath);
+			return messages ? endsOnImageRejection(messages) : null;
 		},
 		hasStartedTurn: async (agentId, workspacePath) =>
 			(await profiles[agentId]?.hasStartedTurn?.(workspacePath)) ?? null,

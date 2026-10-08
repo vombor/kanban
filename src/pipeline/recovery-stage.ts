@@ -38,7 +38,7 @@ import {
 	type RecoveryFlowPatch,
 	readRecoveryFlow,
 } from "./recovery";
-import { buildPoisonedHistoryPrompt, buildRestartResumeLaunch } from "./recovery-prompts";
+import { buildPoisonedHistoryPrompt, buildRestartResumeLaunch, CLEAR_SETTLE_MS } from "./recovery-prompts";
 import { planRestartRecovery, type RestartManifest, type RestartOrphan } from "./restart-recovery";
 
 /**
@@ -73,8 +73,6 @@ const CAPACITY_RECHECK_MS = 30_000;
 const PRESSURE_RECHECK_MS = 30_000;
 /** How many capacity re-checks a resume makes before it gives up for this restart (about 30 min). */
 const CAPACITY_MAX_CHECKS = 60;
-/** Between /clear and the text that follows it, so the TUI has started the new conversation. */
-const CLEAR_SETTLE_MS = 1_500;
 
 export interface RecoveryStageDependencies {
 	/** The card's worktree path, or null when it has none. */

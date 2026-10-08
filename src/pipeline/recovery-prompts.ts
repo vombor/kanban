@@ -20,6 +20,9 @@ export const RESTART_WIP_NOTE =
 export const RESTART_RESUME_NOTE =
 	"NOTE (orchestrator): you were resumed after a container/Kanban restart that ended your previous session. Pick up where you left off (check git status and git diff if unsure what you already did), finish the card, and end with a STATUS line.";
 
+/** Between the clear command and the text that follows it, so the TUI has started the new conversation. */
+export const CLEAR_SETTLE_MS = 1_500;
+
 const WORK_IS_HERE = "Your work so far is in this worktree (git status / git diff): continue the task from there.";
 
 /** The card prompt resent after /clear for a premature stop that poisoned the history. */

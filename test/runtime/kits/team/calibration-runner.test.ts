@@ -10,6 +10,7 @@ import {
 	type CalibrationBoardState,
 	type CalibrationCardInput,
 	type CalibrationDependencies,
+	IMAGE_REJECTION_REASON,
 	runCalibration,
 } from "../../../../src/kits/team/calibration/calibration-runner";
 import { type CalibrationSpec, parseCalibrationSpec } from "../../../../src/kits/team/calibration/calibration-spec";
@@ -18,7 +19,9 @@ import { writeCalibrationState } from "../../../../src/kits/team/calibration/cal
 import type { QaVerdict, QaVerdictRead } from "../../../../src/pipeline/qa-verdict";
 import { readCalibrationRunIds } from "../../../../src/pipeline/watchdog/workspace-data";
 import { type CalibrationPaths, getCalibrationPaths } from "../../../../src/state/kanban-home";
-import type { AgentRunSignals } from "../../../../src/terminal/agent-run-signals";
+import { type AgentRunSignals, createAgentRunSignals } from "../../../../src/terminal/agent-run-signals";
+import { createClineSessionFileReader } from "../../../../src/terminal/cline-session-files";
+import { textMessage, toolResult, toolUse, writeFakeClineSession } from "../../../utilities/fake-cline-sessions";
 import { createTempDir } from "../../../utilities/temp-dir";
 import { createBoard, createCard } from "../../../utilities/workspace-state-store";
 
@@ -131,6 +134,7 @@ function createHarness(options: {
 		isSessionRunning: async () => null,
 		findToolCallLoop: async () => null,
 		countToolUse: async () => null,
+		hasImageRejection: async () => null,
 		hasStartedTurn: async () => null,
 		isSignedIn: async () => null,
 		...options.signals,
@@ -238,10 +242,13 @@ function createHarness(options: {
 }
 
 const tempDirs: Array<{ cleanup: () => void }> = [];
+const createdPaths: CalibrationPaths[] = [];
 function createPaths(name = "qa-models-t1"): CalibrationPaths {
 	const temp = createTempDir("kanban-calibration-");
 	tempDirs.push(temp);
-	return getCalibrationPaths("foo", name, temp.path);
+	const paths = getCalibrationPaths("foo", name, temp.path);
+	createdPaths.push(paths);
+	return paths;
 }
 
 afterEach(() => {
@@ -455,6 +462,106 @@ describe("runCalibration", () => {
 			verdict: "DNF",
 			badVerdict: "invalid JSON (Bad control character)",
 			why: "verdict.json unusable (invalid JSON (Bad control character)) after 1 nudges",
+		});
+	});
+
+	describe("image rejection (issue #7)", () => {
+		const REJECTION = "This model doesn't support the image field for user messages. Remove image and try again.";
+		const WORKTREE = "/worktrees/c0001/repo";
+
+		/** A Cline model whose session files (real reader, fake files) play the agent: session `n` ends on `last`. */
+		function createImageHarness(sessions: Array<"rejection" | "stop" | "verdict">) {
+			const spec = createSpec({
+				sets: [{ id: "A", ref: "r1", base: "b1", fromCard: "f80db" }],
+				models: [{ key: "sol6", agent: "cline", provider: "bedrock", model: "us.openai.gpt-6-sol" }],
+				maxNudges: 6,
+			});
+			const temp = createTempDir("kanban-cline-sessions-");
+			tempDirs.push(temp);
+			const signals = createAgentRunSignals({
+				clineReader: createClineSessionFileReader(),
+				clineSessionsPath: temp.path,
+			});
+			let written = 0;
+			const writeSession = (index: number, at: number) => {
+				const kind = sessions[index] ?? "stop";
+				const last =
+					kind === "rejection"
+						? textMessage("assistant", REJECTION, at + 3)
+						: textMessage("assistant", "I looked at the page.", at + 3);
+				writeFakeClineSession(temp.path, {
+					sessionId: `${at}_s${index}`,
+					cwd: WORKTREE,
+					status: "idle",
+					startedAt: at,
+					messages: [
+						textMessage("user", "review it", at),
+						toolUse("read_files", at + 1),
+						toolResult(at + 2),
+						last,
+					],
+				});
+				return kind;
+			};
+			const created = createHarness({
+				spec,
+				paths: createPaths(),
+				signals,
+				onPoll: (h) => {
+					const card = h.cards[0];
+					if (!card || card.column === "trash") {
+						return;
+					}
+					// One session per conversation: the first at the start, then one after each /clear.
+					const clears = h.delivered.filter((entry) => entry.text === "/clear").length;
+					if (written <= clears) {
+						const kind = writeSession(written, h.now());
+						written += 1;
+						h.endTurn(card, kind === "verdict" ? { kind: "ok", verdict: verdictOf("PASS") } : undefined);
+					} else if (card.column !== "review") {
+						h.endTurn(card);
+					}
+				},
+			});
+			return created;
+		}
+
+		it("answers a rejection with the image recovery: /clear, then the run prompt with the no-images note", async () => {
+			const { harness, run } = createImageHarness(["rejection", "verdict"]);
+			const state = await run();
+			const prompt = harness.cards[0]?.input.prompt ?? "";
+			expect(harness.delivered.map((entry) => entry.text)).toEqual([
+				"/clear",
+				`${prompt}\n\nYour previous conversation was cleared: you opened an image file, your model doesn't accept images, and every later request failed. Your work so far is in this worktree (git status / git diff): continue the task from there. Never read image files (.png/.jpg/.gif/.webp); check screenshots through the screenshot tool's text report (status, console, outline) instead.`,
+			]);
+			// The prompt follows the clear once the TUI has started its new conversation.
+			expect((harness.delivered[1]?.at ?? 0) - (harness.delivered[0]?.at ?? 0)).toBe(1_500);
+			expect(state.runs["A-sol6"]).toMatchObject({ verdict: "PASS", nudges: 1, imageRecoveries: 1 });
+		});
+
+		it("ends the run DNF at once when the rejection repeats right after the image recovery", async () => {
+			const { harness, run } = createImageHarness(["rejection", "rejection"]);
+			const state = await run();
+			expect(harness.delivered.filter((entry) => entry.text === "/clear")).toHaveLength(1);
+			expect(harness.delivered).toHaveLength(2);
+			expect(state.runs["A-sol6"]).toMatchObject({ verdict: "DNF", why: IMAGE_REJECTION_REASON, nudges: 1 });
+			expect(harness.finished).toEqual(["c0001"]);
+			const saved = JSON.parse(await readFile(createdPaths.at(-1)?.state ?? "", "utf8")) as CalibrationState;
+			expect(saved.runs["A-sol6"]?.why).toBe("model rejects images");
+			expect(await readFile(createdPaths.at(-1)?.resultsMd ?? "", "utf8")).toContain("| DNF |");
+			expect(await readFile(createdPaths.at(-1)?.resultsMd ?? "", "utf8")).toContain("model rejects images");
+		});
+
+		it("still sends the usual nudges to a Cline run that stopped without a rejection", async () => {
+			const { harness, run } = createImageHarness(["stop"]);
+			const state = await run();
+			expect(harness.delivered).toHaveLength(6);
+			expect(harness.delivered.every((entry) => entry.text.startsWith("You stopped without writing"))).toBe(true);
+			expect(state.runs["A-sol6"]).toMatchObject({
+				verdict: "DNF",
+				why: "stopped without a verdict after 6 nudges",
+			});
+			expect(state.runs["A-sol6"]?.imageRecoveries).toBeUndefined();
 		});
 	});
 

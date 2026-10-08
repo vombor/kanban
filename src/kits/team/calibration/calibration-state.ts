@@ -22,6 +22,10 @@ export interface CalibrationRunState {
 	nudges?: number;
 	lastNudge?: number;
 	lastCostCheck?: number;
+	/** The last nudge was the image recovery (clear + resend); a rejection right after it ends the run DNF. */
+	imageRecoverySent?: boolean;
+	/** Image recoveries sent over the run. */
+	imageRecoveries?: number;
 	/** The first reason verdict.json was unusable (a judging fact: an invalid verdict disqualifies). */
 	badVerdict?: string;
 	/** Not started because its agent was signed out: the next run of the calibration retries it. */
