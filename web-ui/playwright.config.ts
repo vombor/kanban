@@ -6,6 +6,8 @@ const currentDir = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
 	testDir: "./tests",
+	// Mobile specs start their own dev instance: playwright.mobile.config.ts.
+	testIgnore: "mobile/**",
 	timeout: 30_000,
 	use: {
 		baseURL: "http://127.0.0.1:4173",

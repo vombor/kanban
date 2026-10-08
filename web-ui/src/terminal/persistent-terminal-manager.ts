@@ -35,6 +35,11 @@ import {
 	TerminalReconnectController,
 	type TerminalSocketKind,
 } from "@/terminal/terminal-reconnect-controller";
+import {
+	attachTerminalTouchScroll,
+	isTerminalScrolledUp,
+	resolveTouchScrollMode,
+} from "@/terminal/terminal-touch-scroll";
 import { isMacPlatform } from "@/utils/platform";
 
 const SHIFT_ENTER_SEQUENCE = "\n";
@@ -55,6 +60,7 @@ interface PersistentTerminalSubscriber {
 	onSummary?: (summary: RuntimeTaskSessionSummary) => void;
 	onOutputText?: (text: string) => void;
 	onReadiness?: (readiness: TerminalReadiness) => void;
+	onScrolledUp?: (isScrolledUp: boolean) => void;
 }
 
 interface MountPersistentTerminalOptions {
@@ -195,6 +201,8 @@ class PersistentTerminal {
 	private loadingTimedOut = false;
 	private loadingTimer: ReturnType<typeof setTimeout> | null = null;
 	private readiness: TerminalReadiness = { state: "loading", phase: "connecting" };
+	private isScrolledUp = false;
+	private readonly disposeTouchScroll: () => void;
 	private disposed = false;
 
 	constructor(
@@ -257,6 +265,30 @@ class PersistentTerminal {
 			return true;
 		});
 
+		this.terminal.onScroll(() => {
+			this.updateScrolledUp();
+		});
+		this.terminal.onWriteParsed(() => {
+			this.updateScrolledUp();
+		});
+		this.terminal.buffer.onBufferChange(() => {
+			this.updateScrolledUp();
+		});
+		this.disposeTouchScroll = attachTerminalTouchScroll(this.hostElement, {
+			getMode: () =>
+				resolveTouchScrollMode({
+					bufferType: this.terminal.buffer.active.type,
+					mouseTrackingMode: this.terminal.modes.mouseTrackingMode,
+				}),
+			getLineHeightPx: () => this.getLineHeightPx(),
+			scrollLines: (lines) => {
+				this.terminal.scrollLines(lines);
+			},
+			sendWheel: (direction, point, target) => {
+				this.sendWheelNotch(direction, point, target);
+			},
+		});
+
 		// Paste reaches xterm through its textarea's paste event, not the key handler.
 		this.hostElement.addEventListener(
 			"paste",
@@ -291,6 +323,51 @@ class PersistentTerminal {
 		this.setInputEnabled(false);
 		this.openSockets();
 		this.updateReadiness();
+	}
+
+	private getLineHeightPx(): number {
+		const screen = this.terminal.element?.querySelector(".xterm-screen");
+		const height = screen instanceof HTMLElement ? screen.getBoundingClientRect().height : 0;
+		if (height > 0 && this.terminal.rows > 0) {
+			return height / this.terminal.rows;
+		}
+		return (this.terminal.options.fontSize ?? 13) * (this.terminal.options.lineHeight ?? 1);
+	}
+
+	// A synthetic wheel event where the finger is: xterm encodes it as the
+	// report the app asked for (SGR or X10, at the cell under the finger), just
+	// like a desktop wheel notch.
+	private sendWheelNotch(
+		direction: 1 | -1,
+		point: { clientX: number; clientY: number },
+		target: EventTarget | null,
+	): void {
+		const element = this.terminal.element;
+		if (!element) {
+			return;
+		}
+		const dispatchTarget = target instanceof Node && element.contains(target) ? target : element;
+		dispatchTarget.dispatchEvent(
+			new WheelEvent("wheel", {
+				bubbles: true,
+				cancelable: true,
+				clientX: point.clientX,
+				clientY: point.clientY,
+				deltaMode: WheelEvent.DOM_DELTA_LINE,
+				deltaY: direction,
+			}),
+		);
+	}
+
+	private updateScrolledUp(): void {
+		const isScrolledUp = isTerminalScrolledUp(this.terminal.buffer.active);
+		if (isScrolledUp === this.isScrolledUp) {
+			return;
+		}
+		this.isScrolledUp = isScrolledUp;
+		for (const subscriber of this.subscribers) {
+			subscriber.onScrolledUp?.(isScrolledUp);
+		}
 	}
 
 	private notifyLastError(): void {
@@ -703,6 +780,7 @@ class PersistentTerminal {
 		subscriber.onLastError?.(this.lastError);
 		subscriber.onConnectionStatus?.(this.reconnect.getStatus());
 		subscriber.onReadiness?.(this.readiness);
+		subscriber.onScrolledUp?.(this.isScrolledUp);
 		if (this.latestSummary) {
 			subscriber.onSummary?.(this.latestSummary);
 		}
@@ -781,6 +859,10 @@ class PersistentTerminal {
 		this.reconnect.retryNow();
 	}
 
+	scrollToBottom(): void {
+		this.terminal.scrollToBottom();
+	}
+
 	input(text: string): boolean {
 		if (!this.isIoOpen()) {
 			return false;
@@ -805,6 +887,7 @@ class PersistentTerminal {
 					return;
 				}
 				this.terminal.clear();
+				this.updateScrolledUp();
 			});
 	}
 
@@ -892,6 +975,7 @@ class PersistentTerminal {
 		}
 		this.disposed = true;
 		this.clearLoadingTimer();
+		this.disposeTouchScroll();
 		this.reconnect.dispose();
 		this.unmount(this.visibleContainer);
 		this.closeSockets();

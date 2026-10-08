@@ -30,7 +30,10 @@ export interface UsePersistentTerminalSessionResult {
 	// Null while no terminal is attached (disabled, or no project).
 	readiness: TerminalReadiness | null;
 	isStopping: boolean;
+	// The viewport is above the newest output (normal buffer only).
+	isScrolledUp: boolean;
 	clearTerminal: () => void;
+	scrollToBottom: () => void;
 	stopTerminal: () => Promise<void>;
 	retryConnection: () => void;
 }
@@ -68,6 +71,7 @@ export function usePersistentTerminalSession({
 	const [connectionStatus, setConnectionStatus] = useState<TerminalConnectionStatus | null>(null);
 	const [readiness, setReadiness] = useState<TerminalReadiness | null>(null);
 	const [isStopping, setIsStopping] = useState(false);
+	const [isScrolledUp, setIsScrolledUp] = useState(false);
 	callbackRef.current = {
 		onSummary,
 		onConnectionReady,
@@ -85,6 +89,7 @@ export function usePersistentTerminalSession({
 			setLastError(null);
 			setConnectionStatus(null);
 			setReadiness(null);
+			setIsScrolledUp(false);
 			setIsStopping(false);
 			return;
 		}
@@ -100,6 +105,7 @@ export function usePersistentTerminalSession({
 			setLastError("No project selected.");
 			setConnectionStatus(null);
 			setReadiness(null);
+			setIsScrolledUp(false);
 			return;
 		}
 		const container = containerRef.current;
@@ -136,6 +142,7 @@ export function usePersistentTerminalSession({
 			onConnectionStatus: setConnectionStatus,
 			onLastError: setLastError,
 			onReadiness: setReadiness,
+			onScrolledUp: setIsScrolledUp,
 			onSummary: (summary) => {
 				callbackRef.current.onSummary?.(summary);
 			},
@@ -202,6 +209,10 @@ export function usePersistentTerminalSession({
 		terminalRef.current?.clear();
 	}, []);
 
+	const scrollToBottom = useCallback(() => {
+		terminalRef.current?.scrollToBottom();
+	}, []);
+
 	const retryConnection = useCallback(() => {
 		terminalRef.current?.retryConnection();
 	}, []);
@@ -212,7 +223,9 @@ export function usePersistentTerminalSession({
 		connectionStatus,
 		readiness,
 		isStopping,
+		isScrolledUp,
 		clearTerminal,
+		scrollToBottom,
 		stopTerminal,
 		retryConnection,
 	};

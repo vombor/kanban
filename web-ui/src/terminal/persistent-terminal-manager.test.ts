@@ -24,6 +24,16 @@ const fakeTerminals = vi.hoisted(() => {
 		// When set, write callbacks wait for releaseWrites(), like a busy renderer.
 		deferWrites = false;
 		unicode = { activeVersion: "" };
+		modes = { mouseTrackingMode: "none" };
+		element: HTMLElement | undefined = undefined;
+		// The active buffer's scroll position: scrolled up while viewportY < baseY.
+		activeBuffer = { type: "normal" as "normal" | "alternate", viewportY: 0, baseY: 0 };
+		buffer = {
+			active: this.activeBuffer,
+			onBufferChange: (listener: () => void) => this.listen(this.scrollListeners, listener),
+		};
+		scrollToBottomCount = 0;
+		private readonly scrollListeners: Array<() => void> = [];
 		private deferredCallbacks: Array<() => void> = [];
 		private readonly dataListeners: Array<(data: string) => void> = [];
 		private keyEventHandler: ((event: KeyboardEvent) => boolean) | null = null;
@@ -35,6 +45,29 @@ const fakeTerminals = vi.hoisted(() => {
 			FakeTerminal.instances.push(this);
 		}
 
+		private listen(listeners: Array<() => void>, listener: () => void): { dispose: () => void } {
+			listeners.push(listener);
+			return { dispose: () => {} };
+		}
+		onScroll(listener: () => void): { dispose: () => void } {
+			return this.listen(this.scrollListeners, listener);
+		}
+		onWriteParsed(listener: () => void): { dispose: () => void } {
+			return this.listen(this.scrollListeners, listener);
+		}
+		// The user (or output) moved the viewport.
+		setScrollPosition(viewportY: number, baseY: number): void {
+			this.activeBuffer.viewportY = viewportY;
+			this.activeBuffer.baseY = baseY;
+			for (const listener of this.scrollListeners) {
+				listener();
+			}
+		}
+		scrollLines(): void {}
+		scrollToBottom(): void {
+			this.scrollToBottomCount += 1;
+			this.setScrollPosition(this.activeBuffer.baseY, this.activeBuffer.baseY);
+		}
 		loadAddon(): void {}
 		open(): void {}
 		attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean): void {
@@ -732,5 +765,64 @@ describe("persistent terminal readiness", () => {
 			latestSocket("stream").serverClose(1006);
 		}
 		expect(latestReadiness()).toEqual({ state: "unavailable", reason: "disconnected" });
+	});
+});
+
+describe("persistent terminal scroll state", () => {
+	const workspaceId = "workspace-1";
+	let taskId: string;
+
+	beforeEach(() => {
+		nextTaskNumber += 1;
+		taskId = `task-${nextTaskNumber}`;
+		FakeWebSocket.instances = [];
+		fakeTerminals.FakeTerminal.instances = [];
+		vi.stubGlobal("WebSocket", FakeWebSocket);
+	});
+
+	afterEach(() => {
+		disposePersistentTerminal(workspaceId, taskId);
+		vi.unstubAllGlobals();
+	});
+
+	function createTerminal(scrolledUp: boolean[]) {
+		const terminal = ensurePersistentTerminal({
+			taskId,
+			workspaceId,
+			cursorColor: "#fff",
+			terminalBackgroundColor: "#000",
+		});
+		terminal.subscribe({
+			onScrolledUp: (next) => {
+				scrolledUp.push(next);
+			},
+		});
+		return terminal;
+	}
+
+	it("reports when the viewport is above the newest output, and jumps back to the bottom", () => {
+		const scrolledUp: boolean[] = [];
+		const terminal = createTerminal(scrolledUp);
+		const fake = latestTerminal();
+		fake.setScrollPosition(100, 100);
+		expect(scrolledUp).toEqual([false]);
+
+		fake.setScrollPosition(40, 100);
+		// New output while scrolled up keeps the viewport where it is.
+		fake.setScrollPosition(40, 120);
+		expect(scrolledUp).toEqual([false, true]);
+
+		terminal.scrollToBottom();
+		expect(fake.scrollToBottomCount).toBe(1);
+		expect(scrolledUp).toEqual([false, true, false]);
+	});
+
+	it("is never scrolled up on the alternate screen, which has no scrollback", () => {
+		const scrolledUp: boolean[] = [];
+		createTerminal(scrolledUp);
+		const fake = latestTerminal();
+		fake.activeBuffer.type = "alternate";
+		fake.setScrollPosition(0, 100);
+		expect(scrolledUp).toEqual([false]);
 	});
 });
