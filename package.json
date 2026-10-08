@@ -1,6 +1,6 @@
 {
 	"name": "@vombor/kanban",
-	"version": "0.1.70-fork.4",
+	"version": "0.1.70-fork.5",
 	"description": "A kanban foundation for coding agents",
 	"publishConfig": {
 		"registry": "https://npm.pkg.github.com"

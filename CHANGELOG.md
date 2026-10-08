@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.1.70-fork.5]
+
+The fork is now published as `@vombor/kanban` on GitHub Packages (it was `kanban` on npm). GitHub Packages needs a classic personal access token with `read:packages`, even to install. Add to `~/.npmrc`:
+
+```ini
+@vombor:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
+```
+
+Then `npm i -g @vombor/kanban@next` (fork versions are prereleases on the `next` tag).
+
+Fixes
+- Terminals reconnect on their own after a dropped websocket, restore their output, and show the connection status
+- The server saves session summaries itself, so a browser save can no longer roll them back and restart recovery sees every card
+- After an unexpected restart, cards whose session died are marked interrupted instead of "running", and their QA is redone
+- Each Cline card gets its own `.cline/hooks`, and every Kanban Cline hook checks it belongs to its card, so one card's hooks no longer move another card
+- Tests and git hooks can no longer redirect git commands into the real repository; a project whose repository is broken is reported, never removed
+- Restart recovery works across a Kanban home move; the Kanban home is `KANBAN_HOME` or `~/.kanban`, with no fallbacks
+
+Features
+- QA gate: on projects with landing mode `qa`, finished cards are snapshotted, run the project's lint and test scripts, get a QA card, and land on PASS
+- Rework loop: a FAIL sends the card back with QA's findings, escalates to another model, or runs a runoff between models, as the project's kit says
+- Recovery nudges stalled agents, retries provider errors, waits out outages, and detects Cline cards that went silent mid-tool
+- Restart recovery resumes orphaned cards after a restart (Claude cards keep their conversation) and replaces dead QA cards; the server writes the restart manifest periodically, so even a crash leaves a recent one
+- Watchdog: reports stalls in ATTENTION.md and wakes only the project's own orchestrator (`workspaces.<id>.orchestrator.wake`); after a restart it reports cards still held, and Review cards whose dead QA card wasn't replaced
+- Project isolation (`isolation.mode` off/report/enforce, default off): each agent session works only on its own project; agents can never create, add or remove projects
+- `kanban message`: orchestrators of different projects can message each other; the receiver gets a notice, never typed-in text
+- Plan cards turn a requirement into a reviewed spec and a card breakdown; `kanban plan approve`/`expand` and the Approve plan button only accept the user's approval
+- Issue import (`workspaces.<id>.issues`, default off): issues from the project's own GitHub repository become Backlog cards; only trusted authors' text is used, and a land adds `Fixes #N`
+- Task history: every Done move and task delete records who asked and what happened (`kanban task history`)
+- `kanban doctor`, `kanban setup`, `kanban project add --kit` and per-project routing kits choose the agent and model for each new card
+- Session sync: the server moves cards between In Progress and Review, after the turn has settled
+- Agent guardrails keep task agents inside their worktrees and away from shared-branch pushes
+- New project, clone and open folder from Kanban, only under the projects root
+- Board cards show their task id
+- Lemonade models for Cline: `kanban setup` and `kanban doctor` compare the settings and print `kanban cline apply-lemonade-models`; nothing is written until you run it
+- `kanban project rename-id` changes a project's internal workspace id (server stopped, backup, dry run)
+- Releases are published to GitHub Packages on version tags; one classic PAT (`GH_TOKEN` in the container, `GH_PAT` in CI) covers all GitHub auth, while Copilot keeps its own login
+- The container image includes the GitHub CLI and prepares a restart when it stops
+
+Removals
+- `orchestrator.wake.target` is removed: there is no cross-project wake; `kanban doctor --fix` migrates old configs
+
+Security
+- Kanban writes nothing under `~/.cline`: Cline rules go into each worktree, notices are turned off through the environment, provider settings are only checked, and the debug reset never deletes Cline's data
+- `GH_TOKEN`, `GITHUB_TOKEN` and `AWS_BEARER_TOKEN_BEDROCK` are hidden from a project's scripted checks
+
 ## [0.1.70-fork.4]
 
 Fixes
