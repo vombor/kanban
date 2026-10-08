@@ -4,13 +4,26 @@
 // workspace is scoped to its own project instead of the server's active one.
 import type { IncomingMessage } from "node:http";
 
-import type { IsolationService } from "../isolation/isolation-service";
+import type { CallerRequest, IsolationService } from "../isolation/isolation-service";
 import { KANBAN_SESSION_CREDENTIAL_HEADER, type RuntimeCaller } from "../isolation/session-identity";
 
 export function readRequestHeader(request: IncomingMessage, name: string): string | null {
 	const value = request.headers[name];
 	const first = Array.isArray(value) ? value[0] : value;
 	return typeof first === "string" && first.trim() ? first.trim() : null;
+}
+
+/** The request as the isolation service's caller lookup takes it: credential header and loopback connection. */
+export function buildCallerRequest(request: IncomingMessage): CallerRequest {
+	return {
+		credential: readRequestHeader(request, KANBAN_SESSION_CREDENTIAL_HEADER),
+		connection: {
+			remoteAddress: request.socket.remoteAddress,
+			remotePort: request.socket.remotePort,
+			localPort: request.socket.localPort,
+		},
+		connectionKey: request.socket,
+	};
 }
 
 export interface RequestCallerScope {
@@ -30,18 +43,7 @@ export interface RequestCallerResolver {
 export function createRequestCallerResolver(isolation: IsolationService): RequestCallerResolver {
 	const resolveRequestCaller: RequestCallerResolver["resolveRequestCaller"] = async (request, strict = false) =>
 		await isolation
-			.resolveCaller(
-				{
-					credential: readRequestHeader(request, KANBAN_SESSION_CREDENTIAL_HEADER),
-					connection: {
-						remoteAddress: request.socket.remoteAddress,
-						remotePort: request.socket.remotePort,
-						localPort: request.socket.localPort,
-					},
-					connectionKey: request.socket,
-				},
-				{ strict },
-			)
+			.resolveCaller(buildCallerRequest(request), { strict })
 			// A lookup that fails is the user's request, as before isolation (config errors never lock the user out),
 			// except for the strict lookups of grants, approvals and project changes.
 			.catch(

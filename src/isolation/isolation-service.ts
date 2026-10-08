@@ -34,7 +34,10 @@ import {
 	type AgentSessionIdentity,
 	type CredentialEntry,
 	createSessionCredentialRegistry,
+	describeCaller,
 	getSessionRole,
+	MAX_CHILD_CREDENTIALS_PER_SESSION,
+	MAX_UNBOUND_CHILD_CREDENTIALS_PER_SESSION,
 	type RuntimeCaller,
 	type SessionCredentialRegistry,
 	USER_CALLER,
@@ -79,10 +82,24 @@ export interface IsolationService {
 	readConfig: () => Promise<PipelineConfig>;
 	/** Issues a session's credential and drops the ones of sessions that are gone. */
 	issueCredential: (identity: AgentSessionIdentity) => string;
-	/** Revokes the credentials of sessions that have ended (the server runs it every few seconds). */
-	pruneCredentials: () => void;
+	/**
+	 * Revokes the credentials of sessions that have ended (the server runs it every few seconds). The dead pids go at
+	 * once; the returned promise settles after the /proc check of bound child credentials (a reused pid).
+	 */
+	pruneCredentials: () => Promise<void>;
 	/** Binds a headless run's credential to its pid (the root of its process tree). */
 	bindCredential: (credential: string, pid: number) => boolean;
+	/**
+	 * A child credential for a detached process the calling session is about to spawn (`kanban bench calibrate`):
+	 * same workspace, task and role, unusable until `bindChildCredential`. Only a session calling from its own
+	 * process tree with its own credential gets one.
+	 */
+	issueChildCredential: (request: CallerRequest) => Promise<ChildCredentialResult>;
+	/**
+	 * Binds a child credential to `pid`, which must be a live child of the calling process (its /proc parent), and the
+	 * caller the session the credential was issued to. The credential stops working when that process exits.
+	 */
+	bindChildCredential: (request: CallerRequest, credential: string, pid: number) => Promise<ChildCredentialResult>;
 	resolveCaller: (request: CallerRequest, options?: { strict?: boolean }) => Promise<RuntimeCaller>;
 	/** The decision on a reach, not logged (listings, whoami). */
 	peekWorkspaceAccess: (
@@ -97,12 +114,13 @@ export interface IsolationService {
 		action: string,
 		config?: PipelineConfig,
 	) => Promise<WorkspaceAccessDecision>;
-	/** A project create/add/remove, decided and logged when refused. */
+	/** A project create/add/remove, decided and logged when refused. `target`: the path or project it names. */
 	checkProjectChange: (
 		caller: RuntimeCaller,
 		kind: ProjectChangeKind,
 		targetWorkspaceId: string | null,
 		action: string,
+		target?: string | null,
 	) => Promise<{ allowed: true } | { allowed: false; message: string }>;
 	log: (
 		workspaceIds: readonly (string | null)[],
@@ -116,6 +134,8 @@ export interface IsolationService {
 		},
 	) => Promise<void>;
 }
+
+export type ChildCredentialResult = { ok: true; credential: string } | { ok: false; error: string };
 
 const CONFIG_CACHE_MS = 2_000;
 const CREDENTIAL_START_GRACE_MS = 60_000;
@@ -210,10 +230,28 @@ export function createIsolationService(deps: IsolationServiceDependencies): Isol
 		return await cachedConfig.config;
 	};
 
-	/** The pid at the root of a credential's session tree, or null when the session is no longer live. */
-	const sessionRootPid = (entry: CredentialEntry, live: readonly LiveAgentSession[]): number | null => {
+	/**
+	 * The pid at the root of a credential's session tree, or null when the session is no longer live. With
+	 * `processes` (a /proc read) a bound process must still have its start time, so a reused pid isn't it.
+	 */
+	const sessionRootPid = (
+		entry: CredentialEntry,
+		live: readonly LiveAgentSession[],
+		processes?: readonly ProcessEntry[],
+	): number | null => {
 		if (entry.boundPid !== null) {
-			return isPidAlive(entry.boundPid) ? entry.boundPid : null;
+			if (!isPidAlive(entry.boundPid)) {
+				return null;
+			}
+			if (processes && entry.boundStartTime !== null) {
+				const bound = processes.find((candidate) => candidate.pid === entry.boundPid);
+				return bound?.startTime === entry.boundStartTime ? entry.boundPid : null;
+			}
+			return entry.boundPid;
+		}
+		if (entry.child) {
+			// Not bound yet: it stands for no process at all (never its parent session's tree).
+			return null;
 		}
 		const session = live.find(
 			(candidate) =>
@@ -222,17 +260,35 @@ export function createIsolationService(deps: IsolationServiceDependencies): Isol
 		return session?.live && typeof session.pid === "number" && session.pid > 0 ? session.pid : null;
 	};
 
-	const pruneCredentials = () => {
+	const pruneCredentials = async () => {
 		const live = deps.listLiveSessions();
 		// A credential is issued just before its process starts (and a headless run's is bound right after its spawn):
 		// until then it has no root and must stay.
 		credentials.prune(
 			(entry) => sessionRootPid(entry, live) !== null || now() - entry.issuedAt < CREDENTIAL_START_GRACE_MS,
 		);
+		// A bound child whose pid now has another start time has exited, and its pid was reused.
+		const reader = deps.processReader;
+		if (!reader) {
+			return;
+		}
+		const stale = new Set<string>();
+		for (const entry of credentials.list()) {
+			if (!entry.child || entry.boundPid === null || entry.boundStartTime === null) {
+				continue;
+			}
+			const current = await reader.read(entry.boundPid).catch(() => null);
+			if (current?.startTime !== entry.boundStartTime) {
+				stale.add(`${entry.boundPid}:${entry.boundStartTime}`);
+			}
+		}
+		if (stale.size > 0) {
+			credentials.prune((entry) => !(entry.child && stale.has(`${entry.boundPid}:${entry.boundStartTime}`)));
+		}
 	};
 
 	const issueCredential: IsolationService["issueCredential"] = (identity) => {
-		pruneCredentials();
+		void pruneCredentials().catch(() => undefined);
 		return credentials.issue(identity);
 	};
 
@@ -264,7 +320,7 @@ export function createIsolationService(deps: IsolationServiceDependencies): Isol
 		const registered = credentials.list().filter((candidate) => candidate.identity.agentId === agentId);
 		// A call from inside one of the agent's PTY trees is that session's.
 		for (const pid of chain) {
-			const session = registered.find((candidate) => sessionRootPid(candidate, live) === pid);
+			const session = registered.find((candidate) => sessionRootPid(candidate, live, peer.processes) === pid);
 			if (session) {
 				return { kind: "session", session: session.identity, via: "credential" };
 			}
@@ -278,7 +334,7 @@ export function createIsolationService(deps: IsolationServiceDependencies): Isol
 		const match = cwd
 			? deepestContaining(
 					registered
-						.filter((candidate) => sessionRootPid(candidate, live) !== null)
+						.filter((candidate) => sessionRootPid(candidate, live, peer.processes) !== null)
 						.map((candidate) => candidate.identity),
 					cwd,
 				)
@@ -297,7 +353,8 @@ export function createIsolationService(deps: IsolationServiceDependencies): Isol
 				return unknown("not a live session's credential");
 			}
 			const rootPid = sessionRootPid(entry, live);
-			const sharedDaemon = sharesProcessEnvAcrossSessions(entry.identity.agentId);
+			// A child credential is in its own process's env only, never in a shared daemon's.
+			const sharedDaemon = !entry.child && sharesProcessEnvAcrossSessions(entry.identity.agentId);
 			if (rootPid === null && !sharedDaemon) {
 				return unknown("its session has ended");
 			}
@@ -313,7 +370,8 @@ export function createIsolationService(deps: IsolationServiceDependencies): Isol
 			if (sharedDaemon) {
 				return resolveSharedDaemonCaller(entry, chain, peer, live);
 			}
-			return rootPid !== null && chain.includes(rootPid)
+			const tracedRoot = sessionRootPid(entry, live, peer.processes);
+			return tracedRoot !== null && chain.includes(tracedRoot)
 				? { kind: "session", session: entry.identity, via: "credential" }
 				: unknown("credential used outside its session's process tree");
 		}
@@ -328,7 +386,7 @@ export function createIsolationService(deps: IsolationServiceDependencies): Isol
 			return USER_CALLER;
 		}
 		for (const pid of listParentChain(peer.pid, peer.processes)) {
-			const registered = credentials.list().find((entry) => sessionRootPid(entry, live) === pid);
+			const registered = credentials.list().find((entry) => sessionRootPid(entry, live, peer.processes) === pid);
 			if (registered) {
 				return { kind: "session", session: registered.identity, via: "process" };
 			}
@@ -354,7 +412,91 @@ export function createIsolationService(deps: IsolationServiceDependencies): Isol
 		return USER_CALLER;
 	};
 
-	const peekWorkspaceAccess: IsolationService["peekWorkspaceAccess"] = (caller, toWorkspaceId, config) =>
+	/** The session calling from its own tree with its own (not a child) credential, and the calling process. */
+	const resolveCredentialOwner = async (
+		request: CallerRequest,
+	): Promise<{ ok: true; session: AgentSessionIdentity; peerPid: number } | { ok: false; error: string }> => {
+		if (!deps.processReader) {
+			return { ok: false, error: "the server can't check process trees here (no /proc)" };
+		}
+		const entry = credentials.resolve(request.credential);
+		if (!entry) {
+			return { ok: false, error: "only an agent session with its own credential can ask for one" };
+		}
+		if (entry.child) {
+			return { ok: false, error: "a child credential can't hand out further ones" };
+		}
+		const caller = await resolveCaller(request);
+		if (caller.kind !== "session" || caller.via !== "credential") {
+			return {
+				ok: false,
+				error: `the caller is ${caller.kind === "session" ? `card ${caller.session.taskId} by its cwd` : describeCaller(caller)}, not a session calling from its own process tree`,
+			};
+		}
+		const peer = await lookUpPeer(request);
+		if (!peer) {
+			return { ok: false, error: "the calling process could not be traced" };
+		}
+		return { ok: true, session: caller.session, peerPid: peer.pid };
+	};
+
+	const issueChildCredential: IsolationService["issueChildCredential"] = async (request) => {
+		const owner = await resolveCredentialOwner(request);
+		if (!owner.ok) {
+			return owner;
+		}
+		await pruneCredentials();
+		const credential = credentials.issueChild(owner.session);
+		if (!credential) {
+			return {
+				ok: false,
+				error: `the session already holds its ${MAX_UNBOUND_CHILD_CREDENTIALS_PER_SESSION} unbound (or ${MAX_CHILD_CREDENTIALS_PER_SESSION}) child credentials, or the server has no room for another`,
+			};
+		}
+		return { ok: true, credential };
+	};
+
+	const bindChildCredential: IsolationService["bindChildCredential"] = async (request, credential, pid) => {
+		const owner = await resolveCredentialOwner(request);
+		if (!owner.ok) {
+			return owner;
+		}
+		const child = credentials.resolve(credential);
+		if (
+			!child?.child ||
+			child.identity.workspaceId !== owner.session.workspaceId ||
+			child.identity.taskId !== owner.session.taskId
+		) {
+			return { ok: false, error: "not a child credential of the calling session" };
+		}
+		if (child.boundPid !== null) {
+			return { ok: false, error: "that child credential is already bound" };
+		}
+		// Read at bind time: the process must be the caller's own child, alive (not a zombie).
+		const target = deps.processReader ? await deps.processReader.read(pid).catch(() => null) : null;
+		if (!target || target.state === "Z" || target.ppid !== owner.peerPid) {
+			return { ok: false, error: `process ${pid} is not a live child of the calling process` };
+		}
+		if (!credentials.bindChild(credential, pid, target.startTime)) {
+			return { ok: false, error: "the child credential could not be bound" };
+		}
+		await log([owner.session.workspaceId], {
+			kind: "child_credential",
+			taskId: owner.session.taskId,
+			from: owner.session.workspaceId,
+			to: owner.session.workspaceId,
+			action: "isolation.bindChildCredential",
+			detail: `bound to pid ${pid} (child of ${owner.peerPid})`,
+		});
+		return { ok: true, credential };
+	};
+
+	const decideAccess = (
+		caller: RuntimeCaller,
+		toWorkspaceId: string,
+		config: PipelineConfig,
+		action?: string,
+	): WorkspaceAccessDecision =>
 		caller.kind === "user" || (caller.kind === "session" && caller.session.workspaceId === toWorkspaceId)
 			? { outcome: "allow", mode: "off" }
 			: decideWorkspaceAccess({
@@ -362,7 +504,10 @@ export function createIsolationService(deps: IsolationServiceDependencies): Isol
 					caller,
 					toWorkspaceId,
 					grant: caller.kind === "session" ? grants.find(caller.session, toWorkspaceId) : null,
+					action,
 				});
+	const peekWorkspaceAccess: IsolationService["peekWorkspaceAccess"] = (caller, toWorkspaceId, config) =>
+		decideAccess(caller, toWorkspaceId, config);
 
 	const checkWorkspaceAccess: IsolationService["checkWorkspaceAccess"] = async (
 		caller,
@@ -373,7 +518,7 @@ export function createIsolationService(deps: IsolationServiceDependencies): Isol
 		if (caller.kind === "user" || (caller.kind === "session" && caller.session.workspaceId === toWorkspaceId)) {
 			return { outcome: "allow", mode: "off" };
 		}
-		const decision = peekWorkspaceAccess(caller, toWorkspaceId, config ?? (await readConfig()));
+		const decision = decideAccess(caller, toWorkspaceId, config ?? (await readConfig()), action);
 		const base =
 			caller.kind === "session"
 				? { taskId: caller.session.taskId, from: caller.session.workspaceId, to: toWorkspaceId, action }
@@ -400,8 +545,9 @@ export function createIsolationService(deps: IsolationServiceDependencies): Isol
 		kind,
 		targetWorkspaceId,
 		action,
+		target,
 	) => {
-		const decision = decideProjectChange({ caller, kind, targetWorkspaceId });
+		const decision = decideProjectChange({ caller, kind, targetWorkspaceId, target });
 		if (!decision.allowed && caller.kind !== "user") {
 			await log([caller.kind === "session" ? caller.session.workspaceId : null, targetWorkspaceId], {
 				kind: "project_change_refused",
@@ -423,6 +569,8 @@ export function createIsolationService(deps: IsolationServiceDependencies): Isol
 		issueCredential,
 		pruneCredentials,
 		bindCredential: (credential, pid) => credentials.bindPid(credential, pid),
+		issueChildCredential,
+		bindChildCredential,
 		resolveCaller,
 		peekWorkspaceAccess,
 		checkWorkspaceAccess,

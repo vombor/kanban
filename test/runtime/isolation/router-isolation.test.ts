@@ -251,6 +251,69 @@ describe("project create/add/remove are the user's, whatever the mode", () => {
 	});
 });
 
+describe("an already registered project never hits the project-add check (issue #6)", () => {
+	const DETACHED: RuntimeCaller = { kind: "unknown", reason: "credential used outside its session's process tree" };
+
+	it("an unidentified caller re-adding a registered project is only a reach: allowed with isolation off", async () => {
+		const harness = setup({});
+		await expect(harness.caller(DETACHED, null).projects.add({ path: "/projects/a" })).rejects.toThrow(REACHED);
+		expect(harness.addProject).toHaveBeenCalledTimes(1);
+	});
+
+	it("under enforce it is refused as a reach into that project, never as registering one", async () => {
+		const harness = setup({ isolation: { mode: "enforce" } });
+		const refused = harness.caller(DETACHED, null).projects.add({ path: "/projects/a" });
+		await expect(refused).rejects.toMatchObject({
+			code: "FORBIDDEN",
+			message: expect.stringContaining('refused "open the already registered project in project a"'),
+		});
+		await expect(refused).rejects.not.toMatchObject({ message: expect.stringContaining("as a Kanban project") });
+		expect(harness.addProject).not.toHaveBeenCalled();
+	});
+
+	it("another project's session re-adding it is refused in every mode, naming that project", async () => {
+		const harness = setup({});
+		await expect(harness.caller(orchestrator("a"), null).projects.add({ path: "/projects/b" })).rejects.toMatchObject(
+			{
+				code: "FORBIDDEN",
+				message: expect.stringContaining(
+					'Project isolation refused "open the already registered project in project b": the orchestrator of a',
+				),
+			},
+		);
+	});
+});
+
+describe("refusal texts name the refused action", () => {
+	it("names the action and project for sessions and unidentified callers", async () => {
+		const harness = setup({ isolation: { mode: "enforce" } });
+		await expect(
+			harness.caller(orchestrator("a"), "b").runtime.startTaskSession({ taskId: "t1" } as never),
+		).rejects.toMatchObject({ message: expect.stringContaining('refused "start a task in project b"') });
+		await expect(
+			harness.caller({ kind: "unknown", reason: "not a live session's credential" }, "a").workspace.getState(),
+		).rejects.toMatchObject({
+			message: expect.stringContaining(
+				'refused "read the board in project a": the caller is an unidentified agent session',
+			),
+		});
+	});
+
+	it("names the path a refused registration or create names", async () => {
+		const harness = setup({});
+		const fromA = harness.caller(orchestrator("a"), null);
+		await expect(fromA.projects.add({ path: "/projects/new" })).rejects.toMatchObject({
+			message: expect.stringContaining("Only the user can register /projects/new as a Kanban project"),
+		});
+		await expect(fromA.projects.create({ path: "/projects/new" })).rejects.toMatchObject({
+			message: expect.stringContaining("Only the user can create a Kanban project at /projects/new"),
+		});
+		await expect(fromA.projects.remove({ projectId: "b" })).rejects.toMatchObject({
+			message: expect.stringContaining("Only the user can remove project b"),
+		});
+	});
+});
+
 describe("orchestrator messages", () => {
 	const allowBoth = {
 		workspaces: { a: { isolation: { messages: "allow" } }, b: { isolation: { messages: "allow" } } },

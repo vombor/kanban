@@ -329,6 +329,9 @@ export function registerBenchCommand(program: Command): void {
 		.option("--print", "Check the inputs (dev prompts, refs) without creating cards.")
 		.option("--force", "Run on a workspace whose kit doesn't list the calibration feature.")
 		.addOption(new Option("--worker", "The detached runner (started by calibrate itself).").hideHelp())
+		.addOption(
+			new Option("--await-identity", "The worker waits for its child credential to be bound (stdin).").hideHelp(),
+		)
 		.action(runAction("calibrate", (spec: string, options: CalibrateOptions) => runCalibrateCommand(spec, options)));
 	registerBenchRunoffCommands(bench, runAction);
 }

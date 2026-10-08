@@ -136,6 +136,7 @@ import {
 	runtimeWorktreeEnsureResponseSchema,
 } from "../core/api-contract";
 import { isHomeAgentSessionId, isHomeAgentSessionIdForWorkspace } from "../core/home-agent-session";
+import type { CallerRequest } from "../isolation/isolation-service";
 import type { RuntimeCaller } from "../isolation/session-identity";
 import {
 	isolationApprovalRequestResponseSchema,
@@ -143,6 +144,8 @@ import {
 	isolationApprovalStatusResponseSchema,
 	isolationApproveRequestSchema,
 	isolationApproveResponseSchema,
+	isolationBindChildCredentialRequestSchema,
+	isolationChildCredentialResponseSchema,
 	isolationGrantRequestSchema,
 	isolationGrantResponseSchema,
 	isolationGrantsResponseSchema,
@@ -180,6 +183,8 @@ export interface RuntimeTrpcContext {
 	 * it); wins over `caller`.
 	 */
 	getCaller?: () => Promise<RuntimeCaller>;
+	/** The raw request for the isolation service's own lookups (child credentials); absent in-process. */
+	callerRequest?: CallerRequest;
 	/** The caller with the process-tree lookup forced on, for grants, approvals and project changes. */
 	resolveStrictCaller?: () => Promise<RuntimeCaller>;
 	/** A passcode-authenticated browser session (remote mode): the user, so project changes need no approval. */
@@ -754,6 +759,23 @@ export const runtimeAppRouter = t.router({
 					return { ok: false, grant: null, approvalId: null, error: "Project isolation is not available here." };
 				}
 				return await ctx.isolationApi.revoke(await readStrictCaller(ctx), input.id);
+			}),
+		// A detached process of the calling session (`kanban bench calibrate`) gets a credential of its own, bound to
+		// its pid: same workspace, task and role, ending when that process exits (docs/fork/project-isolation.md).
+		issueChildCredential: t.procedure.output(isolationChildCredentialResponseSchema).mutation(async ({ ctx }) => {
+			if (!ctx.isolationApi) {
+				return { ok: false, credential: null, error: "Project isolation is not available here." };
+			}
+			return await ctx.isolationApi.issueChildCredential(ctx.callerRequest ?? null);
+		}),
+		bindChildCredential: t.procedure
+			.input(isolationBindChildCredentialRequestSchema)
+			.output(isolationChildCredentialResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.isolationApi) {
+					return { ok: false, credential: null, error: "Project isolation is not available here." };
+				}
+				return await ctx.isolationApi.bindChildCredential(ctx.callerRequest ?? null, input);
 			}),
 		grants: t.procedure.output(isolationGrantsResponseSchema).query(async ({ ctx }) => {
 			return ctx.isolationApi ? await ctx.isolationApi.listGrants(await readCaller(ctx)) : { grants: [] };

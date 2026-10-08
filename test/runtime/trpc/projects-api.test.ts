@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { RuntimeProjectTaskCounts } from "../../../src/core/api-contract";
 import { resolveProjectRoots } from "../../../src/projects/project-roots";
+import { loadWorkspaceContext } from "../../../src/state/workspace-state";
 import type { TerminalSessionManager } from "../../../src/terminal/session-manager";
 import { type CreateProjectsApiDependencies, createProjectsApi } from "../../../src/trpc/projects-api";
 import { createGitTestEnv } from "../../utilities/git-env";
@@ -415,6 +416,29 @@ describe("projects roots over tRPC: create, checkName, roots, open folder", () =
 				"outside the projects root",
 			);
 			expect((await api.createProject(null, { path: root })).error).toContain("the projects root itself");
+		});
+	});
+
+	it("re-adding a registered project is a no-op: no initial commit, no git init, no activation", async () => {
+		await withRoot(async ({ api, deps, outside }) => {
+			// Registered (outside the root, as an older registration may be) and with no commit yet.
+			execFileSync("git", ["init", "-q", "-b", "main"], { cwd: outside, env: createGitTestEnv() });
+			writeFileSync(join(outside, "work.txt"), "uncommitted\n");
+			const { workspaceId } = await loadWorkspaceContext(outside);
+			(deps.hasGitRepository as ReturnType<typeof vi.fn>).mockReturnValue(true);
+			expect(await api.addProject(null, { path: outside })).toMatchObject({ ok: true });
+			expect(() =>
+				execFileSync("git", ["rev-parse", "--verify", "-q", "HEAD"], { cwd: outside, env: createGitTestEnv() }),
+			).toThrow();
+			expect(
+				execFileSync("git", ["status", "--porcelain"], { cwd: outside, env: createGitTestEnv(), encoding: "utf8" }),
+			).toBe("?? work.txt\n");
+			expect(deps.createProjectSummary).toHaveBeenCalledWith(
+				expect.objectContaining({ workspaceId, repoPath: outside }),
+			);
+			expect(deps.setActiveWorkspace).not.toHaveBeenCalled();
+			expect(deps.rememberWorkspace).not.toHaveBeenCalled();
+			expect(deps.broadcastRuntimeProjectsUpdated).not.toHaveBeenCalled();
 		});
 	});
 

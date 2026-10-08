@@ -134,6 +134,14 @@ export interface RuntimeWorkspaceContext {
 	git: RuntimeGitRepositoryInfo;
 }
 
+/** A load without auto-create of a project that isn't registered; `repoPath` is its resolved repo root. */
+export class WorkspaceNotRegisteredError extends Error {
+	constructor(readonly repoPath: string) {
+		super(`Project ${repoPath} is not added to Kanban yet.`);
+		this.name = "WorkspaceNotRegisteredError";
+	}
+}
+
 export interface LoadWorkspaceContextOptions {
 	autoCreateIfMissing?: boolean;
 }
@@ -613,7 +621,7 @@ export async function loadWorkspaceContext(
 		const index = await readWorkspaceIndex();
 		const existingEntry = findWorkspaceEntry(index, repoPath);
 		if (!existingEntry) {
-			throw new Error(`Project ${repoPath} is not added to Kanban yet.`);
+			throw new WorkspaceNotRegisteredError(repoPath);
 		}
 		return {
 			repoPath,

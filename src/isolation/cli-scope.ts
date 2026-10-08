@@ -12,6 +12,7 @@
 import type { RuntimeTrpcClient } from "../commands/runtime-trpc-client";
 import type { IsolationMode, PipelineConfig } from "../config/pipeline-config";
 import { listWorkspaceIndexEntries, setWorkspaceAccessGuard } from "../state/workspace-state";
+import { describeIsolationAction } from "./action-names";
 import { type CompleteApprovalInput, completeIsolationApproval } from "./cli-approval";
 import { appendIsolationLog } from "./isolation-log";
 import {
@@ -142,8 +143,12 @@ export async function resolveCliSessionScope(input: {
 	};
 }
 
-/** The scope as the board-file layer's guard (workspace-state.ts setWorkspaceAccessGuard). */
-export async function installCliWorkspaceGuard(scope: CliSessionScope, config: PipelineConfig): Promise<void> {
+/** The scope as the board-file layer's guard (workspace-state.ts setWorkspaceAccessGuard); `commandPath` names it. */
+export async function installCliWorkspaceGuard(
+	scope: CliSessionScope,
+	config: PipelineConfig,
+	commandPath: string = process.argv.slice(2, 4).join(" "),
+): Promise<void> {
 	setWorkspaceAccessGuard(null);
 	const ownRepoPath =
 		(await listWorkspaceIndexEntries()).find((entry) => entry.workspaceId === scope.workspaceId)?.repoPath ?? null;
@@ -183,8 +188,8 @@ export async function installCliWorkspaceGuard(scope: CliSessionScope, config: P
 		},
 		describeRefusal: ({ workspaceId, repoPath }) =>
 			workspaceId
-				? `Project isolation: this session works only on its own Kanban project${ownRepoPath ? ` (${ownRepoPath})` : ""}; ${repoPath} is not part of it.`
-				: `${repoPath} is not a registered Kanban project, and only the user registers projects.${ownRepoPath ? ` For this session's project pass --project-path ${ownRepoPath}.` : ""}`,
+				? `Project isolation refused "${describeIsolationAction(`cli ${commandPath}`, workspaceId)}": this session works only on its own Kanban project${ownRepoPath ? ` (${ownRepoPath})` : ""}; ${repoPath} is not part of it.`
+				: `\`kanban ${commandPath}\` names ${repoPath}, which is not a registered Kanban project, and only the user registers projects.${ownRepoPath ? ` For this session's project pass --project-path ${ownRepoPath}.` : ""}`,
 	});
 }
 
@@ -295,6 +300,6 @@ export async function applyCliSessionScope(input: {
 	if (machineWide && scope.mode === "enforce") {
 		return `Project isolation: \`kanban ${input.commandPath}${input.commandPath === "doctor" ? " --fix" : ""}\` changes machine-wide state, which only the user changes. Ask the user to run it.`;
 	}
-	await installCliWorkspaceGuard(scope, config);
+	await installCliWorkspaceGuard(scope, config, input.commandPath);
 	return null;
 }

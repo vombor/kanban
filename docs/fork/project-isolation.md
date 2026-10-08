@@ -56,6 +56,52 @@ credential is taken as is.
 Isolation is a guard against an agent's ordinary command forms, like the card guardrails, not a sandbox. The agents
 run as the same uid as the server.
 
+### Detached processes of a session (child credentials)
+
+A process a session starts detached (`setsid`, or a parent that exits) is reparented to init and leaves the session's
+tree, so the session's credential no longer counts from it: the caller is *unknown* ("credential used outside its
+session's process tree"). `kanban bench calibrate` detaches by default because a calibration runs for hours. Before
+issue #6, every one of its card creates and starts was refused from an orchestrator.
+
+Such a process gets a **child credential** instead. This is the headless orchestrator run's approach (a credential
+bound to a pid), but the session asks for it itself:
+
+1. `isolation.issueChildCredential`: the session calls with its own credential from its own tree (`via: credential`;
+   a Cline daemon call matched by cwd, the user, an unknown caller or another child credential get none). The server
+   issues a new credential with the session's exact identity: same workspace, task, role and agent. It stays unusable
+   until it is bound, and it never stands for the session's own tree.
+2. The command spawns the detached process with the child credential in `KANBAN_SESSION_CREDENTIAL`, never the
+   session's own.
+3. `isolation.bindChildCredential { credential, pid }`: the server checks that the caller is the session the
+   credential was issued to, and reads `/proc` at bind time. `pid` must be a live, non-zombie process whose parent is
+   the calling process (the one holding the request's connection). A child credential binds once. The bind records the
+   process's start time, and it is logged as `child_credential`.
+4. The command tells the process on its stdin that it may start (`identity-bound`). The process starts no work
+   (no board or session call) before that line arrives, and exits if stdin closes or 30 s pass without it. Its CLI
+   startup `whoami` comes before the bind and can't name it yet, so its in-process scope falls back to the env's
+   workspace id: the same project, without grants.
+
+The binding ends when that process exits. A dead pid, or a reused one with another start time, makes the credential
+unknown, and the 10 s sweep drops it (it reads the pid's start time from /proc). A reused pid is never taken for the
+child in the credential-less process lookup or the Cline daemon lookup either. An unbound child credential is dropped
+after 60 s.
+
+Child credentials can't crowd out other sessions. A session holds at most 3 unbound ones and 8 in all; beyond that
+the issue is refused. At the global cap of 500 credentials the oldest child credential goes first. A child credential
+never pushes out a session's own: with no child left to drop, no new one is issued. It doesn't end with the
+parent session: the detached run is meant to outlive it, and a relaunch of the session doesn't replace it. It never
+widens what the session may do. It has the same identity and role, so the same isolation decisions apply, and it can't
+hand out further credentials.
+
+The server may refuse to issue or bind one (no `/proc`, an unreachable server, a caller it can't confirm). Where the
+project's isolation mode is `report` or `enforce`, detached mode is then refused up front, the refusal says to use
+`--foreground`, and the child it started is stopped. With the mode `off`, the child is stopped and the plain detach
+runs instead, as before isolation: the worker gets the session's env and no handshake. A detached calibrate from the
+user's own shell is unchanged: no credential, no handshake.
+
+Why this and not "detached mode is refused from a session": the calibration must survive the session that started it.
+The identity it carries stays the session's own, checked against the process the session really spawned.
+
 ## What is scoped
 
 - **Runtime API** (`src/trpc/app-router.ts`): every workspace-scoped procedure checks the caller's reach. A session's
@@ -111,15 +157,23 @@ workspace's `isolation.jsonl` and on its console. Who made the edit isn't known 
 ## Projects are the user's
 
 Creating, registering and removing projects is done by the user through Kanban's UI or CLI. Every agent session is
-refused, in every mode: tRPC `projects.create/add/remove` and `kanban project add|create|rename-id`, plus in-process
-registration (`kanban task create --project-path <new repo>`). Re-registering the session's own project is a no-op
-and allowed. A message can't get around this: the receiving orchestrator is refused the same way.
+refused, in every mode: tRPC `projects.create/add/remove` and `kanban project add|create|rename-id`, and
+`kanban task create --project-path <new repo>`. The Kanban CLI never registers a project in-process: a task command on a
+project that isn't registered asks the server's `projects.add`, which applies this rule and the projects-root check
+(for the user's shell too), and then reads the project back from the index. Re-registering the session's own project
+is a no-op and allowed. A message can't get around this: the receiving orchestrator is refused the same way.
 
 While some workspace is in `enforce`, the user's own changes need the console code (next section) too, because a
 reparented agent process looks like the user: `kanban project add|create` asks for it before it writes, and a
 browser add/create/remove is refused with the approval id to complete. A passcode-authenticated browser (remote mode)
-is the user and needs no code. Re-adding an already registered project (`kanban task create` does it on every call)
-changes nothing and needs none.
+is the user and needs no code. Re-adding an already registered project changes nothing and needs none.
+
+Re-adding an already registered project is no project change, so it never hits the project-add check. The Kanban CLI
+doesn't send it at all: `kanban task create|start|...` call `projects.add` only for a project that isn't registered.
+Over tRPC the server answers it from the index, with no git init, no initial commit and no activation, so it really is
+a no-op. The user and an unidentified caller get it decided as a reach into that project, like any other request. A session may still re-add only its own project, in every mode. Every refusal names the action that
+was refused and the project it was refused in (`src/isolation/action-names.ts`, e.g. `refused "start a task in project
+foo"`), and an unidentified caller's refusal says why its credential didn't count.
 
 ## Escape hatch (the user only)
 

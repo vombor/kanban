@@ -62,6 +62,14 @@ export interface CredentialEntry {
 	 * after it was spawned). PTY sessions are found by their summary's pid.
 	 */
 	boundPid: number | null;
+	/** The bound process's start time (/proc), so a reused pid isn't taken for it; null when not known. */
+	boundStartTime: string | null;
+	/**
+	 * A credential the session handed to a detached process it spawned itself (`issueChild`, e.g. `kanban bench
+	 * calibrate`): the session's identity, usable only once bound to that process (`bindChild`) and only while it
+	 * lives.
+	 */
+	child: boolean;
 	issuedAt: number;
 }
 
@@ -72,6 +80,13 @@ export interface SessionCredentialRegistry {
 	current: (workspaceId: string, taskId: string) => string | null;
 	/** Binds a credential to the root pid of its process tree (headless runs). */
 	bindPid: (credential: string, pid: number) => boolean;
+	/**
+	 * A new, unbound child credential with the session's identity; the session's own credential is unchanged. Null
+	 * when the session already has its share of child credentials (unbound or in all) or there is no room for one.
+	 */
+	issueChild: (identity: AgentSessionIdentity) => string | null;
+	/** Binds an unbound child credential to its process, once. */
+	bindChild: (credential: string, pid: number, startTime: string | null) => boolean;
 	resolve: (credential: string | null | undefined) => CredentialEntry | null;
 	/** Every session that has a credential, for the cwd and process lookups. */
 	list: () => CredentialEntry[];
@@ -79,8 +94,15 @@ export interface SessionCredentialRegistry {
 	prune: (isLive: (entry: CredentialEntry) => boolean) => void;
 }
 
-/** At most this many credentials are kept; the oldest go first. */
+/**
+ * At most this many credentials are kept. Child credentials go first (the oldest), and a child credential never
+ * pushes out a session's own: one session's child churn can't evict other projects' credentials.
+ */
 export const MAX_SESSION_CREDENTIALS = 500;
+/** Unbound child credentials one session may hold at once (an issue waiting for its spawn and bind). */
+export const MAX_UNBOUND_CHILD_CREDENTIALS_PER_SESSION = 3;
+/** Child credentials, bound or not, one session may hold at once. */
+export const MAX_CHILD_CREDENTIALS_PER_SESSION = 8;
 
 function sessionKey(workspaceId: string, taskId: string): string {
 	return `${workspaceId}\u0000${taskId}`;
@@ -103,29 +125,77 @@ export function createSessionCredentialRegistry(now: () => number = Date.now): S
 		}
 		return null;
 	};
-	return {
-		issue: (identity) => {
-			const credential = randomBytes(32).toString("hex");
-			const key = sessionKey(identity.workspaceId, identity.taskId);
-			bySession.delete(key);
-			bySession.set(key, { credential, entry: { identity: { ...identity }, boundPid: null, issuedAt: now() } });
-			// Map order is insertion order: the first keys are the oldest.
-			while (bySession.size > MAX_SESSION_CREDENTIALS) {
-				const oldest = bySession.keys().next().value;
-				if (oldest === undefined) {
-					break;
-				}
-				bySession.delete(oldest);
+	// Map order is insertion order: the first keys are the oldest.
+	const oldestKey = (child: boolean): string | null => {
+		for (const [key, value] of bySession) {
+			if (value.entry.child === child) {
+				return key;
 			}
-			return credential;
-		},
+		}
+		return null;
+	};
+	const add = (key: string, identity: AgentSessionIdentity, child: boolean): string => {
+		const credential = randomBytes(32).toString("hex");
+		bySession.delete(key);
+		bySession.set(key, {
+			credential,
+			entry: { identity: { ...identity }, boundPid: null, boundStartTime: null, child, issuedAt: now() },
+		});
+		while (bySession.size > MAX_SESSION_CREDENTIALS) {
+			const oldest = oldestKey(true) ?? oldestKey(false);
+			if (oldest === null) {
+				break;
+			}
+			bySession.delete(oldest);
+		}
+		return credential;
+	};
+	const childrenOf = (identity: AgentSessionIdentity) =>
+		[...bySession.values()].filter(
+			(value) =>
+				value.entry.child &&
+				value.entry.identity.workspaceId === identity.workspaceId &&
+				value.entry.identity.taskId === identity.taskId,
+		);
+	const validPid = (pid: number) => Number.isInteger(pid) && pid > 1;
+	return {
+		issue: (identity) => add(sessionKey(identity.workspaceId, identity.taskId), identity, false),
 		current: (workspaceId, taskId) => bySession.get(sessionKey(workspaceId, taskId))?.credential ?? null,
 		bindPid: (credential, pid) => {
 			const value = find(credential);
-			if (!value || !Number.isInteger(pid) || pid <= 1) {
+			if (!value || value.entry.child || !validPid(pid)) {
 				return false;
 			}
 			value.entry.boundPid = pid;
+			return true;
+		},
+		// Under its own key, so neither the session's credential nor a relaunch's `issue` replaces it.
+		issueChild: (identity) => {
+			const children = childrenOf(identity);
+			if (
+				children.length >= MAX_CHILD_CREDENTIALS_PER_SESSION ||
+				children.filter((value) => value.entry.boundPid === null).length >=
+					MAX_UNBOUND_CHILD_CREDENTIALS_PER_SESSION
+			) {
+				return null;
+			}
+			// Full of sessions' own credentials: no child takes one's place.
+			if (bySession.size >= MAX_SESSION_CREDENTIALS && oldestKey(true) === null) {
+				return null;
+			}
+			return add(
+				`${sessionKey(identity.workspaceId, identity.taskId)}\u0000child\u0000${randomBytes(8).toString("hex")}`,
+				identity,
+				true,
+			);
+		},
+		bindChild: (credential, pid, startTime) => {
+			const value = find(credential);
+			if (!value?.entry.child || value.entry.boundPid !== null || !validPid(pid)) {
+				return false;
+			}
+			value.entry.boundPid = pid;
+			value.entry.boundStartTime = startTime;
 			return true;
 		},
 		resolve: (credential) => {

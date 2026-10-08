@@ -10,7 +10,7 @@ import type { IsolationMode } from "../config/pipeline-config";
 import type { ProjectChangeKind, WorkspaceAccessDecision } from "../isolation/access-policy";
 import type { ApprovalKind } from "../isolation/approvals";
 import { type IsolationGrant, MAX_GRANT_MINUTES, ORCHESTRATOR_GRANT_SESSION } from "../isolation/grants";
-import type { IsolationService } from "../isolation/isolation-service";
+import type { CallerRequest, IsolationService } from "../isolation/isolation-service";
 import { isAnyWorkspaceEnforced, resolveIsolationMode } from "../isolation/isolation-settings";
 import type { MessageNoticeQueue } from "../isolation/message-notices";
 import {
@@ -33,6 +33,17 @@ export const isolationWhoamiResponseSchema = z.object({
 	reachable: z.array(z.string()).nullable(),
 });
 export type IsolationWhoamiResponse = z.infer<typeof isolationWhoamiResponseSchema>;
+
+/** A child credential for a detached process of the calling session (`isolation.issueChildCredential`). */
+export const isolationChildCredentialResponseSchema = z.object({
+	ok: z.boolean(),
+	credential: z.string().nullable(),
+	error: z.string().optional(),
+});
+export const isolationBindChildCredentialRequestSchema = z.object({
+	credential: z.string().min(1).max(256),
+	pid: z.number().int().min(2),
+});
 
 const grantSchema = z.object({
 	id: z.string(),
@@ -150,6 +161,14 @@ export interface RuntimeIsolationApi {
 		trustedBrowser: boolean;
 		run: () => Promise<string>;
 	}) => Promise<ChangeDecision>;
+	/** A child credential for a detached process the calling session spawns (isolation-service.ts). */
+	issueChildCredential: (
+		request: CallerRequest | null,
+	) => Promise<z.infer<typeof isolationChildCredentialResponseSchema>>;
+	bindChildCredential: (
+		request: CallerRequest | null,
+		input: z.infer<typeof isolationBindChildCredentialRequestSchema>,
+	) => Promise<z.infer<typeof isolationChildCredentialResponseSchema>>;
 	/** The projects a session may see: its own and the ones isolation lets it reach. */
 	filterVisibleWorkspaceIds: (caller: RuntimeCaller, workspaceIds: readonly string[]) => Promise<Set<string>>;
 	/** Machine-wide operations (config reset, update, settings without a workspace): refused for sessions under enforce. */
@@ -255,7 +274,8 @@ export function createIsolationApi(deps: CreateIsolationApiDependencies): Runtim
 			await service.checkWorkspaceAccess(caller, workspaceId, action),
 		checkProjectChange: async ({ caller, kind, target, action, trustedBrowser, run }) => {
 			let targetWorkspaceId = target.workspaceId ?? null;
-			if (!targetWorkspaceId && target.path && caller.kind !== "unknown") {
+			// An unidentified caller has no cwd of its own: only an absolute path names a project for it.
+			if (!targetWorkspaceId && target.path && (caller.kind !== "unknown" || isAbsolute(target.path))) {
 				const base = caller.kind === "session" ? caller.session.cwd || "/" : process.cwd();
 				const path = await realpathOrSelf(isAbsolute(target.path) ? target.path : resolve(base, target.path));
 				for (const entry of await deps.listEntries()) {
@@ -265,9 +285,14 @@ export function createIsolationApi(deps: CreateIsolationApiDependencies): Runtim
 					}
 				}
 			}
+			// Re-adding a registered project changes nothing: for the user and an unidentified caller it is only a reach
+			// into that project, decided (and named in a refusal) like any other; a session may re-add its own project only.
+			if (kind === "add" && targetWorkspaceId && caller.kind !== "session") {
+				const decision = await service.checkWorkspaceAccess(caller, targetWorkspaceId, action);
+				return decision.outcome === "refuse" ? { allowed: false, message: decision.message } : { allowed: true };
+			}
 			if (caller.kind === "user") {
-				// Re-adding a registered project changes nothing (`kanban task create` asks for it on every call).
-				if (trustedBrowser || (kind === "add" && targetWorkspaceId)) {
+				if (trustedBrowser) {
 					return { allowed: true };
 				}
 				if (!isAnyWorkspaceEnforced(await service.readConfig())) {
@@ -277,7 +302,27 @@ export function createIsolationApi(deps: CreateIsolationApiDependencies): Runtim
 				const approvalId = holdForApproval(`project.${kind}`, summary, run);
 				return { allowed: false, message: approvalNeededMessage(approvalId, `Project ${kind} (${summary})`) };
 			}
-			return await service.checkProjectChange(caller, kind, targetWorkspaceId, action);
+			return await service.checkProjectChange(
+				caller,
+				kind,
+				targetWorkspaceId,
+				action,
+				target.path ?? target.workspaceId ?? null,
+			);
+		},
+		issueChildCredential: async (request) => {
+			const result = request
+				? await service.issueChildCredential(request)
+				: { ok: false as const, error: "no caller to identify" };
+			return result.ok
+				? { ok: true, credential: result.credential }
+				: { ok: false, credential: null, error: result.error };
+		},
+		bindChildCredential: async (request, input) => {
+			const result = request
+				? await service.bindChildCredential(request, input.credential, input.pid)
+				: { ok: false as const, error: "no caller to identify" };
+			return result.ok ? { ok: true, credential: null } : { ok: false, credential: null, error: result.error };
 		},
 		filterVisibleWorkspaceIds: async (caller, workspaceIds) => {
 			if (caller.kind === "user") {

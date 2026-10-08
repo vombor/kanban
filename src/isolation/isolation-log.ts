@@ -1,6 +1,6 @@
 // `<home>/data/<ws>/isolation.jsonl`: one JSON line per isolation event of the workspace's sessions (a reach outside
-// the project refused or reported, a refused project change, a grant made, used or revoked). A grant and its uses
-// are written on both sides: the session's workspace and the one it reaches.
+// the project refused or reported, a refused project change, a grant made, used or revoked, a child credential
+// bound). A grant and its uses are written on both sides: the session's workspace and the one it reaches.
 import { appendFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 
@@ -15,7 +15,8 @@ export type IsolationLogKind =
 	| "grant_revoked"
 	| "message_refused"
 	| "mode_changed"
-	| "approval";
+	| "approval"
+	| "child_credential";
 
 export interface IsolationLogRecord {
 	at: string;

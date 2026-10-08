@@ -87,10 +87,12 @@ export function createProjectsApi(deps: CreateProjectsApiDependencies): RuntimeT
 	const filesystemRoot = resolve(deps.serverCwd, "/");
 	const readRoots = deps.readProjectRoots ?? readProjectRoots;
 
-	const isRegisteredProjectPath = async (projectPath: string): Promise<boolean> => {
+	const findRegisteredProject = async (projectPath: string) => {
 		const real = await realpath(projectPath).catch(() => projectPath);
-		return (await listWorkspaceIndexEntries()).some(
-			(entry) => entry.repoPath === projectPath || entry.repoPath === real,
+		return (
+			(await listWorkspaceIndexEntries()).find(
+				(entry) => entry.repoPath === projectPath || entry.repoPath === real,
+			) ?? null
 		);
 	};
 
@@ -150,14 +152,25 @@ export function createProjectsApi(deps: CreateProjectsApiDependencies): RuntimeT
 				} else {
 					// path is guaranteed to exist here by the schema refine and the gitUrl branch above.
 					projectPath = deps.resolveProjectInputPath(body.path as string, resolveBasePath);
-					// Open folder: a new registration must be inside a projects root; registered ones keep working.
-					if (!(await isRegisteredProjectPath(projectPath))) {
-						const check = await resolvePathInsideProjectRoots(projectPath, projectRoots);
-						if (!check.ok) {
-							return { ok: false, project: null, error: check.error } satisfies RuntimeProjectAddResponse;
-						}
-						projectPath = check.path;
+					// A registered project is answered from the index: re-adding it changes nothing (no git init, no
+					// initial commit, no activation), whoever asks.
+					const registered = await findRegisteredProject(projectPath);
+					if (registered) {
+						return {
+							ok: true,
+							project: deps.createProjectSummary({
+								workspaceId: registered.workspaceId,
+								repoPath: registered.repoPath,
+								taskCounts: await deps.summarizeProjectTaskCounts(registered.workspaceId, registered.repoPath),
+							}),
+						} satisfies RuntimeProjectAddResponse;
 					}
+					// Open folder: a new registration must be inside a projects root.
+					const check = await resolvePathInsideProjectRoots(projectPath, projectRoots);
+					if (!check.ok) {
+						return { ok: false, project: null, error: check.error } satisfies RuntimeProjectAddResponse;
+					}
+					projectPath = check.path;
 				}
 				await deps.assertPathIsDirectory(projectPath);
 				if (!deps.hasGitRepository(projectPath)) {

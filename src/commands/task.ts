@@ -50,7 +50,12 @@ import { createPlanIndexStore } from "../plans/plan-index";
 import { resolveProjectInputPath } from "../projects/project-path";
 import { createLandVetoPrecheck } from "../server/task-landing-gate";
 import { getWatchdogWorkspacePaths } from "../state/kanban-home";
-import { loadWorkspaceContext, mutateWorkspaceState } from "../state/workspace-state";
+import {
+	loadWorkspaceContext,
+	mutateWorkspaceState,
+	type RuntimeWorkspaceContext,
+	WorkspaceNotRegisteredError,
+} from "../state/workspace-state";
 import {
 	createRuntimeTrpcClient,
 	notifyRuntimeWorkspaceStateUpdated,
@@ -314,36 +319,31 @@ function resolveTaskCommandTarget(input: TaskCommandTarget, commandName: string)
 	throw new Error(`${commandName} requires either --task-id or --column.`);
 }
 
+/**
+ * The project a task command works on. The CLI never registers a project itself: one that isn't registered yet is
+ * added through the running server's `projects.add`, which applies isolation's project rule (no agent session
+ * registers a project, in any mode) and the projects-root check, and is then read back from the index. An already
+ * registered project never reaches `projects.add`.
+ */
 async function resolveRuntimeWorkspace(
 	projectPath: string | undefined,
 	cwd: string,
 	options: { autoCreateIfMissing?: boolean } = {},
-) {
+): Promise<RuntimeWorkspaceContext> {
 	const normalizedProjectPath = (projectPath ?? "").trim();
 	const resolvedPath = normalizedProjectPath ? resolveProjectInputPath(normalizedProjectPath, cwd) : cwd;
-	return await loadWorkspaceContext(resolvedPath, {
-		autoCreateIfMissing: options.autoCreateIfMissing ?? true,
-	});
-}
-
-async function resolveWorkspaceRepoPath(
-	projectPath: string | undefined,
-	cwd: string,
-	options: { autoCreateIfMissing?: boolean } = {},
-): Promise<string> {
-	const workspace = await resolveRuntimeWorkspace(projectPath, cwd, options);
-	return workspace.repoPath;
-}
-
-async function ensureRuntimeWorkspace(workspaceRepoPath: string): Promise<string> {
-	const runtimeClient = createRuntimeTrpcClient(null);
-	const added = await runtimeClient.projects.add.mutate({
-		path: workspaceRepoPath,
-	});
-	if (!added.ok || !added.project) {
-		throw new Error(added.error ?? `Could not register project ${workspaceRepoPath} in Kanban runtime.`);
+	try {
+		return await loadWorkspaceContext(resolvedPath, { autoCreateIfMissing: false });
+	} catch (error) {
+		if (options.autoCreateIfMissing === false || !(error instanceof WorkspaceNotRegisteredError)) {
+			throw error;
+		}
+		const added = await createRuntimeTrpcClient(null).projects.add.mutate({ path: error.repoPath });
+		if (!added.ok || !added.project) {
+			throw new Error(added.error ?? `Could not register project ${error.repoPath} in Kanban runtime.`);
+		}
+		return await loadWorkspaceContext(resolvedPath, { autoCreateIfMissing: false });
 	}
-	return added.project.id;
 }
 
 async function updateRuntimeWorkspaceState<T>(
@@ -584,8 +584,9 @@ export async function createTask(input: {
 	/** A plan card's spec slug (`docs/specs/<slug>.md`); default from the title. */
 	planSlug?: string;
 }): Promise<JsonRecord> {
-	const workspaceRepoPath = await resolveWorkspaceRepoPath(input.projectPath, input.cwd);
-	const workspaceId = await ensureRuntimeWorkspace(workspaceRepoPath);
+	const workspace = await resolveRuntimeWorkspace(input.projectPath, input.cwd);
+	const workspaceRepoPath = workspace.repoPath;
+	const workspaceId = workspace.workspaceId;
 	const runtimeClient = createRuntimeTrpcClient(workspaceId);
 	if (shouldWarnOnExplicitAgentId(input.agentId)) {
 		warnOnAgentSettingsMechanismGaps(input.agentId, input.agentSettings);
@@ -728,8 +729,9 @@ async function updateTaskCommand(input: {
 		throw new Error("task update requires at least one field to change.");
 	}
 
-	const workspaceRepoPath = await resolveWorkspaceRepoPath(input.projectPath, input.cwd);
-	const workspaceId = await ensureRuntimeWorkspace(workspaceRepoPath);
+	const workspace = await resolveRuntimeWorkspace(input.projectPath, input.cwd);
+	const workspaceRepoPath = workspace.repoPath;
+	const workspaceId = workspace.workspaceId;
 	const runtimeClient = createRuntimeTrpcClient(workspaceId);
 	let mergedAgentSettings: RuntimeTaskAgentSettings | null | undefined;
 	const updated = await updateRuntimeWorkspaceState(runtimeClient, workspaceRepoPath, (runtimeState) => {
@@ -786,8 +788,9 @@ async function linkTasks(input: {
 	linkedTaskId: string;
 	projectPath?: string;
 }): Promise<JsonRecord> {
-	const workspaceRepoPath = await resolveWorkspaceRepoPath(input.projectPath, input.cwd);
-	const workspaceId = await ensureRuntimeWorkspace(workspaceRepoPath);
+	const workspace = await resolveRuntimeWorkspace(input.projectPath, input.cwd);
+	const workspaceRepoPath = workspace.repoPath;
+	const workspaceId = workspace.workspaceId;
 	const runtimeClient = createRuntimeTrpcClient(workspaceId);
 	const dependency = await updateRuntimeWorkspaceState(runtimeClient, workspaceRepoPath, (runtimeState) => {
 		const linked = addTaskDependency(runtimeState.board, input.taskId, input.linkedTaskId);
@@ -821,8 +824,9 @@ export async function linkTaskPairs(input: {
 	projectPath?: string;
 	pairs: ReadonlyArray<{ waitingTaskId: string; prerequisiteTaskId: string }>;
 }): Promise<{ added: RuntimeBoardDependency[]; skipped: number }> {
-	const workspaceRepoPath = await resolveWorkspaceRepoPath(input.projectPath, input.cwd);
-	const workspaceId = await ensureRuntimeWorkspace(workspaceRepoPath);
+	const workspace = await resolveRuntimeWorkspace(input.projectPath, input.cwd);
+	const workspaceRepoPath = workspace.repoPath;
+	const workspaceId = workspace.workspaceId;
 	const runtimeClient = createRuntimeTrpcClient(workspaceId);
 	return await updateRuntimeWorkspaceState(runtimeClient, workspaceRepoPath, (state) => {
 		let board = state.board;
@@ -846,8 +850,9 @@ export async function linkTaskPairs(input: {
 }
 
 async function unlinkTasks(input: { cwd: string; dependencyId: string; projectPath?: string }): Promise<JsonRecord> {
-	const workspaceRepoPath = await resolveWorkspaceRepoPath(input.projectPath, input.cwd);
-	const workspaceId = await ensureRuntimeWorkspace(workspaceRepoPath);
+	const workspace = await resolveRuntimeWorkspace(input.projectPath, input.cwd);
+	const workspaceRepoPath = workspace.repoPath;
+	const workspaceId = workspace.workspaceId;
 	const runtimeClient = createRuntimeTrpcClient(workspaceId);
 	const removedDependency = await updateRuntimeWorkspaceState(runtimeClient, workspaceRepoPath, (runtimeState) => {
 		const dependency =
@@ -878,8 +883,9 @@ async function unlinkTasks(input: { cwd: string; dependencyId: string; projectPa
 }
 
 export async function startTask(input: { cwd: string; taskId: string; projectPath?: string }): Promise<JsonRecord> {
-	const workspaceRepoPath = await resolveWorkspaceRepoPath(input.projectPath, input.cwd);
-	const workspaceId = await ensureRuntimeWorkspace(workspaceRepoPath);
+	const workspace = await resolveRuntimeWorkspace(input.projectPath, input.cwd);
+	const workspaceRepoPath = workspace.repoPath;
+	const workspaceId = workspace.workspaceId;
 	const runtimeClient = createRuntimeTrpcClient(workspaceId);
 	const runtimeState = await runtimeClient.workspace.getState.query();
 	const fromColumnId = getTaskColumnId(runtimeState.board, input.taskId);
@@ -1064,8 +1070,9 @@ export async function trashTask(input: {
 	landing?: RuntimeTaskLandingChoice;
 }): Promise<JsonRecord> {
 	const target = resolveTaskCommandTarget(input, "task done");
-	const workspaceRepoPath = await resolveWorkspaceRepoPath(input.projectPath, input.cwd);
-	const workspaceId = await ensureRuntimeWorkspace(workspaceRepoPath);
+	const workspace = await resolveRuntimeWorkspace(input.projectPath, input.cwd);
+	const workspaceRepoPath = workspace.repoPath;
+	const workspaceId = workspace.workspaceId;
 	const runtimeClient = createRuntimeTrpcClient(workspaceId);
 
 	if (target.kind === "task") {
@@ -1163,8 +1170,9 @@ export async function trashTask(input: {
  * other landing mode it is the same as `task done`.
  */
 export async function approveTask(input: { cwd: string; taskId: string; projectPath?: string }): Promise<JsonRecord> {
-	const workspaceRepoPath = await resolveWorkspaceRepoPath(input.projectPath, input.cwd);
-	const workspaceId = await ensureRuntimeWorkspace(workspaceRepoPath);
+	const workspace = await resolveRuntimeWorkspace(input.projectPath, input.cwd);
+	const workspaceRepoPath = workspace.repoPath;
+	const workspaceId = workspace.workspaceId;
 	const runtimeClient = createRuntimeTrpcClient(workspaceId);
 	const approved = await trashTaskById({
 		taskId: input.taskId,
@@ -1200,8 +1208,9 @@ export async function handbackTask(input: {
 	by?: string;
 	projectPath?: string;
 }): Promise<JsonRecord> {
-	const workspaceRepoPath = await resolveWorkspaceRepoPath(input.projectPath, input.cwd);
-	const workspaceId = await ensureRuntimeWorkspace(workspaceRepoPath);
+	const workspace = await resolveRuntimeWorkspace(input.projectPath, input.cwd);
+	const workspaceRepoPath = workspace.repoPath;
+	const workspaceId = workspace.workspaceId;
 	const runtimeClient = createRuntimeTrpcClient(workspaceId);
 	const runoffsPath = getWatchdogWorkspacePaths(workspaceId).runoffs;
 	// A loser of a decided runoff (or any card of a bench-only one) must not come back: its next PASS would land next
@@ -1292,8 +1301,9 @@ export async function releaseHoldTask(input: {
 	by?: string;
 	projectPath?: string;
 }): Promise<JsonRecord> {
-	const workspaceRepoPath = await resolveWorkspaceRepoPath(input.projectPath, input.cwd);
-	const workspaceId = await ensureRuntimeWorkspace(workspaceRepoPath);
+	const workspace = await resolveRuntimeWorkspace(input.projectPath, input.cwd);
+	const workspaceRepoPath = workspace.repoPath;
+	const workspaceId = workspace.workspaceId;
 	const store = createPipelineStateStore();
 	const hold = readPipelineHold((await store.peek(workspaceId))?.cards[input.taskId]);
 	if (!hold) {
@@ -1336,8 +1346,9 @@ async function deleteTaskCommand(input: {
 	projectPath?: string;
 }): Promise<JsonRecord> {
 	const target = resolveTaskCommandTarget(input, "task delete");
-	const workspaceRepoPath = await resolveWorkspaceRepoPath(input.projectPath, input.cwd);
-	const workspaceId = await ensureRuntimeWorkspace(workspaceRepoPath);
+	const workspace = await resolveRuntimeWorkspace(input.projectPath, input.cwd);
+	const workspaceRepoPath = workspace.repoPath;
+	const workspaceId = workspace.workspaceId;
 	const runtimeClient = createRuntimeTrpcClient(workspaceId);
 	const mutation = await mutateWorkspaceState(workspaceRepoPath, (latestState) => {
 		const latestTargetRecords =

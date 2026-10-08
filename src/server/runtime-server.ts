@@ -72,7 +72,7 @@ import { createOrphanProcessSweeper } from "./orphan-process-sweeper";
 import { createPipelineActionRunner } from "./pipeline-actions";
 import { createProcessReaper, type PreparedWorktreeReap } from "./process-reaper";
 import { createProcProcessTableReader, isProcessTableSupported } from "./process-table";
-import { createRequestCallerResolver } from "./request-caller";
+import { buildCallerRequest, createRequestCallerResolver } from "./request-caller";
 import type { RuntimeStateHub } from "./runtime-state-hub";
 import { createTaskLandingGate } from "./task-landing-gate";
 import { createTaskTrashWorkflow, createTrashTaskRequestHandler, type TaskTrashWorkflow } from "./task-trash-workflow";
@@ -336,7 +336,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 	});
 	messageNotices.start();
 	// A session's credential stops working when its process ends (resolveCaller checks that too); this drops them.
-	const credentialSweep = setInterval(() => isolation.pruneCredentials(), 10_000);
+	const credentialSweep = setInterval(() => void isolation.pruneCredentials().catch(() => undefined), 10_000);
 	credentialSweep.unref();
 	const isolationApi = createIsolationApi({
 		service: isolation,
@@ -427,6 +427,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			workspaceScope: scope.workspaceScope,
 			getCaller,
 			resolveStrictCaller,
+			callerRequest: buildCallerRequest(req),
 			// The passcode gate's browser cookie (remote mode): the user at the browser, so no console code is needed.
 			trustedBrowser: isRemoteMode && isPasscodeEnabled() && sessionToken !== null && validateSession(sessionToken),
 			isolationApi,
