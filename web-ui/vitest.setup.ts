@@ -101,3 +101,16 @@ if (typeof globalThis.ResizeObserver === "undefined") {
 		value: MockResizeObserver,
 	});
 }
+
+// jsdom lacks the pointer-capture and scrolling APIs Radix Select calls when it opens and focuses items.
+if (typeof Element !== "undefined") {
+	if (typeof Element.prototype.scrollIntoView !== "function") {
+		Element.prototype.scrollIntoView = () => {};
+	}
+	if (typeof Element.prototype.hasPointerCapture !== "function") {
+		Element.prototype.hasPointerCapture = () => false;
+	}
+	if (typeof Element.prototype.releasePointerCapture !== "function") {
+		Element.prototype.releasePointerCapture = () => {};
+	}
+}

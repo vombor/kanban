@@ -5,6 +5,7 @@ import {
 	useDebounce as useReactUseDebounce,
 	useEvent as useReactUseEvent,
 	useInterval as useReactUseInterval,
+	useLatest as useReactUseLatest,
 	useLocalStorage as useReactUseLocalStorage,
 	useMeasure as useReactUseMeasure,
 	useMedia as useReactUseMedia,
@@ -71,14 +72,13 @@ export function useBooleanLocalStorageValue(key: string, initialValue: boolean):
 		deserializer: (value) => value === "true",
 	});
 	const value = storedValue ?? initialValue;
+	// react-use's setter resolves a function update against the state of its first render, so resolve it here.
+	const latestValue = useReactUseLatest(value);
 	const setValue: StateSetter<boolean> = useCallback(
 		(nextValue) => {
-			setStoredValue((currentValue) => {
-				const resolvedCurrent = currentValue ?? initialValue;
-				return resolveNextValue(nextValue, resolvedCurrent);
-			});
+			setStoredValue(resolveNextValue(nextValue, latestValue.current));
 		},
-		[initialValue, setStoredValue],
+		[latestValue, setStoredValue],
 	);
 	return [value, setValue];
 }
@@ -92,14 +92,13 @@ export function useRawLocalStorageValue<T extends string>(
 		raw: true,
 	});
 	const value = storedValue ? (normalize(storedValue) ?? initialValue) : initialValue;
+	// See useBooleanLocalStorageValue: resolve a function update against the latest value, not react-use's.
+	const latestValue = useReactUseLatest(value);
 	const setValue: StateSetter<T> = useCallback(
 		(nextValue) => {
-			setStoredValue((currentValue) => {
-				const resolvedCurrent = currentValue ? (normalize(currentValue) ?? initialValue) : initialValue;
-				return resolveNextValue(nextValue, resolvedCurrent);
-			});
+			setStoredValue(resolveNextValue(nextValue, latestValue.current));
 		},
-		[initialValue, normalize, setStoredValue],
+		[latestValue, setStoredValue],
 	);
 	return [value, setValue];
 }

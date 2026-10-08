@@ -12,6 +12,16 @@ export function isTaskAgentSetupSatisfied(
 	return config.agents.some((agent) => isRuntimeAgentLaunchSupported(agent.id) && agent.installed);
 }
 
+// The display name of the workspace's selected agent (e.g. "Claude Code"), or null before the config loads.
+export function getSelectedAgentLabel(
+	config: Pick<RuntimeConfigResponse, "selectedAgentId" | "agents"> | null | undefined,
+): string | null {
+	if (!config) {
+		return null;
+	}
+	return config.agents.find((agent) => agent.id === config.selectedAgentId)?.label ?? null;
+}
+
 export function getTaskAgentNavbarHint(
 	config: Pick<RuntimeConfigResponse, "selectedAgentId" | "agents"> | null | undefined,
 	options?: {

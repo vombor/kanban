@@ -8,6 +8,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { selectNewestTaskSessionSummary } from "@/hooks/home-sidebar-agent-panel-session-summary";
 import { useHomeAgentSession } from "@/hooks/use-home-agent-session";
 import { useIsMobile } from "@/hooks/use-is-mobile";
+import { getSelectedAgentLabel } from "@/runtime/native-agent";
 import type { RuntimeConfigResponse, RuntimeGitRepositoryInfo, RuntimeTaskSessionSummary } from "@/runtime/types";
 import { useTerminalThemeColors } from "@/terminal/theme-colors";
 
@@ -61,15 +62,7 @@ export function useHomeSidebarAgentPanel({
 		upsertSessionSummary,
 	});
 
-	const selectedAgentLabel = useMemo(() => {
-		if (!runtimeProjectConfig) {
-			return "selected agent";
-		}
-		return (
-			runtimeProjectConfig.agents.find((agent) => agent.id === runtimeProjectConfig.selectedAgentId)?.label ??
-			"selected agent"
-		);
-	}, [runtimeProjectConfig]);
+	const selectedAgentLabel = getSelectedAgentLabel(runtimeProjectConfig) ?? "selected agent";
 
 	const homeAgentPanelSummary = taskId ? (effectiveSessionSummaries[taskId] ?? null) : null;
 

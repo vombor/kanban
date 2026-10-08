@@ -4,6 +4,7 @@ import { notifyError } from "@/components/app-toaster";
 import { buildProjectPathname, parseProjectIdFromPathname } from "@/hooks/app-utils";
 import { getRuntimeTrpcClient } from "@/runtime/trpc-client";
 import { useRuntimeStateStream } from "@/runtime/use-runtime-state-stream";
+import { LocalStorageKey, readLocalStorageItem, writeLocalStorageItem } from "@/storage/local-storage-store";
 import { useWindowEvent } from "@/utils/react-use";
 
 const REMOVED_PROJECT_ERROR_PREFIX = "Project no longer exists on disk and was removed:";
@@ -43,11 +44,15 @@ export interface UseProjectNavigationResult {
 }
 
 export function useProjectNavigation({ onProjectSwitchStart }: UseProjectNavigationInput): UseProjectNavigationResult {
+	// A project URL wins; otherwise open the most recently accessed project (a stale id falls back like a stale URL).
 	const [requestedProjectId, setRequestedProjectId] = useState<string | null>(() => {
 		if (typeof window === "undefined") {
 			return null;
 		}
-		return parseProjectIdFromPathname(window.location.pathname);
+		return (
+			parseProjectIdFromPathname(window.location.pathname) ??
+			readLocalStorageItem(LocalStorageKey.LastAccessedProject)
+		);
 	});
 	const [pendingAddedProjectId, setPendingAddedProjectId] = useState<string | null>(null);
 	const [removingProjectId, setRemovingProjectId] = useState<string | null>(null);
@@ -128,6 +133,12 @@ export function useProjectNavigation({ onProjectSwitchStart }: UseProjectNavigat
 		setRequestedProjectId(nextProjectId);
 	}, []);
 	useWindowEvent("popstate", handlePopState);
+
+	useEffect(() => {
+		if (currentProjectId) {
+			writeLocalStorageItem(LocalStorageKey.LastAccessedProject, currentProjectId);
+		}
+	}, [currentProjectId]);
 
 	useEffect(() => {
 		if (typeof window === "undefined") {

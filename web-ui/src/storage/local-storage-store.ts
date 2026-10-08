@@ -2,7 +2,7 @@ export enum LocalStorageKey {
 	TaskStartInPlanMode = "kanban.task-start-in-plan-mode",
 	TaskAutoReviewEnabled = "kanban.task-auto-review-enabled",
 	TaskAutoReviewMode = "kanban.task-auto-review-mode",
-	AgentTipsDismissed = "kanban.agent-tips-dismissed",
+	SidebarTipsExpanded = "kanban.sidebar-tips-expanded",
 	TaskCreatePrimaryStartAction = "kanban.task-create-primary-start-action",
 	BottomTerminalPaneHeight = "kanban.bottom-terminal-pane-height",
 	DetailAgentPanelRatio = "kanban.detail-agent-panel-ratio",
@@ -19,6 +19,7 @@ export enum LocalStorageKey {
 	NotificationBadgeClearEvent = "kanban.notification-badge-clear.v1",
 	TabVisibilityPresence = "kanban.tab-visibility-presence.v1",
 	Theme = "kanban.theme",
+	LastAccessedProject = "kanban.last-accessed-project",
 }
 
 export const LAYOUT_CUSTOMIZATION_LOCAL_STORAGE_KEYS = [

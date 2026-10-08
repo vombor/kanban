@@ -469,35 +469,6 @@ body.kb-dependency-link-mode {
 	margin-left: 8px;
 }
 
-/* -- Project navigation rows -- */
-
-.kb-project-row {
-}
-
-.kb-project-row-actions {
-	opacity: 0;
-}
-
-@media (hover: hover) {
-	.kb-project-row:hover {
-		background: var(--color-surface-2);
-	}
-
-	.kb-project-row:hover .kb-project-row-actions {
-		opacity: 1;
-	}
-}
-
-.kb-project-row-selected,
-.kb-project-row-selected:hover {
-	background: var(--color-accent);
-	color: var(--color-accent-fg);
-}
-
-.kb-project-count-tag {
-	font-size: 10px;
-}
-
 /* -- File tree rows -- */
 
 .kb-file-tree-row {
@@ -1145,15 +1116,6 @@ body.kb-dependency-link-mode {
 	.kb-board-card-shell:active > div {
 		background-color: var(--color-surface-3);
 		border-color: var(--color-border-bright);
-	}
-
-	.kb-project-row {
-		touch-action: manipulation;
-		-webkit-tap-highlight-color: transparent;
-	}
-
-	.kb-project-row:active {
-		background: var(--color-surface-3);
 	}
 }
 
