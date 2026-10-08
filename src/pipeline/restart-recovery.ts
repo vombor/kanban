@@ -12,11 +12,17 @@
 // nothing penalizes them, dev cards are resumed one at a time on the same model, QA cards are recreated for the same
 // snapshot (by the QA gate, P4-3), calibration cards are left to their runner. 1a7a32a: a Cline CLI session idle after
 // a final reply is finished work, not an orphan (cline 3.x never marks a session completed).
+//
+// The running server also writes the manifest itself (src/server/restart-manifest-writer.ts: every few minutes, on
+// In Progress/Review changes and at a clean shutdown, `source` "periodic"/"shutdown"), so a crash, OOM kill or power
+// loss leaves one at most a few minutes old. Only `kanban restart prepare` (`source` "prepare") makes WIP tags, and
+// only its tags are reused: a server-written manifest's cards are tagged fresh at resume, since the worktree may have
+// moved on since any tag was made.
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
 
-import type { RuntimeBoardCard, RuntimeTaskRole } from "../core/api-contract";
+import type { RuntimeBoardCard, RuntimeBoardColumn, RuntimeTaskRole } from "../core/api-contract";
 import { resolveCardRole } from "../core/card-role";
 import { lockedFileSystem } from "../fs/locked-file-system";
 import { getRestartManifestPath, getRestartRecoverRequestPath, getServerStartRecordPath } from "../state/kanban-home";
@@ -32,15 +38,30 @@ const restartManifestCardSchema = z
 	})
 	.passthrough();
 
+/**
+ * Who wrote the manifest: `kanban restart prepare` (WIP tags, just before a planned restart; a manifest without
+ * `source` is one of its), or the running server itself, every few minutes ("periodic") and at a clean shutdown.
+ */
+export const RESTART_MANIFEST_SOURCES = ["prepare", "periodic", "shutdown"] as const;
+export type RestartManifestSource = (typeof RESTART_MANIFEST_SOURCES)[number];
+
 export const restartManifestSchema = z
 	.object({
 		at: z.string(),
 		kanbanStart: z.string().nullable().optional(),
+		source: z.enum(RESTART_MANIFEST_SOURCES).optional(),
+		/** Set by restart recovery once it has planned this start with the manifest (markRestartManifestPlanned). */
+		plannedAt: z.string().optional(),
 		cards: z.array(restartManifestCardSchema),
 	})
 	.passthrough();
 export type RestartManifest = z.infer<typeof restartManifestSchema>;
 export type RestartManifestCard = z.infer<typeof restartManifestCardSchema>;
+
+/** Written by the server itself (periodic or shutdown), not by `kanban restart prepare`. */
+export function isServerWrittenManifest(manifest: RestartManifest): boolean {
+	return manifest.source === "periodic" || manifest.source === "shutdown";
+}
 
 export interface RestartOrphan {
 	taskId: string;
@@ -49,6 +70,8 @@ export interface RestartOrphan {
 	reason: string;
 	/** From the manifest: the WIP tag `kanban restart prepare` made for this restart. */
 	wipTag: string | null;
+	/** A tag a server-written manifest listed: not reused (the work may have changed since), only logged. */
+	earlierWipTag?: string | null;
 }
 
 export interface RestartRecoveryPlan {
@@ -76,6 +99,12 @@ const BLOCKED_TITLE = /^BLOCKED: /;
 export const MANIFEST_FROM_OTHER_HOME_MAX_AGE_MS = 24 * 3_600_000;
 
 /**
+ * How old a server-written manifest may be when this server starts. The writer refreshes it every few minutes, so its
+ * age is about how long Kanban was down; after a longer outage recovery goes by the session summaries, as without one.
+ */
+export const SERVER_WRITTEN_MANIFEST_MAX_AGE_MS = 24 * 3_600_000;
+
+/**
  * A manifest is for the very next server start only: written before `serverStartedAt` by the server that ran just
  * before this one. Normally that server's start (`kanbanStart`) equals `previousServerStartedAt`, from the start
  * record this server replaced. `kanban home migrate` copies the start record with `data/`, but a home moved by hand
@@ -83,6 +112,9 @@ export const MANIFEST_FROM_OTHER_HOME_MAX_AGE_MS = 24 * 3_600_000;
  * no server started on this home after the writer, and the manifest counts if it is recent (MANIFEST_FROM_OTHER_HOME_MAX_AGE_MS; a home move
  * happens in a restart window). Anything else is stale (a manifest no start used, from weeks ago, one written without
  * a known server, or one a later server on this home already had) and is never replayed; recovery deletes it.
+ * A server-written manifest (the periodic one a crash leaves) must also be at most SERVER_WRITTEN_MANIFEST_MAX_AGE_MS
+ * old. One written under this very server is for the next start (the CLI's `restart recover --dry-run` asks "as if
+ * restarted now" by passing the running server as the previous one).
  */
 export function isManifestForStart(
 	manifest: RestartManifest | null,
@@ -95,6 +127,9 @@ export function isManifestForStart(
 	const at = Date.parse(manifest.at);
 	const writerStartedAt = Date.parse(manifest.kanbanStart);
 	if (!(at < serverStartedAt) || !(writerStartedAt <= at)) {
+		return false;
+	}
+	if (isServerWrittenManifest(manifest) && serverStartedAt - at > SERVER_WRITTEN_MANIFEST_MAX_AGE_MS) {
 		return false;
 	}
 	if (previousServerStartedAt === writerStartedAt) {
@@ -154,11 +189,35 @@ export function planRestartRecovery(input: PlanRestartRecoveryInput): RestartRec
 		if (!lostToRestart(session, serverStartedAt)) {
 			continue; // it has a process in this server, or this server started it and it ended normally
 		}
+		const reuseTags = manifestUsable !== null && !isServerWrittenManifest(manifestUsable);
 		const orphan = (reason: string) =>
-			plan.orphans.push({ taskId: card.id, role, column, reason, wipTag: listed?.wipTag ?? null });
+			plan.orphans.push({
+				taskId: card.id,
+				role,
+				column,
+				reason,
+				wipTag: reuseTags ? (listed?.wipTag ?? null) : null,
+				...(!reuseTags && listed?.wipTag ? { earlierWipTag: listed.wipTag } : {}),
+			});
 		// A listed card whose session started after the manifest was written has been resumed since.
-		if (listed && !(session?.startedAt && session.startedAt > Date.parse(manifestUsable?.at ?? ""))) {
-			orphan(`in the restart manifest of ${manifestUsable?.at}`);
+		if (listed && manifestUsable && !(session?.startedAt && session.startedAt > Date.parse(manifestUsable.at))) {
+			const changedAt = session ? (session.stateChangedAt ?? session.updatedAt ?? 0) : 0;
+			// Its turn ended after the manifest was written, whoever wrote it: finished work is finished (a periodic
+			// manifest can be minutes older than the crash, a prepare one seconds older than the stop).
+			if (session && !ORPHAN_STATES.has(session.state) && changedAt > Date.parse(manifestUsable.at)) {
+				plan.skipped.push({
+					taskId: card.id,
+					why: `session ${session.state} since ${new Date(changedAt).toISOString()}, after the restart manifest: finished work`,
+				});
+				continue;
+			}
+			// `kanban restart prepare` lists its cards on purpose; the server's own manifest lists every "running"
+			// session, an idle Cline TUI after its final reply included (1a7a32a), so those cards get the turn check.
+			if (isServerWrittenManifest(manifestUsable) && input.turnEnded(card)) {
+				plan.skipped.push({ taskId: card.id, why: "its turn had ended before the restart: finished work" });
+				continue;
+			}
+			orphan(`in the restart manifest of ${manifestUsable.at}`);
 			continue;
 		}
 		if (!session) {
@@ -186,6 +245,47 @@ export function planRestartRecovery(input: PlanRestartRecoveryInput): RestartRec
 		);
 	}
 	return plan;
+}
+
+export interface RestartManifestCandidate {
+	card: RuntimeBoardCard;
+	column: "in_progress" | "review";
+	role: RuntimeTaskRole;
+	model: string | null;
+	/** Why the card is not listed, or null when it is. */
+	notListed: string | null;
+}
+
+/**
+ * The In Progress / Review cards a restart manifest is about, and which of them it lists: only cards whose agent is
+ * mid-work (a Review card whose turn ended waits for QA, nothing to resume; an In Progress card without a summary was
+ * already left without a process by a restart before this one), never calibration, triage or plan cards. Shared by
+ * `kanban restart prepare` and the server's own writer, so both list the same cards.
+ */
+export function listRestartManifestCandidates(
+	columns: readonly RuntimeBoardColumn[],
+	sessionOf: (taskId: string) => { state: string; modelId?: string | null } | null | undefined,
+): RestartManifestCandidate[] {
+	const candidates: RestartManifestCandidate[] = [];
+	for (const column of columns) {
+		if (column.id !== "in_progress" && column.id !== "review") {
+			continue;
+		}
+		for (const card of column.cards) {
+			const role = resolveCardRole(card);
+			const session = sessionOf(card.id) ?? null;
+			let notListed: string | null = null;
+			if (session ? session.state !== "running" : column.id !== "in_progress") {
+				notListed = `session ${session?.state ?? "none"}, not running`;
+			} else if (role === "calibration" || role === "triage" || role === "plan") {
+				notListed =
+					role === "plan" ? "a plan card is resumed by hand (kanban task resume)" : "left to its own runner";
+			}
+			const model = card.agentSettings?.modelId ?? session?.modelId ?? null;
+			candidates.push({ card, column: column.id, role, model, notListed });
+		}
+	}
+	return candidates;
 }
 
 async function readJson(path: string): Promise<unknown> {
@@ -223,15 +323,62 @@ export async function readRestartManifest(workspaceId: string): Promise<RestartM
 	return parsed.success ? parsed.data : null;
 }
 
-export async function writeRestartManifest(workspaceId: string, manifest: RestartManifest): Promise<string> {
+/** Atomic. `alreadyLocked`: the caller holds the manifest's file lock (withRestartManifestLock). */
+export async function writeRestartManifest(
+	workspaceId: string,
+	manifest: RestartManifest,
+	options: { alreadyLocked?: boolean } = {},
+): Promise<string> {
 	const path = getRestartManifestPath(workspaceId);
 	await mkdir(dirname(path), { recursive: true });
-	await lockedFileSystem.writeJsonFileAtomic(path, manifest);
+	await lockedFileSystem.writeJsonFileAtomic(path, manifest, options.alreadyLocked ? { lock: null } : {});
 	return path;
 }
 
-export async function removeRestartManifest(workspaceId: string): Promise<void> {
-	await rm(getRestartManifestPath(workspaceId), { force: true });
+/** Runs `operation` holding the manifest's file lock, the one every manifest write takes. */
+export async function withRestartManifestLock<T>(workspaceId: string, operation: () => Promise<T>): Promise<T> {
+	const path = getRestartManifestPath(workspaceId);
+	await mkdir(dirname(path), { recursive: true });
+	return await lockedFileSystem.withLock({ path, type: "file" }, operation);
+}
+
+function isSameManifest(current: RestartManifest | null, planned: RestartManifest): current is RestartManifest {
+	return current !== null && current.at === planned.at && current.kanbanStart === planned.kanbanStart;
+}
+
+/**
+ * Records that restart recovery has planned this start with `planned` (only while the file is still that manifest).
+ * The file stays until the resumes are done (a worker restart in between plans again), but the running server's
+ * writer stops holding back for it and may replace it with its own (src/server/restart-manifest-writer.ts).
+ */
+export async function markRestartManifestPlanned(
+	workspaceId: string,
+	planned: RestartManifest,
+	at: Date = new Date(),
+): Promise<void> {
+	await withRestartManifestLock(workspaceId, async () => {
+		const current = await readRestartManifest(workspaceId);
+		if (isSameManifest(current, planned) && !current.plannedAt) {
+			await writeRestartManifest(workspaceId, { ...current, plannedAt: at.toISOString() }, { alreadyLocked: true });
+		}
+	});
+}
+
+/**
+ * Deletes the workspace's manifest. With `planned`, only while the file is still that manifest: the running server
+ * may have replaced it with its own since recovery read it, and that one is for the next start.
+ */
+export async function removeRestartManifest(workspaceId: string, planned?: RestartManifest): Promise<void> {
+	const path = getRestartManifestPath(workspaceId);
+	if (!planned) {
+		await rm(path, { force: true });
+		return;
+	}
+	await withRestartManifestLock(workspaceId, async () => {
+		if (isSameManifest(await readRestartManifest(workspaceId), planned)) {
+			await rm(path, { force: true });
+		}
+	});
 }
 
 // One "<iso> <workspaceId>" line per `kanban restart recover` request; a line without a workspace asks for all.

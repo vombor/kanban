@@ -236,8 +236,11 @@ server and has no process is an **orphan**, unless its turn had already ended (f
 Nothing nudges, QA's, snapshots or escalates an orphan. Dev orphans are resumed one at a time, 20 s apart, on the
 same model, after a WIP tag `preserve/<id>-wip-<stamp>-restart`. Mid-run QA cards are recreated for the same
 snapshot, and calibration cards are left to their runner. `kanban restart prepare` tags the WIP and writes `restart-manifest.json` (the image entrypoint runs it on every
-container stop, after the legacy `kit prepare-restart`). A manifest is used only by the start right after the
-server that wrote it, and is never replayed. Until the cutover, the legacy autoland does this (since kit `a2b4695`
+container stop, after the legacy `kit prepare-restart`). The server also writes the manifest itself, without WIP
+tags, every 5 minutes, 15 s after an In Progress/Review change and at a clean shutdown, so a crash, OOM kill or power
+loss still leaves one a few minutes old. It never carries a tag over, and recovery always tags its cards fresh at
+resume. Its cards also get the "turn had ended" check, and one more than a day old is ignored. A listed card whose
+session ended its turn after any manifest was written, prepare's included, is finished work, not an orphan. A manifest is used only by the start right after the server that wrote it, and is never replayed. Until the cutover, the legacy autoland does this (since kit `a2b4695`
 it also resumes Claude cards with `claude --continue` and a short resume note), and the runtime only reports it.
 
 ## 11. Models

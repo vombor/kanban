@@ -51,6 +51,7 @@ import { applyCliSessionScope } from "./isolation/cli-scope";
 import type { PipelineWorkerHost } from "./pipeline/worker-host";
 import { disablePasscode, generateInternalToken, generatePasscode } from "./security/passcode-manager";
 import type { AutoReviewReconciler } from "./server/auto-review-reconciler";
+import type { RestartManifestWriter } from "./server/restart-manifest-writer";
 import type { RuntimeStateHub } from "./server/runtime-state-hub";
 import type { SessionColumnSync } from "./server/session-column-sync";
 import { setKanbanHomeOverride } from "./state/kanban-home";
@@ -350,6 +351,7 @@ async function startServer(): Promise<{
 		{ createAutoReviewReconciler },
 		{ createPipelineWorkerHost },
 		{ readServerStartRecord, writeServerStartRecord },
+		{ createRestartManifestWriter },
 		{ createRuntimeServer },
 		{ createRuntimeStateHub },
 		{ createSessionColumnSync },
@@ -367,6 +369,7 @@ async function startServer(): Promise<{
 		import("./server/auto-review-reconciler.js"),
 		import("./pipeline/worker-host.js"),
 		import("./pipeline/restart-recovery.js"),
+		import("./server/restart-manifest-writer.js"),
 		import("./server/runtime-server.js"),
 		import("./server/runtime-state-hub.js"),
 		import("./server/session-column-sync.js"),
@@ -381,6 +384,7 @@ async function startServer(): Promise<{
 	let autoReviewReconciler: AutoReviewReconciler | undefined;
 	let sessionColumnSync: SessionColumnSync | undefined;
 	let pipelineWorkerHost: PipelineWorkerHost | undefined;
+	let restartManifestWriter: RestartManifestWriter | undefined;
 	// Read once: the server's session sync and the browser (runtime config response) must agree on who moves cards.
 	const sessionSyncSetting = await readSessionSyncSetting();
 	if (sessionSyncSetting.warning) {
@@ -460,6 +464,7 @@ async function startServer(): Promise<{
 		sessionSummaryPersister.untrackWorkspace(workspaceId);
 		autoReviewReconciler?.untrackWorkspace(workspaceId);
 		pipelineWorkerHost?.forgetWorkspace(workspaceId);
+		restartManifestWriter?.forgetWorkspace(workspaceId);
 		return disposed;
 	};
 
@@ -609,6 +614,35 @@ async function startServer(): Promise<{
 			`[kanban] could not record the server start: ${error instanceof Error ? error.message : String(error)}`,
 		);
 	});
+	// The server keeps every workspace's restart manifest fresh itself, so a crash without `kanban restart prepare`
+	// still leaves restart recovery one at most a few minutes old (src/server/restart-manifest-writer.ts).
+	const manifestWriter = createRestartManifestWriter({
+		listWorkspaceIds: () => workspaceRegistry.listManagedWorkspaces().map((workspace) => workspace.workspaceId),
+		loadWorkspace: async (workspaceId) => {
+			const state = await loadWorkspaceStateById(workspaceId);
+			if (!state) {
+				return null;
+			}
+			const liveSummaries = workspaceRegistry.getTerminalManagerForWorkspace(workspaceId)?.listSummaries() ?? [];
+			return {
+				board: state.board,
+				sessions: {
+					...state.sessions,
+					...Object.fromEntries(liveSummaries.map((summary) => [summary.taskId, summary])),
+				},
+			};
+		},
+		serverStartedAt,
+		previousServerStartedAt,
+		warn: (message) => {
+			console.warn(`[kanban] ${message}`);
+		},
+	});
+	const unsubscribeManifestActivity = runtimeHub.onWorkspaceActivity((activity) =>
+		manifestWriter.notifyActivity(activity),
+	);
+	manifestWriter.start();
+	restartManifestWriter = manifestWriter;
 	const workerHost = createPipelineWorkerHost({
 		listWorkspaces: () => workspaceRegistry.listManagedWorkspaces(),
 		handleWatchdogRequest: runtimeServer.handleWatchdogRequest,
@@ -681,6 +715,8 @@ async function startServer(): Promise<{
 		sessionColumnSync?.close();
 		autoReviewReconciler?.close();
 		unsubscribePipelineActivity();
+		unsubscribeManifestActivity();
+		await restartManifestWriter?.close();
 		await pipelineWorkerHost?.close();
 		await sessionSummaryPersister.close();
 		await runtimeServer.close();
@@ -690,9 +726,11 @@ async function startServer(): Promise<{
 		// Stop auto-review before session cleanup so it cannot arm or trigger git
 		// actions while shutdown is interrupting sessions and sweeping the board. Session sync stops too: shutdown
 		// writes the board itself. The summary persister writes what it has queued and stops, so the summaries on disk
-		// are the ones from before shutdown stopped the sessions (restart recovery reads them).
+		// are the ones from before shutdown stopped the sessions (restart recovery reads them). The restart manifest is
+		// written once more for the same reason, while the sessions still run.
 		sessionColumnSync?.close();
 		autoReviewReconciler?.close();
+		await restartManifestWriter?.close({ finalSource: "shutdown" });
 		await pipelineWorkerHost?.close();
 		await sessionSummaryPersister.close();
 		await shutdownRuntimeServer({

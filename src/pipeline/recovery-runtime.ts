@@ -14,7 +14,12 @@ import type { PipelineDecisionLog } from "./decision-log";
 import { createPipelineStateStore, type PipelineStateStore } from "./pipeline-state";
 import type { RecoveryFlowPatch } from "./recovery";
 import { createRecoveryStage, type RecoveryStage, type RecoveryStageDependencies } from "./recovery-stage";
-import { consumeRestartRecoveryRequest, readRestartManifest, removeRestartManifest } from "./restart-recovery";
+import {
+	consumeRestartRecoveryRequest,
+	markRestartManifestPlanned,
+	readRestartManifest,
+	removeRestartManifest,
+} from "./restart-recovery";
 import { hasTrackedChanges, tagRestartWip } from "./wip-tag";
 
 // Gitignored report dirs a test run leaves behind; one of them overflowed a 131k context (0a3d1fc).
@@ -111,6 +116,7 @@ export function createWorkerRecoveryStage(options: {
 		hasTrackedChanges,
 		readManifest: readRestartManifest,
 		removeManifest: removeRestartManifest,
+		markManifestPlanned: async (workspaceId, planned) => await markRestartManifestPlanned(workspaceId, planned),
 		consumeRecoverRequest: consumeRestartRecoveryRequest,
 		updateCards: async (workspaceId, patches) => {
 			await options.store.update(workspaceId, (state) => ({

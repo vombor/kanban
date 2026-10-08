@@ -177,6 +177,86 @@ describe("planRestartRecovery", () => {
 		});
 		expect(bare.orphans.map((orphan) => orphan.taskId)).toEqual(["listed", "277f8"]);
 	});
+
+	it("checks the cards of the server's own (periodic) manifest for work that finished after it was written", () => {
+		const previous = SERVER_START - 3_600_000;
+		const manifestAt = SERVER_START - 5 * 60_000;
+		const listed = (id: string) => ({ id, column: "review", wipTag: null });
+		const manifest = {
+			at: new Date(manifestAt).toISOString(),
+			kanbanStart: new Date(previous).toISOString(),
+			source: "periodic" as const,
+			cards: [listed("mid"), listed("ended-later"), listed("idle-reply"), listed("lost")],
+		};
+		const cards = ["mid", "ended-later", "idle-reply", "lost"].map((id) => ({ card: card(id), column: "review" }));
+		const sessions = new Map([
+			["mid", session("mid", { stateChangedAt: manifestAt - 60_000 })],
+			// Its turn ended two minutes after the last periodic write, a minute before the crash.
+			["ended-later", session("ended-later", { state: "awaiting_review", stateChangedAt: manifestAt + 120_000 })],
+			["idle-reply", session("idle-reply")],
+		]);
+		const input = {
+			cards,
+			sessions,
+			serverStartedAt: SERVER_START,
+			previousServerStartedAt: previous,
+			turnEnded: (entry: RuntimeBoardCard) => entry.id === "idle-reply",
+		};
+		const plan = planRestartRecovery({ ...input, manifest });
+		expect(plan.manifestAt).toBe(manifest.at);
+		// "lost" has no summary (a Review card is only found through the manifest).
+		expect(plan.orphans.map((orphan) => orphan.taskId)).toEqual(["mid", "lost"]);
+		expect(Object.fromEntries(plan.skipped.map((entry) => [entry.taskId, entry.why]))).toEqual({
+			"ended-later": `session awaiting_review since ${new Date(manifestAt + 120_000).toISOString()}, after the restart manifest: finished work`,
+			"idle-reply": "its turn had ended before the restart: finished work",
+		});
+		// `kanban restart prepare` lists its cards on purpose: no turn check.
+		const prepared = planRestartRecovery({ ...input, manifest: { ...manifest, source: "prepare" } });
+		expect(prepared.orphans.map((orphan) => orphan.taskId)).toEqual(["mid", "idle-reply", "lost"]);
+	});
+
+	it("skips a prepare manifest's card whose turn ended after the manifest, and reuses only prepare's WIP tags", () => {
+		const previous = SERVER_START - 3_600_000;
+		const manifestAt = SERVER_START - 30_000;
+		const manifest = {
+			at: new Date(manifestAt).toISOString(),
+			kanbanStart: new Date(previous).toISOString(),
+			source: "prepare" as const,
+			cards: [
+				{ id: "mid", column: "in_progress", wipTag: "preserve/mid-wip-20261007T1159-restart" },
+				{ id: "done", column: "review", wipTag: "preserve/done-wip-20261007T1159-restart" },
+			],
+		};
+		const input = {
+			cards: [
+				{ card: card("mid"), column: "in_progress" },
+				{ card: card("done"), column: "review" },
+			],
+			// "done" finished its turn 10 s after prepare ran, before the container stopped.
+			sessions: new Map([
+				["mid", session("mid")],
+				["done", session("done", { state: "awaiting_review", stateChangedAt: manifestAt + 10_000 })],
+			]),
+			serverStartedAt: SERVER_START,
+			previousServerStartedAt: previous,
+			turnEnded: () => false,
+		};
+		const prepared = planRestartRecovery({ ...input, manifest });
+		expect(prepared.orphans.map((orphan) => [orphan.taskId, orphan.wipTag])).toEqual([
+			["mid", "preserve/mid-wip-20261007T1159-restart"],
+		]);
+		expect(prepared.skipped).toEqual([
+			{
+				taskId: "done",
+				why: `session awaiting_review since ${new Date(manifestAt + 10_000).toISOString()}, after the restart manifest: finished work`,
+			},
+		]);
+		// A tag in a server-written manifest is never reused: the worktree may have moved on, so resume tags fresh.
+		const periodic = planRestartRecovery({ ...input, manifest: { ...manifest, source: "periodic" } });
+		expect(periodic.orphans).toMatchObject([
+			{ taskId: "mid", wipTag: null, earlierWipTag: "preserve/mid-wip-20261007T1159-restart" },
+		]);
+	});
 });
 
 describe("restart manifest and recover requests", () => {
@@ -202,6 +282,27 @@ describe("restart manifest and recover requests", () => {
 			),
 		).toBe(false);
 		expect(isManifestForStart(null, SERVER_START, previous)).toBe(false);
+	});
+
+	it("takes the previous server's periodic manifest after a crash, unless it is more than a day old", () => {
+		const previous = SERVER_START - 30 * 86_400_000;
+		const writer = new Date(previous).toISOString();
+		const periodic = (age: number) => ({
+			at: new Date(SERVER_START - age).toISOString(),
+			kanbanStart: writer,
+			source: "periodic" as const,
+			cards: [],
+		});
+		// The server ran for a month, crashed, and came back 4 minutes after its last periodic write.
+		expect(isManifestForStart(periodic(4 * 60_000), SERVER_START, previous)).toBe(true);
+		expect(isManifestForStart(periodic(20 * 3_600_000), SERVER_START, previous)).toBe(true);
+		// Down for two days: recovery goes by the session summaries.
+		expect(isManifestForStart(periodic(2 * 86_400_000), SERVER_START, previous)).toBe(false);
+		expect(isManifestForStart({ ...periodic(2 * 86_400_000), source: "shutdown" }, SERVER_START, previous)).toBe(
+			false,
+		);
+		// A prepare manifest of the previous server counts at any age, as before.
+		expect(isManifestForStart({ ...periodic(2 * 86_400_000), source: "prepare" }, SERVER_START, previous)).toBe(true);
 	});
 
 	it("uses a manifest written under the previous home after a home move (P5-4, 10/07)", () => {
@@ -252,6 +353,27 @@ describe("restart manifest and recover requests", () => {
 			expect(await readRestartManifest("foo")).toEqual(manifest);
 			await removeRestartManifest("foo");
 			expect(existsSync(path)).toBe(false);
+		});
+	});
+
+	it("deletes a planned manifest only while the file is still that manifest", async () => {
+		await withTemporaryKanbanHome(async () => {
+			const planned = { at: "2026-10-07T11:55:00.000Z", kanbanStart: "2026-10-07T09:00:00.000Z", cards: [] };
+			const path = await writeRestartManifest("foo", planned);
+			// The running server replaced it with its own since recovery read it.
+			const own = {
+				at: "2026-10-07T12:10:00.000Z",
+				kanbanStart: "2026-10-07T12:00:00.000Z",
+				source: "periodic" as const,
+				cards: [],
+			};
+			await writeRestartManifest("foo", own);
+			await removeRestartManifest("foo", planned);
+			expect(await readRestartManifest("foo")).toEqual(own);
+			await writeRestartManifest("foo", planned);
+			await removeRestartManifest("foo", planned);
+			expect(existsSync(path)).toBe(false);
+			await removeRestartManifest("foo", planned);
 		});
 	});
 

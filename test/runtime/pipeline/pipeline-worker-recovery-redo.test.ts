@@ -88,6 +88,7 @@ describe("pipeline worker: a turn recovery redoes", () => {
 					hasTrackedChanges: async () => false,
 					readManifest: async () => null,
 					removeManifest: async () => {},
+					markManifestPlanned: async () => {},
 					consumeRecoverRequest: async () => false,
 					updateCards: async (workspaceId, patches) => {
 						await harness?.store.update(workspaceId, (state) => ({

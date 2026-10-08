@@ -94,7 +94,10 @@ export interface RecoveryStageDependencies {
 	tagRestartWip: (worktreePath: string, taskId: string) => Promise<string | null>;
 	hasTrackedChanges: (worktreePath: string) => Promise<boolean>;
 	readManifest: (workspaceId: string) => Promise<RestartManifest | null>;
-	removeManifest: (workspaceId: string) => Promise<void>;
+	/** Deletes the manifest recovery planned with, unless the file has been replaced since (removeRestartManifest). */
+	removeManifest: (workspaceId: string, planned: RestartManifest) => Promise<void>;
+	/** Records on the manifest that this start's recovery has planned with it (markRestartManifestPlanned). */
+	markManifestPlanned: (workspaceId: string, planned: RestartManifest) => Promise<void>;
 	consumeRecoverRequest: (workspaceId: string) => Promise<boolean>;
 	/** Merges each patch into the card's `qaflow` entry of pipeline-state.json. */
 	updateCards: (workspaceId: string, patches: ReadonlyMap<string, RecoveryFlowPatch>) => Promise<void>;
@@ -426,7 +429,11 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 		return records;
 	};
 
-	const resumeOrphans = async (input: RecoveryEvaluationInput, orphans: RestartOrphan[], manifestUsed: boolean) => {
+	const resumeOrphans = async (
+		input: RecoveryEvaluationInput,
+		orphans: RestartOrphan[],
+		manifestUsed: RestartManifest | null,
+	) => {
 		const { workspaceId } = input.snapshot;
 		const settings = input.config.pipeline.recovery;
 		for (const [index, orphan] of orphans.entries()) {
@@ -546,13 +553,13 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 			await deps.appendRecords([
 				record(
 					"acted",
-					`resumed on ${model} (${wipTag ? `WIP tag ${wipTag}` : "no WIP tag"}${launch.continueConversation ? ", conversation continued" : hasWip ? ", WIP note" : ", fresh"}); no FAIL round, nudge or escalation counted`,
+					`resumed on ${model} (${wipTag ? `WIP tag ${wipTag}` : "no WIP tag"}${orphan.earlierWipTag ? `; the manifest's earlier tag ${orphan.earlierWipTag} not reused` : ""}${launch.continueConversation ? ", conversation continued" : hasWip ? ", WIP note" : ", fresh"}); no FAIL round, nudge or escalation counted`,
 					context,
 				),
 			]);
 		}
 		if (manifestUsed) {
-			await deps.removeManifest(workspaceId);
+			await deps.removeManifest(workspaceId, manifestUsed);
 		}
 	};
 
@@ -613,10 +620,13 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 			turnEnded: (card) => ended.has(card.id),
 		});
 		// A manifest that isn't this start's (no start used it, or it predates the previous server) is never replayed.
-		const staleManifest = manifest !== null && plan.manifestAt === null;
+		// One this very server wrote (src/server/restart-manifest-writer.ts) is for the next start: left alone.
+		const ownManifest = manifest?.kanbanStart ? Date.parse(manifest.kanbanStart) === serverStartedAt : false;
+		const staleManifest = manifest !== null && plan.manifestAt === null && !ownManifest;
 		if (staleManifest) {
-			await deps.removeManifest(workspaceId);
+			await deps.removeManifest(workspaceId, manifest);
 		}
+		const usedManifest = plan.manifestAt !== null ? manifest : null;
 		const byId = new Map(contexts.map((context) => [context.card.id, context]));
 		const notActing = input.config.pipeline.recovery.mode === "on" ? "shadow" : "report";
 		const records: PipelineDecisionRecord[] = [
@@ -686,14 +696,18 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 				plannedNow.add(orphan.taskId);
 			}
 			recovering.add(workspaceId);
+			// Removed once the resumes are done; until then the running server's writer may replace it.
+			if (usedManifest) {
+				await deps.markManifestPlanned(workspaceId, usedManifest);
+			}
 			track(
-				resumeOrphans(input, devOrphans, plan.manifestAt !== null).finally(() => {
+				resumeOrphans(input, devOrphans, usedManifest).finally(() => {
 					recovering.delete(workspaceId);
 				}),
 			);
-		} else if (plan.manifestAt) {
+		} else if (usedManifest) {
 			// A manifest is for the next start only: once planned, it goes in report mode too.
-			await deps.removeManifest(workspaceId);
+			await deps.removeManifest(workspaceId, usedManifest);
 		}
 		return plan.orphans.length > 0 || asked || staleManifest ? records : [];
 	};

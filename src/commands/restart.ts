@@ -4,7 +4,9 @@
 //            every In Progress / Review dev card whose session is running (preserve/<id>-wip-<stamp>-restart,
 //            untracked files included) and writes data/<workspace>/restart-manifest.json. After the restart,
 //            restart recovery treats the listed cards as orphaned without guessing, reuses the tags, and deletes
-//            the manifest.
+//            the manifest. The running server keeps a manifest of its own up to date too (every few minutes, on
+//            In Progress/Review changes, at a clean shutdown; src/server/restart-manifest-writer.ts) for a crash with
+//            no prepare; this one adds the WIP tags, and the server leaves it in place for a while.
 //   recover  asks the pipeline worker to check a workspace for orphaned cards now; --dry-run prints what restart
 //            recovery would do with the live board instead.
 //
@@ -15,10 +17,11 @@ import type { Command } from "commander";
 
 import { getWorkspacePipelineSettings, readPipelineConfig } from "../config/pipeline-config";
 import type { RuntimeWorkspaceStateResponse } from "../core/api-contract";
-import { resolveCardRole } from "../core/card-role";
 import { getRecoveryScope, type PipelineSessionView } from "../pipeline/engine";
 import {
+	listRestartManifestCandidates,
 	planRestartRecovery,
+	type RestartManifest,
 	type RestartManifestCard,
 	readRestartManifest,
 	readRunningServerStart,
@@ -69,47 +72,35 @@ async function prepareWorkspace(
 ): Promise<number> {
 	const state = await readLiveState(target.workspaceId);
 	const cards: RestartManifestCard[] = [];
-	for (const column of state.board.columns) {
-		if (column.id !== "in_progress" && column.id !== "review") {
+	for (const { card, column, role, model, notListed } of listRestartManifestCandidates(
+		state.board.columns,
+		(taskId) => state.sessions[taskId],
+	)) {
+		if (notListed) {
+			print(`${card.id} (${role}, ${column}): ${notListed}; not listed`);
 			continue;
 		}
-		for (const card of column.cards) {
-			const role = resolveCardRole(card);
-			const session = state.sessions[card.id];
-			// Only cards whose agent is mid-work: a Review card whose turn ended waits for QA, nothing to resume. An In
-			// Progress card without a summary was already left without a process (a restart before this one).
-			if (session ? session.state !== "running" : column.id !== "in_progress") {
-				print(`${card.id} (${role}, ${column.id}): session ${session?.state ?? "none"}, not running; not listed`);
-				continue;
+		let wipTag: string | null = null;
+		if (role === "dev") {
+			const info = await getTaskWorkspacePathInfo({
+				cwd: target.repoPath,
+				taskId: card.id,
+				baseRef: card.baseRef,
+			}).catch(() => null);
+			if (info?.exists) {
+				wipTag = dryRun
+					? await nextRestartWipTag(info.path, card.id, new Date())
+					: await tagRestartWip(info.path, card.id);
 			}
-			if (role === "calibration" || role === "triage" || role === "plan") {
-				print(
-					`${card.id} (${role}, ${column.id}): ${role === "plan" ? "a plan card is resumed by hand (kanban task resume)" : "left to its own runner"}; not listed`,
-				);
-				continue;
-			}
-			let wipTag: string | null = null;
-			if (role === "dev") {
-				const info = await getTaskWorkspacePathInfo({
-					cwd: target.repoPath,
-					taskId: card.id,
-					baseRef: card.baseRef,
-				}).catch(() => null);
-				if (info?.exists) {
-					wipTag = dryRun
-						? await nextRestartWipTag(info.path, card.id, new Date())
-						: await tagRestartWip(info.path, card.id);
-				}
-			}
-			const model = card.agentSettings?.modelId ?? session?.modelId ?? null;
-			cards.push({ id: card.id, column: column.id, model, wipTag, kind: role });
-			print(`${card.id} (${role}, ${column.id}, ${model ?? "default model"})${wipTag ? `: WIP tag ${wipTag}` : ""}`);
 		}
+		cards.push({ id: card.id, column, model, wipTag, kind: role });
+		print(`${card.id} (${role}, ${column}, ${model ?? "default model"})${wipTag ? `: WIP tag ${wipTag}` : ""}`);
 	}
 	const kanbanStart = await readRunningServerStart(isProcessAlive);
-	const manifest = {
+	const manifest: RestartManifest = {
 		at: new Date().toISOString(),
 		kanbanStart: kanbanStart ? new Date(kanbanStart).toISOString() : null,
+		source: "prepare",
 		cards,
 	};
 	if (dryRun) {

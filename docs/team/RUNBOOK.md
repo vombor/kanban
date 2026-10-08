@@ -148,6 +148,15 @@ asks the worker to check now. Never restart the pod yourself: that is the user's
   summary. The server writes every session summary to `sessions.json` itself (at most once a second), so a Review
   card whose turn was still running is found from its summary too; a home from before that (277f8 on 10/07) may have
   none. The manifest adds the WIP tags.
+- **Unplanned restart** (crash, OOM kill, power loss, reboot): nothing to run first. The server rewrites
+  `restart-manifest.json` itself (`source: "periodic"`, every 5 min and 15 s after an In Progress/Review change;
+  `"shutdown"` at a clean stop; `src/server/restart-manifest-writer.ts`), so the next start finds one at most a few
+  minutes old. It has no WIP tags (a prepare manifest's tags are not carried over either): recovery tags the worktree
+  as the crash left it when it resumes. It is ignored when more than 24 h old. A new server's periodic writes leave the
+  previous server's manifest to restart recovery until recovery has planned with it (`plannedAt`), it is no longer the
+  file found at start, or 10 min have passed. Its shutdown write never waits. A `kanban restart prepare` manifest is left
+  alone for 30 min, the shutdown write included. All writes take the manifest's file lock. With any manifest, a listed
+  card whose session ended its turn after the manifest was written is finished work, not an orphan.
 - **Home move** (Kanban stopped, a one-off): `kanban home migrate --from <old home> --to ~/.kanban` (`--from` is
   required; `--from-worktrees <dir>` when the old home's config.json doesn't name its worktrees root). It copies
   config/workspaces/hooks/patches, all of `data/` (pipeline state, decision and QA logs, scoreboard, runoffs, plans,

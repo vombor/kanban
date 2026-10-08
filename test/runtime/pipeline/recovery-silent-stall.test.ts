@@ -113,6 +113,7 @@ describe("recovery: silent stalls of Cline cards", () => {
 			hasTrackedChanges: async () => false,
 			readManifest: async () => null,
 			removeManifest: async () => {},
+			markManifestPlanned: async () => {},
 			consumeRecoverRequest: async () => false,
 			updateCards: async (_workspaceId, patches: ReadonlyMap<string, RecoveryFlowPatch>) => {
 				cards = applyRecoveryPatches(cards, patches);

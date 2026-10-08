@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 
 import { getWorkspacePipelineSettings, parsePipelineConfig } from "../../../src/config/pipeline-config";
@@ -14,8 +15,17 @@ import {
 	type RecoveryActionResult,
 	type RecoveryStageDependencies,
 } from "../../../src/pipeline/recovery-stage";
-import type { RestartManifest } from "../../../src/pipeline/restart-recovery";
+import {
+	markRestartManifestPlanned,
+	type RestartManifest,
+	readRestartManifest,
+	removeRestartManifest,
+	writeRestartManifest,
+} from "../../../src/pipeline/restart-recovery";
+import { createRestartManifestWriter } from "../../../src/server/restart-manifest-writer";
+import { getRestartManifestPath } from "../../../src/state/kanban-home";
 import type { ClineSessionDetail } from "../../../src/terminal/cline-session-files";
+import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
 
 const NOW = Date.parse("2026-10-07T12:00:00.000Z");
 const SERVER_START = NOW - 5 * 60_000;
@@ -109,6 +119,7 @@ function createHarness(options: HarnessOptions = {}) {
 		removeManifest: async (workspaceId) => {
 			removedManifests.push(workspaceId);
 		},
+		markManifestPlanned: async () => {},
 		consumeRecoverRequest: options.consumeRecoverRequest ?? (async () => false),
 		updateCards: async (_workspaceId, patches: ReadonlyMap<string, RecoveryFlowPatch>) => {
 			cards = applyRecoveryPatches(cards, patches);
@@ -555,6 +566,122 @@ describe("recovery stage", () => {
 		expect(records[0]?.note).toContain("restart manifest of");
 		expect(harness.actions).toEqual([]);
 		expect(harness.removedManifests).toEqual(["foo"]);
+	});
+
+	it("after a crash (no prepare, no shutdown) resumes the cards of the crashed server's periodic manifest", async () => {
+		await withTemporaryKanbanHome(async () => {
+			const crashBoard = board({ in_progress: [card("dev1")], review: [card("dev2"), card("dev3")] });
+			const running = { state: "running" as const, modelId: null };
+			// The previous server's last periodic write, 4 minutes before it was killed (OOM, power loss).
+			const lastWriteAt = SERVER_START - 4 * 60_000;
+			const crashed = createRestartManifestWriter({
+				listWorkspaceIds: () => ["foo"],
+				loadWorkspace: async () => ({
+					board: crashBoard,
+					sessions: { dev1: running, dev2: running, dev3: running },
+				}),
+				serverStartedAt: PREVIOUS_START,
+				previousServerStartedAt: null,
+				now: () => lastWriteAt,
+			});
+			await crashed.writeAll("periodic");
+			// Killed: `crashed` is never closed, no shutdown write, no `kanban restart prepare`.
+
+			// The new server's own writer leaves that manifest to restart recovery.
+			const writer = createRestartManifestWriter({
+				listWorkspaceIds: () => ["foo"],
+				loadWorkspace: async () => ({ board: crashBoard, sessions: {} }),
+				serverStartedAt: SERVER_START,
+				previousServerStartedAt: PREVIOUS_START,
+				now: () => NOW,
+			});
+			await writer.writeAll("periodic");
+			expect((await readRestartManifest("foo"))?.kanbanStart).toBe(new Date(PREVIOUS_START).toISOString());
+
+			let asked = false;
+			const harness = createHarness({ consumeRecoverRequest: async () => asked });
+			harness.deps.readManifest = readRestartManifest;
+			harness.deps.removeManifest = removeRestartManifest;
+			harness.deps.markManifestPlanned = markRestartManifestPlanned;
+			// sessions.json after the crash: dev1's summary still "running"; dev2 has none (only the manifest knows it
+			// was mid-turn); dev3's turn ended after the last periodic write.
+			const snapshot = {
+				board: crashBoard,
+				sessions: [dead("dev1"), dead("dev3", { state: "awaiting_review", stateChangedAt: lastWriteAt + 60_000 })],
+				serverStartedAt: SERVER_START,
+				previousServerStartedAt: PREVIOUS_START,
+			};
+			const records = await harness.evaluate(snapshot);
+			expect(records[0]?.note).toContain(`restart manifest of ${new Date(lastWriteAt).toISOString()}`);
+			expect(records[0]?.note).toContain("2 orphaned card(s)");
+			expect(harness.actions.filter((action) => action.kind === "resume").map((action) => action.taskId)).toEqual([
+				"dev1",
+				"dev2",
+			]);
+			// Used once: gone, so the next start never replays it.
+			expect(existsSync(getRestartManifestPath("foo"))).toBe(false);
+
+			// The new server's own manifest is for the next start: a later check leaves it alone.
+			await writer.writeAll("periodic");
+			const own = await readRestartManifest("foo");
+			expect(own).toMatchObject({ kanbanStart: new Date(SERVER_START).toISOString(), source: "periodic" });
+			asked = true;
+			const again = await harness.evaluate(snapshot);
+			expect(again[0]?.note).not.toContain("dropped a stale restart manifest");
+			expect(await readRestartManifest("foo")).toEqual(own);
+			await writer.close();
+		});
+	});
+
+	it("tags fresh after a crash 3 h after a `kanban restart prepare` that no restart followed", async () => {
+		await withTemporaryKanbanHome(async () => {
+			const crashedStart = SERVER_START - 6 * 3_600_000;
+			const crashBoard = board({ in_progress: [card("dev1")] });
+			const preparedAt = SERVER_START - 3 * 3_600_000;
+			await writeRestartManifest("foo", {
+				at: new Date(preparedAt).toISOString(),
+				kanbanStart: new Date(crashedStart).toISOString(),
+				source: "prepare",
+				cards: [{ id: "dev1", column: "in_progress", wipTag: "preserve/dev1-wip-20261007T0900-restart" }],
+			});
+			// The crashed server went on writing its own manifests after the prepare hold, until 4 min before the crash.
+			let clock = preparedAt + 31 * 60_000;
+			const crashed = createRestartManifestWriter({
+				listWorkspaceIds: () => ["foo"],
+				loadWorkspace: async () => ({ board: crashBoard, sessions: { dev1: { state: "running", modelId: null } } }),
+				serverStartedAt: crashedStart,
+				previousServerStartedAt: null,
+				now: () => clock,
+			});
+			await crashed.writeAll("periodic");
+			clock = SERVER_START - 4 * 60_000;
+			await crashed.writeAll("periodic");
+			expect(await readRestartManifest("foo")).toMatchObject({ source: "periodic", cards: [{ wipTag: null }] });
+
+			const harness = createHarness();
+			harness.deps.readManifest = readRestartManifest;
+			harness.deps.removeManifest = removeRestartManifest;
+			const mark = vi.fn(markRestartManifestPlanned);
+			harness.deps.markManifestPlanned = mark;
+			const records = await harness.evaluate({
+				board: crashBoard,
+				sessions: [dead("dev1")],
+				serverStartedAt: SERVER_START,
+				previousServerStartedAt: crashedStart,
+			});
+			expect(harness.actions.filter((action) => action.kind === "resume").map((action) => action.taskId)).toEqual([
+				"dev1",
+			]);
+			// The harness's tagRestartWip: the worktree as the crash left it, not the 3-hour-old prepare tag.
+			const resumed = records.find(
+				(record) => record.taskId === "dev1" && record.outcome === "acted" && record.note?.startsWith("resumed"),
+			);
+			expect(resumed?.note).toContain("WIP tag preserve/dev1-wip-20261007T1200-restart");
+			expect(resumed?.note).not.toContain("20261007T0900");
+			// Planned before the resumes, so the new server's writer stops holding back; removed once they are done.
+			expect(mark).toHaveBeenCalledWith("foo", expect.objectContaining({ source: "periodic" }));
+			expect(await readRestartManifest("foo")).toBeNull();
+		});
 	});
 
 	it("never replays a stale manifest (a landing-off workspace's, weeks old) when recovery is switched on", async () => {
