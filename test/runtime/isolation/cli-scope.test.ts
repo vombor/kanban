@@ -113,6 +113,7 @@ describe("applyCliSessionScope", () => {
 				"isolation grant",
 				"isolation approve",
 				"cline apply-lemonade-models",
+				"cline remove-bedrock-key",
 			]) {
 				expect(
 					await applyCliSessionScope({

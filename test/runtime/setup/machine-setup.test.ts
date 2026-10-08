@@ -91,9 +91,18 @@ describe("kanban setup steps", () => {
 			paths.clineProviders,
 			JSON.stringify({ providers: { bedrock: { settings: { apiKey: "k", aws: { region: "eu-west-1" } } } } }),
 		);
-		expect(byId(await plan(), "cline-providers")).toMatchObject({
-			status: "ok",
-			details: ["bedrock key from providers.json, region eu-west-1"],
+		// A stored key works, but the environment is recommended: the step is manual and names the user's command.
+		const storedOnly = byId(await plan(), "cline-providers");
+		expect(storedOnly.status).toBe("manual");
+		expect(storedOnly.details).toEqual([
+			`Cline stores a Bedrock API key in plain text in ${paths.clineProviders}; provide it as AWS_BEARER_TOKEN_BEDROCK in Kanban's environment instead (podman: Secret=<secret name>,type=env,target=AWS_BEARER_TOKEN_BEDROCK), then remove the stored one: run \`kanban cline remove-bedrock-key\``,
+		]);
+		const storedAndEnv = byId(await plan({ env: { AWS_BEARER_TOKEN_BEDROCK: "k" } }), "cline-providers");
+		expect(storedAndEnv).toMatchObject({
+			status: "manual",
+			details: [
+				`Cline stores a Bedrock API key in ${paths.clineProviders}; the environment already provides it (the same value as AWS_BEARER_TOKEN_BEDROCK): run \`kanban cline remove-bedrock-key\``,
+			],
 		});
 		const settingsFiles = readdirSync(join(root, "cline", "data", "settings"));
 		expect(settingsFiles).toEqual(["providers.json"]);

@@ -10,6 +10,7 @@ import { loadGlobalRuntimeConfig } from "../config/runtime-config";
 import { resolveGitHubAuth } from "../issues/issue-auth";
 import { loadKitCatalog } from "../kits/resolve-kit";
 import { resolveProjectRoots } from "../projects/project-roots";
+import type { ClineKeyLauncherDeps } from "../setup/cline-bedrock-key";
 import { buildLemonadeModelListUrl, planClineModelsSource } from "../setup/cline-models-source";
 import { planMachineSetup } from "../setup/machine-setup";
 import { getAgentTrustConfigPaths } from "../setup/workspace-trust-report";
@@ -22,6 +23,7 @@ import {
 } from "../state/kanban-home";
 import { readLiveKanbanServerLock } from "../state/kanban-server-lock";
 import { listWorkspaceIndexEntries, loadWorkspaceBoardById } from "../state/workspace-state";
+import { checkClineBedrockKey } from "./cline-bedrock-key-checks";
 import { checkKanbanFilesUnderClineDir } from "./cline-dir-checks";
 import { checkClineLemonadeModels } from "./cline-models-checks";
 import { createDeepCheckDeps, type DeepCheckDeps, runDeepChecks } from "./deep-checks";
@@ -57,6 +59,8 @@ export interface DoctorOptions {
 	githubAuthDeps?: GitHubAuthCheckDeps;
 	/** Test hook: the fetch the Lemonade models row asks Lemonade with. */
 	fetch?: typeof fetch;
+	/** Test hook: where the Bedrock key row looks for the server and the Cline hub daemons (default /proc). */
+	clineKeyLauncherDeps?: ClineKeyLauncherDeps;
 	/** Test hook: the issue import rows' remotes, state and auth source. */
 	issueDeps?: IssueCheckDeps;
 }
@@ -120,9 +124,22 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
 				origin: options.origin,
 				legacyKitInstalled: legacyKit.raw !== null,
 				config,
-				skipSteps: ["cline-lemonade-models"],
+				// Both have their own doctor rows (Lemonade asked once; the Bedrock key row also compares the server's
+				// and the hub daemons' env).
+				skipSteps: ["cline-lemonade-models", "cline-providers"],
 			}),
 		),
+	);
+	findings.push(
+		...(await checkClineBedrockKey({
+			providersPath: getClineProvidersSettingsPath(config.agents.cline.dataDir),
+			defaultProvider: config.models.providers.default,
+			bedrockRegion: config.models.bedrockRegion,
+			env: process.env,
+			launcherDeps: options.clineKeyLauncherDeps ?? {
+				serverPid: readLiveKanbanServerLock(home.homePath)?.pid ?? null,
+			},
+		})),
 	);
 	findings.push(...(await checkGitHubAuth(options.githubAuthDeps)));
 	const clineModelsPath = getClineModelsSettingsPath(config.agents.cline.dataDir);

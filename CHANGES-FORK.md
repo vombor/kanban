@@ -769,3 +769,17 @@ of this repository is the complete record of changes.
   the pushed tag a lightweight ref, so the tag fetch runs with `--force` to replace it with the annotated tag (a plain
   fetch refused it as "would clobber existing tag"). The compare link picks the previous fork tag (`v*-fork.*`) and
   falls back to the nearest tag only when there is none.
+- `src/setup/cline-bedrock-key.ts`, `src/setup/cline-file-write.ts`, `src/setup/cline-lemonade-apply.ts`,
+  `src/setup/machine-setup.ts`, `src/doctor/cline-bedrock-key-checks.ts`, `src/doctor/run-doctor.ts`,
+  `src/commands/cline.ts`, `src/isolation/cli-scope.ts`, `docs/fork/cline-bedrock-auth.md`, `docs/fork/github-auth.md`,
+  tests: Cline's Bedrock key comes from the environment (`AWS_BEARER_TOKEN_BEDROCK`, the podman secret
+  `Secret=<name>,type=env,target=AWS_BEARER_TOKEN_BEDROCK`), not from Cline's providers.json. cline 3.0.69 falls back
+  to the env key only while providers.json stores none. This was verified with real runs, both direct and in its hub
+  daemon. `kanban doctor` has a row that warns when providers.json stores a key the environment already provides. It
+  also says so when the env var is missing but Bedrock is in use, and flags a running Kanban server or Cline hub
+  daemon that doesn't have the same value. It never prints a key, only whether one is stored and whether it equals the
+  env's. `kanban setup`'s `cline-providers` step recommends the env var in the same words. The new user-only command
+  `kanban cline remove-bedrock-key [--dry-run]` deletes only `providers.bedrock.settings.apiKey`. It refuses without
+  the env var, while the server or a hub daemon lacks the same value, or when stored access keys would take over.
+  Agent sessions are refused it too. It backs up to `<home>/backups/cline/` first, writes atomically and prints the
+  rollback line. The backup and atomic-write helpers moved out of `cline-lemonade-apply.ts` into `cline-file-write.ts`.
