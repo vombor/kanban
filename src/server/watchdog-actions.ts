@@ -6,10 +6,10 @@
 //   - prune-done edits the board under the workspace lock and tells the browsers;
 //   - the PID-pressure sweep is the orphan process sweeper's own sweep;
 //   - project isolation: a wake for one workspace's board never types into or starts another workspace's
-//     orchestrator under `enforce` (the watchdog redirects such a wake home; this is the server's own check), and a
-//     headless orchestrator run gets its workspace's session credential, bound to the run's pid.
+//     orchestrator, in any isolation mode (the watchdog only ever wakes a workspace's own orchestrator; this is the
+//     server's own check, docs/fork/watchdog-isolation.md), and a headless orchestrator run gets its workspace's
+//     session credential, bound to the run's pid.
 
-import type { PipelineConfig } from "../config/pipeline-config";
 import type {
 	RuntimeProcessSweepResult,
 	RuntimeTaskSessionStartRequest,
@@ -21,7 +21,6 @@ import {
 	isHomeAgentSessionIdForWorkspace,
 } from "../core/home-agent-session";
 import type { IsolationService } from "../isolation/isolation-service";
-import { readIsolationConfig, resolveReachIsolationMode } from "../isolation/isolation-settings";
 import type { WatchdogActionRequest, WatchdogActionResults } from "../pipeline/watchdog/actions";
 import { pruneDoneCards } from "../pipeline/watchdog/prune-done";
 import { deliverTaskInput, type TaskInputTerminal } from "../terminal/deliver-task-input";
@@ -43,8 +42,6 @@ export interface WatchdogActionDependencies {
 	runProcessSweep: () => Promise<{ supported: boolean; lastSweep: RuntimeProcessSweepResult | null }>;
 	onBoardMutated: (scope: WatchdogActionScope) => Promise<void>;
 	pruneDone?: typeof pruneDoneCards;
-	/** config.json for the isolation check; defaults to reading it. */
-	readConfig?: () => Promise<PipelineConfig>;
 	/** The isolation service's credentials (absent: headless runs get none). */
 	credentials?: Pick<IsolationService, "issueCredential" | "bindCredential">;
 }
@@ -61,19 +58,17 @@ export function createWatchdogActionHandler(
 		return { workspaceId, workspacePath };
 	};
 
-	const readConfig = deps.readConfig ?? readIsolationConfig;
-	/** Why an action of `fromWorkspaceId`'s board may not reach `workspaceId`'s orchestrator, or null. */
-	const refuseCrossWorkspace = async (
-		fromWorkspaceId: string | undefined,
-		workspaceId: string,
-	): Promise<string | null> => {
-		if (!fromWorkspaceId || fromWorkspaceId === workspaceId) {
-			return null;
+	/**
+	 * Why an action for `fromWorkspaceId`'s board may not reach `workspaceId`'s orchestrator, or null. A missing
+	 * `fromWorkspaceId` is refused too (an old worker build, or a caller that left it out), so the check can't be skipped.
+	 */
+	const refuseCrossWorkspace = (fromWorkspaceId: string | undefined, workspaceId: string): string | null => {
+		if (!fromWorkspaceId) {
+			return `Project isolation: a wake for ${workspaceId}'s orchestrator must name the workspace it is for (fromWorkspaceId).`;
 		}
-		const mode = resolveReachIsolationMode(await readConfig(), fromWorkspaceId, workspaceId);
-		return mode === "enforce"
-			? `Project isolation: ${fromWorkspaceId}'s board can't wake ${workspaceId}'s orchestrator.`
-			: null;
+		return fromWorkspaceId === workspaceId
+			? null
+			: `Project isolation: ${fromWorkspaceId}'s board can't wake ${workspaceId}'s orchestrator.`;
 	};
 
 	return async (request) => {
@@ -93,7 +88,12 @@ export function createWatchdogActionHandler(
 						error: `${request.taskId} is not ${request.workspaceId}'s orchestrator session.`,
 					};
 				}
-				const refused = await refuseCrossWorkspace(request.fromWorkspaceId, request.workspaceId);
+				// Card sessions also take input from recovery and the QA gate, which name no board; an orchestrator session
+				// only from its own board, and the field is required for it.
+				const refused =
+					isHomeAgentSessionId(request.taskId) || request.fromWorkspaceId !== undefined
+						? refuseCrossWorkspace(request.fromWorkspaceId, request.workspaceId)
+						: null;
 				if (refused) {
 					return { ok: false, status: "error", evidence: null, enterAttempts: 0, summary: null, error: refused };
 				}
@@ -107,7 +107,7 @@ export function createWatchdogActionHandler(
 			}
 			case "startOrchestratorSession": {
 				const taskId = createHomeAgentSessionId(request.workspaceId, request.agentId);
-				const refused = await refuseCrossWorkspace(request.fromWorkspaceId, request.workspaceId);
+				const refused = refuseCrossWorkspace(request.fromWorkspaceId, request.workspaceId);
 				if (refused) {
 					return { ok: false, taskId, error: refused };
 				}

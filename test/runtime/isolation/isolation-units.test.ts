@@ -158,17 +158,19 @@ describe("orchestrator message text", () => {
 });
 
 describe("watchdog actions under project isolation", () => {
-	function handler(raw: Record<string, unknown>) {
+	function handler() {
+		const getTerminal = vi.fn(async () => {
+			throw new Error("no terminal in this test");
+		});
 		const startTaskSession = vi.fn(async () => ({ ok: true, summary: null }));
 		const issued: AgentSessionIdentity[] = [];
 		const bound: { credential: string; pid: number }[] = [];
 		const handle = createWatchdogActionHandler({
 			getWorkspacePathById: (workspaceId) => `/projects/${workspaceId}`,
-			getTerminal: async () => ({}) as never,
+			getTerminal,
 			startTaskSession,
 			runProcessSweep: async () => ({ supported: false, lastSweep: null }),
 			onBoardMutated: async () => {},
-			readConfig: async () => parsePipelineConfig(raw).config,
 			credentials: {
 				issueCredential: (identity) => {
 					issued.push(identity);
@@ -180,11 +182,11 @@ describe("watchdog actions under project isolation", () => {
 				},
 			},
 		});
-		return { handle, startTaskSession, issued, bound };
+		return { handle, startTaskSession, issued, bound, getTerminal };
 	}
 
 	it("issues a headless run the workspace's orchestrator credential and binds it to the run's pid", async () => {
-		const { handle, issued, bound } = handler({});
+		const { handle, issued, bound } = handler();
 		expect(await handle({ kind: "issueOrchestratorCredential", workspaceId: "a", agentId: "claude" })).toEqual({
 			ok: true,
 			credential: "cred-1",
@@ -202,8 +204,8 @@ describe("watchdog actions under project isolation", () => {
 		expect(bound).toEqual([{ credential: "cred-1", pid: 77 }]);
 	});
 
-	it("B's board can't start or type into A's orchestrator under enforce", async () => {
-		const { handle, startTaskSession } = handler({ isolation: { mode: "enforce" } });
+	it("B's board can't start or type into A's orchestrator, whatever the isolation mode (it reads no config)", async () => {
+		const { handle, startTaskSession } = handler();
 		const started = await handle({
 			kind: "startOrchestratorSession",
 			workspaceId: "a",
@@ -224,7 +226,7 @@ describe("watchdog actions under project isolation", () => {
 	});
 
 	it("never types into another workspace's orchestrator session under any mode", async () => {
-		const { handle } = handler({});
+		const { handle } = handler();
 		const typed = await handle({
 			kind: "deliverInput",
 			workspaceId: "b",
@@ -234,8 +236,33 @@ describe("watchdog actions under project isolation", () => {
 		expect(typed).toMatchObject({ ok: false, error: expect.stringContaining("not b's orchestrator session") });
 	});
 
+	it("a wake that leaves fromWorkspaceId out is refused; a card's input doesn't need it", async () => {
+		const { handle, startTaskSession } = handler();
+		const startRequest = { kind: "startOrchestratorSession", workspaceId: "a", agentId: "claude", prompt: "w" };
+		// An old worker build (or any caller) that leaves the field out: the type requires it, the server checks it.
+		expect(await handle(startRequest as Parameters<typeof handle>[0])).toMatchObject({
+			ok: false,
+			error: expect.stringContaining("must name the workspace"),
+		});
+		expect(startTaskSession).not.toHaveBeenCalled();
+		expect(
+			await handle({
+				kind: "deliverInput",
+				workspaceId: "a",
+				taskId: createHomeAgentSessionId("a", "claude"),
+				text: "wake",
+			}),
+		).toMatchObject({ ok: false, status: "error", error: expect.stringContaining("must name the workspace") });
+		// Card input (recovery, the QA gate) names no board and is not an orchestrator wake: it reaches the terminal.
+		const { handle: cardHandle, getTerminal } = handler();
+		await expect(
+			cardHandle({ kind: "deliverInput", workspaceId: "a", taskId: "abc12", text: "continue" }),
+		).rejects.toThrow("no terminal in this test");
+		expect(getTerminal).toHaveBeenCalledTimes(1);
+	});
+
 	it("a workspace's own wake goes through", async () => {
-		const { handle, startTaskSession } = handler({ isolation: { mode: "enforce" } });
+		const { handle, startTaskSession } = handler();
 		expect(
 			await handle({
 				kind: "startOrchestratorSession",
@@ -263,7 +290,7 @@ describe("doctor isolation rows", () => {
 		expect(findings[0]?.message).toContain("refuse it from every agent session");
 	});
 
-	it("shows each workspace's mode with each agent's level, and warns on a cross-project wake target", () => {
+	it("shows each workspace's mode with each agent's level; the removed wake target is not an isolation row", () => {
 		const config = parsePipelineConfig({
 			orchestrator: { wake: { target: "b" } },
 			workspaces: { a: { isolation: { mode: "enforce", messages: "allow" } } },
@@ -274,7 +301,7 @@ describe("doctor isolation rows", () => {
 		expect(row?.message).toContain("Claude Code partial");
 		expect(row?.message).toContain("OpenAI Codex prompt-only");
 		expect(row?.level).toBe("warn");
-		expect(findings.some((finding) => finding.message.startsWith("orchestrator.wake.target is b"))).toBe(true);
+		expect(findings.some((finding) => finding.message.includes("orchestrator.wake.target"))).toBe(false);
 	});
 
 	it("agent levels: Claude, Cline and Copilot partial, Codex and unverified agents prompt-only", () => {

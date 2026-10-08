@@ -95,7 +95,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
 			clineDirPath: getClineHomeDirPath(),
 		})),
 	);
-	findings.push(...checkLegacyConfigKeys(await readRawGlobalConfig(configPath), configPath));
+	findings.push(...checkLegacyConfigKeys(await readRawGlobalConfig(configPath), configPath, home.homePath));
 	if (options.target) {
 		findings.push(...(await checkTargetProject(options.target, projectContext)));
 	}

@@ -173,13 +173,14 @@ The watchdog runs in the pipeline worker. With `watchdog.mode` not `off`, the wo
 | `watchdog.pruneDone.enabled`, `.days` | `true`, 3 | hourly: delete Done cards older than this, after a backup (keeps undecided runoffs and running calibrations) |
 | `orchestrator.wake.enabled` | `true` | wake the orchestrator for ATTENTION items |
 | `orchestrator.wake.mode` | `headless` | `headless` (a `claude -p` / `codex exec` run; falls back to `sidebar` when the selected agent has no headless runner) or `sidebar` |
-| `orchestrator.wake.target` | null | one workspace id whose sidebar gets every workspace's wakes (one orchestrator); null = each its own |
+| `orchestrator.wake.target` | removed | ignored; `kanban doctor --fix` deletes it. Each workspace wakes only its own orchestrator ([watchdog-isolation.md](../fork/watchdog-isolation.md)) |
+| `workspaces.<id>.orchestrator.wake.enabled`, `.mode` | null | this workspace's override of `orchestrator.wake.enabled` / `.mode`. With wakes off its items stay in its own ATTENTION.md (stalls and pending `kanban orchestrator wake` requests listed every tick) |
 | `orchestrator.wake.cooldownMin` | 30 | per item |
 | `orchestrator.wake.timeoutMin` | 45 | a headless run |
 | `orchestrator.wake.liveSessionMin` | 10 | an interactive session active this recently holds a headless run |
 
 There is no `orchestrator.agent`: the orchestrator is always the agent selected in Kanban settings, in the sidebar
-session `__home_agent__:<target or ws>:<selected agent>`.
+session `__home_agent__:<ws>:<selected agent>` of the workspace the items are about, never another workspace's.
 
 ## `models.*`, `agents.*`, `backups.*`, `processes.*`
 
@@ -275,7 +276,7 @@ landing `off`. Top-level routing is never copied onto a project. The main rename
 | `QAFLOW_MAX_FAILS`, `REWORK_CLEAR_TURNS`, `REWORK_CLEAR_TOKENS` | `pipeline.rework.*` |
 | `NUDGE_MAX`, `PREMATURE_MAX`, `TRANSIENT_BACKOFF_MIN`, `HUNG_MIN`, `HUNG_FIRST_MIN`, `OUTAGE_*` | `pipeline.recovery.*` |
 | `WATCH_INTERVAL_SEC`, `STALL_*`, `RESUME_IDLE_MIN`, `NEW_CARD_GRACE_MIN`, `PROMPT_STUCK_MIN`, `PID_*`, `PRUNE_DONE*`, `TRIAGE_*` | `watchdog.*` |
-| `WAKE_ORCHESTRATOR`, `wakeMode`, `wakeTarget`, `WAKE_COOLDOWN_MIN`, `ORCH_*` | `orchestrator.wake.*` |
+| `WAKE_ORCHESTRATOR`, `wakeMode`, `WAKE_COOLDOWN_MIN`, `ORCH_*` | `orchestrator.wake.*` (`wakeTarget` is not imported: each workspace wakes its own orchestrator) |
 | `PRETRUST`, `clineSessions`, `codexSessions` | `agents.*` |
 | `providers`, `bedrockRegion`, `modelLists` | `models.*` |
 | `BOARD_BACKUP_MIN`, `BOARD_BACKUP_KEEP` | `backups.board.*` |

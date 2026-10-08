@@ -5,10 +5,11 @@
 // server; no agent session survives a stopped server.
 //
 // State (moved or rewritten): every path named after the id (getWorkspaceIdKeyedPaths: workspaces/<id>, data/<id>,
-// backups/boards/<id>, the QA preview pid, the orchestrator lock), the index entry, config.json `workspaces.<id>` and
-// `orchestrator.wake.target`, the home-agent session ids (`__home_agent__:<id>:<agent>`, in every workspace's
-// sessions.json), every workspace's messages.jsonl (replies look the original up by `toWorkspaceId`), calibration
-// specs' `workspace`, and `kanban restart recover` requests. History (left as written): decision logs, the
+// backups/boards/<id>, the QA preview pid, the orchestrator lock), the index entry, config.json `workspaces.<id>` (the
+// removed `orchestrator.wake.target` is deleted), the home-agent session ids (`__home_agent__:<id>:<agent>`, in every
+// workspace's sessions.json), every workspace's messages.jsonl (replies look the original up by `toWorkspaceId`),
+// calibration specs' `workspace`, the `[<id>]` tags of its headless orchestrator queue (a run drops lines tagged with
+// another id), and `kanban restart recover` requests. History (left as written): decision logs, the
 // watchdog's, isolation.jsonl, scoreboard.jsonl, qa-log.md, ATTENTION.md, orchestrator notes, logs/,
 // pipeline-state.json's `importedFrom`, trashed-task patches, and backups. Task worktrees are keyed by task id and
 // per-launch files (hook commands, rules) are rewritten by the next launch, so neither is touched; nor is anything
@@ -23,7 +24,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync
 import { dirname, join, relative, resolve } from "node:path";
 import { z } from "zod";
 
-import { updatePipelineConfigFile } from "../config/pipeline-config";
+import { migrateLegacyConfigKeys, readLegacyWakeTarget, updatePipelineConfigFile } from "../config/pipeline-config";
 import { HOME_AGENT_SESSION_PREFIX, isHomeAgentSessionIdForWorkspace } from "../core/home-agent-session";
 import { getKanbanRuntimeOrigin } from "../core/runtime-endpoint";
 import { lockedFileSystem } from "../fs/locked-file-system";
@@ -67,7 +68,15 @@ const stepSchema = z.discriminatedUnion("kind", [
 	z.object({ kind: z.literal("move"), from: z.string(), to: z.string() }),
 	z.object({
 		kind: z.literal("rewrite"),
-		target: z.enum(["sessions", "messages", "calibration-specs", "restart-requests", "config", "index"]),
+		target: z.enum([
+			"sessions",
+			"messages",
+			"calibration-specs",
+			"restart-requests",
+			"orchestrator-queue",
+			"config",
+			"index",
+		]),
 	}),
 ]);
 export type ProjectRenameIdStep = z.infer<typeof stepSchema>;
@@ -369,9 +378,10 @@ const rewriteConfig: Rewriter = async ({ homePath, fromId, toId, apply }) => {
 	if (isObject(config.workspaces) && fromId in config.workspaces) {
 		details.push(`workspaces.${fromId} → workspaces.${toId}`);
 	}
-	const wake = isObject(config.orchestrator) && isObject(config.orchestrator.wake) ? config.orchestrator.wake : null;
-	if (wake?.target === fromId) {
-		details.push(`orchestrator.wake.target ${fromId} → ${toId}`);
+	// The removed machine-wide wake target is deleted (as doctor --fix does), never renamed: every workspace wakes
+	// its own orchestrator now (docs/fork/watchdog-isolation.md).
+	if (readLegacyWakeTarget(config) !== undefined) {
+		details.push("removed orchestrator.wake.target (no longer used)");
 	}
 	if (details.length === 0) {
 		return [];
@@ -382,17 +392,39 @@ const rewriteConfig: Rewriter = async ({ homePath, fromId, toId, apply }) => {
 			if (isObject(next.workspaces) && fromId in next.workspaces) {
 				next.workspaces = renameKey(next.workspaces, fromId, toId);
 			}
-			if (
-				isObject(next.orchestrator) &&
-				isObject(next.orchestrator.wake) &&
-				next.orchestrator.wake.target === fromId
-			) {
-				next.orchestrator = { ...next.orchestrator, wake: { ...next.orchestrator.wake, target: toId } };
-			}
-			return next;
+			return readLegacyWakeTarget(next) === undefined ? next : migrateLegacyConfigKeys(next).config;
 		}, configPath);
 	}
 	return [{ file: relative(homePath, configPath), detail: details.join("; ") }];
+};
+
+/** The `[<id>]` tags of the project's headless orchestrator queue lines; a run drops lines tagged with another id. */
+const rewriteOrchestratorQueue: Rewriter = async ({ homePath, fromId, toId, apply }) => {
+	const data = currentDataDir(homePath, fromId, toId);
+	const path = getWatchdogWorkspacePaths(data.id, homePath).orchestratorQueue;
+	if (!existsSync(path)) {
+		return [];
+	}
+	let changed = 0;
+	const tag = `[${fromId}]`;
+	const lines = readFileSync(path, "utf8")
+		.split("\n")
+		.map((line) => {
+			// "<iso> [<workspaceId>] <issue>" (headless-run.ts appendOrchestratorQueue).
+			const [at, workspaceTag, ...rest] = line.split(" ");
+			if (workspaceTag !== tag) {
+				return line;
+			}
+			changed += 1;
+			return [at, `[${toId}]`, ...rest].join(" ");
+		});
+	if (changed === 0) {
+		return [];
+	}
+	if (apply) {
+		await writeText(path, lines.join("\n"));
+	}
+	return [{ file: relative(homePath, path), detail: `${changed} queued line(s): [${fromId}] → [${toId}]` }];
 };
 
 const rewriteIndex: Rewriter = async ({ homePath, fromId, toId, repoPath, apply }) => {
@@ -419,6 +451,7 @@ const REWRITERS: Record<RewriteTarget, Rewriter> = {
 	messages: rewriteMessages,
 	"calibration-specs": rewriteCalibrationSpecs,
 	"restart-requests": rewriteRestartRequests,
+	"orchestrator-queue": rewriteOrchestratorQueue,
 	config: rewriteConfig,
 	// Last: until it runs, the old id is the registered one.
 	index: rewriteIndex,

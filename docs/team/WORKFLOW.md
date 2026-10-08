@@ -212,8 +212,9 @@ The watchdog (`src/pipeline/watchdog/`, in the pipeline worker) is LLM-free and 
 It writes `data/<ws>/ATTENTION.md` (keeping the orchestrator's own "needs the user" section) and wakes the
 orchestrator once per item per 30 min. It types into a live sidebar session, queues behind a running headless run,
 or else starts a headless run (`claude -p` / `codex exec`, with a lock and a timeout) or the sidebar session
-server-side. It never leaves zero orchestrators and never starts two. `orchestrator.wake.target` sends every
-workspace's wakes to one sidebar. Items that are open "needs the user" entries don't re-wake.
+server-side. It never leaves zero orchestrators and never starts two. A workspace's items only ever wake that
+workspace's own orchestrator; with its wakes off (`workspaces.<id>.orchestrator.wake.enabled: false`) they are only
+listed in its ATTENTION.md. Items that are open "needs the user" entries don't re-wake.
 
 ## 9. Guardrails for task cards
 

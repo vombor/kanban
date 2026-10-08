@@ -26,6 +26,8 @@ export interface WatchdogHarnessOptions {
 	findRunningTool?: (worktreePath: string, agentPid: number | null) => Promise<string | null>;
 	coreJobs?: WatchdogDependencies["coreJobs"];
 	takeWakeNotes?: WatchdogDependencies["takeWakeNotes"];
+	/** Answers one request (undefined: the per-kind answer). */
+	respond?: (request: WatchdogActionRequest) => WatchdogActionResults[WatchdogActionRequest["kind"]] | undefined;
 }
 
 export function deliveryResult(status: RuntimeTaskInputDeliveryResponse["status"]): RuntimeTaskInputDeliveryResponse {
@@ -69,7 +71,7 @@ export function createWatchdogHarness(options: WatchdogHarnessOptions = {}) {
 					issueOrchestratorCredential: { ok: true, credential: "cred-headless" },
 					bindOrchestratorCredential: { ok: true },
 				};
-				return (results[kind] ?? fallback[kind]) as never;
+				return (options.respond?.(request) ?? results[kind] ?? fallback[kind]) as never;
 			},
 		},
 		readConfig: async () => parsePipelineConfig(rawConfig),

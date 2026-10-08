@@ -9,9 +9,11 @@ import {
 	getWorkspacePipelineSettings,
 	migrateLegacyConfigKeys,
 	type PipelineConfig,
+	readLegacyWakeTarget,
 	updatePipelineConfigFile,
 } from "../config/pipeline-config";
 import { DEFAULT_KIT_NAME, type KitCatalog, resolveWorkspaceKit } from "../kits/resolve-kit";
+import { stripForeignQueueLines } from "../pipeline/watchdog/headless-run";
 import { addProject, resolveProjectRepoPath } from "../projects/project-add";
 import { describeProjectRoots, type ProjectRoots, resolvePathInsideProjectRoots } from "../projects/project-roots";
 import { readAgentsQaSectionStatus, syncProjectSections } from "../projects/project-sections";
@@ -368,14 +370,16 @@ export async function checkWorktreePushHooks(entries: RuntimeWorkspaceIndexEntry
 }
 
 /** Keys config.json still has in an older build's form; `--fix` rewrites them (the value is kept). */
-export function checkLegacyConfigKeys(rawConfig: Record<string, unknown>, configPath: string): DoctorFinding[] {
+export function checkLegacyConfigKeys(
+	rawConfig: Record<string, unknown>,
+	configPath: string,
+	homePath: string,
+): DoctorFinding[] {
 	const { migrated } = migrateLegacyConfigKeys(rawConfig);
-	if (!migrated.includes("sessionSync")) {
-		return [];
-	}
-	const value = JSON.stringify(rawConfig.sessionSync);
-	return [
-		{
+	const findings: DoctorFinding[] = [];
+	if (migrated.includes("sessionSync")) {
+		const value = JSON.stringify(rawConfig.sessionSync);
+		findings.push({
 			level: "warn",
 			area: "home",
 			message: `${configPath} has the old "sessionSync": ${value}; the core setting is now "sessionSync": { "enabled": ${value} } (both read the same)`,
@@ -384,8 +388,29 @@ export function checkLegacyConfigKeys(rawConfig: Record<string, unknown>, config
 				await updatePipelineConfigFile((config) => migrateLegacyConfigKeys(config).config, configPath);
 				return [`sessionSync: ${value} -> { "enabled": ${value} }`];
 			},
-		},
-	];
+		});
+	}
+	if (migrated.includes("orchestrator.wake.target")) {
+		const value = JSON.stringify(readLegacyWakeTarget(rawConfig));
+		findings.push({
+			level: "warn",
+			area: "home",
+			message: `${configPath} has the removed "orchestrator.wake.target": ${value}; it is ignored. Every workspace's watchdog items now wake that workspace's own orchestrator (a headless run, or its sidebar session started server-side), default-kit and landing-off projects included; a project that should only get ATTENTION.md needs "workspaces.<id>.orchestrator.wake.enabled": false`,
+			hint: "kanban doctor --fix removes it, and drops other workspaces' items from each orchestrator queue",
+			fix: async () => {
+				await updatePipelineConfigFile((config) => migrateLegacyConfigKeys(config).config, configPath);
+				const stripped = await stripForeignQueueLines(homePath);
+				return [
+					`removed orchestrator.wake.target (${value})`,
+					...stripped.map(
+						({ workspaceId, dropped }) =>
+							`${workspaceId}: dropped ${dropped} line(s) of other workspaces from its orchestrator queue`,
+					),
+				];
+			},
+		});
+	}
+	return findings;
 }
 
 export function checkSetup(plans: SetupStepPlan[]): DoctorFinding[] {

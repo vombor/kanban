@@ -6,8 +6,10 @@ import type { RuntimeAgentId, RuntimeTaskInputDeliveryResponse } from "../../cor
 export type WatchdogActionRequest =
 	/** Types text into a card's (or the orchestrator sidebar's) agent TUI through deliverTaskInput. */
 	/**
-	 * `fromWorkspaceId`: the workspace whose board the input is for (an orchestrator wake); the server refuses it
-	 * into another workspace's session under project isolation `enforce` (src/server/watchdog-actions.ts).
+	 * `fromWorkspaceId`: the workspace whose board the input is for (an orchestrator wake); required for a home-agent (orchestrator)
+	 * session id: the server refuses such a delivery without it, or into another workspace's session, in every isolation
+	 * mode (src/server/watchdog-actions.ts), so the check can't be skipped by leaving the field out. The watchdog always
+	 * sends its own workspace here: a workspace's items wake only its own orchestrator.
 	 */
 	| { kind: "deliverInput"; workspaceId: string; taskId: string; text: string; fromWorkspaceId?: string }
 	/** Sends Esc to a running agent (PID brownout: the agent cancels its turn, the card keeps its session). */
@@ -22,8 +24,8 @@ export type WatchdogActionRequest =
 			workspaceId: string;
 			agentId: RuntimeAgentId;
 			prompt: string;
-			/** The workspace whose board needs the orchestrator; see deliverInput. */
-			fromWorkspaceId?: string;
+			/** The workspace whose board needs the orchestrator (required; the server refuses another workspace's). */
+			fromWorkspaceId: string;
 	  }
 	/** Deletes Done cards older than `days` after a backup (src/state/board-prune.ts). */
 	| { kind: "pruneDone"; workspaceId: string; days: number }

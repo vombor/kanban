@@ -12,11 +12,16 @@
 // Ported from archive/devteam-kit:bin/orchestrator-wake.mjs@6da71597 (lock, queue, prompt, runOnce, stillOpen) and kit
 // main cc1eefe / 6f4fa93 (the live-session check, also before follow-ups; a skipped follow-up re-queues its lines).
 import { type ChildProcess, execFile, spawn } from "node:child_process";
-import { appendFile, mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, open, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import type { RuntimeAgentId } from "../../core/api-contract";
-import { getKanbanLogsPath, getOrchestratorLockPath, getWatchdogWorkspacePaths } from "../../state/kanban-home";
+import {
+	getKanbanDataPath,
+	getKanbanLogsPath,
+	getOrchestratorLockPath,
+	getWatchdogWorkspacePaths,
+} from "../../state/kanban-home";
 import {
 	findLiveInteractiveSession,
 	getHeadlessOrchestratorCommand,
@@ -72,20 +77,56 @@ async function takeQueue(queuePath: string): Promise<string> {
 }
 
 /**
- * Queue lines still worth a follow-up: lines without a card id, or whose card is still in its workspace's
- * ATTENTION.md (archive/devteam-kit:bin/orchestrator-wake.mjs@6da71597 stillOpen).
+ * Only the queue lines tagged `[<workspaceId>]`: a run is that workspace's orchestrator and never handles another
+ * project's items. Lines tagged with another workspace are left over from the removed `orchestrator.wake.target`,
+ * which queued every workspace's items for one target (docs/fork/watchdog-isolation.md). Untagged lines can't be
+ * traced to a workspace and are dropped too.
+ */
+export function keepOwnQueueLines(queue: string, workspaceId: string): { kept: string; dropped: number } {
+	const lines = queue.split("\n").filter(Boolean);
+	const kept = lines.filter((line) => QUEUE_LINE.exec(line)?.[2] === workspaceId);
+	return { kept: kept.join("\n").trim(), dropped: lines.length - kept.length };
+}
+
+/**
+ * `kanban doctor --fix` for the removed target: rewrites every workspace's `orchestrator-queue.txt` in the home with
+ * only the lines tagged with that workspace. Returns the workspaces whose queue changed and how many lines each lost.
+ */
+export async function stripForeignQueueLines(
+	homePath: string,
+): Promise<Array<{ workspaceId: string; dropped: number }>> {
+	const entries = await readdir(getKanbanDataPath(homePath), { withFileTypes: true }).catch(() => []);
+	const changed: Array<{ workspaceId: string; dropped: number }> = [];
+	for (const entry of entries) {
+		if (!entry.isDirectory()) {
+			continue;
+		}
+		const queuePath = getWatchdogWorkspacePaths(entry.name, homePath).orchestratorQueue;
+		const own = keepOwnQueueLines(await readFile(queuePath, "utf8").catch(() => ""), entry.name);
+		if (own.dropped > 0) {
+			await writeFile(queuePath, own.kept ? `${own.kept}\n` : "", "utf8");
+			changed.push({ workspaceId: entry.name, dropped: own.dropped });
+		}
+	}
+	return changed;
+}
+
+/**
+ * Queue lines still worth a follow-up: lines without a card id, or whose card is still in the run's own workspace's
+ * ATTENTION.md (archive/devteam-kit:bin/orchestrator-wake.mjs@6da71597 stillOpen). The queue holds only that
+ * workspace's lines (keepOwnQueueLines), so no other workspace's ATTENTION.md is read.
  */
 export async function filterStillOpen(
 	queue: string,
-	readAttention: (workspaceId: string) => Promise<string>,
+	readOwnAttention: () => Promise<string>,
 ): Promise<{ kept: string; dropped: number }> {
 	const lines = queue.split("\n").filter(Boolean);
 	const kept: string[] = [];
+	const attention = lines.length > 0 ? await readOwnAttention() : "";
 	for (const line of lines) {
-		const match = QUEUE_LINE.exec(line);
-		const issue = match?.[3] ?? line;
+		const issue = QUEUE_LINE.exec(line)?.[3] ?? line;
 		const id = /^([0-9a-f]{5})\b/u.exec(issue)?.[1];
-		if (!id || (await readAttention(match?.[2] ?? "")).includes(id)) {
+		if (!id || attention.includes(id)) {
 			kept.push(line);
 		}
 	}
@@ -195,7 +236,8 @@ export interface OrchestratorRunDependencies {
 		projectPath: string,
 		liveMs: number,
 	) => Promise<LiveInteractiveSession | null>;
-	readAttention?: (workspaceId: string) => Promise<string>;
+	/** The run's own workspace's ATTENTION.md. */
+	readAttention?: () => Promise<string>;
 	pid?: number;
 	now?: () => Date;
 }
@@ -227,10 +269,17 @@ export async function runOrchestratorHeadless(
 		deps.findLiveSession ??
 		(async (agentId: RuntimeAgentId, projectPath: string, ms: number) =>
 			await findLiveInteractiveSession(agentId, projectPath, { liveMs: ms }));
-	const readAttention =
-		deps.readAttention ??
-		(async (workspaceId: string) =>
-			await readFile(getWatchdogWorkspacePaths(workspaceId).attention, "utf8").catch(() => ""));
+	const readAttention = deps.readAttention ?? (async () => await readFile(paths.attention, "utf8").catch(() => ""));
+	/** The queue with only this workspace's lines; any other line is logged and dropped. */
+	const takeOwnQueue = async (when: string): Promise<string> => {
+		const own = keepOwnQueueLines(await takeQueue(paths.orchestratorQueue), options.workspaceId);
+		if (own.dropped > 0) {
+			await log(
+				`${when}: dropped ${own.dropped} queued line(s) not tagged [${options.workspaceId}] (not this workspace's items)`,
+			);
+		}
+		return own.kept;
+	};
 
 	const holder = await readLiveLockPid(lockPath);
 	if (holder && holder !== pid) {
@@ -255,7 +304,7 @@ export async function runOrchestratorHeadless(
 	await writeFile(lockPath, String(pid), "utf8");
 	let runs = 0;
 	try {
-		let queue = await takeQueue(paths.orchestratorQueue);
+		let queue = await takeOwnQueue("start");
 		while (queue) {
 			const prompt = buildOrchestratorRunPrompt({
 				workspaceId: options.workspaceId,
@@ -279,7 +328,7 @@ export async function runOrchestratorHeadless(
 				spawnAgent: deps.spawnAgent,
 				log,
 			});
-			const next = await filterStillOpen(await takeQueue(paths.orchestratorQueue), readAttention);
+			const next = await filterStillOpen(await takeOwnQueue("follow-up"), readAttention);
 			if (next.dropped > 0) {
 				await log(`follow-up: dropped ${next.dropped} queued issue(s) no longer in ATTENTION.md`);
 			}

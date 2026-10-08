@@ -163,9 +163,10 @@ asks the worker to check now. Never restart the pod yourself: that is the user's
   It refuses while a server runs on the home (the server lock or an answer on the runtime port, as `home migrate`).
   It writes `<home>/backups/rename-id-<ts>.tgz` first, then moves `workspaces/<old>`, `data/<old>`,
   `backups/boards/<old>` (and the QA preview pid / orchestrator lock in `run/`) to the new id and rewrites the index
-  entry, config.json `workspaces.<old>` and `orchestrator.wake.target`, the home-agent session ids
-  (`__home_agent__:<old>:<agent>`) in every workspace's `sessions.json`, the project's side of every `messages.jsonl`,
-  calibration specs' `workspace` and pending `restart-recover.now` lines. Logs are history and keep the old id:
+  entry, config.json `workspaces.<old>` (and deletes the removed `orchestrator.wake.target`), the home-agent session
+  ids (`__home_agent__:<old>:<agent>`) in every workspace's `sessions.json`, the project's side of every
+  `messages.jsonl`, calibration specs' `workspace`, the `[<old>]` tags in its `orchestrator-queue.txt` and pending
+  `restart-recover.now` lines. Logs are history and keep the old id:
   decision logs, the watchdog's and isolation's, `scoreboard.jsonl`, `qa-log.md`, `ATTENTION.md`, `logs/`, and
   pipeline-state's `importedFrom`. The output lists files in the data dir that still name `data/<old>` (your own
   scripts and notes too): update your scripts. State already at the new id that isn't a registered project (the

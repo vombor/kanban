@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { importLegacyKitConfig, mapLegacyKitConfig } from "../../../src/config/import-kit";
-import { parsePipelineConfig } from "../../../src/config/pipeline-config";
+import { parsePipelineConfig, readLegacyWakeTarget } from "../../../src/config/pipeline-config";
 import { loadKitCatalog, resolveWorkspaceKit } from "../../../src/kits/resolve-kit";
 import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
 
@@ -158,7 +158,6 @@ describe("mapLegacyKitConfig", () => {
 			"watchdog.triageCards": false,
 			"orchestrator.wake.enabled": true,
 			"orchestrator.wake.mode": "sidebar",
-			"orchestrator.wake.target": "kanban-2uge",
 			"models.providers.default": "bedrock",
 			"models.providers.fallback": {},
 			"models.providers.deprecated": { "openai-native": "Mantle path, broken under cline 3.x" },
@@ -172,6 +171,7 @@ describe("mapLegacyKitConfig", () => {
 				"toggles.QA_CREATE",
 				"devAgent",
 				"benchmark",
+				"wakeTarget",
 			]),
 		);
 		expect(dropped).not.toContain("//");
@@ -211,7 +211,7 @@ describe("importLegacyKitConfig", () => {
 			});
 			const { config, issues } = parsePipelineConfig(written);
 			expect(issues).toEqual([]);
-			expect(config.orchestrator.wake.target).toBe("kanban-2uge");
+			expect(readLegacyWakeTarget(written)).toBeUndefined();
 			expect(config.workspaces.foo?.checks.enabled).toBe(false);
 			expect(config.workspaces.foo?.pipeline.shadow).toBe(true);
 			expect(config.workspaces["kanban-2uge"]?.kit).toBeNull();

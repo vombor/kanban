@@ -1,10 +1,11 @@
 // `kanban doctor`'s project isolation rows (docs/fork/project-isolation.md): each workspace's mode and message
 // switch with, per installed agent, how its launch enforces isolation (native / partial / prompt-only, from
 // describeAgentIsolation in src/terminal/agent-guardrails.ts), the mechanisms once per agent, and the settings that
-// conflict with isolation (a cross-project wake target).
-import type { PipelineConfig } from "../config/pipeline-config";
+// conflict with isolation (headless wakes under enforce). The removed cross-project `orchestrator.wake.target` is
+// checkLegacyConfigKeys's row (doctor-checks.ts).
+import { type PipelineConfig, resolveWorkspaceWakeSettings } from "../config/pipeline-config";
 import { RUNTIME_AGENT_CATALOG } from "../core/agent-catalog";
-import { resolveIsolationMode, resolveReachIsolationMode } from "../isolation/isolation-settings";
+import { resolveIsolationMode } from "../isolation/isolation-settings";
 import type { RuntimeWorkspaceIndexEntry } from "../state/workspace-state";
 import { describeAgentIsolation, usesKanbanCommandMatcher } from "../terminal/agent-guardrails";
 import { isBinaryAvailableOnPath } from "../terminal/command-discovery";
@@ -93,22 +94,12 @@ export function checkIsolation(
 					: {}),
 			});
 		}
-		const target = config.orchestrator.wake.target;
-		if (target) {
-			const crossed = modes.filter(
-				({ entry }) =>
-					entry.workspaceId !== target && resolveReachIsolationMode(config, entry.workspaceId, target) !== "off",
-			);
-			if (crossed.length > 0) {
-				findings.push({
-					level: "warn",
-					area: AREA,
-					message: `orchestrator.wake.target is ${target}: under project isolation each board wakes its own orchestrator, so ${crossed.map(({ entry }) => entry.workspaceId).join(", ")} ${crossed.some(({ entry }) => resolveReachIsolationMode(config, entry.workspaceId, target) === "enforce") ? "wake their own orchestrator instead" : "would wake their own orchestrator under enforce"}`,
-					hint: 'remove "orchestrator": { "wake": { "target" } } from config.json',
-				});
-			}
-		}
-		if (modes.some(({ mode }) => mode === "enforce") && config.orchestrator.wake.mode === "headless") {
+		if (
+			modes.some(
+				({ entry, mode }) =>
+					mode === "enforce" && resolveWorkspaceWakeSettings(config, entry.workspaceId).mode === "headless",
+			)
+		) {
 			findings.push({
 				level: "info",
 				area: AREA,

@@ -1,7 +1,9 @@
 // `kanban orchestrator wake <issue> [--when-card-done <id> | --when-model-up <model>]`: wakes the orchestrator now or
 // once a condition holds. Requests are a file the CLI appends to (`data/<ws>/orchestrator-wake-requests.json`, under
 // its lock) and the watchdog checks every tick, so there is no detached poller per request (plan §2.3). A due request
-// becomes a wake item for that workspace and is removed.
+// becomes a wake item for that workspace and is removed. While the workspace's wakes are off
+// (`orchestrator.wake.enabled`, `workspaces.<id>.orchestrator.wake.enabled`) requests stay in the file and are listed in
+// its ATTENTION.md.
 //
 //   --when-card-done <id>: the card is in Done or gone (a dev card bounces between Review and In Progress during
 //                          rework, so leaving In Progress is not enough). A card id prefix matches.
@@ -77,6 +79,15 @@ export async function addWakeRequest(
 		upSince: null,
 	};
 	return await updateWakeRequests(path, (requests) => ({ requests: [...requests, request], value: request }));
+}
+
+/** When a request wakes the orchestrator, for its ATTENTION.md line while the workspace's wakes are off. */
+export function describeWakeRequestCondition(request: WakeRequest): string {
+	const when = request.when;
+	if (!when) {
+		return "now";
+	}
+	return when.kind === "card-done" ? `when card ${when.taskId} is done` : `when ${when.model} answers`;
 }
 
 export interface WakeRequestCheck {

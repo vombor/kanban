@@ -171,6 +171,34 @@ describe("kanban doctor", () => {
 		});
 	});
 
+	it("warns about the removed orchestrator.wake.target; --fix removes it and other workspaces' queued items", async () => {
+		await withTemporaryKanbanHome(async ({ globalConfigPath, homePath }) => {
+			const queue = join(homePath, "data", "kanban-2uge", "orchestrator-queue.txt");
+			mkdirSync(dirname(queue), { recursive: true });
+			writeFileSync(
+				queue,
+				"2026-10-07T23:09:00.000Z [foo] 6f756: stall\n2026-10-07T23:09:00.000Z [kanban-2uge] a0001: own\n",
+			);
+			writeJson(globalConfigPath, {
+				selectedAgentId: "claude",
+				orchestrator: { wake: { mode: "sidebar", target: "kanban-2uge" } },
+			});
+			const report = await runDoctor(DOCTOR);
+			const warning = find(report.findings, "home", 'removed "orchestrator.wake.target": "kanban-2uge"');
+			expect(warning?.level).toBe("warn");
+			expect(warning?.message).toContain("default-kit and landing-off projects included");
+			expect(warning?.message).toContain('"workspaces.<id>.orchestrator.wake.enabled": false');
+			await runDoctor({ ...DOCTOR, fix: true });
+			expect(JSON.parse(readFileSync(globalConfigPath, "utf8"))).toMatchObject({
+				selectedAgentId: "claude",
+				orchestrator: { wake: { mode: "sidebar" } },
+			});
+			expect(JSON.parse(readFileSync(globalConfigPath, "utf8")).orchestrator.wake).not.toHaveProperty("target");
+			expect(readFileSync(queue, "utf8")).toBe("2026-10-07T23:09:00.000Z [kanban-2uge] a0001: own\n");
+			expect(find((await runDoctor(DOCTOR)).findings, "home", "orchestrator.wake.target")).toBeUndefined();
+		});
+	});
+
 	it("reports worktrees missing the main checkout's pre-push hook, and --fix copies it", async () => {
 		await withTemporaryKanbanHome(async ({ userHomePath }) => {
 			const repo = createRepo(join(userHomePath, "app"));

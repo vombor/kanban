@@ -94,6 +94,9 @@ export const workspaceIssuesSettingsSchema = z
 	.strict();
 export type WorkspaceIssuesSettings = z.infer<typeof workspaceIssuesSettingsSchema>;
 
+export const orchestratorWakeModeSchema = z.enum(["headless", "sidebar"]);
+export type OrchestratorWakeMode = z.infer<typeof orchestratorWakeModeSchema>;
+
 export const workspacePipelineSettingsSchema = z
 	.object({
 		name: z.string().nullable().default(null),
@@ -142,6 +145,20 @@ export const workspacePipelineSettingsSchema = z
 			.default({ mode: null, messages: "deny" }),
 		// Issue import from the project's own remote (src/issues/).
 		issues: workspaceIssuesSettingsSchema.default(() => workspaceIssuesSettingsSchema.parse({})),
+		// This workspace's orchestrator wakes: null keeps the machine-wide `orchestrator.wake` value. With `enabled`
+		// false the watchdog's items stay in this workspace's ATTENTION.md only; no other workspace is woken instead.
+		orchestrator: z
+			.object({
+				wake: z
+					.object({
+						enabled: z.boolean().nullable().default(null),
+						mode: orchestratorWakeModeSchema.nullable().default(null),
+					})
+					.strict()
+					.default({ enabled: null, mode: null }),
+			})
+			.strict()
+			.default({ wake: { enabled: null, mode: null } }),
 	})
 	.strict();
 export type WorkspacePipelineSettings = z.infer<typeof workspacePipelineSettingsSchema>;
@@ -286,30 +303,36 @@ const watchdogSectionSchema = z
 	})
 	.strict();
 
-// There is no `orchestrator.agent`: the orchestrator is always the agent selected in Kanban settings.
+const ORCHESTRATOR_WAKE_DEFAULTS = {
+	enabled: true,
+	mode: "headless",
+	cooldownMin: 30,
+	timeoutMin: 45,
+	liveSessionMin: 10,
+} as const;
+
+// There is no `orchestrator.agent`: the orchestrator is always the agent selected in Kanban settings. Every wake goes
+// to the orchestrator of the workspace it is about (docs/fork/watchdog-isolation.md); `workspaces.<id>.orchestrator`
+// overrides `enabled` and `mode` per workspace (resolveWorkspaceWakeSettings).
 const orchestratorSectionSchema = z
 	.object({
 		wake: z
 			.object({
-				enabled: z.boolean().default(true),
+				enabled: z.boolean().default(ORCHESTRATOR_WAKE_DEFAULTS.enabled),
 				// "headless" falls back to "sidebar" when the selected agent has no headless runner.
-				mode: z.enum(["headless", "sidebar"]).default("headless"),
-				cooldownMin: z.number().nonnegative().default(30),
-				timeoutMin: z.number().positive().default(45),
-				liveSessionMin: z.number().nonnegative().default(10),
-				// One workspace id whose sidebar gets the wakes of every workspace (one orchestrator); null = each
-				// workspace wakes its own sidebar. Legacy kit `wakeTarget` (archive/devteam-kit:lib/sidebar-wake.cjs).
-				target: z.string().min(1).nullable().default(null),
+				mode: orchestratorWakeModeSchema.default(ORCHESTRATOR_WAKE_DEFAULTS.mode),
+				cooldownMin: z.number().nonnegative().default(ORCHESTRATOR_WAKE_DEFAULTS.cooldownMin),
+				timeoutMin: z.number().positive().default(ORCHESTRATOR_WAKE_DEFAULTS.timeoutMin),
+				liveSessionMin: z.number().nonnegative().default(ORCHESTRATOR_WAKE_DEFAULTS.liveSessionMin),
+				// Removed: one workspace whose sidebar got every workspace's wakes (legacy kit `wakeTarget`). It broke
+				// project isolation (foo's stalls were typed into kanban-2uge's sidebar, 10/07). Still parsed, so an old
+				// config.json keeps its other wake settings, but dropped here: nothing reads it, migrateLegacyConfigKeys()
+				// removes it from the file and doctor warns until then.
+				target: z.string().nullable().optional(),
 			})
 			.strict()
-			.default({
-				enabled: true,
-				mode: "headless",
-				cooldownMin: 30,
-				timeoutMin: 45,
-				liveSessionMin: 10,
-				target: null,
-			}),
+			.transform(({ target: _removed, ...wake }) => wake)
+			.default({ ...ORCHESTRATOR_WAKE_DEFAULTS }),
 	})
 	.strict();
 
@@ -429,9 +452,20 @@ export function isLegacySessionSyncValue(value: unknown): value is boolean {
 	return typeof value === "boolean";
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+	return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+/** The removed `orchestrator.wake.target` as it is in a raw config.json (undefined when absent). */
+export function readLegacyWakeTarget(config: Record<string, unknown>): unknown {
+	const wake = asRecord(asRecord(config.orchestrator)?.wake);
+	return wake && "target" in wake ? wake.target : undefined;
+}
+
 /**
- * config.json with the keys an older build wrote in an older form rewritten (today only P2-1's boolean
- * `sessionSync`). Returns the dotted keys it changed; an absent key stays absent (its default applies).
+ * config.json with the keys an older build wrote in an older form rewritten: P2-1's boolean `sessionSync`, and the
+ * removed `orchestrator.wake.target` (deleted: every workspace now wakes its own orchestrator, so there is nothing to
+ * carry it into). Returns the dotted keys it changed; an absent key stays absent (its default applies).
  * A build from before the move (P2-1 up to P3-2) reads the new `sessionSync` object as invalid and uses the
  * default (on), so after a rollback to one, `"sessionSync": { "enabled": false }` must be written back as `false`.
  */
@@ -439,10 +473,19 @@ export function migrateLegacyConfigKeys(config: Record<string, unknown>): {
 	config: Record<string, unknown>;
 	migrated: string[];
 } {
-	if (!isLegacySessionSyncValue(config.sessionSync)) {
-		return { config, migrated: [] };
+	let next = config;
+	const migrated: string[] = [];
+	if (isLegacySessionSyncValue(config.sessionSync)) {
+		next = { ...next, sessionSync: { enabled: config.sessionSync } };
+		migrated.push("sessionSync");
 	}
-	return { config: { ...config, sessionSync: { enabled: config.sessionSync } }, migrated: ["sessionSync"] };
+	if (readLegacyWakeTarget(config) !== undefined) {
+		const orchestrator = asRecord(config.orchestrator) ?? {};
+		const { target: _removed, ...wake } = asRecord(orchestrator.wake) ?? {};
+		next = { ...next, orchestrator: { ...orchestrator, wake } };
+		migrated.push("orchestrator.wake.target");
+	}
+	return { config: next, migrated };
 }
 
 /**
@@ -595,6 +638,18 @@ export function parsePipelineConfig(raw: unknown): ParsedPipelineConfig {
 /** A workspace's settings; a workspace without an entry gets the defaults (never another workspace's). */
 export function getWorkspacePipelineSettings(config: PipelineConfig, workspaceId: string): WorkspacePipelineSettings {
 	return config.workspaces[workspaceId] ?? getDefaultWorkspacePipelineSettings();
+}
+
+export type OrchestratorWakeSettings = PipelineConfig["orchestrator"]["wake"];
+
+/** `orchestrator.wake` for one workspace's own orchestrator: the machine-wide values with its overrides. */
+export function resolveWorkspaceWakeSettings(config: PipelineConfig, workspaceId: string): OrchestratorWakeSettings {
+	const overrides = getWorkspacePipelineSettings(config, workspaceId).orchestrator.wake;
+	return {
+		...config.orchestrator.wake,
+		enabled: overrides.enabled ?? config.orchestrator.wake.enabled,
+		mode: overrides.mode ?? config.orchestrator.wake.mode,
+	};
 }
 
 function isMissingFileError(error: unknown): boolean {

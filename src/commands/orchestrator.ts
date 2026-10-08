@@ -4,7 +4,7 @@
 // archive/devteam-kit:bin/orchestrator-wake.mjs@6da71597 and bin/wake-when.mjs@6da71597.
 import type { Command } from "commander";
 
-import { readPipelineConfig } from "../config/pipeline-config";
+import { readPipelineConfig, resolveWorkspaceWakeSettings } from "../config/pipeline-config";
 import { type RuntimeAgentId, runtimeAgentIdSchema } from "../core/api-contract";
 import { runOrchestratorHeadless } from "../pipeline/watchdog/headless-run";
 import {
@@ -104,8 +104,10 @@ export function registerOrchestratorCommand(program: Command): void {
 						`watchdog.mode is "${config.watchdog.mode}": the request is kept but nothing wakes the orchestrator until it is "on".`,
 					);
 				}
-				if (!config.orchestrator.wake.enabled) {
-					warnings.push("orchestrator.wake.enabled is off: the watchdog logs the request instead of waking.");
+				if (!resolveWorkspaceWakeSettings(config, target.workspaceId).enabled) {
+					warnings.push(
+						`orchestrator wakes are off for ${target.workspaceId} (orchestrator.wake.enabled or workspaces.<id>.orchestrator.wake.enabled): the request is listed in the workspace's ATTENTION.md and waits until wakes are on.`,
+					);
 				}
 				for (const warning of warnings) {
 					process.stderr.write(`Warning: ${warning}\n`);

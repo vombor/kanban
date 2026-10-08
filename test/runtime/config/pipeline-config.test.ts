@@ -8,6 +8,7 @@ import {
 	getWorkspacePipelineSettings,
 	migrateLegacyConfigKeys,
 	parsePipelineConfig,
+	resolveWorkspaceWakeSettings,
 	updatePipelineConfigFile,
 } from "../../../src/config/pipeline-config";
 import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
@@ -152,13 +153,47 @@ describe("pipeline config", () => {
 		expect(migrateLegacyConfigKeys(current).migrated).toEqual([]);
 	});
 
-	it("has one wake target for every workspace's sidebar, none by default", () => {
-		expect(parsePipelineConfig({}).config.orchestrator.wake.target).toBeNull();
+	it("still parses the removed orchestrator.wake.target, keeps the other wake settings and drops it", () => {
 		const { config, issues } = parsePipelineConfig({
-			orchestrator: { wake: { mode: "sidebar", target: "kanban-2uge" } },
+			orchestrator: { wake: { mode: "sidebar", cooldownMin: 5, target: "kanban-2uge" } },
 		});
 		expect(issues).toEqual([]);
-		expect(config.orchestrator.wake).toMatchObject({ mode: "sidebar", target: "kanban-2uge", enabled: true });
+		expect(config.orchestrator.wake).toEqual({
+			enabled: true,
+			mode: "sidebar",
+			cooldownMin: 5,
+			timeoutMin: 45,
+			liveSessionMin: 10,
+		});
+		expect(
+			migrateLegacyConfigKeys({ a: 1, orchestrator: { wake: { mode: "sidebar", target: "kanban-2uge" } } }),
+		).toEqual({
+			config: { a: 1, orchestrator: { wake: { mode: "sidebar" } } },
+			migrated: ["orchestrator.wake.target"],
+		});
+		expect(migrateLegacyConfigKeys({ orchestrator: { wake: { mode: "sidebar" } } }).migrated).toEqual([]);
+	});
+
+	it("resolves each workspace's own wake settings: its overrides over the machine-wide ones", () => {
+		const { config, issues } = parsePipelineConfig({
+			orchestrator: { wake: { mode: "sidebar", cooldownMin: 5 } },
+			workspaces: {
+				quiet: { orchestrator: { wake: { enabled: false } } },
+				foo: { orchestrator: { wake: { mode: "headless" } } },
+			},
+		});
+		expect(issues).toEqual([]);
+		expect(resolveWorkspaceWakeSettings(config, "quiet")).toMatchObject({
+			enabled: false,
+			mode: "sidebar",
+			cooldownMin: 5,
+		});
+		expect(resolveWorkspaceWakeSettings(config, "foo")).toMatchObject({
+			enabled: true,
+			mode: "headless",
+			cooldownMin: 5,
+		});
+		expect(resolveWorkspaceWakeSettings(config, "unknown")).toMatchObject({ enabled: true, mode: "sidebar" });
 	});
 
 	it("writes config.json keeping other keys, and refuses an edit that adds a settings issue", async () => {

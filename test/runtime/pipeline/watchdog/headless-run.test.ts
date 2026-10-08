@@ -1,16 +1,22 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import {
 	appendOrchestratorQueue,
 	filterStillOpen,
+	keepOwnQueueLines,
 	readLiveLockPid,
 	runOrchestratorHeadless,
+	stripForeignQueueLines,
 } from "../../../../src/pipeline/watchdog/headless-run";
-import { getOrchestratorLockPath, getWatchdogWorkspacePaths } from "../../../../src/state/kanban-home";
+import {
+	getKanbanLogsPath,
+	getOrchestratorLockPath,
+	getWatchdogWorkspacePaths,
+} from "../../../../src/state/kanban-home";
 import type { HeadlessOrchestratorCommand } from "../../../../src/terminal/orchestrator-agents";
 import { withTemporaryKanbanHome } from "../../../utilities/kanban-home";
 
@@ -109,6 +115,85 @@ describe("headless orchestrator run", () => {
 				async () => "",
 			);
 			expect(kept).toEqual({ kept: `${NOW.toISOString()} [foo] board idle: do the next plan step`, dropped: 0 });
+		});
+	});
+
+	it("a run handles only its own workspace's queue lines: others are dropped and logged, its ATTENTION.md is the only one read", async () => {
+		await withTemporaryKanbanHome(async () => {
+			const paths = getWatchdogWorkspacePaths("kanban-2uge");
+			// Left from the removed orchestrator.wake.target: foo's items queued for kanban-2uge's orchestrator.
+			await appendOrchestratorQueue(
+				paths.orchestratorQueue,
+				"foo",
+				["- 6f756: dev card has been in Review 14 min"],
+				NOW,
+			);
+			await appendOrchestratorQueue(paths.orchestratorQueue, "kanban-2uge", ["- a0001: own item"], NOW);
+			const prompts: string[] = [];
+			const readAttention = vi.fn(async () => "");
+			const result = await runOrchestratorHeadless(
+				{
+					workspaceId: "kanban-2uge",
+					projectPath: "/projects/kanban",
+					agentId: "claude",
+					timeoutMin: 1,
+					liveSessionMin: 10,
+				},
+				{
+					spawnAgent: fakeSpawn((command) => prompts.push(command.args[1] ?? "")),
+					findLiveSession: async () => null,
+					readAttention,
+					now: () => NOW,
+				},
+			);
+			expect(result).toEqual({ runs: 1, skipped: null });
+			expect(prompts[0]).toContain("[kanban-2uge] a0001: own item");
+			expect(prompts[0]).not.toContain("6f756");
+			expect(prompts[0]).not.toContain("[foo]");
+			expect(readFileSync(join(getKanbanLogsPath(), "orchestrator.log"), "utf8")).toContain(
+				"[kanban-2uge] start: dropped 1 queued line(s) not tagged [kanban-2uge]",
+			);
+
+			// A queue of only foreign lines starts no run at all.
+			await appendOrchestratorQueue(paths.orchestratorQueue, "foo", ["- 8d024: x"], NOW);
+			const none = await runOrchestratorHeadless(
+				{
+					workspaceId: "kanban-2uge",
+					projectPath: "/projects/kanban",
+					agentId: "claude",
+					timeoutMin: 1,
+					liveSessionMin: 10,
+				},
+				{ spawnAgent: fakeSpawn(() => prompts.push("ran")), findLiveSession: async () => null, now: () => NOW },
+			);
+			expect(none).toEqual({ runs: 0, skipped: null });
+			expect(prompts).toHaveLength(1);
+		});
+	});
+
+	it("filterStillOpen reads only the run's own ATTENTION.md", async () => {
+		const readOwn = vi.fn(async () => "- **b0001** (review): still open\n");
+		const next = await filterStillOpen(
+			`${NOW.toISOString()} [foo] b0001: open\n${NOW.toISOString()} [foo] c0001: gone`,
+			readOwn,
+		);
+		expect(next).toEqual({ kept: `${NOW.toISOString()} [foo] b0001: open`, dropped: 1 });
+		expect(readOwn).toHaveBeenCalledTimes(1);
+		expect(readOwn).toHaveBeenCalledWith();
+	});
+
+	it("keepOwnQueueLines and stripForeignQueueLines keep only each workspace's own tagged lines", async () => {
+		const queue = `${NOW.toISOString()} [foo] a: 1\n${NOW.toISOString()} [bar] b: 2\nuntagged line`;
+		expect(keepOwnQueueLines(queue, "foo")).toEqual({ kept: `${NOW.toISOString()} [foo] a: 1`, dropped: 2 });
+		await withTemporaryKanbanHome(async ({ homePath }) => {
+			const foo = getWatchdogWorkspacePaths("foo").orchestratorQueue;
+			const bar = getWatchdogWorkspacePaths("bar").orchestratorQueue;
+			await appendOrchestratorQueue(foo, "foo", ["- a0001: own"], NOW);
+			await appendOrchestratorQueue(foo, "bar", ["- b0001: foreign"], NOW);
+			await appendOrchestratorQueue(bar, "bar", ["- b0002: own"], NOW);
+			expect(await stripForeignQueueLines(homePath)).toEqual([{ workspaceId: "foo", dropped: 1 }]);
+			expect(readFileSync(foo, "utf8")).toBe(`${NOW.toISOString()} [foo] a0001: own\n`);
+			expect(readFileSync(bar, "utf8")).toBe(`${NOW.toISOString()} [bar] b0002: own\n`);
 		});
 	});
 });

@@ -63,4 +63,54 @@ describe("watchdog core jobs and wake notes", () => {
 		expect(queue).toContain("1 new issue card(s) from vombor/kanban");
 		expect(queue).toContain("issue #2 (card b, In Progress)");
 	});
+
+	it("each workspace's issue job, its wake and its notes stay with that workspace's own orchestrator", async () => {
+		const ran: string[] = [];
+		const takeWakeNotes = vi.fn(async (workspaceId: string) => [`- ${workspaceId}: issue #2 has new comments`]);
+		const h = createWatchdogHarness({
+			config: {
+				watchdog: { mode: "on" },
+				orchestrator: { wake: { mode: "sidebar" } },
+				workspaces: { quiet: { orchestrator: { wake: { enabled: false } } } },
+			},
+			coreJobs: ({ workspaceId }) => [
+				{
+					name: "issues:sync",
+					everyMin: 15,
+					run: async () => {
+						ran.push(workspaceId);
+						return "synced";
+					},
+				},
+			],
+			takeWakeNotes,
+		});
+		cleanups.push(h.cleanup);
+		h.observe({ workspaceId: "ws-1", board: createBoard({}) });
+		h.observe({ workspaceId: "ws-2", board: createBoard({}) });
+		h.observe({ workspaceId: "quiet", board: createBoard({}) });
+		for (const workspaceId of ["ws-1", "quiet"]) {
+			await addWakeRequest(h.paths(workspaceId).wakeRequests, {
+				issue: `1 new issue card(s) from vombor/${workspaceId}`,
+				when: null,
+			});
+		}
+		await h.watchdog.tick();
+		expect(ran.sort()).toEqual(["quiet", "ws-1", "ws-2"]);
+		const wakes = h.requests.filter(
+			(request) => request.kind === "startOrchestratorSession" || request.kind === "deliverInput",
+		);
+		expect(wakes).toEqual([
+			expect.objectContaining({ kind: "startOrchestratorSession", workspaceId: "ws-1", fromWorkspaceId: "ws-1" }),
+		]);
+		const prompt = wakes[0] && "prompt" in wakes[0] ? wakes[0].prompt : "";
+		expect(prompt).toContain("1 new issue card(s) from vombor/ws-1");
+		expect(prompt).toContain("ws-1: issue #2 has new comments");
+		expect(prompt).not.toContain("quiet");
+		// Wakes off: the wake waits in quiet's own ATTENTION.md, and its notes stay in its issue state.
+		expect(readFileSync(h.paths("quiet").attention, "utf8")).toContain(
+			"- **wake request** (now): 1 new issue card(s) from vombor/quiet",
+		);
+		expect(takeWakeNotes.mock.calls).toEqual([["ws-1"]]);
+	});
 });

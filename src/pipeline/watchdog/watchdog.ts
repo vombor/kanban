@@ -18,21 +18,28 @@
 //     session file shows no progress; cline-turn-check.ts) is only reported: recovery owns its nudge, so where
 //     recovery acts the watchdog just logs it, and elsewhere it becomes an item. A workspace on the `default` kit with landing
 //     `off` gets nothing else, as the legacy kit watched only its configured projects.
+//   - machine-wide, once per tick: PID pressure (the flag files, the process sweep). Its notices go to the server
+//     log; a workspace's ATTENTION.md says that its own new work is held, and that line never wakes anyone.
+//
+// Isolated by project (docs/fork/watchdog-isolation.md): one worker, but each workspace has its own state file,
+// ATTENTION.md, wake requests and headless queue, and its items wake only its own orchestrator. There is no
+// cross-workspace wake target any more.
 //
 // Ported from archive/devteam-kit:services/review-watch.mjs@6da71597 (tick, finishTick, triage, pruneDone) and kit
-// main 00514f2 (wakeTarget: one orchestrator for every workspace, following Kanban's selected agent).
+// main 00514f2 (following Kanban's selected agent; its wakeTarget, one orchestrator for every workspace, is dropped).
 import { mkdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import {
 	getWorkspacePipelineSettings,
 	type ParsedPipelineConfig,
+	resolveWorkspaceWakeSettings,
 	type WatchdogMode,
 } from "../../config/pipeline-config";
 import type { RuntimeAgentId, RuntimeBoardCard, RuntimeBoardColumnId } from "../../core/api-contract";
 import type { EffectiveModelConfig } from "../../core/effective-agent";
 import { createHomeAgentSessionId } from "../../core/home-agent-session";
-import { resolveIsolationMode, resolveReachIsolationMode } from "../../isolation/isolation-settings";
+import { resolveIsolationMode } from "../../isolation/isolation-settings";
 import { KANBAN_SESSION_CREDENTIAL_ENV, KANBAN_SESSION_WORKSPACE_ENV } from "../../isolation/session-identity";
 import { createRoutingPolicy, type RoutingPolicy } from "../../kits/policy";
 import { type KitCatalog, resolveWorkspaceKit } from "../../kits/resolve-kit";
@@ -108,7 +115,7 @@ import {
 	type WatchdogCardRole,
 } from "./stalls";
 import { buildWakeText, isOrchestratorSessionLive, type WakeOutcome, wakeKey, wakeOrchestrator } from "./wake";
-import { checkWakeRequests, readWakeRequests, updateWakeRequests } from "./wake-requests";
+import { checkWakeRequests, describeWakeRequestCondition, readWakeRequests, updateWakeRequests } from "./wake-requests";
 import { loadWatchdogState, saveWatchdogState, type WatchdogWorkspaceState } from "./watchdog-state";
 import { readCalibrationRunIds, readUndecidedRunoffCardIds } from "./workspace-data";
 
@@ -323,6 +330,11 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 			}
 			return;
 		}
+		if (!pidFlagsSet) {
+			deps.log(
+				`watchdog: PID pressure, level ${context.pidLevel}${usage ? ` (${usage.current}/${usage.max})` : ""}`,
+			);
+		}
 		const line = usage ? `${usage.current}/${usage.max}\n` : "\n";
 		await mkdir(dirname(flags.pressure), { recursive: true });
 		await writeFile(flags.pressure, line, "utf8");
@@ -405,7 +417,15 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 		const attention: string[] = [];
 		const queued: string[] = [];
 		const triageCooldownMs = config.watchdog.triageCooldownMin * MIN;
+		// Wakes off for this workspace: nothing reaches an orchestrator (never another workspace's instead), so what
+		// would have woken it is listed in its own ATTENTION.md, every tick while it holds.
+		const wakesOn = resolveWorkspaceWakeSettings(config, workspaceId).enabled;
 		const queueIssue = (key: string, taskId: string | null, issue: string): void => {
+			if (!wakesOn) {
+				attention.push(`- ${taskId ? `**${taskId}** (stall): ` : ""}${issue}`);
+				record(records, context, { workspaceId, taskId, kind: "stall", outcome: outcomeOf(context), note: issue });
+				return;
+			}
 			const last = state.triaged[key];
 			if (last && context.now - Date.parse(last) < triageCooldownMs) {
 				return;
@@ -636,7 +656,7 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 			}
 			const planText = await readText(paths.orchestratorPlan);
 			if (
-				config.orchestrator.wake.enabled &&
+				resolveWorkspaceWakeSettings(config, workspaceId).enabled &&
 				!isBoardBusy(snapshot.board) &&
 				context.pidLevel === "none" &&
 				planHasOpenSteps(planText)
@@ -647,7 +667,14 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 			}
 		}
 
-		queued.push(...(await takeDueWakeRequests(snapshot, paths, context, records)));
+		if (wakesOn) {
+			queued.push(...(await takeDueWakeRequests(snapshot, paths, context, records)));
+		} else {
+			// Left in the request file: they wake the orchestrator once wakes are on again.
+			for (const request of await readWakeRequests(paths.wakeRequests)) {
+				attention.push(`- **wake request** (${describeWakeRequestCondition(request)}): ${request.issue}`);
+			}
+		}
 
 		for (const item of attention) {
 			record(records, context, {
@@ -683,7 +710,8 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 			),
 			...queued,
 		];
-		if (context.act && wakeItems.length > 0 && deps.takeWakeNotes) {
+		// Notes ride along with a wake of this workspace's own orchestrator; with its wakes off they stay in its issue state.
+		if (context.act && wakesOn && wakeItems.length > 0 && deps.takeWakeNotes) {
 			const notes = await deps.takeWakeNotes(workspaceId).catch(() => []);
 			queued.push(...notes);
 			wakeItems.push(...notes);
@@ -782,75 +810,46 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 		context: TickContext,
 		records: WatchdogDecisionRecord[],
 	): Promise<void> => {
+		// Project isolation: a workspace's items wake only its own orchestrator (its sidebar session or a headless run
+		// in its project), never another workspace's (docs/fork/watchdog-isolation.md). Every request below names
+		// `workspaceId` as both the target and `fromWorkspaceId`, and the server refuses any pair that differs.
 		const { workspaceId } = snapshot;
-		const wakeSettings = context.parsed.config.orchestrator.wake;
+		const wakeSettings = resolveWorkspaceWakeSettings(context.parsed.config, workspaceId);
 		if (!wakeSettings.enabled) {
+			const override = getWorkspacePipelineSettings(context.parsed.config, workspaceId).orchestrator.wake.enabled;
 			record(records, context, {
 				workspaceId,
 				taskId: null,
 				kind: "wake",
 				outcome: "skipped",
-				note: `orchestrator.wake.enabled is off; not waking for ${items.length} item(s)${context.parsed.config.watchdog.triageCards ? " (TRIAGE cards are not built: watchdog.triageCards has no effect)" : ""}`,
-			});
-			return;
-		}
-		let targetWorkspaceId = wakeSettings.target ?? workspaceId;
-		// Project isolation: a board's wake goes to its own orchestrator only. `orchestrator.wake.target` (one
-		// orchestrator for every workspace) was the migration's exception; under `enforce` the wake goes home.
-		if (targetWorkspaceId !== workspaceId) {
-			const reachMode = resolveReachIsolationMode(context.parsed.config, workspaceId, targetWorkspaceId);
-			if (reachMode !== "off") {
-				record(records, context, {
-					workspaceId,
-					taskId: null,
-					kind: "wake",
-					// enforce redirects the wake (done); report only says it would.
-					outcome: reachMode === "enforce" ? "acted" : "report",
-					note:
-						reachMode === "enforce"
-							? `orchestrator.wake.target ${targetWorkspaceId} is another project and project isolation is enforce: waking ${workspaceId}'s own orchestrator instead`
-							: `orchestrator.wake.target ${targetWorkspaceId} is another project: project isolation enforce would wake ${workspaceId}'s own orchestrator instead`,
-				});
-				if (reachMode === "enforce") {
-					targetWorkspaceId = workspaceId;
-				}
-			}
-		}
-		const targetSnapshot = snapshots.get(targetWorkspaceId);
-		if (!targetSnapshot) {
-			record(records, context, {
-				workspaceId,
-				taskId: null,
-				kind: "error",
-				outcome: "failed",
-				note: `orchestrator.wake.target ${targetWorkspaceId} is not a registered workspace; nothing woken`,
+				note: `${override === false ? `workspaces.${workspaceId}.orchestrator.wake.enabled` : "orchestrator.wake.enabled"} is off; ${items.length} item(s) stay in ${paths.attention} only${context.parsed.config.watchdog.triageCards ? " (TRIAGE cards are not built: watchdog.triageCards has no effect)" : ""}`,
 			});
 			return;
 		}
 		// The orchestrator is the agent selected in Kanban settings (never a hard-coded id).
-		const agentId = targetSnapshot.selectedAgentId;
-		const sessionId = createHomeAgentSessionId(targetWorkspaceId, agentId);
+		const agentId = snapshot.selectedAgentId;
+		const sessionId = createHomeAgentSessionId(workspaceId, agentId);
 		const startedAt = justStarted.get(sessionId);
-		const reportedSession = targetSnapshot.sessions.find((session) => session.taskId === sessionId) ?? null;
+		const reportedSession = snapshot.sessions.find((session) => session.taskId === sessionId) ?? null;
 		const session: PipelineSessionView | null =
 			isOrchestratorSessionLive(reportedSession) ||
 			startedAt === undefined ||
 			context.now - startedAt > JUST_STARTED_MS
 				? reportedSession
 				: { taskId: sessionId, agentId, modelId: null, state: "running", pid: -1 };
-		const headlessKey = `headless:${targetWorkspaceId}`;
+		const headlessKey = `headless:${workspaceId}`;
 		const headlessStartedAt = justStarted.get(headlessKey);
 		// A run that was just spawned may not have written its lock yet.
 		const runningHeadlessPid =
-			(await headlessPid(targetWorkspaceId)) ||
+			(await headlessPid(workspaceId)) ||
 			(headlessStartedAt !== undefined && context.now - headlessStartedAt <= JUST_STARTED_MS ? -1 : 0);
 		// A headless run carries no session credential and no isolation guardrails: under `enforce` the wake goes
 		// to the sidebar session, which startTaskSession launches with both.
 		const wakeMode =
-			resolveIsolationMode(context.parsed.config, targetWorkspaceId) === "enforce" ? "sidebar" : wakeSettings.mode;
+			resolveIsolationMode(context.parsed.config, workspaceId) === "enforce" ? "sidebar" : wakeSettings.mode;
 		const target = {
-			workspaceId: targetWorkspaceId,
-			projectPath: targetSnapshot.workspacePath,
+			workspaceId,
+			projectPath: snapshot.workspacePath,
 			agentId,
 			sessionId,
 			session,
@@ -865,16 +864,15 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 				items: fresh,
 				now: new Date(context.now),
 			});
-		const targetPaths = getPaths(targetWorkspaceId);
 		const queueForHeadless = async (fresh: readonly string[]) =>
-			await appendOrchestratorQueue(targetPaths.orchestratorQueue, workspaceId, fresh, new Date(context.now));
+			await appendOrchestratorQueue(paths.orchestratorQueue, workspaceId, fresh, new Date(context.now));
 
 		if (!context.act) {
 			const live = isOrchestratorSessionLive(session);
 			const route = live
 				? `type into ${sessionId}`
 				: wakeMode === "headless" && hasHeadlessRunner(agentId)
-					? `start a headless ${agentId} run in ${targetWorkspaceId}`
+					? `start a headless ${agentId} run in ${workspaceId}`
 					: `start ${sessionId} with the wake as its first input`;
 			record(records, context, {
 				workspaceId,
@@ -911,12 +909,12 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 						// credential, bound to the run's pid (project isolation; an old server without the kind answers
 						// with an error, and the run starts without one, as before).
 						const issued = await deps.actions
-							.request({ kind: "issueOrchestratorCredential", workspaceId: targetWorkspaceId, agentId })
+							.request({ kind: "issueOrchestratorCredential", workspaceId, agentId })
 							.catch(() => null);
 						const credential = issued?.ok ? issued.credential : null;
 						const started = startHeadlessRun({
-							workspaceId: targetWorkspaceId,
-							projectPath: targetSnapshot.workspacePath,
+							workspaceId,
+							projectPath: snapshot.workspacePath,
 							agentId,
 							timeoutMin: wakeSettings.timeoutMin,
 							liveSessionMin: wakeSettings.liveSessionMin,
@@ -924,7 +922,7 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 								? {
 										env: {
 											[KANBAN_SESSION_CREDENTIAL_ENV]: credential,
-											[KANBAN_SESSION_WORKSPACE_ENV]: targetWorkspaceId,
+											[KANBAN_SESSION_WORKSPACE_ENV]: workspaceId,
 										},
 									}
 								: {}),
@@ -943,7 +941,7 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 						await deps.actions
 							.request({
 								kind: "deliverInput",
-								workspaceId: targetWorkspaceId,
+								workspaceId,
 								taskId: sessionId,
 								text: input,
 								fromWorkspaceId: workspaceId,
@@ -963,7 +961,7 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 						const result = await deps.actions
 							.request({
 								kind: "startOrchestratorSession",
-								workspaceId: targetWorkspaceId,
+								workspaceId,
 								agentId,
 								prompt,
 								fromWorkspaceId: workspaceId,
@@ -999,9 +997,7 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 				600,
 			),
 		});
-		deps.log(
-			`watchdog ${workspaceId}: wake orchestrator (${agentId} in ${targetWorkspaceId}): ${outcome.path}: ${outcome.detail}`,
-		);
+		deps.log(`watchdog ${workspaceId}: wake its orchestrator (${agentId}): ${outcome.path}: ${outcome.detail}`);
 	};
 
 	return {

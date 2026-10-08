@@ -67,11 +67,11 @@ run as the same uid as the server.
   credential scopes its in-process board access. Other projects in `enforce` drop out of every listing and can't be
   opened; a task worktree resolves to its project. Reads under a grant are logged as `grant_used` on both sides. The
   hook commands are never scoped.
-- **Watchdog**: a board's wake goes to its own orchestrator only. Under `enforce`, `orchestrator.wake.target` is
-  ignored (the wake goes home; under `report` the decision log says it *would*), and wakes go to the sidebar session
-  instead of a headless run: a headless run carries its workspace's credential but no isolation guardrails. The
-  server checks it too: an action for B's board can't type into or start A's orchestrator (`fromWorkspaceId`,
-  `src/server/watchdog-actions.ts`).
+- **Watchdog** ([watchdog-isolation.md](watchdog-isolation.md)): a board's wake goes to its own orchestrator only,
+  in every mode; the machine-wide `orchestrator.wake.target` is removed (doctor warns, `--fix` deletes it). Under
+  `enforce` wakes go to the sidebar session instead of a headless run: a headless run carries its workspace's
+  credential but no isolation guardrails. The server checks it too, in every mode: an action for B's board can't type
+  into or start A's orchestrator (`fromWorkspaceId`, `src/server/watchdog-actions.ts`).
 - **Launches**: other projects' checkouts, worktrees, Kanban data (`data/<ws>`, `workspaces/<ws>`, board backups)
   and Claude project dirs are denied for reads and writes. The machine-wide config is denied for writes, for file
   tools and, for Claude Code and Cline (Kanban's command matcher), for shell writes too: a redirect into it, or any
@@ -166,7 +166,8 @@ is never scoped, so a one-off cross-project command is just the user running it.
 ## Turning it on
 
 1. `"isolation": { "mode": "report" }` in config.json, then read `data/<ws>/isolation.jsonl` for a day.
-2. Remove `orchestrator.wake.target`, and allow messages where two projects work together.
+2. Run `kanban doctor --fix` if config.json still has the removed `orchestrator.wake.target`, and allow messages
+   where two projects work together.
 3. `"mode": "enforce"`, then restart the sessions so they launch with the denies (`kanban doctor`, area `isolation`).
 
 ## Rolling back

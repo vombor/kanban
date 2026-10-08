@@ -1,6 +1,7 @@
 // The orchestrator wake (plan §9): the target is createHomeAgentSessionId(ws, selectedAgentId) whatever the selected
 // agent is; headless falls back to the sidebar when the agent has no headless runner; never two orchestrators (a live
-// sidebar or a running headless run blocks a second) and never zero (no live sidebar → one is started server-side).
+// sidebar or a running headless run blocks a second) and never zero (no live sidebar → one is started server-side); and only ever the orchestrator of the workspace the
+// items are about.
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -8,6 +9,7 @@ import type { RuntimeAgentId } from "../../../src/core/api-contract";
 import { createHomeAgentSessionId } from "../../../src/core/home-agent-session";
 import type { PipelineSessionView } from "../../../src/pipeline/engine";
 import { wakeOrchestrator } from "../../../src/pipeline/watchdog/wake";
+import { addWakeRequest } from "../../../src/pipeline/watchdog/wake-requests";
 import { createEmptyWatchdogState } from "../../../src/pipeline/watchdog/watchdog-state";
 import { createWatchdogHarness, deliveryResult, WATCHDOG_NOW } from "../../utilities/watchdog";
 import { createBoard, createCard } from "../../utilities/workspace-state-store";
@@ -111,43 +113,6 @@ describe("watchdog wake target", () => {
 		expect(readFileSync(harness.paths("foo").orchestratorQueue, "utf8")).toContain("[foo] d0001:");
 	});
 
-	it("routes every workspace's wake to orchestrator.wake.target's sidebar, on that workspace's selected agent", async () => {
-		const harness = createWatchdogHarness({ config: qaConfig({ mode: "sidebar", target: "home" }) });
-		harnesses.push(harness);
-		harness.observe({
-			workspaceId: "home",
-			board: createBoard({}),
-			selectedAgentId: "codex",
-			workspacePath: "/projects/home",
-		});
-		harness.observe({ workspaceId: "foo", board: stalledBoard(), selectedAgentId: "claude" });
-		await harness.watchdog.tick();
-		const start = harness.requests.find((request) => request.kind === "startOrchestratorSession");
-		expect(start).toMatchObject({ workspaceId: "home", agentId: "codex" });
-		expect(start && "prompt" in start ? start.prompt : "").toContain("workspace foo (/projects/foo)");
-	});
-
-	it("doesn't start a second session for the same wake target within one tick", async () => {
-		const harness = createWatchdogHarness({
-			config: {
-				...qaConfig({ mode: "sidebar", target: "foo" }),
-				workspaces: {
-					foo: { landing: { mode: "qa" }, kit: { name: "team" } },
-					bar: { landing: { mode: "qa" }, kit: { name: "team" } },
-				},
-			},
-		});
-		harnesses.push(harness);
-		harness.observe({ workspaceId: "foo", board: stalledBoard() });
-		harness.observe({
-			workspaceId: "bar",
-			board: createBoard({ review: [createCard({ id: "e0001", updatedAt: WATCHDOG_NOW - 60 * MIN })] }),
-		});
-		await harness.watchdog.tick();
-		const kinds = harness.requests.map((request) => request.kind).filter((kind) => kind !== "pruneDone");
-		expect(kinds).toEqual(["startOrchestratorSession", "deliverInput"]);
-	});
-
 	it("respects the cooldown: the same item doesn't wake again within cooldownMin", async () => {
 		const harness = createWatchdogHarness({ config: qaConfig({ mode: "sidebar", cooldownMin: 30 }) });
 		harnesses.push(harness);
@@ -239,50 +204,176 @@ describe("wakeOrchestrator", () => {
 	});
 });
 
-// Project isolation: a board's wake goes to its own orchestrator only (B's watchdog can't wake A's orchestrator).
-describe("watchdog wake under project isolation", () => {
-	function crossTargetHarness(isolation: Record<string, unknown>, wake: Record<string, unknown> = {}) {
-		const harness = createWatchdogHarness({
-			config: qaConfig({ mode: "sidebar", target: "home", ...wake }, { isolation }),
+// Project isolation: a workspace's items wake only its own orchestrator; there is no cross-workspace wake target.
+describe("watchdog wake isolated by project", () => {
+	const TWO_QA = {
+		foo: { landing: { mode: "qa" }, kit: { name: "team" } },
+		bar: { landing: { mode: "qa" }, kit: { name: "team" } },
+	};
+
+	function barBoard() {
+		return createBoard({
+			review: [createCard({ id: "e0001", updatedAt: WATCHDOG_NOW - 60 * MIN, createdAt: WATCHDOG_NOW - 90 * MIN })],
 		});
+	}
+
+	function twoProjects(config: Record<string, unknown>, options: Parameters<typeof createWatchdogHarness>[0] = {}) {
+		const harness = createWatchdogHarness({ ...options, config });
 		harnesses.push(harness);
 		harness.observe({
-			workspaceId: "home",
-			board: createBoard({}),
-			selectedAgentId: "codex",
-			workspacePath: "/projects/home",
+			workspaceId: "foo",
+			board: stalledBoard(),
+			selectedAgentId: "claude",
+			sessions: [liveSidebar("foo", "claude")],
 		});
-		harness.observe({ workspaceId: "foo", board: stalledBoard(), selectedAgentId: "claude" });
+		harness.observe({ workspaceId: "bar", board: barBoard(), selectedAgentId: "codex" });
 		return harness;
 	}
 
-	it("enforce: foo's wake starts foo's own orchestrator, never orchestrator.wake.target's", async () => {
-		const harness = crossTargetHarness({ mode: "enforce" });
-		await harness.watchdog.tick();
-		const starts = harness.requests.filter((request) => request.kind === "startOrchestratorSession");
-		expect(starts).toEqual([
-			expect.objectContaining({ workspaceId: "foo", agentId: "claude", fromWorkspaceId: "foo" }),
-		]);
-		expect(harness.requests.some((request) => "workspaceId" in request && request.workspaceId === "home")).toBe(
-			false,
+	function wakeRequests(harness: ReturnType<typeof createWatchdogHarness>) {
+		return harness.requests.filter(
+			(request) => request.kind === "deliverInput" || request.kind === "startOrchestratorSession",
 		);
+	}
+
+	function textOf(request: { kind: string } | undefined): string {
+		return request && "text" in request
+			? String(request.text)
+			: request && "prompt" in request
+				? String(request.prompt)
+				: "";
+	}
+
+	it("two workspaces, one stall each: each wake reaches only its own orchestrator, the old target key ignored", async () => {
+		// `target` is the removed machine-wide key (foo's stalls once went to kanban-2uge's sidebar, 10/07).
+		const harness = twoProjects({
+			watchdog: { mode: "on" },
+			orchestrator: { wake: { mode: "sidebar", target: "foo" } },
+			workspaces: TWO_QA,
+		});
+		await harness.watchdog.tick();
+		const wakes = wakeRequests(harness);
+		expect(wakes).toEqual([
+			expect.objectContaining({
+				kind: "deliverInput",
+				workspaceId: "foo",
+				taskId: createHomeAgentSessionId("foo", "claude"),
+				fromWorkspaceId: "foo",
+			}),
+			expect.objectContaining({
+				kind: "startOrchestratorSession",
+				workspaceId: "bar",
+				agentId: "codex",
+				fromWorkspaceId: "bar",
+			}),
+		]);
+		expect(textOf(wakes[0])).toContain("d0001");
+		expect(textOf(wakes[0])).not.toContain("e0001");
+		expect(textOf(wakes[1])).toContain("workspace bar (/projects/bar)");
+		expect(textOf(wakes[1])).toContain("e0001");
+		expect(textOf(wakes[1])).not.toContain("d0001");
 	});
 
-	it("report: the wake still goes to the target, with a note that enforce would send it home", async () => {
-		const harness = crossTargetHarness({ mode: "report" });
+	it("headless: each workspace's run and queue are its own", async () => {
+		const harness = twoProjects({ watchdog: { mode: "on" }, workspaces: TWO_QA });
+		harness.observe({ workspaceId: "foo", board: stalledBoard(), selectedAgentId: "claude" });
 		await harness.watchdog.tick();
-		const start = harness.requests.find((request) => request.kind === "startOrchestratorSession");
-		expect(start).toMatchObject({ workspaceId: "home", fromWorkspaceId: "foo" });
-		const decisions = readFileSync(harness.paths("foo").decisions, "utf8");
-		expect(decisions).toContain("project isolation enforce would wake foo's own orchestrator instead");
-		// A report is "would", never "skipped": the wake did happen.
-		const redirect = decisions
-			.split("\n")
-			.filter(Boolean)
-			.map((line) => JSON.parse(line) as { note?: string; outcome?: string })
-			.find((record) => record.note?.includes("would wake foo's own orchestrator"));
-		expect(redirect?.outcome).toBe("report");
+		expect(harness.startHeadlessRun.mock.calls.map(([input]) => input.workspaceId)).toEqual(["foo", "bar"]);
+		expect(readFileSync(harness.paths("foo").orchestratorQueue, "utf8")).not.toContain("e0001");
+		expect(readFileSync(harness.paths("bar").orchestratorQueue, "utf8")).toMatch(/\[bar\] e0001:/);
+		expect(readFileSync(harness.paths("bar").orchestratorQueue, "utf8")).not.toContain("d0001");
 	});
+
+	it("a workspace whose wakes are off gets its items in its own ATTENTION.md only; the other is still woken", async () => {
+		const harness = twoProjects({
+			watchdog: { mode: "on" },
+			orchestrator: { wake: { mode: "sidebar" } },
+			workspaces: { ...TWO_QA, bar: { ...TWO_QA.bar, orchestrator: { wake: { enabled: false } } } },
+		});
+		await addWakeRequest(harness.paths("bar").wakeRequests, {
+			issue: "look at the plan",
+			when: null,
+			now: new Date(WATCHDOG_NOW),
+		});
+		await harness.watchdog.tick();
+		expect(wakeRequests(harness)).toEqual([
+			expect.objectContaining({ kind: "deliverInput", workspaceId: "foo", fromWorkspaceId: "foo" }),
+		]);
+		expect(textOf(wakeRequests(harness)[0])).not.toContain("e0001");
+		const attention = readFileSync(harness.paths("bar").attention, "utf8");
+		expect(attention).toContain("- **e0001** (stall): dev card has been in Review");
+		expect(attention).toContain("- **wake request** (now): look at the plan");
+		// The request waits for a wake instead of being used up.
+		expect(JSON.parse(readFileSync(harness.paths("bar").wakeRequests, "utf8")).requests).toHaveLength(1);
+		expect(readFileSync(harness.paths("bar").decisions, "utf8")).toContain(
+			"workspaces.bar.orchestrator.wake.enabled is off",
+		);
+
+		// Still listed on the next tick (no triage cooldown for ATTENTION), still nobody woken for it.
+		harness.requests.length = 0;
+		harness.setNow(WATCHDOG_NOW + MIN);
+		await harness.watchdog.tick();
+		expect(readFileSync(harness.paths("bar").attention, "utf8")).toContain("- **e0001** (stall)");
+		expect(wakeRequests(harness).filter((request) => request.workspaceId === "bar")).toEqual([]);
+	});
+
+	it("wake state is per workspace: foo's pending Enter neither blocks nor retargets bar's wake", async () => {
+		const harness = twoProjects(
+			{ watchdog: { mode: "on" }, orchestrator: { wake: { mode: "sidebar" } }, workspaces: TWO_QA },
+			{
+				respond: (request) =>
+					request.kind === "deliverInput" && request.workspaceId === "foo"
+						? deliveryResult("undelivered")
+						: undefined,
+			},
+		);
+		harness.observe({
+			workspaceId: "bar",
+			board: barBoard(),
+			selectedAgentId: "codex",
+			sessions: [liveSidebar("bar", "codex")],
+		});
+		await harness.watchdog.tick();
+		const fooState = JSON.parse(readFileSync(harness.paths("foo").state, "utf8"));
+		const barState = JSON.parse(readFileSync(harness.paths("bar").state, "utf8"));
+		expect(fooState.wakeEnter).toMatchObject({ taskId: createHomeAgentSessionId("foo", "claude") });
+		expect(barState.wakeEnter).toBeNull();
+		expect(Object.keys(barState.woken).some((key) => key.includes("e0001"))).toBe(true);
+		expect(Object.keys(fooState.woken)).toEqual([]);
+
+		// bar gets a new item next tick and is typed into normally; foo only gets its Enter.
+		harness.requests.length = 0;
+		harness.setNow(WATCHDOG_NOW + MIN);
+		await addWakeRequest(harness.paths("bar").wakeRequests, {
+			issue: "next step",
+			when: null,
+			now: new Date(WATCHDOG_NOW),
+		});
+		await harness.watchdog.tick();
+		expect(wakeRequests(harness)).toEqual([
+			expect.objectContaining({ workspaceId: "foo", taskId: createHomeAgentSessionId("foo", "claude"), text: "" }),
+			expect.objectContaining({ workspaceId: "bar", taskId: createHomeAgentSessionId("bar", "codex") }),
+		]);
+		expect(textOf(wakeRequests(harness)[1])).toContain("next step");
+	});
+
+	it.each(["report", "enforce"] as const)(
+		"isolation %s: every wake request names its own workspace as the target and the sender",
+		async (mode) => {
+			const harness = twoProjects({
+				watchdog: { mode: "on" },
+				orchestrator: { wake: { mode: "sidebar", target: "foo" } },
+				isolation: { mode },
+				workspaces: TWO_QA,
+			});
+			await harness.watchdog.tick();
+			const wakes = wakeRequests(harness);
+			expect(wakes.map((request) => request.workspaceId)).toEqual(["foo", "bar"]);
+			for (const request of wakes) {
+				expect("fromWorkspaceId" in request && request.fromWorkspaceId).toBe(request.workspaceId);
+			}
+		},
+	);
 
 	it("a headless run gets its workspace's session credential, bound to the run's pid", async () => {
 		const harness = createWatchdogHarness({

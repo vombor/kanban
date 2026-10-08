@@ -26,6 +26,7 @@ import {
 	getPipelineStatePath,
 	getProjectRenameJournalPath,
 	getRestartRecoverRequestPath,
+	getWatchdogWorkspacePaths,
 } from "../../../src/state/kanban-home";
 import { getKanbanServerLockPath, readProcessStartTime } from "../../../src/state/kanban-server-lock";
 import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
@@ -98,6 +99,10 @@ function seedHome(): void {
 		getRestartRecoverRequestPath(home),
 		"2026-10-07T11:00:00.000Z kanban-2uge\n2026-10-07T11:00:01.000Z foo\n",
 	);
+	writeText(
+		getWatchdogWorkspacePaths("kanban-2uge", home).orchestratorQueue,
+		"2026-10-07T11:00:00.000Z [kanban-2uge] a0001: queued\n2026-10-07T11:00:01.000Z [foo] 6f756: foreign\n",
+	);
 }
 
 function options(overrides: Partial<ProjectRenameIdOptions> = {}): ProjectRenameIdOptions {
@@ -116,7 +121,7 @@ function expectRenamed(): void {
 	});
 	const config = readJson(getKanbanGlobalConfigPath()) as {
 		workspaces: Record<string, unknown>;
-		orchestrator: { wake: { target: string } };
+		orchestrator: { wake: Record<string, unknown> };
 	};
 	expect(Object.keys(config.workspaces)).toEqual(["kanban", "foo"]);
 	expect(config.workspaces.kanban).toEqual({
@@ -124,7 +129,11 @@ function expectRenamed(): void {
 		landing: { mode: "off" },
 		isolation: { messages: "allow" },
 	});
-	expect(config.orchestrator.wake.target).toBe("kanban");
+	// The removed wake target is deleted, never renamed; the other wake keys stay.
+	expect(config.orchestrator.wake).toEqual({ enabled: true, mode: "sidebar" });
+	expect(readFileSync(getWatchdogWorkspacePaths("kanban", home).orchestratorQueue, "utf8")).toBe(
+		"2026-10-07T11:00:00.000Z [kanban] a0001: queued\n2026-10-07T11:00:01.000Z [foo] 6f756: foreign\n",
+	);
 	expect(existsSync(getKanbanWorkspaceStatePath("kanban-2uge", home))).toBe(false);
 	expect(existsSync(getKanbanWorkspaceDataPath("kanban-2uge", home))).toBe(false);
 	expect(existsSync(getBoardBackupsPath("kanban-2uge", home))).toBe(false);
@@ -214,11 +223,12 @@ describe("kanban project rename-id", () => {
 				"data/kanban-2uge/messages.jsonl",
 				"data/kanban-2uge/calibration/c1/spec.json",
 				"run/restart-recover.now",
+				"data/kanban-2uge/orchestrator-queue.txt",
 				"config.json",
 				"workspaces/index.json",
 			]);
 			expect(result.plan.rewrites.find((rewrite) => rewrite.file === "config.json")?.detail).toBe(
-				"workspaces.kanban-2uge → workspaces.kanban; orchestrator.wake.target kanban-2uge → kanban",
+				"workspaces.kanban-2uge → workspaces.kanban; removed orchestrator.wake.target (no longer used)",
 			);
 		});
 	});

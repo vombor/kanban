@@ -1,6 +1,6 @@
 // Waking the orchestrator: the agent selected in Kanban settings, in the sidebar session
-// `createHomeAgentSessionId(<target workspace>, <selected agent>)` (never a hard-coded agent, plan §4.0 rule 4), or a
-// headless run of that agent.
+// `createHomeAgentSessionId(<ws>, <selected agent>)` of the workspace the items are about (never a hard-coded agent,
+// plan §4.0 rule 4; never another workspace's, docs/fork/watchdog-isolation.md), or a headless run of that agent.
 //
 // Never zero orchestrators and never two (user, 2026-10-07):
 //   - a headless run for the target is going (its lock pid is alive)  → the items go into its queue; it handles them
