@@ -783,3 +783,18 @@ of this repository is the complete record of changes.
   the env var, while the server or a hub daemon lacks the same value, or when stored access keys would take over.
   Agent sessions are refused it too. It backs up to `<home>/backups/cline/` first, writes atomically and prints the
   rollback line. The backup and atomic-write helpers moved out of `cline-lemonade-apply.ts` into `cline-file-write.ts`.
+- `src/terminal/cline-tui-sign-in.ts` (new), `src/setup/cline-bedrock-key.ts`, `src/setup/machine-setup.ts`,
+  `src/doctor/cline-bedrock-key-checks.ts`, `src/doctor/run-doctor.ts`, `src/commands/cline.ts`,
+  `src/isolation/cli-scope.ts`, `src/terminal/cline-turn-check.ts`, `src/pipeline/recovery.ts`,
+  `src/pipeline/recovery-stage.ts`, `src/pipeline/recovery-runtime.ts`, `src/pipeline/watchdog/watchdog.ts`,
+  `docs/fork/cline-bedrock-auth.md`, `docs/fork/github-auth.md`, `AGENTS.md`, tests (issue #9): the entry above was
+  wrong for Cline's interactive TUI, which every card runs in. Its startup check only counts credentials stored in
+  providers.json (a key or AWS credentials, plus a region), never `AWS_BEARER_TOKEN_BEDROCK`/`AWS_REGION`; without them
+  it opens Cline's sign-in screen, writes no session file and never takes the prompt, while Kanban shows "running".
+  Verified in the bundled CLI and with real TUI runs in a throwaway `CLINE_DIR`. Doctor and setup now warn when no key
+  (or region) is stored and when the stored key differs from the env's, and recommend the new user-only
+  `kanban cline store-bedrock-key [--dry-run]`, which stores the env's key (and a missing region) with a backup and an
+  atomic write; `remove-bedrock-key` only refuses. The server/hub-daemon env comparison is gone (a stored key wins).
+  A Cline card whose run has written no session file of its own for `stallNudgeMin` is a new silent-stall kind,
+  `no_session`, whose reason names the sign-in gap when providers.json shows one: recovery escalates a dev card at once
+  (no nudge: the sign-in screen takes typed text as input), and the watchdog reports it for QA cards too.

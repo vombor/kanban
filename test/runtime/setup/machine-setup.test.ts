@@ -67,43 +67,37 @@ describe("kanban setup steps", () => {
 		expect(ids).not.toContain("cline-notices");
 	});
 
-	it("only checks Cline's Bedrock settings: providers.json or the environment, and says what to run", async () => {
+	it("only checks Cline's Bedrock settings: the stored key and region Cline's TUI needs, and says what to run", async () => {
 		mkdirSync(join(root, "cline", "data", "settings"), { recursive: true });
 		const original = JSON.stringify({ version: 1, providers: { lemonade: { settings: { provider: "lemonade" } } } });
 		writeFileSync(paths.clineProviders, original, { mode: 0o600 });
 		const missing = byId(await plan({ env: { BEDROCK_API_KEY: "secret-value-123" } }), "cline-providers");
 		expect(missing.status).toBe("manual");
 		expect(missing.apply).toBeUndefined();
-		expect(missing.details.join("\n")).toContain("export AWS_BEARER_TOKEN_BEDROCK=$BEDROCK_API_KEY");
-		expect(missing.details.join("\n")).toContain("export AWS_REGION=us-west-2");
+		expect(missing.details.join("\n")).toContain("Cline's Bedrock cards have no key");
+		expect(missing.details.join("\n")).toContain("stores no Bedrock region");
 		expect(missing.details.join("\n")).not.toContain("secret-value-123");
 
-		const fromEnv = byId(
+		// The env alone is not enough (issue #9): Cline's TUI opens its sign-in screen without a stored key.
+		const envOnly = byId(
 			await plan({ env: { AWS_BEARER_TOKEN_BEDROCK: "secret-value-123", AWS_REGION: "us-east-1" } }),
 			"cline-providers",
 		);
-		expect(fromEnv).toMatchObject({
-			status: "ok",
-			details: ["bedrock key from AWS_BEARER_TOKEN_BEDROCK, region us-east-1"],
-		});
+		expect(envOnly.status).toBe("manual");
+		expect(envOnly.details.join("\n")).toContain("open on Cline's sign-in screen");
+		expect(envOnly.details.at(-1)).toBe("run `kanban cline store-bedrock-key`");
+		expect(envOnly.details.join("\n")).not.toContain("secret-value-123");
 
 		writeFileSync(
 			paths.clineProviders,
 			JSON.stringify({ providers: { bedrock: { settings: { apiKey: "k", aws: { region: "eu-west-1" } } } } }),
 		);
-		// A stored key works, but the environment is recommended: the step is manual and names the user's command.
-		const storedOnly = byId(await plan(), "cline-providers");
-		expect(storedOnly.status).toBe("manual");
-		expect(storedOnly.details).toEqual([
-			`Cline stores a Bedrock API key in plain text in ${paths.clineProviders}; provide it as AWS_BEARER_TOKEN_BEDROCK in Kanban's environment instead (podman: Secret=<secret name>,type=env,target=AWS_BEARER_TOKEN_BEDROCK), then remove the stored one: run \`kanban cline remove-bedrock-key\``,
-		]);
-		const storedAndEnv = byId(await plan({ env: { AWS_BEARER_TOKEN_BEDROCK: "k" } }), "cline-providers");
-		expect(storedAndEnv).toMatchObject({
-			status: "manual",
-			details: [
-				`Cline stores a Bedrock API key in ${paths.clineProviders}; the environment already provides it (the same value as AWS_BEARER_TOKEN_BEDROCK): run \`kanban cline remove-bedrock-key\``,
-			],
+		expect(byId(await plan(), "cline-providers")).toMatchObject({
+			status: "ok",
+			details: ["bedrock key stored in providers.json, region eu-west-1"],
 		});
+		const storedAndEnv = byId(await plan({ env: { AWS_BEARER_TOKEN_BEDROCK: "k" } }), "cline-providers");
+		expect(storedAndEnv.status).toBe("ok");
 		const settingsFiles = readdirSync(join(root, "cline", "data", "settings"));
 		expect(settingsFiles).toEqual(["providers.json"]);
 	});

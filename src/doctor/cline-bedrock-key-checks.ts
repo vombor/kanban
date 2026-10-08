@@ -1,19 +1,15 @@
-// Doctor row: where Cline cards get their Bedrock key. The environment (AWS_BEARER_TOKEN_BEDROCK, a podman secret in
-// the container) is the recommended source; a key stored in Cline's providers.json is reported with the user's
-// command that removes it (`kanban cline remove-bedrock-key`, src/setup/cline-bedrock-key.ts). It replaces setup's
-// cline-providers step in doctor (skipSteps), so the region is checked here too. Read-only, never prints a key value,
-// and the Kanban server's and the Cline hub daemons' env is compared, never shown.
+// Doctor row: whether Cline cards on Bedrock start. Cline's TUI only counts credentials stored in providers.json
+// (src/terminal/cline-tui-sign-in.ts), so the key must be stored there; without it every Bedrock card sits on Cline's
+// sign-in screen (issue #9). The user's `kanban cline store-bedrock-key` (src/setup/cline-bedrock-key.ts) stores
+// AWS_BEARER_TOKEN_BEDROCK from Kanban's environment. It replaces setup's cline-providers step in doctor (skipSteps),
+// so the region is checked here too. Read-only and never prints a key value.
 import {
-	BEDROCK_PODMAN_SECRET_LINE,
 	CLINE_BEDROCK_AUTH_DOC,
 	CLINE_BEDROCK_KEY_ENV,
-	type ClineKeyLauncherDeps,
+	describeBedrockKeyProblems,
 	describeClineBedrockKey,
-	describeClineKeyLauncher,
-	describeStoredBedrockKey,
-	listClineKeyLaunchers,
-	REMOVE_BEDROCK_KEY_COMMAND,
 	readClineBedrockSettings,
+	STORE_BEDROCK_KEY_COMMAND,
 } from "../setup/cline-bedrock-key";
 import type { DoctorFinding } from "./doctor-report";
 
@@ -23,10 +19,7 @@ export interface ClineBedrockKeyCheckOptions {
 	providersPath: string;
 	/** `models.providers.default`. */
 	defaultProvider: string;
-	/** `models.bedrockRegion`, for the AWS_REGION hint. */
-	bedrockRegion: string;
 	env: NodeJS.ProcessEnv;
-	launcherDeps?: ClineKeyLauncherDeps;
 }
 
 export async function checkClineBedrockKey(options: ClineBedrockKeyCheckOptions): Promise<DoctorFinding[]> {
@@ -40,56 +33,27 @@ export async function checkClineBedrockKey(options: ClineBedrockKeyCheckOptions)
 		return [];
 	}
 	const facts = describeClineBedrockKey(settings, options.env);
-	const findings: DoctorFinding[] = [];
-	const stored = describeStoredBedrockKey(facts, options.providersPath);
-	if (!facts.envKey) {
-		findings.push({
-			level: "warn",
-			area: AREA,
-			message:
-				facts.storedKey === "none"
-					? `${CLINE_BEDROCK_KEY_ENV} is not set and ${options.providersPath} stores no Bedrock key: Cline's Bedrock cards have no key (podman: ${BEDROCK_PODMAN_SECRET_LINE})`
-					: `${CLINE_BEDROCK_KEY_ENV} is not set, but Cline uses Bedrock: ${stored}`,
-			hint: CLINE_BEDROCK_AUTH_DOC,
-		});
-	} else if (stored === null) {
-		findings.push({
-			level: "pass",
-			area: AREA,
-			message: `Cline's Bedrock key comes from ${CLINE_BEDROCK_KEY_ENV}; none stored in ${options.providersPath}`,
-		});
-	} else if (facts.withoutStoredKey === "env") {
-		findings.push({ level: "warn", area: AREA, message: stored, hint: REMOVE_BEDROCK_KEY_COMMAND });
-	} else {
-		findings.push({ level: "info", area: AREA, message: stored });
-	}
-
-	if (facts.envKey && facts.withoutStoredKey === "env") {
-		const envValue = options.env[CLINE_BEDROCK_KEY_ENV]?.trim() ?? null;
-		for (const launcher of await listClineKeyLaunchers(envValue, options.launcherDeps)) {
-			if (launcher.env === "same") {
-				continue;
-			}
-			findings.push({
-				// With a stored key it still works; without one its Bedrock cards have no key (or another one).
-				level: facts.storedKey === "none" ? "warn" : "info",
+	const problems = describeBedrockKeyProblems(facts, options.providersPath);
+	if (problems.length === 0) {
+		return [
+			{
+				level: "pass",
 				area: AREA,
-				message: `${describeClineKeyLauncher(launcher)}: ${
-					facts.storedKey === "none"
-						? "the Cline cards it serves have no Bedrock key (or another one) until it restarts"
-						: `it uses the stored key; ${REMOVE_BEDROCK_KEY_COMMAND} waits until it is restarted from this environment`
-				}`,
-				hint: CLINE_BEDROCK_AUTH_DOC,
-			});
-		}
+				message:
+					facts.credentials === "iam"
+						? `Cline uses AWS credentials for Bedrock (region ${facts.storedRegion})`
+						: `Cline's Bedrock key is stored in ${options.providersPath}${
+								facts.storedKey === "same" ? ` (the same value as ${CLINE_BEDROCK_KEY_ENV})` : ""
+							}, region ${facts.storedRegion}`,
+			},
+		];
 	}
-
-	if (!facts.region) {
-		findings.push({
-			level: "warn",
-			area: AREA,
-			message: `no Bedrock region for Cline: export AWS_REGION=${options.bedrockRegion} before starting Kanban`,
-		});
-	}
-	return findings;
+	// Storing needs the env's key; without it the hint is the doc (set the secret first).
+	const hint = facts.envKey ? STORE_BEDROCK_KEY_COMMAND : CLINE_BEDROCK_AUTH_DOC;
+	return problems.map((problem) => ({
+		level: problem.level,
+		area: AREA,
+		message: problem.message,
+		...(problem.level === "warn" ? { hint } : {}),
+	}));
 }

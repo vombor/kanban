@@ -33,11 +33,10 @@ Create a **classic** PAT (Settings → Developer settings → Personal access to
 
 The Bedrock key `AWS_BEARER_TOKEN_BEDROCK` (with `AWS_REGION`) comes in through the same podman-secret route
 (`Secret=<name>,type=env,target=AWS_BEARER_TOKEN_BEDROCK`) and is handled like `GH_TOKEN`: pipeline checks never see
-it and secret-guard knows its value. Agent sessions keep it, since Cline cards on Bedrock read it from the env (Cline's
-shared hub daemon keeps the env of the card that started it, which is fine: the value is the same for every card).
-`AWS_REGION` is not a secret and stays everywhere. Cline uses the env key only while `providers.json` stores no
-Bedrock key: `kanban doctor` flags a stored one, and the user's `kanban cline remove-bedrock-key` removes it
-([cline-bedrock-auth.md](cline-bedrock-auth.md)).
+it and secret-guard knows its value. `AWS_REGION` is not a secret and stays everywhere. Cline's TUI, which every card
+runs in, only counts a key and region stored in `providers.json` (with the env alone it opens Cline's sign-in screen,
+issue #9). So the user's `kanban cline store-bedrock-key` copies the env's key there, and `kanban doctor` warns when
+none is stored or the stored one differs ([cline-bedrock-auth.md](cline-bedrock-auth.md)).
 
 The entrypoint changes nothing when neither variable is set (gh then uses its login in `/root/.config/gh`). It never
 prints the token, also not under `set -x`, and never writes it to a file. Its `.npmrc` edit is idempotent and keeps

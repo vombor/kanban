@@ -6,8 +6,8 @@
 // @c8552ae (Cline TUI notices). Kanban writes nothing under ~/.cline (user rule, 2026-10-07): the Cline rules and the
 // notice opt-out now come with every Cline launch (agent-session-adapters.ts), and the providers and the two
 // models.json (Lemonade) steps only check: the Lemonade ones print the `kanban cline apply-lemonade-models` line the
-// user runs (user's choice, 2026-10-07), the providers one recommends AWS_BEARER_TOKEN_BEDROCK over a stored key and
-// prints `kanban cline remove-bedrock-key` (2026-10-08).
+// user runs (user's choice, 2026-10-07), the providers one checks that providers.json stores the Bedrock key and
+// region Cline's TUI needs and prints `kanban cline store-bedrock-key` (issue #9, 2026-10-08).
 import { chmod, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -22,12 +22,10 @@ import {
 	renderClaudeMdSection,
 } from "./claude-md-section";
 import {
-	BEDROCK_PODMAN_SECRET_LINE,
-	CLINE_BEDROCK_KEY_ENV,
+	describeBedrockKeyProblems,
 	describeClineBedrockKey,
-	describeStoredBedrockKey,
-	REMOVE_BEDROCK_KEY_COMMAND,
 	readClineBedrockSettings,
+	STORE_BEDROCK_KEY_COMMAND,
 } from "./cline-bedrock-key";
 import { formatApplyLemonadeModelsHint } from "./cline-lemonade-apply";
 import { isLemonadeModelsDiffEmpty, planClineLemonadeModels } from "./cline-lemonade-models";
@@ -164,21 +162,16 @@ export async function planNpmrc(paths: MachineSetupPaths): Promise<SetupStepPlan
 	};
 }
 
-function readNonEmptyString(value: unknown): string | null {
-	return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
 /**
  * Whether Cline cards can reach Bedrock. Read-only: Kanban writes nothing under ~/.cline (user rule, 2026-10-07).
- * Cards pass `-P bedrock -m <model>`, and cline 3.0.69's Bedrock client takes the key and region from providers.json
- * (`settings.apiKey`, `settings.aws.region`), else from AWS_BEARER_TOKEN_BEDROCK (or AWS access keys) and AWS_REGION
- * in the environment Kanban, and so every card, starts from. The environment is the recommended source
- * (src/setup/cline-bedrock-key.ts): a stored key makes the step `manual` with `kanban cline remove-bedrock-key`.
- * When neither has a key this says what to run.
+ * Cards pass `-P bedrock -m <model>` to Cline's TUI, which only counts a key (or AWS credentials) and a region stored
+ * in providers.json, never AWS_BEARER_TOKEN_BEDROCK or AWS_REGION; without them it opens Cline's sign-in screen
+ * (src/terminal/cline-tui-sign-in.ts, issue #9). When something is missing the step is `manual` with
+ * `kanban cline store-bedrock-key`, which stores the environment's key.
  */
 export async function planClineProviders(
 	paths: MachineSetupPaths,
-	options: { bedrockRegion: string; defaultProvider: string; env: NodeJS.ProcessEnv },
+	options: { defaultProvider: string; env: NodeJS.ProcessEnv },
 ): Promise<SetupStepPlan> {
 	const base = { id: "cline-providers" as const, target: paths.clineProviders };
 	if (options.defaultProvider !== "bedrock") {
@@ -192,33 +185,22 @@ export async function planClineProviders(
 	if (read.kind === "invalid") {
 		return { ...base, status: "error", details: [read.detail] };
 	}
-	const { env } = options;
-	const facts = describeClineBedrockKey(read.kind === "found" ? read.settings : null, env);
-	const keySource =
-		facts.storedKey !== "none" && facts.withoutStoredKey !== "iam"
-			? "providers.json"
-			: facts.envKey
-				? CLINE_BEDROCK_KEY_ENV
-				: readNonEmptyString(env.AWS_ACCESS_KEY_ID)
-					? "AWS_ACCESS_KEY_ID"
-					: null;
-	const missing: string[] = [];
-	if (!keySource) {
-		missing.push(
-			`no Bedrock key for Cline: export ${CLINE_BEDROCK_KEY_ENV}${readNonEmptyString(env.BEDROCK_API_KEY) ? "=$BEDROCK_API_KEY" : ""} before starting Kanban (podman: ${BEDROCK_PODMAN_SECRET_LINE}); \`cline auth bedrock -k <key>\` works too, but stores it in plain text`,
-		);
+	const facts = describeClineBedrockKey(read.kind === "found" ? read.settings : null, options.env);
+	const problems = describeBedrockKeyProblems(facts, paths.clineProviders);
+	if (problems.some((problem) => problem.level === "warn")) {
+		return {
+			...base,
+			status: "manual",
+			details: [...problems.map((problem) => problem.message), `run \`${STORE_BEDROCK_KEY_COMMAND}\``],
+		};
 	}
-	if (!facts.region) {
-		missing.push(`no Bedrock region for Cline: export AWS_REGION=${options.bedrockRegion} before starting Kanban`);
-	}
-	const stored = describeStoredBedrockKey(facts, paths.clineProviders);
-	if (stored && facts.withoutStoredKey === "env") {
-		missing.push(`${stored}: run \`${REMOVE_BEDROCK_KEY_COMMAND}\``);
-	}
-	if (missing.length > 0) {
-		return { ...base, status: "manual", details: missing };
-	}
-	return { ...base, status: "ok", details: [`bedrock key from ${keySource}, region ${facts.region}`] };
+	return {
+		...base,
+		status: "ok",
+		details: [
+			`bedrock ${facts.credentials === "iam" ? "AWS credentials" : "key"} stored in providers.json, region ${facts.storedRegion}`,
+		],
+	};
 }
 
 /**
@@ -320,7 +302,6 @@ export async function planMachineSetup(options: MachineSetupOptions): Promise<Se
 			target: paths.clineProviders,
 			plan: () =>
 				planClineProviders(paths, {
-					bedrockRegion: options.config.models.bedrockRegion,
 					defaultProvider: options.config.models.providers.default,
 					env,
 				}),

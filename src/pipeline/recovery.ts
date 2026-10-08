@@ -33,6 +33,7 @@ import {
 	describeClineSilentStall,
 	evaluateClineSilentStall,
 	getSessionProgressAt,
+	isClineSessionOfRun,
 } from "../terminal/cline-turn-check";
 import { getClineFinalReplyText, parseClineStatusLine } from "../terminal/cline-turn-outcome";
 import { getReviewActivityAt, isReviewSettled, type ReviewSettleSession } from "../terminal/review-settle";
@@ -202,6 +203,13 @@ export interface RecoveryCardInput {
 	detail: ClineSessionDetail | null;
 	/** The adapter says where a turn's outcome can be read (`turnEndSource`). */
 	readsTurnOutcome: boolean;
+	/**
+	 * The turn outcome is in Cline-style session files (`detail`), so a running session with none of its own is a
+	 * `no_session` stall (its TUI never took the prompt).
+	 */
+	readsSessionFiles?: boolean;
+	/** For a `no_session` stall: why Cline's TUI would open its sign-in screen (cline-tui-sign-in.ts), when known. */
+	signInGap?: string | null;
 	profile: AgentRecoveryProfile;
 	flow: RecoveryFlowState;
 	/** The card's provider has a probe (models probe), so an outage can be held and probed. */
@@ -640,6 +648,14 @@ function decideInProgress(input: RecoveryCardInput): RecoveryDecision {
 			? { kind: "none", reason: "working again with a provider-error retry or outage hold pending" }
 			: (decidePendingHold(input, {}) ?? { kind: "none", reason: "no pending hold" });
 	}
+	if (
+		input.readsSessionFiles &&
+		session?.live &&
+		session.state === "running" &&
+		!isClineSessionOfRun(detail, session.startedAt ?? null)
+	) {
+		return decideNoSession(input);
+	}
 	if (!input.readsTurnOutcome || !detail || !session?.live || session.state !== "running") {
 		return { kind: "none", reason: "no live session with readable turns" };
 	}
@@ -673,6 +689,28 @@ function decideInProgress(input: RecoveryCardInput): RecoveryDecision {
 			reason: `hung model requests on ${label}: retries used up and no outage probe for this provider`,
 		},
 	};
+}
+
+/**
+ * A running session that has written no session file of its own for `stallNudgeMin` (the `no_session` stall): its
+ * TUI never took the prompt, e.g. Cline's sign-in screen (issue #9, foo QA card ab61f 2026-10-08). It escalates at
+ * once, without a nudge: the screen takes typed text as input and starts a Cline account sign-in, and a restart opens
+ * the same screen until the user fixes Cline's settings.
+ */
+function decideNoSession(input: RecoveryCardInput): RecoveryDecision {
+	const { session, settings, now } = input;
+	const sentAt = input.flow.recoverySentAt ? Date.parse(input.flow.recoverySentAt) : Number.NaN;
+	const stall = evaluateClineSilentStall({
+		detail: input.detail,
+		runStartedAt: session?.startedAt ?? null,
+		kanbanProgressAt: Math.max(getSessionProgressAt(session) ?? 0, Number.isFinite(sentAt) ? sentAt : 0),
+		now,
+	});
+	if (stall?.kind !== "no_session" || stall.idleMs < settings.stallNudgeMin * 60_000) {
+		return { kind: "none", reason: "no Cline session file for this run yet" };
+	}
+	const what = describeClineSilentStall({ ...stall, signInGap: input.signInGap ?? null });
+	return escalate(input, `${what} (${modelLabel(input.model)})`);
 }
 
 /**

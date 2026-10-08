@@ -15,6 +15,7 @@ import {
 	type ClineSessionFileReader,
 	getClineSessionsPath,
 } from "./cline-session-files";
+import { readClineTuiSignInGap } from "./cline-tui-sign-in";
 import {
 	type ClineTurnEndDecision,
 	evaluateClineTurnEnd,
@@ -76,21 +77,27 @@ export function describeClineTurnEnd(decision: EndedClineTurn): string {
  * four cards sat 15 min on a tool_use whose result never came, while their TUIs repainted):
  *   - `interrupted_tool`: the last message is the agent's tool call and no result followed (the step was cut off);
  *   - `no_status_reply`: the last message is a final reply with no STATUS line (nor any other turn end);
- *   - `untouched`: the agent owes the reply (the last message is the prompt or a tool result, or there is none).
+ *   - `untouched`: the agent owes the reply (the last message is the prompt or a tool result, or there is none);
+ *   - `no_session`: Cline wrote no session file for this run at all: its TUI never took the prompt, e.g. it sits on
+ *     Cline's sign-in screen (issue #9, foo QA card ab61f 2026-10-08: no Bedrock key stored in providers.json).
+ *     Typing into it doesn't help: the sign-in screen takes the text as input and starts a Cline account sign-in.
  * A pending question to the user (an ask tool) is no stall. `status` is the session file's own (`running` / `idle`): an `untouched` session still "running" is a model
  * request in flight, which recovery's hung-request check (Esc, `hungMin`) owns.
  */
-export type ClineSilentStallKind = "interrupted_tool" | "no_status_reply" | "untouched";
+export type ClineSilentStallKind = "interrupted_tool" | "no_status_reply" | "untouched" | "no_session";
 
 export interface ClineSilentStall {
 	kind: ClineSilentStallKind;
-	sessionId: string;
+	/** Null for `no_session`. */
+	sessionId: string | null;
 	status: string | null;
 	/** The newest progress: a message, a write in the session dir, or the Kanban turn's start, whichever is newest. */
 	lastProgressAt: number;
 	idleMs: number;
 	/** The interrupted tool calls' names. */
 	tools: string[];
+	/** `no_session` only: why Cline's TUI would open its sign-in screen (cline-tui-sign-in.ts), when that is known. */
+	signInGap?: string | null;
 }
 
 export interface ClineSilentStallInput {
@@ -100,7 +107,28 @@ export interface ClineSilentStallInput {
 	 * for recovery, its last nudge): the stall clock never starts before it.
 	 */
 	kanbanProgressAt: number | null;
+	/**
+	 * When the Kanban session's process started (its `startedAt`). With it, a run with no Cline session file of its
+	 * own (isClineSessionOfRun) is a `no_session` stall; without it such a run is never judged.
+	 */
+	runStartedAt?: number | null;
 	now: number;
+}
+
+/**
+ * Whether `detail` (a worktree's newest Cline session) belongs to the Kanban run that started at `runStartedAt`: it
+ * started then or later, or it has been written since (a session that outlived an earlier run is not this one's
+ * until it moves). True when the run's start is unknown.
+ */
+export function isClineSessionOfRun(detail: ClineSessionDetail | null, runStartedAt: number | null): boolean {
+	if (!detail) {
+		return false;
+	}
+	if (runStartedAt === null) {
+		return true;
+	}
+	const writtenAt = Math.max(detail.lastWriteAt ?? 0, detail.snapshot.messagesWrittenAt ?? 0);
+	return (detail.snapshot.startedAt ?? 0) >= runStartedAt || writtenAt >= runStartedAt;
 }
 
 const ASK_TOOL_PATTERN = new RegExp(`^(?:${CLINE_CLI_ASK_TOOL_PATTERN})$`, "u");
@@ -154,10 +182,23 @@ function classifyLastMessage(
  * The silent stall of a card's newest Cline session, however long it has been quiet (the caller compares `idleMs`
  * with its limit), or null when the session shows no stall: no session, a finished or failed session file, or a
  * final reply that ends the turn. Progress is a new message or a write in the session dir (a teammate's messages
- * included); Kanban's PTY output never counts, since an idle TUI repaints.
+ * included); Kanban's PTY output never counts, since an idle TUI repaints. Given `runStartedAt`, a run without a
+ * session file of its own is `no_session`, its clock starting at the run's start (or Kanban's later progress).
  */
 export function evaluateClineSilentStall(input: ClineSilentStallInput): ClineSilentStall | null {
 	const { detail, now } = input;
+	const runStartedAt = input.runStartedAt ?? null;
+	if (runStartedAt !== null && !isClineSessionOfRun(detail, runStartedAt)) {
+		const lastProgressAt = Math.max(runStartedAt, input.kanbanProgressAt ?? 0);
+		return {
+			kind: "no_session",
+			sessionId: null,
+			status: null,
+			lastProgressAt,
+			idleMs: Math.max(0, now - lastProgressAt),
+			tools: [],
+		};
+	}
 	if (!detail || (detail.snapshot.status !== "running" && detail.snapshot.status !== "idle")) {
 		return null;
 	}
@@ -189,19 +230,27 @@ export interface ReadClineSilentStallInput {
 	settings: Pick<ClineTurnDetectorSettings, "dataDir">;
 	workspacePath: string;
 	kanbanProgressAt: number | null;
+	/** See ClineSilentStallInput. */
+	runStartedAt?: number | null;
+	/** The card's provider (`-P`), for the sign-in reason of a `no_session` stall. */
+	providerId?: string | null;
 	now: number;
 }
 
 /** evaluateClineSilentStall on the newest session of `workspacePath` (a card's worktree). */
 export async function readClineSilentStall(input: ReadClineSilentStallInput): Promise<ClineSilentStall | null> {
-	return evaluateClineSilentStall({
+	const stall = evaluateClineSilentStall({
 		detail: await input.reader.readLatestSessionDetail(
 			getClineSessionsPath(input.settings.dataDir),
 			input.workspacePath,
 		),
 		kanbanProgressAt: input.kanbanProgressAt,
+		runStartedAt: input.runStartedAt,
 		now: input.now,
 	});
+	return stall?.kind === "no_session"
+		? { ...stall, signInGap: await readClineTuiSignInGap(input.settings.dataDir, input.providerId ?? null) }
+		: stall;
 }
 
 /**
@@ -219,6 +268,12 @@ export function getSessionProgressAt(
 
 /** For logs: "a tool call (apply_patch) with no result, silent since <iso> (session 1791…, idle)". Stable while it lasts. */
 export function describeClineSilentStall(stall: ClineSilentStall): string {
+	if (stall.kind === "no_session") {
+		const since = new Date(stall.lastProgressAt).toISOString();
+		return stall.signInGap
+			? `Cline is asking for sign-in: no Cline session file since ${since}, and ${stall.signInGap} (kanban doctor)`
+			: `Cline never took the prompt: no Cline session file since ${since} (a sign-in or setup screen in its TUI?)`;
+	}
 	const what =
 		stall.kind === "interrupted_tool"
 			? `a tool call (${stall.tools.join(", ")}) with no result`

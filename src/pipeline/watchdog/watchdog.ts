@@ -190,16 +190,22 @@ export interface WatchdogDependencies {
 	hooksOnPromptSubmit?: (agentId: RuntimeAgentId) => boolean;
 	hasHeadlessRunner?: (agentId: RuntimeAgentId) => boolean;
 	/** A card worktree's silent Cline stall (readClineSilentStall, the reader recovery decides on too). */
-	readSilentStall?: (input: {
-		worktreePath: string;
-		kanbanProgressAt: number | null;
-		dataDir: string;
-		now: number;
-	}) => Promise<ClineSilentStall | null>;
+	readSilentStall?: (input: SilentStallReadInput) => Promise<ClineSilentStall | null>;
 	/** A process the agent started that still runs in the worktree (recovery asks the same, findAgentToolProcess). */
 	findRunningTool?: AgentToolProcessFinder;
 	now?: () => number;
 	log: (message: string) => void;
+}
+
+export interface SilentStallReadInput {
+	worktreePath: string;
+	kanbanProgressAt: number | null;
+	/** The session's `startedAt`: a run with no Cline session file of its own is a `no_session` stall. */
+	runStartedAt: number | null;
+	/** The card's provider, for the sign-in reason of a `no_session` stall. */
+	providerId: string | null;
+	dataDir: string;
+	now: number;
 }
 
 export interface Watchdog {
@@ -269,13 +275,15 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 	const findRunningTool = deps.findRunningTool ?? createAgentToolProcessFinder();
 	const readSilentStall =
 		deps.readSilentStall ??
-		(async (input: { worktreePath: string; kanbanProgressAt: number | null; dataDir: string; now: number }) =>
+		(async (input: SilentStallReadInput) =>
 			clineReader
 				? await readClineSilentStall({
 						reader: clineReader,
 						settings: { dataDir: input.dataDir },
 						workspacePath: input.worktreePath,
 						kanbanProgressAt: input.kanbanProgressAt,
+						runStartedAt: input.runStartedAt,
+						providerId: input.providerId,
 						now: input.now,
 					})
 				: null);
@@ -532,9 +540,11 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 			const clineDataDir = getClineDataDirPath(config.agents.cline.dataDir);
 			for (const { column, card } of cards) {
 				const session = sessions.get(card.id);
+				// QA cards only for a run that never took its prompt (`no_session`): their other stalls are the QA gate's.
+				const role = roles.get(card.id)?.role;
 				if (
 					column !== "in_progress" ||
-					roles.get(card.id)?.role !== "dev" ||
+					(role !== "dev" && role !== "qa") ||
 					!session?.live ||
 					session.state !== "running" ||
 					!session.workspacePath
@@ -554,10 +564,12 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 				const stall = await readSilentStall({
 					worktreePath: session.workspacePath,
 					kanbanProgressAt: getSessionProgressAt(session),
+					runStartedAt: session.startedAt ?? null,
+					providerId: effective.model?.provider ?? null,
 					dataDir: clineDataDir,
 					now: context.now,
 				});
-				if (!stall || stall.idleMs < stallNudgeMs) {
+				if (!stall || stall.idleMs < stallNudgeMs || (role === "qa" && stall.kind !== "no_session")) {
 					continue;
 				}
 				// A long test run or build: its shell tool writes nothing to the session until it returns.
@@ -568,8 +580,18 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 				) {
 					continue;
 				}
-				const issue = `dev card is running but its Cline session is silent: ${describeClineSilentStall(stall)}`;
-				if (recoveryActs) {
+				const issue =
+					stall.kind === "no_session"
+						? `${role} card is running but ${describeClineSilentStall(stall)}`
+						: `dev card is running but its Cline session is silent: ${describeClineSilentStall(stall)}`;
+				if (role === "qa") {
+					// Recovery never acts on QA cards, and typing into a sign-in screen starts a Cline account sign-in.
+					queueIssue(
+						`${card.id}:no-session`,
+						card.id,
+						`${issue}; nothing restarts it until Cline's settings are fixed`,
+					);
+				} else if (recoveryActs) {
 					// One owner: recovery nudges (and escalates) it; a second "continue" from here would double it.
 					record(records, context, {
 						workspaceId,

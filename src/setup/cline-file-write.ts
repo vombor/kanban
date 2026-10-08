@@ -1,7 +1,7 @@
 // How the user's own `kanban cline ...` commands write a Cline file (Kanban writes nothing under ~/.cline on its own,
 // user rule 2026-10-07): copy the file as read into the Kanban home's backups (`<home>/backups/cline/`, never next to
 // Cline's files; Cline's settings can hold API keys, so the copy is 0600), then replace the file atomically with its
-// own mode. Used by apply-lemonade-models (models.json) and remove-bedrock-key (providers.json).
+// own mode. Used by apply-lemonade-models (models.json) and store-bedrock-key (providers.json).
 import { chmod, mkdir, rename, stat, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 

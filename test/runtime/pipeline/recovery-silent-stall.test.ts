@@ -89,6 +89,7 @@ describe("recovery: silent stalls of Cline cards", () => {
 	function createHarness(
 		config: Record<string, unknown> = { pipeline: { recovery: { mode: "on" } } },
 		runningTool: () => string | null = () => null,
+		readSignInGap?: (providerId: string | null) => Promise<string | null>,
 	) {
 		const actions: RecoveryAction[] = [];
 		const toolLookups: Array<{ worktreePath: string; agentPid: number | null }> = [];
@@ -98,6 +99,7 @@ describe("recovery: silent stalls of Cline cards", () => {
 		const stage = createRecoveryStage({
 			locateWorktree: async () => WORKTREE,
 			readSessionDetail: async (worktreePath) => await reader.readLatestSessionDetail(sessionsPath, worktreePath),
+			readSignInGap,
 			findRunningTool: async (worktreePath, agentPid) => {
 				toolLookups.push({ worktreePath, agentPid });
 				return runningTool();
@@ -235,7 +237,8 @@ describe("recovery: silent stalls of Cline cards", () => {
 		expect(harness.actions).toEqual([]);
 	});
 
-	it("starts the clock at the Kanban run's start, not at an older session file", async () => {
+	it("doesn't count an older session file as this run's: a run that writes none escalates, never nudged", async () => {
+		// A resumed card whose Cline TUI never took the prompt: the newest session file is the previous run's.
 		writeSession([prompt, toolUse("apply_patch", T0 - 30 * MIN)], { status: "idle" });
 		const harness = createHarness();
 		const resumed = running(T0 - MIN);
@@ -243,7 +246,50 @@ describe("recovery: silent stalls of Cline cards", () => {
 		advance(6 * MIN);
 		expect(await harness.evaluate(resumed)).toEqual([]);
 		advance(2 * MIN);
-		expect(await harness.evaluate(resumed)).toMatchObject([{ answer: { kind: "nudge", cause: "silent_stall" } }]);
+		const records = await harness.evaluate(resumed);
+		expect(records).toMatchObject([{ answer: { kind: "escalate" } }]);
+		expect(records[0]?.note).toContain(
+			"Cline never took the prompt: no Cline session file since 2026-10-07T22:29:00.000Z",
+		);
+		expect(harness.actions).toEqual([]);
+		expect(harness.flow()?.escalated).toMatchObject({
+			reason: expect.stringContaining("Cline never took the prompt"),
+		});
+		// Escalated once: recovery leaves the card alone from then on.
+		advance(10 * MIN);
+		expect(await harness.evaluate(resumed)).toEqual([]);
+	});
+
+	it("says Cline is asking for sign-in when providers.json lacks what its TUI needs (issue #9)", async () => {
+		// No session file at all: Cline's TUI sits on its sign-in screen (foo QA card ab61f, 2026-10-08).
+		const providers: Array<string | null> = [];
+		const harness = createHarness(undefined, undefined, async (providerId) => {
+			providers.push(providerId);
+			return "providers.json stores no Bedrock key (Cline's TUI doesn't count AWS_BEARER_TOKEN_BEDROCK)";
+		});
+		const session = { ...running(T0 - 9 * MIN), modelId: "us.anthropic.claude-haiku-4-5-20251001-v1:0" };
+		const records = await harness.evaluate(session);
+		expect(records).toMatchObject([{ answer: { kind: "escalate" } }]);
+		expect(records[0]?.note).toContain(
+			"Cline is asking for sign-in: no Cline session file since 2026-10-07T22:21:00.000Z, and providers.json stores no Bedrock key",
+		);
+		expect(harness.delivered()).toEqual([]);
+		expect(providers.length).toBeGreaterThan(0);
+	});
+
+	it("waits stallNudgeMin for a run's first session file, and never judges a run that has one", async () => {
+		const harness = createHarness();
+		expect(await harness.evaluate(running(T0 - 7 * MIN))).toEqual([]);
+		writeFakeClineSession(sessionsPath, {
+			sessionId: "1791411900000_new01",
+			cwd: WORKTREE,
+			status: "running",
+			startedAt: T0 - 7 * MIN + 2_000,
+			messages: [textMessage("user", "Implement the profile page.", T0 - 7 * MIN + 2_000)],
+			writtenAt: Date.now(),
+		});
+		advance(2 * MIN);
+		expect(await harness.evaluate(running(T0 - 7 * MIN))).toEqual([]);
 	});
 
 	it("gives each further nudge another stallNudgeMin of silence, nudges up to maxNudges, then escalates once", async () => {

@@ -11,15 +11,12 @@ const KEY = "test-bedrock-key-abc123";
 describe("doctor: Cline's Bedrock key", () => {
 	let root: { path: string; cleanup: () => void };
 	let providersPath: string;
-	let procRoot: string;
 
 	beforeEach(() => {
-		// Never the real ~/.cline or /proc.
+		// Never the real ~/.cline.
 		root = createTempDir("kanban-doctor-bedrock-key-");
 		providersPath = join(root.path, "cline", "data", "settings", "providers.json");
-		procRoot = join(root.path, "proc");
 		mkdirSync(dirname(providersPath), { recursive: true });
-		mkdirSync(procRoot, { recursive: true });
 	});
 	afterEach(() => root.cleanup());
 
@@ -30,81 +27,71 @@ describe("doctor: Cline's Bedrock key", () => {
 		);
 	}
 
-	function writeHubDaemon(pid: number, env: Record<string, string>): void {
-		const dir = join(procRoot, String(pid));
-		mkdirSync(dir, { recursive: true });
-		writeFileSync(join(dir, "cmdline"), "/usr/bin/cline\0--cline-hub-daemon\0");
-		writeFileSync(
-			join(dir, "environ"),
-			Object.entries(env)
-				.map(([name, value]) => `${name}=${value}\0`)
-				.join(""),
-		);
-	}
-
 	function check(env: NodeJS.ProcessEnv, defaultProvider = "bedrock") {
-		return checkClineBedrockKey({
-			providersPath,
-			defaultProvider,
-			bedrockRegion: "us-west-2",
-			env,
-			launcherDeps: { procRoot },
-		});
+		return checkClineBedrockKey({ providersPath, defaultProvider, env });
 	}
 
-	it("warns when providers.json stores a key the environment already provides, with the user's command", async () => {
-		writeProviders({ apiKey: KEY, aws: { region: "us-west-2" } });
-		const findings = await check({ AWS_BEARER_TOKEN_BEDROCK: KEY });
+	it("warns when the key is only in the environment: Cline's TUI opens its sign-in screen (issue #9)", async () => {
+		writeProviders({ aws: { region: "us-west-2" } });
+		const findings = await check({ AWS_BEARER_TOKEN_BEDROCK: KEY, AWS_REGION: "us-west-2" });
 		expect(findings).toEqual([
 			{
 				level: "warn",
 				area: "setup",
-				message: `Cline stores a Bedrock API key in ${providersPath}; the environment already provides it (the same value as AWS_BEARER_TOKEN_BEDROCK)`,
-				hint: "kanban cline remove-bedrock-key",
+				message: `${providersPath} stores no Bedrock key: Cline's Bedrock cards open on Cline's sign-in screen and never start (its TUI doesn't read AWS_BEARER_TOKEN_BEDROCK, though Kanban's environment has it)`,
+				hint: "kanban cline store-bedrock-key",
 			},
 		]);
-
-		const different = await check({ AWS_BEARER_TOKEN_BEDROCK: "another-key" });
-		expect(different[0]?.message).toContain(
-			"a different value than AWS_BEARER_TOKEN_BEDROCK; Cline uses the stored one",
-		);
-		expect(JSON.stringify([...findings, ...different])).not.toContain(KEY);
-		expect(JSON.stringify(different)).not.toContain("another-key");
+		expect(JSON.stringify(findings)).not.toContain(KEY);
 	});
 
-	it("passes with the key only in the environment, and flags a hub daemon started without it", async () => {
-		writeProviders({ aws: { region: "us-west-2" } });
-		expect(await check({ AWS_BEARER_TOKEN_BEDROCK: KEY })).toEqual([
+	it("passes with the key stored, and never recommends removing it", async () => {
+		writeProviders({ apiKey: KEY, aws: { region: "us-west-2" } });
+		const findings = await check({ AWS_BEARER_TOKEN_BEDROCK: KEY });
+		expect(findings).toEqual([
 			{
 				level: "pass",
 				area: "setup",
-				message: `Cline's Bedrock key comes from AWS_BEARER_TOKEN_BEDROCK; none stored in ${providersPath}`,
+				message: `Cline's Bedrock key is stored in ${providersPath} (the same value as AWS_BEARER_TOKEN_BEDROCK), region us-west-2`,
 			},
 		]);
-
-		writeHubDaemon(4242, { AWS_REGION: "us-west-2" });
-		writeHubDaemon(4343, { AWS_BEARER_TOKEN_BEDROCK: KEY });
-		const findings = await check({ AWS_BEARER_TOKEN_BEDROCK: KEY });
-		expect(findings).toHaveLength(2);
-		expect(findings[1]).toMatchObject({ level: "warn" });
-		expect(findings[1]?.message).toContain("Cline hub daemon pid 4242 has no AWS_BEARER_TOKEN_BEDROCK");
-		expect(JSON.stringify(findings)).not.toContain("4343");
+		expect(await check({})).toMatchObject([{ level: "pass" }]);
+		expect(JSON.stringify(findings)).not.toContain("remove-bedrock-key");
+		expect(JSON.stringify(findings)).not.toContain(KEY);
 	});
 
-	it("says so when the env var is missing: with a stored key, and with no key at all", async () => {
+	it("warns when the stored key differs from the environment's (a rotated secret)", async () => {
 		writeProviders({ apiKey: KEY, aws: { region: "us-west-2" } });
-		const stored = await check({});
-		expect(stored).toHaveLength(1);
-		expect(stored[0]).toMatchObject({ level: "warn", hint: "docs/fork/cline-bedrock-auth.md" });
-		expect(stored[0]?.message).toContain("AWS_BEARER_TOKEN_BEDROCK is not set, but Cline uses Bedrock");
-		expect(stored[0]?.message).toContain("type=env,target=AWS_BEARER_TOKEN_BEDROCK");
-		expect(JSON.stringify(stored)).not.toContain(KEY);
+		const different = await check({ AWS_BEARER_TOKEN_BEDROCK: "another-key" });
+		expect(different).toHaveLength(1);
+		expect(different[0]).toMatchObject({ level: "warn", hint: "kanban cline store-bedrock-key" });
+		expect(different[0]?.message).toContain("Cline uses the stored one");
+		expect(JSON.stringify(different)).not.toContain(KEY);
+		expect(JSON.stringify(different)).not.toContain("another-key");
+	});
+
+	it("warns about a region only in AWS_REGION, and points at the doc without any key", async () => {
+		writeProviders({ apiKey: KEY });
+		const noRegion = await check({ AWS_BEARER_TOKEN_BEDROCK: KEY, AWS_REGION: "us-west-2" });
+		expect(noRegion).toHaveLength(1);
+		expect(noRegion[0]?.message).toContain("stores no Bedrock region");
+		expect(noRegion[0]?.message).toContain("doesn't count AWS_REGION=us-west-2");
 
 		writeProviders({});
 		const neither = await check({});
-		expect(neither.map((finding) => finding.level)).toEqual(["warn", "warn"]);
+		expect(neither.map((finding) => [finding.level, finding.hint])).toEqual([
+			["warn", "docs/fork/cline-bedrock-auth.md"],
+			["warn", "docs/fork/cline-bedrock-auth.md"],
+		]);
 		expect(neither[0]?.message).toContain("Cline's Bedrock cards have no key");
-		expect(neither[1]?.message).toContain("export AWS_REGION=us-west-2");
+		expect(neither[0]?.message).toContain("type=env,target=AWS_BEARER_TOKEN_BEDROCK");
+	});
+
+	it("passes with IAM credentials and only notes an unused stored key", async () => {
+		writeProviders({ aws: { region: "us-west-2", authentication: "iam" } });
+		expect(await check({})).toMatchObject([{ level: "pass" }]);
+		writeProviders({ apiKey: KEY, aws: { region: "us-west-2", authentication: "iam" } });
+		expect(await check({})).toMatchObject([{ level: "info" }]);
 	});
 
 	it("has nothing to say when Bedrock isn't used", async () => {

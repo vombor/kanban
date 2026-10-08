@@ -62,8 +62,10 @@ Fix it before anything else.
   unless `--claude-md`.
 - **Cline settings and ~/.cline:** Kanban writes nothing under `~/.cline` (that is Cline's). Every Cline launch gets
   Kanban's rules as worktree rules (`.cline/rules/kanban-*.md`, git-excluded) and `CLINE_DISABLE_CLINE_PASS_NOTICE=1`.
-  Bedrock comes from your own Cline settings (`cline auth bedrock`) or from `AWS_BEARER_TOKEN_BEDROCK` + `AWS_REGION`
-  in the environment Kanban starts from; `kanban setup` only checks and prints what to run (status "to do by hand").
+  Bedrock needs its key and region stored in Cline's `providers.json`: Cline's TUI doesn't count
+  `AWS_BEARER_TOKEN_BEDROCK`/`AWS_REGION` and opens its sign-in screen without them. Run `kanban cline store-bedrock-key`
+  from the environment Kanban starts from to store the env's key ([cline-bedrock-auth.md](../fork/cline-bedrock-auth.md));
+  `kanban setup` and `kanban doctor` only check and print what to run (status "to do by hand").
   `kanban models providers --cleanup` lists the edits for Cline's files; you make them. `kanban doctor` reports
   Kanban's rules left in `~/.cline/rules` and `*.bak-before-kanban-setup-*` backups with the `rm` command; it never
   deletes them.

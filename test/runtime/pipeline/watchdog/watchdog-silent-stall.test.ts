@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -144,5 +144,100 @@ describe("watchdog: silent Cline stalls are only reported", () => {
 		harness.setNow(WATCHDOG_NOW - 6 * MIN);
 		await harness.watchdog.tick();
 		expect(readDecisions(harness.paths("foo").decisions).filter((record) => record.taskId === "d0001")).toEqual([]);
+	});
+});
+
+// Issue #9: a Cline TUI on its sign-in screen writes no session file while Kanban says "running".
+describe("watchdog: a Cline run that never wrote a session file", () => {
+	function setup(role: "dev" | "qa", recoveryMode: "on" | "report", options: { providers?: unknown } = {}) {
+		const harness = createWatchdogHarness({ findRunningTool: async () => null });
+		harnesses.push(harness);
+		const dataDir = join(harness.home, "cline-data");
+		harness.setConfig({
+			watchdog: { mode: "on" },
+			orchestrator: { wake: { mode: "sidebar" } },
+			pipeline: { recovery: { mode: recoveryMode } },
+			workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" } } },
+			agents: { cline: { dataDir } },
+		});
+		if (options.providers !== undefined) {
+			mkdirSync(join(dataDir, "settings"), { recursive: true });
+			writeFileSync(join(dataDir, "settings", "providers.json"), JSON.stringify(options.providers));
+		}
+		harness.observe({
+			workspaceId: "foo",
+			board: createBoard({
+				in_progress: [
+					createCard({
+						id: "d0001",
+						role,
+						agentId: "cline",
+						agentSettings: { providerId: "bedrock", modelId: "us.anthropic.claude-haiku-4-5-20251001-v1:0" },
+						updatedAt: WATCHDOG_NOW - 60 * MIN,
+					}),
+				],
+			}),
+			sessions: [{ ...runningCline, startedAt: WATCHDOG_NOW - 9 * MIN, stateChangedAt: WATCHDOG_NOW - 9 * MIN }],
+		});
+		return harness;
+	}
+
+	const noKey = {
+		version: 1,
+		providers: { bedrock: { settings: { provider: "bedrock", aws: { region: "us-west-2" } } } },
+	};
+
+	it("makes a QA card an ATTENTION item that names the sign-in screen, without typing into it", async () => {
+		const harness = setup("qa", "on", { providers: noKey });
+		await harness.watchdog.tick();
+		expect(harness.requests.filter((request) => request.kind === "deliverInput")).toEqual([]);
+		expect(readDecisions(harness.paths("foo").decisions)).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					kind: "stall",
+					taskId: "d0001",
+					note: expect.stringContaining(
+						"qa card is running but Cline is asking for sign-in: no Cline session file since 2026-",
+					),
+				}),
+			]),
+		);
+		const wake = harness.requests.find((request) => request.kind === "startOrchestratorSession");
+		expect(wake && "prompt" in wake ? wake.prompt : "").toContain(
+			"providers.json stores no Bedrock key (Cline's TUI doesn't count AWS_BEARER_TOKEN_BEDROCK)",
+		);
+	});
+
+	it("leaves a dev card's to recovery where recovery acts (it escalates)", async () => {
+		const harness = setup("dev", "on", { providers: noKey });
+		await harness.watchdog.tick();
+		expect(readDecisions(harness.paths("foo").decisions)).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					kind: "stall",
+					taskId: "d0001",
+					outcome: "skipped",
+					note: expect.stringMatching(/dev card is running but Cline is asking for sign-in.*; recovery owns it$/u),
+				}),
+			]),
+		);
+	});
+
+	it("says it never took the prompt when Cline's settings look complete, and waits stallNudgeMin", async () => {
+		const harness = setup("qa", "on", {
+			providers: {
+				providers: { bedrock: { settings: { provider: "bedrock", apiKey: "k", aws: { region: "us-west-2" } } } },
+			},
+		});
+		harness.setNow(WATCHDOG_NOW - 2 * MIN);
+		await harness.watchdog.tick();
+		expect(readDecisions(harness.paths("foo").decisions).filter((record) => record.taskId === "d0001")).toEqual([]);
+		harness.setNow(WATCHDOG_NOW);
+		await harness.watchdog.tick();
+		expect(readDecisions(harness.paths("foo").decisions)).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ taskId: "d0001", note: expect.stringContaining("Cline never took the prompt") }),
+			]),
+		);
 	});
 });

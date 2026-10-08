@@ -22,7 +22,7 @@ import type { EffectiveModel, EffectiveModelConfig } from "../core/effective-age
 import type { RoutingPolicy } from "../kits/policy";
 import { getAgentRecoveryProfile, getAgentTurnEndSource } from "../terminal/agent-session-adapters";
 import type { ClineSessionDetail } from "../terminal/cline-session-files";
-import { isClineShellToolPending } from "../terminal/cline-turn-check";
+import { isClineSessionOfRun, isClineShellToolPending } from "../terminal/cline-turn-check";
 import { evaluateClineTurnEnd } from "../terminal/cline-turn-outcome";
 import type { PipelineDecisionRecord } from "./decision-log";
 import { getRecoveryScope, type PipelineSessionView, type PipelineWorkspaceSnapshot, toEffectiveCard } from "./engine";
@@ -80,6 +80,11 @@ export interface RecoveryStageDependencies {
 	locateWorktree: (workspacePath: string, card: RuntimeBoardCard) => Promise<string | null>;
 	/** The newest Cline CLI session of a worktree. */
 	readSessionDetail: (worktreePath: string) => Promise<ClineSessionDetail | null>;
+	/**
+	 * Why Cline's TUI would open its sign-in screen for a provider (readClineTuiSignInGap), for the reason of a run
+	 * without a session file. Default: unknown.
+	 */
+	readSignInGap?: (providerId: string | null) => Promise<string | null>;
 	/**
 	 * A process the agent (`agentPid`, or a Cline hub daemon) started that still runs in the worktree, described for
 	 * the log, or null (findAgentToolProcess in process-reaper.ts). Asked only while a shell tool call is pending.
@@ -392,6 +397,15 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 				isClineShellToolPending(detail)
 					? await deps.findRunningTool(worktree, context.session.pid ?? null)
 					: null;
+			const readsSessionFiles = getAgentTurnEndSource(effective.agentId) === "cline-session-files";
+			const signInGap =
+				readsSessionFiles &&
+				context.column === "in_progress" &&
+				context.session?.live &&
+				context.session.state === "running" &&
+				!isClineSessionOfRun(detail, context.session.startedAt ?? null)
+					? ((await deps.readSignInGap?.(effective.model?.provider ?? null)) ?? null)
+					: null;
 			const decision = decideRecovery({
 				card: context.card,
 				column: context.column,
@@ -401,6 +415,8 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 				detail,
 				runningTool,
 				readsTurnOutcome: getAgentTurnEndSource(effective.agentId) !== null,
+				readsSessionFiles,
+				signInGap,
 				profile: getAgentRecoveryProfile(effective.agentId),
 				flow,
 				canProbe: deps.canProbe(effective.model?.provider ?? null),

@@ -8,6 +8,7 @@ import { loadModelProbeDependencies } from "../models/model-probe-setup";
 import { createAgentToolProcessFinder } from "../server/process-reaper";
 import { getClineDataDirPath, getPipelineStatePath } from "../state/kanban-home";
 import { createClineSessionFileReader, getClineSessionsPath } from "../terminal/cline-session-files";
+import { readClineTuiSignInGap } from "../terminal/cline-tui-sign-in";
 import { runGit } from "../workspace/git-utils";
 import { getTaskWorkspacePathInfo } from "../workspace/task-worktree";
 import type { PipelineDecisionLog } from "./decision-log";
@@ -96,6 +97,10 @@ export function createWorkerRecoveryStage(options: {
 		},
 		readSessionDetail: async (worktreePath) =>
 			await reader.readLatestSessionDetail(await sessionsPath(), worktreePath),
+		readSignInGap: async (providerId) => {
+			const { config } = await readPipelineConfig();
+			return await readClineTuiSignInGap(getClineDataDirPath(config.agents.cline.dataDir), providerId);
+		},
 		findRunningTool: createAgentToolProcessFinder(),
 		canProbe: canProbeProvider,
 		probe: async (target) => {

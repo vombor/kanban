@@ -3,53 +3,44 @@ import { dirname, join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { listClineKeyLaunchers, removeClineBedrockKey } from "../../../src/setup/cline-bedrock-key";
+import { refuseRemoveClineBedrockKey, storeClineBedrockKey } from "../../../src/setup/cline-bedrock-key";
+import { describeClineTuiSignInGap } from "../../../src/terminal/cline-tui-sign-in";
 import { createTempDir } from "../../utilities/temp-dir";
 
 const KEY = "test-bedrock-key-abc123";
 const NOW = new Date("2026-10-08T12:00:00.000Z");
 
-function providersFile(bedrockSettings: Record<string, unknown>): Record<string, unknown> {
+function providersFile(bedrockSettings: Record<string, unknown> | null): Record<string, unknown> {
 	return {
 		version: 1,
 		lastUsedProvider: "bedrock",
+		modes: {},
 		providers: {
-			bedrock: {
-				settings: { provider: "bedrock", model: "us.example.model", ...bedrockSettings },
-				tokenSource: "manual",
-			},
+			...(bedrockSettings
+				? {
+						bedrock: {
+							settings: { provider: "bedrock", model: "us.example.model", ...bedrockSettings },
+							updatedAt: "2026-10-08T04:48:56.163Z",
+							tokenSource: "manual",
+						},
+					}
+				: {}),
 			lemonade: { settings: { provider: "lemonade", apiKey: "lemonade-key-stays" } },
 		},
 	};
 }
 
-/** A fake /proc: one dir per pid with its cmdline and environ (NUL-separated). */
-function writeFakeProcess(procRoot: string, pid: number, argv: string[], env: Record<string, string>): void {
-	const dir = join(procRoot, String(pid));
-	mkdirSync(dir, { recursive: true });
-	writeFileSync(join(dir, "cmdline"), `${argv.join("\0")}\0`);
-	writeFileSync(
-		join(dir, "environ"),
-		`${Object.entries(env)
-			.map(([name, value]) => `${name}=${value}`)
-			.join("\0")}\0`,
-	);
-}
-
-describe("kanban cline remove-bedrock-key", () => {
+describe("kanban cline store-bedrock-key", () => {
 	let root: { path: string; cleanup: () => void };
 	let providersPath: string;
 	let backupDir: string;
-	let procRoot: string;
 
 	beforeEach(() => {
-		// Never the real ~/.cline: providers.json, the backups and /proc are all temp ones.
+		// Never the real ~/.cline: providers.json and the backups are temp ones.
 		root = createTempDir("kanban-cline-bedrock-key-");
 		providersPath = join(root.path, "cline", "data", "settings", "providers.json");
 		backupDir = join(root.path, "home", "backups", "cline");
-		procRoot = join(root.path, "proc");
 		mkdirSync(dirname(providersPath), { recursive: true });
-		mkdirSync(procRoot, { recursive: true });
 	});
 	afterEach(() => root.cleanup());
 
@@ -59,22 +50,22 @@ describe("kanban cline remove-bedrock-key", () => {
 		return raw;
 	}
 
-	function run(overrides: { env?: NodeJS.ProcessEnv; dryRun?: boolean; serverPid?: number } = {}) {
-		return removeClineBedrockKey({
+	function run(overrides: { env?: NodeJS.ProcessEnv; dryRun?: boolean } = {}) {
+		return storeClineBedrockKey({
 			providersPath,
 			env: overrides.env ?? { AWS_BEARER_TOKEN_BEDROCK: KEY },
+			defaultRegion: "us-west-2",
 			dryRun: overrides.dryRun ?? false,
 			backupDir,
 			now: NOW,
-			launcherDeps: { procRoot, serverPid: overrides.serverPid ?? null },
 		});
 	}
 
-	it("backs up providers.json, then removes only the Bedrock key, atomically with the file's mode", async () => {
-		const before = writeProviders(providersFile({ apiKey: KEY, aws: { region: "us-west-2" } }), 0o640);
-		writeFakeProcess(procRoot, 4242, ["/usr/bin/cline", "--cline-hub-daemon", "--port", "25463"], {
-			AWS_BEARER_TOKEN_BEDROCK: KEY,
-		});
+	it("backs up providers.json, then stores only the env's key, atomically with the file's mode (issue #9)", async () => {
+		// The state `remove-bedrock-key` left behind: region and model, no key, so Cline's TUI shows its sign-in screen.
+		const before = writeProviders(providersFile({ aws: { region: "us-west-2" } }), 0o640);
+		expect(describeClineTuiSignInGap(JSON.parse(before), "bedrock")).toContain("stores no Bedrock key");
+
 		const result = await run();
 		expect(result.status).toBe("written");
 		expect(result.backupPath).toBe(join(backupDir, "providers.json.20261008T120000Z"));
@@ -83,9 +74,8 @@ describe("kanban cline remove-bedrock-key", () => {
 		expect(result.rollback).toBe(`cp '${result.backupPath}' '${providersPath}'`);
 
 		const after = JSON.parse(readFileSync(providersPath, "utf8"));
-		const expected = providersFile({ aws: { region: "us-west-2" } });
-		expect(after).toEqual(expected);
-		expect(after.providers.lemonade.settings.apiKey).toBe("lemonade-key-stays");
+		expect(after).toEqual(providersFile({ aws: { region: "us-west-2" }, apiKey: KEY }));
+		expect(describeClineTuiSignInGap(after, "bedrock")).toBeNull();
 		expect(statSync(providersPath).mode & 0o777).toBe(0o640);
 		// Nothing but providers.json next to Cline's files: no backup, no temp file left.
 		expect(readdirSync(dirname(providersPath))).toEqual(["providers.json"]);
@@ -97,62 +87,105 @@ describe("kanban cline remove-bedrock-key", () => {
 		expect(readdirSync(backupDir)).toHaveLength(1);
 	});
 
+	it("replaces a different stored key (a rotated secret) and stores a missing region", async () => {
+		writeProviders(providersFile({ apiKey: "old-key-value" }));
+		const result = await run({ env: { AWS_BEARER_TOKEN_BEDROCK: KEY, AWS_REGION: "eu-central-1" } });
+		expect(result.status).toBe("written");
+		expect(result.lines.join("\n")).toContain("replace providers.bedrock.settings.apiKey");
+		expect(result.lines.join("\n")).toContain("aws.region = eu-central-1");
+		expect(JSON.stringify(result)).not.toContain("old-key-value");
+		const settings = JSON.parse(readFileSync(providersPath, "utf8")).providers.bedrock.settings;
+		expect(settings).toMatchObject({ apiKey: KEY, aws: { region: "eu-central-1" }, model: "us.example.model" });
+	});
+
+	it("adds a Bedrock entry in Cline's own shape when providers.json has none", async () => {
+		writeProviders(providersFile(null));
+		expect((await run()).status).toBe("written");
+		const after = JSON.parse(readFileSync(providersPath, "utf8"));
+		expect(after.providers.bedrock).toEqual({
+			settings: { provider: "bedrock", apiKey: KEY, aws: { region: "us-west-2" } },
+			updatedAt: NOW.toISOString(),
+			tokenSource: "manual",
+		});
+		expect(after.providers.lemonade.settings.apiKey).toBe("lemonade-key-stays");
+		expect(describeClineTuiSignInGap(after, "bedrock")).toBeNull();
+	});
+
 	it("a dry run writes nothing, not even a backup", async () => {
-		const before = writeProviders(providersFile({ apiKey: KEY, aws: { region: "us-west-2" } }));
+		const before = writeProviders(providersFile({ aws: { region: "us-west-2" } }));
 		const result = await run({ dryRun: true });
 		expect(result.status).toBe("would-write");
-		expect(result.lines[0]).toContain("the same value as AWS_BEARER_TOKEN_BEDROCK");
+		expect(result.lines[0]).toContain("store providers.bedrock.settings.apiKey from AWS_BEARER_TOKEN_BEDROCK");
 		expect(readFileSync(providersPath, "utf8")).toBe(before);
 		expect(() => readdirSync(backupDir)).toThrow();
 	});
 
-	it("is refused without AWS_BEARER_TOKEN_BEDROCK in its env", async () => {
-		const before = writeProviders(providersFile({ apiKey: KEY }));
+	it("is refused without AWS_BEARER_TOKEN_BEDROCK in its env, without providers.json, or with AWS credentials", async () => {
+		expect((await run()).status).toBe("refused");
+		expect((await run()).lines[0]).toContain("no providers.json yet");
+
+		const before = writeProviders(providersFile({ aws: { region: "us-west-2" } }));
 		for (const env of [{}, { AWS_BEARER_TOKEN_BEDROCK: "  " }]) {
 			const result = await run({ env });
 			expect(result.status).toBe("refused");
 			expect(result.lines[0]).toContain("AWS_BEARER_TOKEN_BEDROCK is not set");
 		}
 		expect(readFileSync(providersPath, "utf8")).toBe(before);
+
+		for (const aws of [
+			{ region: "us-west-2", authentication: "iam" },
+			{ region: "us-west-2", accessKey: "AKIA", secretKey: "s" },
+		]) {
+			const stored = writeProviders(providersFile({ aws }));
+			expect((await run()).status).toBe("refused");
+			expect(readFileSync(providersPath, "utf8")).toBe(stored);
+		}
 	});
 
-	it("is refused while the server or a hub daemon doesn't have the same env key", async () => {
-		const before = writeProviders(providersFile({ apiKey: KEY }));
-		writeFakeProcess(procRoot, 100, ["node", "kanban"], { AWS_BEARER_TOKEN_BEDROCK: KEY });
-		writeFakeProcess(procRoot, 4242, ["/usr/bin/cline", "--cline-hub-daemon"], { AWS_REGION: "us-west-2" });
-		writeFakeProcess(procRoot, 4343, ["/usr/bin/cline", "--cline-hub-daemon"], {
-			AWS_BEARER_TOKEN_BEDROCK: "rotated-value-xyz",
-		});
-		writeFakeProcess(procRoot, 4444, ["/usr/bin/cline", "--tui"], {});
-		const result = await run({ serverPid: 100 });
-		expect(result.status).toBe("refused");
-		expect(result.lines.join("\n")).toContain("Cline hub daemon pid 4242 has no AWS_BEARER_TOKEN_BEDROCK");
-		expect(result.lines.join("\n")).toContain("Cline hub daemon pid 4343 has a different AWS_BEARER_TOKEN_BEDROCK");
-		expect(result.lines.join("\n")).not.toContain("4444");
-		expect(result.lines.join("\n")).not.toContain("rotated-value-xyz");
-		expect(readFileSync(providersPath, "utf8")).toBe(before);
-
-		writeFakeProcess(procRoot, 101, ["node", "kanban"], {});
-		expect(await listClineKeyLaunchers(KEY, { procRoot, serverPid: 101 })).toContainEqual({
-			pid: 101,
-			role: "kanban server",
-			env: "missing",
-		});
-	});
-
-	it("is refused when stored access keys would replace the API key", async () => {
-		const before = writeProviders(providersFile({ apiKey: KEY, aws: { accessKey: "AKIA", secretKey: "s" } }));
-		const result = await run();
-		expect(result.status).toBe("refused");
-		expect(result.lines[0]).toContain("AWS access keys");
-		expect(readFileSync(providersPath, "utf8")).toBe(before);
-	});
-
-	it("says there is nothing to do without a stored key or a providers.json, and errors on bad JSON", async () => {
-		expect((await run()).status).toBe("nothing-to-do");
-		writeProviders(providersFile({ aws: { region: "us-west-2" } }));
-		expect((await run()).status).toBe("nothing-to-do");
+	it("errors on bad JSON and never writes it", async () => {
 		writeFileSync(providersPath, "{not json");
 		expect((await run()).status).toBe("error");
+		expect(readFileSync(providersPath, "utf8")).toBe("{not json");
+	});
+});
+
+describe("kanban cline remove-bedrock-key", () => {
+	it("always refuses and points at store-bedrock-key", () => {
+		const result = refuseRemoveClineBedrockKey();
+		expect(result.status).toBe("refused");
+		expect(result.lines.join("\n")).toContain("sign-in screen");
+		expect(result.lines.join("\n")).toContain("kanban cline store-bedrock-key");
+	});
+});
+
+describe("Cline's TUI sign-in check", () => {
+	const doc = (settings: Record<string, unknown>) => ({ providers: { bedrock: { settings } } });
+
+	it("needs a stored key or AWS credentials and a stored region for bedrock; the env never counts", () => {
+		expect(describeClineTuiSignInGap(null, "bedrock")).toBe("providers.json has no bedrock entry");
+		expect(describeClineTuiSignInGap(doc({ apiKey: KEY, aws: { region: "us-west-2" } }), "bedrock")).toContain(
+			"doesn't name its provider",
+		);
+		expect(describeClineTuiSignInGap(doc({ provider: "bedrock", aws: { region: "us-west-2" } }), "bedrock")).toBe(
+			"providers.json stores no Bedrock key (Cline's TUI doesn't count AWS_BEARER_TOKEN_BEDROCK)",
+		);
+		expect(describeClineTuiSignInGap(doc({ provider: "bedrock", apiKey: KEY }), "bedrock")).toContain(
+			"stores no Bedrock region",
+		);
+		for (const settings of [
+			{ apiKey: KEY, aws: { region: "us-west-2" } },
+			{ auth: { accessToken: KEY }, region: "us-west-2" },
+			{ aws: { region: "us-west-2", authentication: "iam" } },
+			{ aws: { region: "us-west-2", profile: "work" } },
+			{ aws: { region: "us-west-2", accessKey: "AKIA", secretKey: "s" } },
+		]) {
+			expect(describeClineTuiSignInGap(doc({ provider: "bedrock", ...settings }), "bedrock")).toBeNull();
+		}
+	});
+
+	it("only judges a missing entry for other providers", () => {
+		const document = { providers: { lemonade: { settings: { provider: "lemonade" } } } };
+		expect(describeClineTuiSignInGap(document, "lemonade")).toBeNull();
+		expect(describeClineTuiSignInGap(document, "openai-native")).toBe("providers.json has no openai-native entry");
 	});
 });
