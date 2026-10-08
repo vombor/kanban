@@ -201,6 +201,79 @@ describe("watchdog on", () => {
 		).toEqual([]);
 	});
 
+	it("post-restart: a Review card whose dead QA card the gate did not replace within the grace wakes only its own orchestrator", async () => {
+		const harness = harnessWith({
+			watchdog: { mode: "on" },
+			orchestrator: { wake: { mode: "sidebar" } },
+			workspaces: { ...QA_FOO, bar: { landing: { mode: "qa" }, kit: { name: "team" } } },
+		});
+		const serverStartedAt = WATCHDOG_NOW - 70_000;
+		const paths = harness.paths("foo");
+		mkdirSync(paths.dataDir, { recursive: true });
+		writeFileSync(
+			`${paths.dataDir}/pipeline-state.json`,
+			JSON.stringify({
+				version: 1,
+				since: "2026-10-01T00:00:00.000Z",
+				importedFrom: null,
+				cards: {
+					"6f756": { qaCard: "q6f75", qaCreated: "abcdef0123456789" },
+					q6f75: {
+						qaGate: {
+							reviewsTaskId: "6f756",
+							round: 1,
+							snapshot: "abcdef0123456789",
+							snapshotRef: "refs/kanban/snapshots/6f756",
+							outboxDir: "/tmp/outbox",
+							scratchDir: "/tmp/scratch",
+							baseRef: "main",
+							agentId: "claude",
+							model: null,
+							devAgentId: "cline",
+							devModel: null,
+							route: null,
+							status: "running",
+							createdAt: serverStartedAt - 30 * MIN,
+							startedAt: serverStartedAt - 29 * MIN,
+						},
+					},
+				},
+			}),
+		);
+		// Long enough in Review for the generic stall too: the restart item replaces it.
+		harness.observe({
+			workspaceId: "foo",
+			serverStartedAt,
+			board: createBoard({
+				review: [createCard({ id: "6f756", updatedAt: WATCHDOG_NOW - 20 * MIN })],
+				in_progress: [createCard({ id: "q6f75", role: "qa", reviewsTaskId: "6f756", updatedAt: serverStartedAt })],
+			}),
+			sessions: [
+				{
+					taskId: "q6f75",
+					agentId: "claude",
+					modelId: null,
+					state: "interrupted",
+					startedAt: serverStartedAt - 29 * MIN,
+					pid: null,
+					live: false,
+				},
+			],
+		});
+		harness.observe({ workspaceId: "bar", serverStartedAt, board: createBoard({}) });
+		await harness.watchdog.tick();
+
+		const wakes = harness.requests.filter((request) => request.kind === "startOrchestratorSession");
+		expect(wakes).toEqual([expect.objectContaining({ workspaceId: "foo", fromWorkspaceId: "foo" })]);
+		const prompt = wakes[0] && "prompt" in wakes[0] ? wakes[0].prompt : "";
+		expect(prompt).toContain(
+			"6f756: dev card is in Review and the automatic QA replacement didn't happen: its QA card q6f75",
+		);
+		expect(prompt).not.toContain("no QA card and no verdict newer than its last move");
+		const decisions = readDecisions(paths.decisions).filter((decision) => decision.kind === "stall");
+		expect(decisions.map((decision) => decision.taskId)).toEqual(["6f756"]);
+	});
+
 	it("PID pressure: flags, a process sweep, the ATTENTION line, no wake for it; brownout pauses running agents once", async () => {
 		const harness = harnessWith(
 			{ watchdog: { mode: "on" }, workspaces: QA_FOO },

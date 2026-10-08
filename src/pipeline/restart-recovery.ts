@@ -103,6 +103,20 @@ export function isManifestForStart(
 	const writerFromOtherHome = previousServerStartedAt === null || previousServerStartedAt < writerStartedAt;
 	return writerFromOtherHome && serverStartedAt - at <= MANIFEST_FROM_OTHER_HOME_MAX_AGE_MS;
 }
+/**
+ * The session (or its absence) is one a restart left behind: no process in this server (`live`) and not started by
+ * this server. The one restart liveness rule: restart recovery's orphans, the engine's isRestartInterrupted() (the
+ * startup mark: the server marks exactly these summaries, when they still said "running", interrupted,
+ * session-manager.ts markOrphanedSessionsInterrupted), the QA gate's describeDeadQaCard() and the watchdog's
+ * post-restart check (src/pipeline/watchdog/restart-checks.ts) all decide on it.
+ */
+export function lostToRestart(
+	session: Pick<PipelineSessionView, "live" | "startedAt"> | null | undefined,
+	serverStartedAt: number,
+): boolean {
+	return !session?.live && !(session?.startedAt && session.startedAt >= serverStartedAt);
+}
+
 const ORPHAN_STATES = new Set(["running", "interrupted"]);
 
 export function planRestartRecovery(input: PlanRestartRecoveryInput): RestartRecoveryPlan {
@@ -137,11 +151,8 @@ export function planRestartRecovery(input: PlanRestartRecoveryInput): RestartRec
 			plan.skipped.push({ taskId: card.id, why: `role ${role}: left to its own runner` });
 			continue;
 		}
-		if (session?.live) {
-			continue; // it has a process in this server
-		}
-		if (session?.startedAt && session.startedAt >= serverStartedAt) {
-			continue; // started by this server and ended normally
+		if (!lostToRestart(session, serverStartedAt)) {
+			continue; // it has a process in this server, or this server started it and it ended normally
 		}
 		const orphan = (reason: string) =>
 			plan.orphans.push({ taskId: card.id, role, column, reason, wipTag: listed?.wipTag ?? null });

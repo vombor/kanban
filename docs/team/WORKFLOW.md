@@ -197,6 +197,10 @@ until the legacy autoland is retired, because both would nudge every card twice.
 
 The watchdog (`src/pipeline/watchdog/`, in the pipeline worker) is LLM-free and ticks every 60 s:
 
+- **After a restart:** the QA gate replaces a dead QA card on its own. The watchdog reports a Review card only when
+  that didn't happen within `stall.restartGraceMin` (1 min): its dead QA card not superseded, or superseded with no
+  new one. A replacement waiting for a QA slot or PID pressure is only logged. A card still held for the restart (an
+  orphan mark nobody resumed) is reported after the same grace plus its place in the resume queue.
 - **Stalls:** Review with no QA (10 min), a QA card stuck (45 min, not calibration cards), In Progress with a dead
   session. That one gets a single LLM-free continue after 5 min before anyone is woken.
 - **Prompts:** a Claude Code or Codex card stuck on a trust, startup or permission dialog (3 min), on every

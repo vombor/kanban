@@ -121,6 +121,7 @@ export function createWatchdogHarness(options: WatchdogHarnessOptions = {}) {
 			sessions?: PipelineSessionView[];
 			selectedAgentId?: RuntimeAgentId;
 			workspacePath?: string;
+			serverStartedAt?: number;
 		}): PipelineWorkspaceSnapshot => {
 			const snapshot: PipelineWorkspaceSnapshot = {
 				workspaceId: input.workspaceId,
@@ -128,6 +129,7 @@ export function createWatchdogHarness(options: WatchdogHarnessOptions = {}) {
 				board: input.board,
 				sessions: input.sessions ?? [],
 				selectedAgentId: input.selectedAgentId ?? "claude",
+				...(input.serverStartedAt === undefined ? {} : { serverStartedAt: input.serverStartedAt }),
 			};
 			watchdog.observe(snapshot);
 			return snapshot;

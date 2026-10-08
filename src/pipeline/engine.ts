@@ -34,6 +34,7 @@ import { isReviewSettled } from "../terminal/review-settle";
 import type { PipelineDecisionOutcome, PipelineDecisionRecord } from "./decision-log";
 import type { PipelineCardState, PipelineWorkspaceState } from "./pipeline-state";
 import { recoveryHoldReason, recoveryRedoReason } from "./recovery";
+import { lostToRestart } from "./restart-recovery";
 import type { SubmissionCardInput, SubmissionInspection } from "./submission-stage";
 
 export type PipelineSessionView = Pick<RuntimeTaskSessionSummary, "taskId" | "agentId" | "modelId" | "state"> &
@@ -227,16 +228,15 @@ function describeQaAnswer(answer: QaPolicyAnswer): string {
 	return `QA by ${answer.agentId}${model} (${answer.route ?? "qa.default"})`;
 }
 
-/** A session the restart cut off: interrupted, no process, started before this server (the startup mark). */
+/** A session the restart cut off: the startup mark (interrupted) on a session lostToRestart() counts as left behind. */
 export function isRestartInterrupted(
 	session: PipelineSessionView | null,
 	snapshot: Pick<PipelineWorkspaceSnapshot, "serverStartedAt">,
 ): boolean {
 	return (
 		session?.state === "interrupted" &&
-		!session.live &&
 		snapshot.serverStartedAt !== undefined &&
-		(session.startedAt ?? 0) < snapshot.serverStartedAt
+		lostToRestart(session, snapshot.serverStartedAt)
 	);
 }
 

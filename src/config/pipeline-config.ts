@@ -286,9 +286,21 @@ const watchdogSectionSchema = z
 				resumeIdleMin: z.number().positive().default(5),
 				newCardGraceMin: z.number().nonnegative().default(10),
 				promptMin: z.number().positive().default(3),
+				// After a Kanban restart: how long a card may stay held for it (an orphan mark recovery hasn't resumed, a QA
+				// card in Review whose session died with the old server) before the post-restart check reports it. The
+				// resume queue's `pipeline.recovery.resumeGapSec` per marked card comes on top for orphan marks.
+				restartGraceMin: z.number().nonnegative().default(1),
 			})
 			.strict()
-			.default({ reviewMin: 10, qaMin: 45, idleMin: 30, resumeIdleMin: 5, newCardGraceMin: 10, promptMin: 3 }),
+			.default({
+				reviewMin: 10,
+				qaMin: 45,
+				idleMin: 30,
+				resumeIdleMin: 5,
+				newCardGraceMin: 10,
+				promptMin: 3,
+				restartGraceMin: 1,
+			}),
 		pids: z
 			.object({
 				pressure: z.number().min(0).max(1).default(0.75),

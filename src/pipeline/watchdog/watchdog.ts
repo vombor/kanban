@@ -14,7 +14,8 @@
 //     sees; the kanban board's cards sat on the trust dialog for an hour on 10/06, unseen, because it wasn't a kit
 //     project) and `kanban orchestrator wake` requests;
 //   - workspaces the pipeline runs on (landing mode `qa`): also stalls, escalations, PID pressure, pipeline idle, the
-//     orchestrator plan's open steps, prune-done and the feature jobs. A Cline card's silent stall (running, but its
+//     orchestrator plan's open steps, the post-restart check (restart-checks.ts: a Review card whose dead QA card the
+//     gate did not replace, a card still held for a restart), prune-done and the feature jobs. A Cline card's silent stall (running, but its
 //     session file shows no progress; cline-turn-check.ts) is only reported: recovery owns its nudge, so where
 //     recovery acts the watchdog just logs it, and elsewhere it becomes an item. A workspace on the `default` kit with landing
 //     `off` gets nothing else, as the legacy kit watched only its configured projects.
@@ -104,6 +105,7 @@ import {
 	readCgroupPidUsage,
 } from "./pid-pressure";
 import { findPromptWaits } from "./prompt-watch";
+import { detectRestartQaGaps } from "./restart-checks";
 import {
 	CONTINUE_TEXT,
 	detectPipelineIdle,
@@ -284,6 +286,8 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 	const loggedDecisions = new Map<string, number>();
 	// Orchestrator sessions / headless runs started this worker life: target key → when.
 	const justStarted = new Map<string, number>();
+	// workspaceId → when the post-restart check first saw a QA card gone (restart-checks.ts firstSeenGone).
+	const restartFirstSeenGone = new Map<string, Map<string, number>>();
 	let lastPressureSweepAt = 0;
 	let lastPressureSweep: { zombies: number; terminated: number } | null = null;
 	let pidFlagsSet = false;
@@ -468,7 +472,36 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 				settings: config.watchdog.stall,
 				now: context.now,
 			});
-			for (const item of stalls.items) {
+			// What a restart left behind and its automatic fix didn't handle (a dead QA card the gate didn't replace, an
+			// orphan nobody resumed) shows up a grace after the start and replaces the generic review stall for that card.
+			let firstSeenGone = restartFirstSeenGone.get(workspaceId);
+			if (!firstSeenGone) {
+				firstSeenGone = new Map();
+				restartFirstSeenGone.set(workspaceId, firstSeenGone);
+			}
+			const restart = detectRestartQaGaps({
+				board: snapshot.board,
+				sessions,
+				roles,
+				pipelineCards: pipelineState.cards,
+				serverStartedAt: snapshot.serverStartedAt,
+				userItemIds,
+				pidPressure: context.pidLevel !== "none",
+				firstSeenGone,
+				settings: {
+					graceMin: config.watchdog.stall.restartGraceMin,
+					resumeGapSec: config.pipeline.recovery.resumeGapSec,
+				},
+				now: context.now,
+			});
+			for (const { taskId, note } of restart.notes) {
+				record(records, context, { workspaceId, taskId, kind: "stall", outcome: "skipped", note });
+			}
+			const restartFlagged = new Set(restart.items.map((item) => item.taskId));
+			for (const item of [
+				...restart.items,
+				...stalls.items.filter((item) => !restartFlagged.has(item.taskId) || !item.key.endsWith(":review-stall")),
+			]) {
 				queueIssue(item.key, item.taskId, item.issue);
 			}
 			for (const resume of stalls.continues) {
@@ -1007,6 +1040,7 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 		forget: (workspaceId) => {
 			snapshots.delete(workspaceId);
 			states.delete(workspaceId);
+			restartFirstSeenGone.delete(workspaceId);
 		},
 		tick: async () => {
 			const parsed = await deps.readConfig();

@@ -95,6 +95,7 @@ import {
 	type QaVerdictRead,
 } from "./qa-verdict";
 import { type RecoveryFlowState, readRecoveryFlow } from "./recovery";
+import { lostToRestart } from "./restart-recovery";
 import { getSnapshotRef, readTaskSnapshot } from "./snapshots";
 import type { PipelineFinishTaskRequest } from "./worker-protocol";
 
@@ -313,8 +314,13 @@ export function describeDeadQaCard(input: {
 	if (serverStartedAt === undefined) {
 		return null;
 	}
-	const startedAt = session?.startedAt ?? entry.startedAt ?? entry.createdAt;
-	if (startedAt >= serverStartedAt) {
+	// Restart recovery's rule; without a summary the gate's own start (or creation) time stands in for the session's.
+	if (
+		!lostToRestart(
+			{ live: false, startedAt: session?.startedAt ?? entry.startedAt ?? entry.createdAt },
+			serverStartedAt,
+		)
+	) {
 		return null;
 	}
 	const orphaned = input.flow.orphan && Date.parse(input.flow.orphan.kanbanStart) === serverStartedAt;

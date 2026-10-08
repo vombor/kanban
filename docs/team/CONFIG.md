@@ -169,6 +169,7 @@ The watchdog runs in the pipeline worker. With `watchdog.mode` not `off`, the wo
 | `watchdog.stall.resumeIdleMin` | 5 | … gets one LLM-free continue after this, before a wake |
 | `watchdog.stall.newCardGraceMin` | 10 | a new Backlog card is not "pipeline idle" |
 | `watchdog.stall.promptMin` | 3 | a card stuck on a trust, startup or permission prompt (every workspace) |
+| `watchdog.stall.restartGraceMin` | 1 | after a Kanban restart, how long the automatic fixes get before the watchdog reports that they didn't happen: a Review card whose dead QA card the QA gate has not superseded (counted from the start, or from when its QA card was first seen gone) or not replaced (from the supersede), and a card still held for the restart (orphan mark; plus `recovery.resumeGapSec` per marked dev card). A replacement waiting for a QA slot or PID pressure is only logged. Replaces the generic Review stall for that card |
 | `watchdog.pids.pressure`, `.brownout` | 0.75, 0.9 | share of `pids.max`: hold new work / Esc running agents once |
 | `watchdog.pruneDone.enabled`, `.days` | `true`, 3 | hourly: delete Done cards older than this, after a backup (keeps undecided runoffs and running calibrations) |
 | `orchestrator.wake.enabled` | `true` | wake the orchestrator for ATTENTION items |
