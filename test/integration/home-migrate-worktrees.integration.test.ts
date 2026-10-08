@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { runKanbanHomeMigration } from "../../src/state/kanban-home-migrate";
 import { createGitTestEnv } from "../utilities/git-env";
 import { withTemporaryKanbanHome } from "../utilities/kanban-home";
+import { realPath } from "../utilities/temp-dir";
 
 function runGit(cwd: string, args: string[]): string {
 	const result = spawnSync("git", args, { cwd, encoding: "utf8", env: createGitTestEnv() });
@@ -51,7 +52,10 @@ describe.sequential("kanban home migrate --worktrees", () => {
 	it("moves worktrees of idle cards only, fixes git metadata and the session paths", async () => {
 		await withTemporaryKanbanHome(async ({ userHomePath }) => {
 			const legacyHome = join(userHomePath, "old-home");
+			// Reached through a symlink, like a macOS tmpdir: git lists these worktrees by their real path.
 			const legacyWorktrees = join(userHomePath, "old-worktrees");
+			mkdirSync(join(userHomePath, "old-worktrees-real"));
+			symlinkSync(join(userHomePath, "old-worktrees-real"), legacyWorktrees);
 			const targetHome = join(userHomePath, ".kanban");
 			const repoPath = join(userHomePath, "projects", "app");
 			mkdirSync(repoPath, { recursive: true });
@@ -135,15 +139,17 @@ describe.sequential("kanban home migrate --worktrees", () => {
 
 			const newPath = (taskId: string) => join(targetHome, "worktrees", taskId, "app");
 			expect(new Set(listWorktreePaths(repoPath))).toEqual(
-				new Set([
-					repoPath,
-					newPath("idle1"),
-					newPath("done1"),
-					legacyPath("live1"),
-					legacyPath("review1"),
-					legacyPath("busy1"),
-					legacyPath("locked1"),
-				]),
+				new Set(
+					[
+						repoPath,
+						newPath("idle1"),
+						newPath("done1"),
+						legacyPath("live1"),
+						legacyPath("review1"),
+						legacyPath("busy1"),
+						legacyPath("locked1"),
+					].map(realPath),
+				),
 			);
 			// The moved worktree is intact, uncommitted work included, and git still knows it.
 			expect(readFileSync(join(newPath("idle1"), "wip.txt"), "utf8")).toBe("uncommitted work\n");

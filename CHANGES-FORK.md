@@ -761,3 +761,5 @@ of this repository is the complete record of changes.
   no new QA card" instead of "was created". On the first tick after this deploys, the gate retires every stale
   `running`/`queued` entry at once (foo's a5e91 and 257a4 among them), logged as one summary line per workspace
   (`qa_start`, no task) plus one line per card, so dev cards still in Review get new QA cards in one burst.
+- `.github/workflows/test.yml` (called by `ci.yml` and `publish.yml`): CI and release testing are Linux-only (ubuntu
+  on Node 20 and 22); the macOS leg and its Python pin are removed, so macOS installs of `@vombor/kanban` are untested.

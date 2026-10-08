@@ -14,7 +14,7 @@ import {
 } from "../../src/workspace/task-worktree";
 import { createGitTestEnv } from "../utilities/git-env";
 import { withTemporaryKanbanHome } from "../utilities/kanban-home";
-import { createTempDir } from "../utilities/temp-dir";
+import { createTempDir, realPath } from "../utilities/temp-dir";
 import {
 	createBoard,
 	createCard,
@@ -76,7 +76,8 @@ describe.skipIf(!hasSetsid).sequential("process reaper integration", () => {
 				orphanPid = await waitFor(async () => {
 					const entries = await reader.list();
 					return (
-						entries.find((entry) => entry.cwd === worktreePath && entry.command === "sleep 3601")?.pid ?? null
+						entries.find((entry) => entry.cwd === realPath(worktreePath) && entry.command === "sleep 3601")
+							?.pid ?? null
 					);
 				});
 				expect(orphanPid).not.toBeNull();

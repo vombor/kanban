@@ -8,6 +8,7 @@ import { getCalibrationPaths, getKanbanGlobalConfigPath } from "../../../../src/
 import { loadWorkspaceContext, mutateWorkspaceState } from "../../../../src/state/workspace-state";
 import { createGitTestEnv } from "../../../utilities/git-env";
 import { withTemporaryKanbanHome } from "../../../utilities/kanban-home";
+import { realPath } from "../../../utilities/temp-dir";
 import { createBoard, createCard } from "../../../utilities/workspace-state-store";
 
 async function createWorkspace(userHomePath: string, kit: string | null) {
@@ -120,7 +121,7 @@ describe("kanban bench calibrate", () => {
 			const [command, args, spawnOptions] = fake.mock.calls[0] as [string, string[], Record<string, unknown>];
 			expect(command).toBe(process.execPath);
 			expect(args.slice(-7)).toEqual(["bench", "calibrate", spec, "--worker", "--project", workspaceId, "--force"]);
-			expect(spawnOptions).toMatchObject({ cwd: repoPath, detached: true });
+			expect(spawnOptions).toMatchObject({ cwd: realPath(repoPath), detached: true });
 			expect(child.unref).toHaveBeenCalled();
 			const paths = getCalibrationPaths(workspaceId, "t1");
 			expect(readFileSync(paths.lock, "utf8")).toBe(`${workerPid}\n`);

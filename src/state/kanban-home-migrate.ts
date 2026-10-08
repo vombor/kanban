@@ -27,6 +27,7 @@ import {
 	readdirSync,
 	readFileSync,
 	readlinkSync,
+	realpathSync,
 	renameSync,
 	rmdirSync,
 	rmSync,
@@ -460,6 +461,15 @@ interface WorktreeInfo {
 	locked: boolean;
 }
 
+/** Git lists worktrees by their real path, so a path through a symlink (macOS /var → /private/var) is compared resolved. */
+function toRealPath(path: string): string {
+	try {
+		return realpathSync(path);
+	} catch {
+		return resolve(path);
+	}
+}
+
 async function listGitWorktrees(repoPath: string): Promise<Map<string, WorktreeInfo>> {
 	const worktrees = new Map<string, WorktreeInfo>();
 	const result = await runGit(repoPath, ["worktree", "list", "--porcelain"]);
@@ -469,7 +479,7 @@ async function listGitWorktrees(repoPath: string): Promise<Map<string, WorktreeI
 	let current: string | null = null;
 	for (const line of result.stdout.split("\n")) {
 		if (line.startsWith("worktree ")) {
-			current = resolve(line.slice("worktree ".length));
+			current = toRealPath(line.slice("worktree ".length));
 			worktrees.set(current, { locked: false });
 		} else if (current && (line === "locked" || line.startsWith("locked "))) {
 			worktrees.set(current, { locked: true });
@@ -525,7 +535,7 @@ async function planWorktrees(
 						? "card has a running session"
 						: !isDirectory(repoPath)
 							? `repository ${repoPath} is missing`
-							: gitWorktrees.get(resolve(from))?.locked
+							: gitWorktrees.get(toRealPath(from))?.locked
 								? "worktree is locked (git worktree lock)"
 								: existsSync(to)
 									? `${to} already exists`

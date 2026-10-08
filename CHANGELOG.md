@@ -1,6 +1,8 @@
 # Changelog
 
-## [0.1.70-fork.5]
+## [0.1.70-fork.6]
+
+0.1.70-fork.5 was tagged but never published.
 
 The fork is now published as `@vombor/kanban` on GitHub Packages (it was `kanban` on npm). GitHub Packages needs a classic personal access token with `read:packages`, even to install. Add to `~/.npmrc`:
 
@@ -42,6 +44,7 @@ Features
 
 Removals
 - `orchestrator.wake.target` is removed: there is no cross-project wake; `kanban doctor --fix` migrates old configs
+- macOS is no longer tested in CI
 
 Security
 - Kanban writes nothing under `~/.cline`: Cline rules go into each worktree, notices are turned off through the environment, provider settings are only checked, and the debug reset never deletes Cline's data

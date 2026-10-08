@@ -9,6 +9,7 @@ import { buildLandCommitMessage, checkLand, landCommit } from "../../src/workspa
 import { getTaskWorktreeCandidatePaths } from "../../src/workspace/task-worktree";
 import { withTemporaryKanbanHome } from "../utilities/kanban-home";
 import { createLandRepo } from "../utilities/land-repo";
+import { realPath } from "../utilities/temp-dir";
 
 const MESSAGE = buildLandCommitMessage({ id: "a1b2c", title: "Add the feature", prompt: "" });
 
@@ -67,7 +68,7 @@ describe("land: squash a card's work onto its base", () => {
 			taskId: "a1b2c",
 		});
 
-		expect(result).toMatchObject({ status: "landed", checkout: repo.repoPath });
+		expect(result).toMatchObject({ status: "landed", checkout: realPath(repo.repoPath) });
 		expect(repo.git(["show", "HEAD:src/app.ts"])).toBe("export const value = 2;");
 		expect(readFileSync(join(repo.repoPath, "README.md"), "utf8")).toBe("hello, edited\n");
 		expect(readFileSync(join(repo.repoPath, "notes.txt"), "utf8")).toBe("untracked note\n");
@@ -206,7 +207,7 @@ describe("land: squash a card's work onto its base", () => {
 		expect(result.status).toBe("landed");
 		expect(readFileSync(join(repo.repoPath, ".post-land-ran"), "utf8")).toBe("generated\n");
 		expect(existsSync(join(repo.repoPath, ".never-ran"))).toBe(false);
-		expect(stopProcessesUnder).toHaveBeenCalledWith([join(repo.repoPath, "api")]);
+		expect(stopProcessesUnder).toHaveBeenCalledWith([join(realPath(repo.repoPath), "api")]);
 		expect(log).toHaveBeenCalledWith(expect.stringContaining("post-land (^prisma/) ok"));
 	});
 

@@ -10,6 +10,7 @@ import type { TerminalSessionManager } from "../../../src/terminal/session-manag
 import { type CreateProjectsApiDependencies, createProjectsApi } from "../../../src/trpc/projects-api";
 import { createGitTestEnv } from "../../utilities/git-env";
 import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
+import { realPath } from "../../utilities/temp-dir";
 
 function createTestCwd(): string {
 	const base = join(tmpdir(), `kanban-test-dir-list-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
@@ -309,9 +310,9 @@ describe("addProject", () => {
 		// that resolveProjectInputPath was called with the projects root as the base.
 		await api.addProject(null, { gitUrl: "https://example.com/repo.git", path: "my-new-proj" });
 		const resolveSpy = deps.resolveProjectInputPath as ReturnType<typeof vi.fn>;
-		expect(resolveSpy).toHaveBeenCalledWith("my-new-proj", testCwd);
+		expect(resolveSpy).toHaveBeenCalledWith("my-new-proj", realPath(testCwd));
 		// Crucially, it must NOT have been called with the active project path:
-		expect(resolveSpy).not.toHaveBeenCalledWith("my-new-proj", activeProjectPath);
+		expect(resolveSpy).not.toHaveBeenCalledWith("my-new-proj", realPath(activeProjectPath));
 	});
 });
 
