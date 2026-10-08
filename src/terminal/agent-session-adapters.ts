@@ -2176,13 +2176,6 @@ export function buildCopilotProviderEnv(
 	return env;
 }
 
-// Copilot CLI 1.0.93 (`copilot help environment`): "COPILOT_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN (in order of
-// precedence): an authentication token that takes precedence over previously stored credentials". The container's
-// GH_TOKEN is the user's PAT for gh, git and npm; Copilot keeps its own login (`copilot login`, in its config.json),
-// so every Copilot launch (task, QA and orchestrator sessions) runs without these. `undefined` removes a variable
-// from the launch env (buildTerminalEnvironment in session-manager.ts).
-export const COPILOT_TOKEN_ENV_NAMES = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"] as const;
-
 // GitHub Copilot CLI (`copilot`, npm @github/copilot) as a PTY task agent. Based on upstream #286, ported
 // onto per-task agentSettings (#592): --model / --reasoning-effort / provider come from the card.
 const copilotAdapter: AgentSessionAdapter = {
@@ -2190,9 +2183,11 @@ const copilotAdapter: AgentSessionAdapter = {
 	inputDelivery: { focusInBeforeInput: true },
 	async prepare(input) {
 		let args = [...input.args];
-		const env: Record<string, string | undefined> = Object.fromEntries(
-			COPILOT_TOKEN_ENV_NAMES.map((name) => [name, undefined]),
-		);
+		// Copilot gets Kanban's env as is, its own token included. Copilot CLI 1.0.93 (`copilot help environment`):
+		// "COPILOT_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN (in order of precedence): an authentication token that takes
+		// precedence over previously stored credentials". So the container's COPILOT_GITHUB_TOKEN wins over the user's
+		// PAT in GH_TOKEN, which gh, git and npm inside the card keep using (docs/fork/github-auth.md).
+		const env: Record<string, string | undefined> = {};
 		let sessionWarning: string | undefined;
 		const allowFlags = ["--allow-all", "--allow-all-tools", "--allow-all-paths", "--allow-all-urls", "--yolo"];
 		const guardrails = getSessionGuardrails(input);

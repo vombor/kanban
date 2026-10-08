@@ -205,7 +205,8 @@ function formatShellSpawnFailure(binary: string, error: unknown): string {
 	return `Failed to launch "${binary}": ${message}`;
 }
 
-// A source's `undefined` removes the variable (node-pty would pass it on as the string "undefined").
+// A source's `undefined` removes the variable (node-pty would pass it on as the string "undefined"). No adapter
+// removes one today; the env type allows it, so the filter stays.
 export function buildTerminalEnvironment(
 	...sources: Array<Record<string, string | undefined> | undefined>
 ): Record<string, string> {

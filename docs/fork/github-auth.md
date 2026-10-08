@@ -25,9 +25,9 @@ Create a **classic** PAT (Settings → Developer settings → Personal access to
 | Kanban's update check | reads the same `.npmrc` line (else `GH_TOKEN`); without a token it checks nothing, quietly |
 | CI publish (`publish.yml`) | `NODE_AUTH_TOKEN: ${{ secrets.GH_PAT }}` for `npm publish`, and the GitHub release |
 | GHCR push (`image.yml`) | `docker/login-action` with `secrets.GH_PAT` |
-| Agent sessions (Claude, Codex, Cline, ...) | keep `GH_TOKEN`: PR-mode cards need gh, and `/root/.config/gh` is readable by them anyway |
-| Pipeline checks (`src/pipeline/checks.ts`) | never see it: `GH_TOKEN`, `GITHUB_TOKEN` and `AWS_BEARER_TOKEN_BEDROCK` are removed, so a project's tests can't read them |
-| `scripts/secret-guard.sh` | counts the values of `GH_TOKEN` / `GITHUB_TOKEN` / `AWS_BEARER_TOKEN_BEDROCK` as known secrets and blocks a push that adds one |
+| Agent sessions (Claude, Codex, Cline, Copilot, ...) | keep `GH_TOKEN`: PR-mode cards need gh, and `/root/.config/gh` is readable by them anyway (Copilot itself runs on `COPILOT_GITHUB_TOKEN`, see below) |
+| Pipeline checks (`src/pipeline/checks.ts`) | never see it: `GH_TOKEN`, `GITHUB_TOKEN`, `COPILOT_GITHUB_TOKEN` and `AWS_BEARER_TOKEN_BEDROCK` are removed, so a project's tests can't read them |
+| `scripts/secret-guard.sh` | counts the values of `GH_TOKEN` / `GITHUB_TOKEN` / `COPILOT_GITHUB_TOKEN` / `AWS_BEARER_TOKEN_BEDROCK` as known secrets and blocks a push that adds one |
 
 `GITHUB_TOKEN` is accepted as a fallback for `GH_TOKEN` in the container, but set `GH_TOKEN`.
 
@@ -43,11 +43,18 @@ the user's other lines; an auth line for `npm.pkg.github.com` with some other va
 
 ### Copilot is the exception
 
-The Copilot CLI takes `COPILOT_GITHUB_TOKEN`, `GH_TOKEN` or `GITHUB_TOKEN` (in that order) ahead of its own login
-(`copilot help environment`, verified on 1.0.93). So Kanban removes all three from every Copilot launch (task, QA and
-orchestrator sessions; `COPILOT_TOKEN_ENV_NAMES` in `src/terminal/agent-session-adapters.ts`), and Copilot keeps
-using its own login (`copilot login`, stored in `~/.copilot`). `kanban doctor` says so and warns when Copilot is
-installed but not logged in.
+The Copilot CLI takes `COPILOT_GITHUB_TOKEN`, then `GH_TOKEN`, then `GITHUB_TOKEN` ahead of its own login
+(`copilot help environment`, verified on 1.0.93). The PAT is not a Copilot credential, so the container also carries
+Copilot's own token in `COPILOT_GITHUB_TOKEN` (a second podman secret, below). Kanban passes the env to Copilot
+launches as is (task, QA, calibration and orchestrator sessions; `copilotAdapter` in
+`src/terminal/agent-session-adapters.ts`), so Copilot runs on `COPILOT_GITHUB_TOKEN` while gh, git and npm inside the
+card keep the PAT. Until 2026-10-08 Kanban removed all three variables from Copilot launches so Copilot used its
+`copilot login`; that would now take Copilot's own token away.
+
+`COPILOT_GITHUB_TOKEN` is a secret like the PAT: pipeline checks never see it and secret-guard knows its value.
+`kanban doctor` names the credential Copilot cards run on (never its value), warns when there is neither
+`COPILOT_GITHUB_TOKEN` nor a Copilot login, and warns when the PAT would win over the login because
+`COPILOT_GITHUB_TOKEN` is missing.
 
 ## Setting it up
 
@@ -55,6 +62,7 @@ installed but not logged in.
 
 ```sh
 printf '%s' "$PAT" | podman secret create gh_pat -
+printf '%s' "$COPILOT_TOKEN" | podman secret create copilot_github_token -
 ```
 
 Quadlet (preferred over a plain `Environment=GH_TOKEN=...`, which puts the token in the unit file and in
@@ -63,10 +71,13 @@ Quadlet (preferred over a plain `Environment=GH_TOKEN=...`, which puts the token
 ```ini
 [Container]
 Secret=gh_pat,type=env,target=GH_TOKEN
+Secret=copilot_github_token,type=env,target=COPILOT_GITHUB_TOKEN
 ```
 
-Without a quadlet: `podman run --secret gh_pat,type=env,target=GH_TOKEN ...`. Restart the container so the
-entrypoint sets up npm and git.
+Without a quadlet: `podman run --secret gh_pat,type=env,target=GH_TOKEN
+--secret copilot_github_token,type=env,target=COPILOT_GITHUB_TOKEN ...`. Restart the container so the entrypoint
+sets up npm and git and Copilot cards get their token. Without the Copilot line, Copilot takes the PAT over its
+`copilot login` (doctor warns).
 
 ### Repository secret
 

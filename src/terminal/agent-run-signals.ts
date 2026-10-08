@@ -113,8 +113,8 @@ function hasEntries(value: unknown): boolean {
 }
 
 // 60c5538: don't start a Copilot run signed out (Kanban's Copilot trust write once wiped the login from config.json,
-// 10/06 19:58Z). Copilot keeps the login in its JSONC config.json (authTokens / loggedInUsers). Its token env vars
-// don't count: Kanban removes them from every Copilot launch (COPILOT_TOKEN_ENV_NAMES).
+// 10/06 19:58Z). Copilot keeps the login in its JSONC config.json (authTokens / loggedInUsers). This reads only
+// the login; a run is also signed in through COPILOT_GITHUB_TOKEN (isCopilotRunSignedIn).
 export async function isCopilotSignedIn(): Promise<boolean> {
 	let content: string;
 	try {
@@ -124,6 +124,12 @@ export async function isCopilotSignedIn(): Promise<boolean> {
 	}
 	const config = parseCopilotConfig(content)?.config;
 	return Boolean(config) && (hasEntries(config?.authTokens) || hasEntries(config?.loggedInUsers));
+}
+
+// Copilot launches keep Kanban's env (copilotAdapter), and COPILOT_GITHUB_TOKEN is Copilot's own token. GH_TOKEN and
+// GITHUB_TOKEN don't count: in the container they hold the user's gh/git PAT, not a Copilot login.
+async function isCopilotRunSignedIn(env: NodeJS.ProcessEnv): Promise<boolean> {
+	return Boolean(env.COPILOT_GITHUB_TOKEN?.trim()) || (await isCopilotSignedIn());
 }
 
 // de83bf8: a signed-out Copilot CLI never writes events.jsonl and spins in its TUI (v9 mai-flash 10/06: 3 x 60 min DNF).
@@ -159,7 +165,7 @@ export function createAgentRunSignals(
 		},
 		copilot: {
 			hasStartedTurn: hasCopilotEvents,
-			isSignedIn: isCopilotSignedIn,
+			isSignedIn: isCopilotRunSignedIn,
 		},
 	};
 

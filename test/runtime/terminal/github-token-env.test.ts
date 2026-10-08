@@ -5,11 +5,11 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { RuntimeAgentId } from "../../../src/core/api-contract";
-import { COPILOT_TOKEN_ENV_NAMES, prepareAgentLaunch } from "../../../src/terminal/agent-session-adapters";
+import { prepareAgentLaunch } from "../../../src/terminal/agent-session-adapters";
 import { buildTerminalEnvironment } from "../../../src/terminal/session-manager";
 
-// The container's GH_TOKEN is the user's PAT (docs/fork/github-auth.md). Copilot would take it over its own login,
-// so its launches drop every token variable it reads; all other agents keep the PAT for gh, git and npm.
+// The container's GH_TOKEN is the user's PAT and COPILOT_GITHUB_TOKEN is Copilot's own token
+// (docs/fork/github-auth.md). Every agent launch keeps both; Copilot picks COPILOT_GITHUB_TOKEN over the PAT itself.
 describe("GitHub token env in agent launches", () => {
 	let home: string;
 
@@ -42,17 +42,33 @@ describe("GitHub token env in agent launches", () => {
 		return buildTerminalEnvironment(undefined, launch.env);
 	}
 
-	it("removes Copilot's token variables from a Copilot launch", async () => {
-		const env = await launchEnv("copilot");
-		for (const name of COPILOT_TOKEN_ENV_NAMES) {
-			expect(name in env).toBe(false);
-		}
+	it.each(["copilot", "claude", "codex", "cline"] as const)("keeps every token in a %s launch", async (agentId) => {
+		const env = await launchEnv(agentId);
+		expect(env.COPILOT_GITHUB_TOKEN).toBe("copilot-token");
+		expect(env.GH_TOKEN).toBe("pat-from-the-container");
+		expect(env.GITHUB_TOKEN).toBe("pat-fallback");
 		expect(Object.values(env)).not.toContain("undefined");
 	});
 
-	it.each(["claude", "codex", "cline"] as const)("keeps GH_TOKEN in a %s launch", async (agentId) => {
-		const env = await launchEnv(agentId);
-		expect(env.GH_TOKEN).toBe("pat-from-the-container");
-		expect(env.GITHUB_TOKEN).toBe("pat-fallback");
+	it("doesn't add any token to a Copilot launch's own env", async () => {
+		const cwd = join(home, "worktree-copilot-own");
+		mkdirSync(cwd, { recursive: true });
+		const launch = await prepareAgentLaunch({
+			taskId: "task-copilot-own",
+			agentId: "copilot",
+			binary: "copilot",
+			args: [],
+			cwd,
+			prompt: "Build it",
+			workspaceId: "workspace-1",
+		});
+		for (const name of ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"]) {
+			expect(name in launch.env).toBe(false);
+		}
+	});
+
+	it("still drops an undefined source value instead of passing the string on", () => {
+		const env = buildTerminalEnvironment({ SOME_VAR: undefined });
+		expect("SOME_VAR" in env).toBe(false);
 	});
 });

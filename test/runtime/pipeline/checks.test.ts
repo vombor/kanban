@@ -77,6 +77,7 @@ describe("check step environment", () => {
 		process.env.NODE_ENV = "production";
 		process.env.GH_TOKEN = "user-pat";
 		process.env.GITHUB_TOKEN = "user-pat";
+		process.env.COPILOT_GITHUB_TOKEN = "copilot-token";
 		process.env.AWS_BEARER_TOKEN_BEDROCK = "bedrock-key";
 		process.env.AWS_REGION = "us-east-1";
 		try {
@@ -96,6 +97,7 @@ describe("check step environment", () => {
 				"NODE_ENV",
 				"GH_TOKEN",
 				"GITHUB_TOKEN",
+				"COPILOT_GITHUB_TOKEN",
 				"AWS_BEARER_TOKEN_BEDROCK",
 			]) {
 				expect(env[key]).toBeUndefined();

@@ -50,10 +50,12 @@ of this repository is the complete record of changes.
   the scoped name. `README.md`, `RELEASE_WORKFLOW.md` and the release command describe installing and releasing.
 - GitHub PAT in the container: `deploy/kanban-entrypoint.sh` turns `GH_TOKEN` into an npm `${GH_TOKEN}` reference for
   `@vombor` and gh's git credential helper; `deploy/Containerfile`, `docs/fork/container-lifecycle.md` describe it.
-  `src/pipeline/checks.ts` hides `GH_TOKEN`/`GITHUB_TOKEN`/`AWS_BEARER_TOKEN_BEDROCK` from a project's checks,
-  `scripts/secret-guard.sh` knows their values, and Copilot launches (`src/terminal/agent-session-adapters.ts`, `session-manager.ts`) drop
-  `COPILOT_GITHUB_TOKEN`/`GH_TOKEN`/`GITHUB_TOKEN` so Copilot keeps its own login (`src/doctor/github-auth-checks.ts`
-  reports it).
+  `src/pipeline/checks.ts` hides `GH_TOKEN`/`GITHUB_TOKEN`/`COPILOT_GITHUB_TOKEN`/`AWS_BEARER_TOKEN_BEDROCK` from a
+  project's checks and `scripts/secret-guard.sh` knows their values. Copilot launches
+  (`src/terminal/agent-session-adapters.ts`) keep the env as is, so Copilot runs on the container's
+  `COPILOT_GITHUB_TOKEN` (podman `Secret=...,type=env,target=COPILOT_GITHUB_TOKEN`), which it prefers over
+  `GH_TOKEN`/`GITHUB_TOKEN` and its login; `src/terminal/agent-run-signals.ts` counts that token as signed in, and
+  `src/doctor/github-auth-checks.ts` names the credential Copilot runs on and warns without a token or login.
 - `DEVELOPMENT.md`: replaced the PostHog section with the fork's telemetry/error-reporting notes.
 - `web-ui/src/components/project-navigation-panel.tsx`: sidebar header reads "Kanban v…" instead of "Cline v…".
 - `web-ui/index.html`, `web-ui/public/manifest.json`, `web-ui/public/assets/icon.svg`, `icon-192.png`, `icon-512.png`,

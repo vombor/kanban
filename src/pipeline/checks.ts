@@ -140,8 +140,9 @@ const HARNESS_INSTALL = /\b(ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ENOSPC)\b|i
 // biome-ignore lint/suspicious/noControlCharactersInRegex: strips ANSI colour codes from tool output.
 const ANSI = /\x1b\[[0-9;]*m/g;
 
-// The user's secrets the container passes in (docs/fork/github-auth.md): the GitHub PAT and the Bedrock key.
-const SECRET_ENV_NAMES = ["GH_TOKEN", "GITHUB_TOKEN", "AWS_BEARER_TOKEN_BEDROCK"];
+// The user's secrets the container passes in (docs/fork/github-auth.md): the GitHub PAT, Copilot's token and the
+// Bedrock key.
+const SECRET_ENV_NAMES = ["GH_TOKEN", "GITHUB_TOKEN", "COPILOT_GITHUB_TOKEN", "AWS_BEARER_TOKEN_BEDROCK"];
 
 /** Environment for every check step: no Kanban, git repository or secret token variables leak into the project's scripts. */
 export function createCheckStepEnv(settings: ChecksSettings, npmrcPath: string): NodeJS.ProcessEnv {
@@ -153,7 +154,7 @@ export function createCheckStepEnv(settings: ChecksSettings, npmrcPath: string):
 			delete env[key];
 		}
 	}
-	// Nor the user's GitHub PAT or Bedrock key.
+	// Nor the user's GitHub PAT, Copilot token or Bedrock key.
 	for (const key of SECRET_ENV_NAMES) {
 		delete env[key];
 	}

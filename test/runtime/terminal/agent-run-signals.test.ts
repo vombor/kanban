@@ -69,14 +69,16 @@ describe("createAgentRunSignals", () => {
 		expect(await signals.isSignedIn("cline")).toBeNull();
 	});
 
-	it("reads the Copilot login from its JSONC config (never a token env var, Kanban drops those), and its session events", async () => {
+	it("signs Copilot in through COPILOT_GITHUB_TOKEN or the login in its JSONC config (never the PAT), and reads its session events", async () => {
 		const temp = createTempDir("kanban-copilot-");
 		tempDirs.push(temp);
 		vi.stubEnv("COPILOT_HOME", temp.path);
 		const signals = createAgentRunSignals();
 		const noToken = { PATH: "/usr/bin" };
 		expect(await signals.isSignedIn("copilot", noToken)).toBe(false);
-		expect(await signals.isSignedIn("copilot", { GH_TOKEN: "x", COPILOT_GITHUB_TOKEN: "y" })).toBe(false);
+		expect(await signals.isSignedIn("copilot", { GH_TOKEN: "x", GITHUB_TOKEN: "x" })).toBe(false);
+		expect(await signals.isSignedIn("copilot", { COPILOT_GITHUB_TOKEN: " " })).toBe(false);
+		expect(await signals.isSignedIn("copilot", { COPILOT_GITHUB_TOKEN: "y" })).toBe(true);
 		await writeFile(join(temp.path, "config.json"), '// Copilot config\n{ "trustedFolders": [] }\n');
 		expect(await signals.isSignedIn("copilot", noToken)).toBe(false);
 		await writeFile(

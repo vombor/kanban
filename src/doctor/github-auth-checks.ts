@@ -1,8 +1,7 @@
 // `kanban doctor`'s GitHub auth rows (docs/fork/github-auth.md): whether the container's PAT (GH_TOKEN) is there for
-// gh, git and npm, and that Copilot doesn't use it: Kanban drops Copilot's token variables from every Copilot launch
-// (COPILOT_TOKEN_ENV_NAMES), so Copilot cards need Copilot's own login. Never prints a token.
+// gh, git and npm, and which credential Copilot runs on. Copilot launches keep Kanban's env, and Copilot takes
+// COPILOT_GITHUB_TOKEN, else GH_TOKEN/GITHUB_TOKEN, else its own login. Never prints a token.
 import { isCopilotSignedIn } from "../terminal/agent-run-signals";
-import { COPILOT_TOKEN_ENV_NAMES } from "../terminal/agent-session-adapters";
 import { isBinaryAvailableOnPath } from "../terminal/command-discovery";
 import type { DoctorFinding } from "./doctor-report";
 
@@ -13,6 +12,7 @@ export interface GitHubAuthCheckDeps {
 }
 
 const AREA = "setup";
+const COPILOT_PRECEDENCE = "Copilot uses COPILOT_GITHUB_TOKEN when set, else GH_TOKEN/GITHUB_TOKEN, else its own login";
 
 export async function checkGitHubAuth(
 	deps: GitHubAuthCheckDeps = { env: process.env, isOnPath: isBinaryAvailableOnPath, isCopilotSignedIn },
@@ -36,17 +36,30 @@ export async function checkGitHubAuth(
 	if (!deps.isOnPath("copilot")) {
 		return findings;
 	}
-	findings.push({
-		level: "info",
-		area: AREA,
-		message: `Copilot ignores the container PAT (Kanban drops ${COPILOT_TOKEN_ENV_NAMES.join(", ")} from its launches) and uses its own login`,
-	});
-	if (!(await deps.isCopilotSignedIn())) {
+	const hasCopilotToken = Boolean(deps.env.COPILOT_GITHUB_TOKEN?.trim());
+	const signedIn = await deps.isCopilotSignedIn();
+	const current = hasCopilotToken
+		? "COPILOT_GITHUB_TOKEN"
+		: tokenVar
+			? `the PAT in ${tokenVar}`
+			: signedIn
+				? "its own login"
+				: "nothing";
+	findings.push({ level: "info", area: AREA, message: `${COPILOT_PRECEDENCE}: Copilot cards run on ${current}` });
+	if (!hasCopilotToken && !signedIn) {
 		findings.push({
 			level: "warn",
 			area: AREA,
-			message: "Copilot is not logged in: Copilot cards can't start a run",
-			hint: "copilot login",
+			message: "no COPILOT_GITHUB_TOKEN and Copilot is not logged in: Copilot cards can't start a run",
+			hint: "set COPILOT_GITHUB_TOKEN in the container (docs/fork/github-auth.md), or copilot login",
+		});
+	} else if (!hasCopilotToken && tokenVar) {
+		// The PAT wins over the login, and it is the user's gh/git/npm token, not one made for Copilot.
+		findings.push({
+			level: "warn",
+			area: AREA,
+			message: `no COPILOT_GITHUB_TOKEN: Copilot takes the PAT in ${tokenVar} over its own login`,
+			hint: "set COPILOT_GITHUB_TOKEN in the container (docs/fork/github-auth.md)",
 		});
 	}
 	return findings;
