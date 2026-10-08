@@ -763,3 +763,7 @@ of this repository is the complete record of changes.
   (`qa_start`, no task) plus one line per card, so dev cards still in Review get new QA cards in one burst.
 - `.github/workflows/test.yml` (called by `ci.yml` and `publish.yml`): CI and release testing are Linux-only (ubuntu
   on Node 20 and 22); the macOS leg and its Python pin are removed, so macOS installs of `@vombor/kanban` are untested.
+- `.github/workflows/publish.yml`: a tag push no longer fails at "Resolve tag": `actions/checkout` has already made
+  the pushed tag a lightweight ref, so the tag fetch runs with `--force` to replace it with the annotated tag (a plain
+  fetch refused it as "would clobber existing tag"). The compare link picks the previous fork tag (`v*-fork.*`) and
+  falls back to the nearest tag only when there is none.
