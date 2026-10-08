@@ -84,7 +84,7 @@ import { readPipelineHold } from "./hold";
 import type { PipelineCardState, PipelineStateStore } from "./pipeline-state";
 import { readQaPassEntry, readQaVerdictRecords } from "./qa-gate";
 import { type AppendQaLog, getQaLogSection, readQaLog } from "./qa-log";
-import { recoveryHoldReason } from "./recovery";
+import { recoveryHoldReason, recoveryRedoReason } from "./recovery";
 import { findTaskWorktree, readStaleBase, type StageQaNotesInput, stageQaNotes } from "./rework-notes";
 import { REWORK_STARTED_CHECK_MS } from "./rework-state";
 import {
@@ -266,6 +266,8 @@ export interface ReworkContext {
 	agentDefaultModels?: EffectiveModelConfig["agentDefaultModels"];
 	/** `agents.cline.dataDir`, for reading a Cline session's size. */
 	clineDataDir: string | null;
+	/** `pipeline.recovery.nudgeCheckSec` in ms: how long a turn recovery resent is left to redo (recoveryRedoReason). */
+	recoveryNudgeCheckMs: number;
 	now: number;
 }
 
@@ -1364,6 +1366,14 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 		if (recoveryHoldReason(entry)) {
 			return;
 		}
+		// Recovery resent the turn (a nudge, a retry, /clear + the card prompt, a restart resume) and the session has
+		// shown no activity since: this Review is the turn before the redo, so it is neither "returned unchanged" nor a
+		// new trigger. Recovery runs first in the same evaluation and the entry is read after it, so a nudge sent in
+		// this sweep counts (foo 552ba/64a2d, 2026-10-08: escalated 11-15 ms after an image nudge, #4).
+		const { context } = scope;
+		if (recoveryRedoReason(entry, scope.session, context.now, context.recoveryNudgeCheckMs)) {
+			return;
+		}
 		if (columnId !== "review" && readQaflow(entry).stopped) {
 			await updateFlow(workspaceId, card.id, (qaflow) => {
 				const next = { ...qaflow };
@@ -1372,7 +1382,6 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 			});
 		}
 		const unchanged = await watchRework(scope, entry);
-		const { context } = scope;
 		if (columnId !== "review" || !isReviewSettled(scope.session, context.now, context.snapshot.reviewSettleMs)) {
 			return;
 		}

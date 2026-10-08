@@ -612,6 +612,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 					policy,
 					agentDefaultModels,
 					clineDataDir: parsed.config.agents.cline.dataDir,
+					recoveryNudgeCheckMs: parsed.config.pipeline.recovery.nudgeCheckSec * 1000,
 					now: now(),
 				})),
 			);

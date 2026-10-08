@@ -154,6 +154,7 @@ export function createReworkHarness(options: ReworkHarnessOptions = {}) {
 				kitName: "stub",
 				policy,
 				clineDataDir: null,
+				recoveryNudgeCheckMs: config.pipeline.recovery.nudgeCheckSec * 1000,
 				now,
 			}),
 		cleanup: () => temp.cleanup(),
