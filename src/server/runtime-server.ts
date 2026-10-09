@@ -49,6 +49,7 @@ import {
 	listWorkspaceIndexEntries,
 	loadWorkspaceBoardById,
 	loadWorkspaceContextById,
+	loadWorkspaceStateById,
 	mutateWorkspaceState,
 } from "../state/workspace-state";
 import { createClineTurnMonitor } from "../terminal/cline-turn-monitor";
@@ -61,6 +62,7 @@ import { createGitHubApi } from "../trpc/github-api";
 import { createHooksApi } from "../trpc/hooks-api";
 import { createIsolationApi } from "../trpc/isolation-api";
 import { createKitSettingsApi } from "../trpc/kit-settings-api";
+import { createPipelineResubmitApi } from "../trpc/pipeline-resubmit-api";
 import { createPlansApi } from "../trpc/plans-api";
 import { createProjectsApi } from "../trpc/projects-api";
 import { createRuntimeApi } from "../trpc/runtime-api";
@@ -119,6 +121,8 @@ export interface CreateRuntimeServerDependencies {
 	isolation?: IsolationService;
 	/** `sessionSync.reviewSettleSec` in ms: orchestrator message notices wait for a settled Review. */
 	reviewSettleMs?: number;
+	/** Asks the pipeline worker host for a workspace's snapshot now (`kanban task resubmit`). */
+	requestPipelineSnapshot?: (workspaceId: string) => void;
 }
 
 export interface RuntimeServer {
@@ -353,6 +357,13 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 	});
 	const plansApi = createPlansApi({ log: isolation.log });
 	const kitSettingsApi = createKitSettingsApi({ log: isolation.log });
+	const pipelineResubmitApi = createPipelineResubmitApi({
+		log: isolation.log,
+		loadWorkspaceState: loadWorkspaceStateById,
+		getLiveSession: (workspaceId, taskId) =>
+			deps.workspaceRegistry.getTerminalManagerForWorkspace(workspaceId)?.getSummary(taskId) ?? null,
+		requestSnapshot: (workspaceId) => deps.requestPipelineSnapshot?.(workspaceId),
+	});
 	// Shortcut runs that ask for a port, and the proxy the browser reaches those ports through (shortcut-ports.ts).
 	const shortcutPorts = createShortcutPortRegistry();
 	const handleShortcutPortProxyRequest = createShortcutPortProxyHandler({
@@ -470,6 +481,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			isolationApi,
 			plansApi,
 			kitSettingsApi,
+			pipelineResubmitApi,
 			shortcutsApi,
 			githubApi,
 			runtimeApi,

@@ -219,6 +219,42 @@ describe("pipeline worker host", () => {
 		await harness.host.close();
 	});
 
+	it("a turn that ends in Review with no state change gets the settled snapshot too (issue #20)", async () => {
+		const harness = createHostHarness(QA_FOO, { reviewSettleMs: 5_000 });
+		await harness.startReady();
+		const child = harness.children[0];
+		const review = (lastHookAt: number) =>
+			({ ...summary("f0ba7", "awaiting_review"), stateChangedAt: 1_000, lastHookAt }) as RuntimeTaskSessionSummary;
+		harness.host.notifyActivity({ workspaceId: "foo", summary: review(1_000) });
+		await vi.advanceTimersByTimeAsync(7_000);
+		const settled = harness.snapshotsSent(child).length;
+
+		// The same state with the same Review clock (output, a repaint) sends nothing.
+		harness.host.notifyActivity({ workspaceId: "foo", summary: review(1_000) });
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(harness.snapshotsSent(child).length).toBe(settled);
+
+		// A hook moved the clock (the turn's end): nothing now, one snapshot once it has settled (before the 30 s sweep).
+		harness.host.notifyActivity({ workspaceId: "foo", summary: review(50_000) });
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(harness.snapshotsSent(child).length).toBe(settled);
+		await vi.advanceTimersByTimeAsync(6_000);
+		expect(harness.snapshotsSent(child).length).toBe(settled + 1);
+		await harness.host.close();
+	});
+
+	it("requestSnapshot sends the workspace's snapshot after the coalescing delay", async () => {
+		const harness = createHostHarness(QA_FOO);
+		await harness.startReady();
+		const child = harness.children[0];
+		const before = harness.snapshotsSent(child).length;
+		harness.host.requestSnapshot("foo");
+		harness.host.requestSnapshot("unknown");
+		await vi.advanceTimersByTimeAsync(2_000);
+		expect(harness.snapshotsSent(child).length).toBe(before + 1);
+		await harness.host.close();
+	});
+
 	it("restarts a worker that died, after a delay", async () => {
 		const harness = createHostHarness(QA_FOO);
 		await harness.startReady();

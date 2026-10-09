@@ -106,6 +106,7 @@ on). There is no `pause` command.
 | Approve & land without QA (landing `qa`) | the card's Approve & land button, or `kanban task approve --task-id <id>` |
 | Done on a card with unlanded work | `kanban task done --task-id <id> --land` or `--discard` (the browser asks "land or discard?"; a Done with no choice is refused). On landing `off`/`commit`/`pr` there is nothing to land: commit it (Commit / Open PR) or `--discard` (the browser asks "discard uncommitted work?"); pushed work passes |
 | Hand an escalated card back | `kanban task handback --task-id <id> --note "<why>" [--extra-rounds N] [--by NAME]`; after a STALLED QA round it goes to Review for a new QA round with the kit's current QA model (no `--extra-rounds` there) |
+| Snapshot a Review card again and QA it | `kanban task resubmit --task-id <id>` (landing qa; the user and the project's orchestrator, never a card; logged as stage `resubmit`) |
 | Release a held PASS (runoff) | `kanban task release-hold --task-id <id> --land` or `--discard [--tag preserve/<id>-<model>] [--note …]` |
 | Who moved a card to Done, or deleted it | `kanban task history [<id>] [--limit N]`: every Done (also refused or skipped ones) and every delete from `data/<ws>/task-history.jsonl`, with trigger (`cli`, `browser`, `approve`, `auto_review`, `pipeline`, `hold_release`, `watchdog`), caller (user, card or orchestrator session, unknown; `null` for in-process triggers), from-column, landing choice and outcome, sessions stopped, worktree deleted |
 | Type into a card | `kanban task send <id> "<text>"` or `@file` (`--no-enter` to only type) |
@@ -214,8 +215,9 @@ their CLI's own refusal. The orchestrator does the landing. A workspace can only
 
 **False "no changes" snapshot.** The decision log says `no changes against <base>; not submitted` when the card
 reached Review without work, or the agent committed onto the base itself. Check the worktree (`git -C <worktree>
-status`, `log -3`) and `git log <base> -15`. If the work is real, move the card through In Progress → Review to
-re-snapshot it.
+status`, `log -3`) and `git log <base> -15`. A turn that ends later while the card is still in Review is
+snapshotted again once its Review settles (issue #20). If the work is real and no new snapshot came (work without a
+hook, or done by hand), `kanban task resubmit --task-id <id>` re-snapshots it and submits it to the QA gate.
 
 **Board wiped** (Kanban removes a workspace's state when a `git rev-parse` fails, e.g. at the pids limit):
 `kanban board restore <ws> [backup]` (default: the newest `board-latest.json`; it refuses unless the state dir is

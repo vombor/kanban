@@ -174,6 +174,11 @@ import {
 	type RuntimeKitSettingsApi,
 } from "./kit-settings-api";
 import {
+	type RuntimePipelineResubmitApi,
+	taskResubmitRequestSchema,
+	taskResubmitResponseSchema,
+} from "./pipeline-resubmit-api";
+import {
 	planApproveRequestSchema,
 	planApproveResponseSchema,
 	planPreviewRequestSchema,
@@ -224,6 +229,8 @@ export interface RuntimeTrpcContext {
 	shortcutsApi?: RuntimeShortcutsApi;
 	/** GitHub issues and comments as the Kanban GitHub App (src/trpc/github-api.ts); absent = not available. */
 	githubApi?: RuntimeGitHubApi;
+	/** `kanban task resubmit` (src/trpc/pipeline-resubmit-api.ts); absent = not available. */
+	pipelineResubmitApi?: RuntimePipelineResubmitApi;
 	runtimeApi: {
 		loadConfig: (scope: RuntimeTrpcWorkspaceScope | null) => Promise<RuntimeConfigResponse>;
 		saveConfig: (
@@ -885,6 +892,24 @@ export const runtimeAppRouter = t.router({
 					};
 				}
 				return await ctx.kitSettingsApi.unset({
+					caller: await readStrictCaller(ctx),
+					workspaceId: ctx.workspaceScope.workspaceId,
+					request: input,
+				});
+			}),
+	}),
+	// A Review dev card snapshotted again and sent to the QA gate (src/trpc/pipeline-resubmit-api.ts): the user's and
+	// that project's orchestrator's.
+	pipeline: t.router({
+		resubmit: workspaceProcedure
+			.input(taskResubmitRequestSchema)
+			.output(taskResubmitResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.pipelineResubmitApi) {
+					return { ok: false, taskId: input.taskId, requestedAt: null, error: "Resubmit is not available here." };
+				}
+				// In every isolation mode: a session without its credential is traced to its process tree.
+				return await ctx.pipelineResubmitApi.resubmit({
 					caller: await readStrictCaller(ctx),
 					workspaceId: ctx.workspaceScope.workspaceId,
 					request: input,

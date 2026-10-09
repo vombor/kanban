@@ -1535,6 +1535,22 @@ export async function handbackTask(input: {
 }
 
 /**
+ * `kanban task resubmit`: a Review dev card is snapshotted again and its submission goes to the QA gate (issue #20,
+ * src/trpc/pipeline-resubmit-api.ts). Through the running server, which decides who asks: the user and the project's
+ * own orchestrator, never a card. Only on landing mode `qa`; elsewhere the answer says there is nothing to submit to.
+ */
+export async function resubmitTask(input: { cwd: string; taskId: string; projectPath?: string }): Promise<JsonRecord> {
+	const workspace = await resolveRuntimeWorkspace(input.projectPath, input.cwd);
+	const response = await createRuntimeTrpcClient(workspace.workspaceId).pipeline.resubmit.mutate({
+		taskId: input.taskId,
+	});
+	if (!response.ok) {
+		throw new Error(response.error ?? "refused");
+	}
+	return { ...response, workspaceId: workspace.workspaceId, workspacePath: workspace.repoPath };
+}
+
+/**
  * `kanban task release-hold`: the human way out of the pipeline's hold (src/pipeline/hold.ts). The hold is lifted
  * (logged in the pipeline state and the QA log), then the card goes through the ordinary Done workflow with the
  * chosen landing, as `kanban task done --land|--discard` does. `--discard --tag preserve/…` tags its work first. A land that
@@ -2077,6 +2093,20 @@ export function registerTaskCommand(program: Command): void {
 				);
 			},
 		);
+
+	task
+		.command("resubmit")
+		.description(
+			"Snapshot a Review dev task again and submit it to the QA gate (landing mode qa), e.g. after an early 'no changes' snapshot. Only the user and the project's own orchestrator.",
+		)
+		.requiredOption("--task-id <id>", "Task ID.")
+		.option("--project-path <path>", "Workspace path. Defaults to current directory workspace.")
+		.action(async (options: { taskId: string; projectPath?: string }) => {
+			await runTaskCommand(
+				async () =>
+					await resubmitTask({ cwd: process.cwd(), taskId: options.taskId, projectPath: options.projectPath }),
+			);
+		});
 
 	task
 		.command("release-hold")

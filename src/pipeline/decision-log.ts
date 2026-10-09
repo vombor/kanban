@@ -21,7 +21,8 @@ const DECISION_LOG_MAX_BYTES = 5 * 1024 * 1024;
  * kit's QA answer for a dev card; `qa_start` / `qa_ingest` / `qa_pass`: the QA gate starting and ingesting QA cards and acting on a PASS; `recovery` / `restart`: recovery-stage.ts.
  * `rework`: the rework loop acting on a FAIL, STALLED, land conflict or unchanged rework (the kit's `onFail` answer,
  * or the core's own escalation at the `maxFailRounds` cap), and checking that a rework started. `issues`: the issue
- * import (src/issues/issue-sync.ts), what it imported, updated or skipped and each sync's summary.
+ * import (src/issues/issue-sync.ts), what it imported, updated or skipped and each sync's summary. `resubmit`:
+ * `kanban task resubmit` asked for a Review card's new snapshot (src/trpc/pipeline-resubmit-api.ts), written by the server.
  */
 export type PipelineStage =
 	| "issues"
@@ -35,7 +36,8 @@ export type PipelineStage =
 	| "rework"
 	| "land"
 	| "recovery"
-	| "restart";
+	| "restart"
+	| "resubmit";
 
 /**
  * What the pipeline did with a decision. `none`: nothing to do. `shadow`: it would act, but the workspace is in

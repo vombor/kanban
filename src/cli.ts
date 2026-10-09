@@ -450,6 +450,7 @@ async function startServer(): Promise<{
 		sessionSyncEnabled: sessionSyncSetting.enabled,
 		reviewSettleMs: sessionSyncSetting.reviewSettleMs,
 		onTaskLanded: (event) => pipelineWorkerHost?.notifyLanded(event),
+		requestPipelineSnapshot: (workspaceId) => pipelineWorkerHost?.requestSnapshot(workspaceId),
 		runtimeStateHub: runtimeHub,
 		warn: (message) => {
 			console.warn(`[kanban] ${message}`);

@@ -13,7 +13,9 @@
 //   after a short coalescing delay. Session summaries that don't change the state (output, hook activity) are
 //   ignored. A session that enters Review also gets a snapshot once its Review has settled (`reviewSettleMs` plus
 //   the coalescing delay): the pipeline acts on a Review card only then (src/terminal/review-settle.ts), and the
-//   next sweep could be 30 s away.
+//   next sweep could be 30 s away. So does hook activity that moves a Review's settle clock without a state change
+//   (a turn that ended while the card was already in Review, issue #20).
+// - `requestSnapshot` sends a workspace's snapshot after the coalescing delay (`kanban task resubmit`).
 // - The worker asks the server to finish a card (the Done workflow, with its landing step) with a `finishTask`
 //   request; the host runs it and answers `finishTaskResult`. Lands from any trigger reach the worker as `landed`.
 // - A worker that exits on its own is restarted after a growing delay. `pipeline.workerEntry` points the child at
@@ -36,7 +38,7 @@ import type {
 	RuntimeTaskTrashResponse,
 } from "../core/api-contract";
 import { type PidPressureFlags, readPidPressureFlags } from "../state/pid-pressure-flags";
-import { DEFAULT_REVIEW_SETTLE_MS } from "../terminal/review-settle";
+import { DEFAULT_REVIEW_SETTLE_MS, getReviewActivityAt } from "../terminal/review-settle";
 import type { PipelineActionRequest, PipelineActionResult } from "./actions";
 import { getRecoveryScope, isPipelineWorkspace, type PipelineWorkspaceSnapshot } from "./engine";
 import type { PipelineEventMap } from "./events";
@@ -108,6 +110,8 @@ export interface PipelineWorkerHost {
 	forgetWorkspace: (workspaceId: string) => void;
 	/** Kanban landed a card: tells the worker, which emits `landed` for kit features. */
 	notifyLanded: (event: PipelineEventMap["landed"]) => void;
+	/** Sends the workspace's snapshot after the coalescing delay, if the worker has it (`kanban task resubmit`). */
+	requestSnapshot: (workspaceId: string) => void;
 	/** Re-reads the config, starts or stops the worker, and sends every pipeline workspace's snapshot. */
 	sweep: () => Promise<void>;
 	getStatus: () => PipelineWorkerHostStatus;
@@ -184,7 +188,8 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 	const coalesceTimers = new Map<string, NodeJS.Timeout>();
 	/** `workspaceId:taskId` → the snapshot sent once that session's Review has settled. */
 	const settleTimers = new Map<string, NodeJS.Timeout>();
-	const lastSessionStates = new Map<string, RuntimeTaskSessionState>();
+	/** `workspaceId:taskId` → the session's last state and its Review's settle clock (getReviewActivityAt). */
+	const lastSessionStates = new Map<string, { state: RuntimeTaskSessionState; reviewActivityAt: number | null }>();
 
 	const runAction = async (request: PipelineActionRequest): Promise<PipelineActionResult> => {
 		const allowed =
@@ -249,6 +254,20 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 			clearTimeout(timer);
 			settleTimers.delete(key);
 		}
+	};
+
+	/** The snapshot sent once this session's Review has settled, counted from now (a later call restarts it). */
+	const armSettleTimer = (key: string, workspaceId: string): void => {
+		clearSettleTimer(key);
+		if (reviewSettleMs <= 0) {
+			return;
+		}
+		const timer = setTimeout(() => {
+			settleTimers.delete(key);
+			scheduleSnapshot(workspaceId);
+		}, reviewSettleMs);
+		timer.unref();
+		settleTimers.set(key, timer);
 	};
 
 	const answerFinishTask = async (
@@ -461,18 +480,20 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 			if (summary) {
 				const key = `${workspaceId}:${summary.taskId}`;
 				const previous = lastSessionStates.get(key);
-				lastSessionStates.set(key, summary.state);
-				if (previous === summary.state) {
+				const reviewActivityAt = getReviewActivityAt(summary);
+				lastSessionStates.set(key, { state: summary.state, reviewActivityAt });
+				if (previous?.state === summary.state) {
+					// A turn can end in Review with no state change (a hook's to_review on a session that never showed
+					// running, e.g. input delivered to an agent without a prompt-submit hook, issue #20): its hooks move the
+					// Review's clock, so it gets the settled snapshot too. Nothing else is sent for it now.
+					if (summary.state === "awaiting_review" && reviewActivityAt !== previous.reviewActivityAt) {
+						armSettleTimer(key, workspaceId);
+					}
 					return;
 				}
 				clearSettleTimer(key);
-				if (summary.state === "awaiting_review" && reviewSettleMs > 0) {
-					const timer = setTimeout(() => {
-						settleTimers.delete(key);
-						scheduleSnapshot(workspaceId);
-					}, reviewSettleMs);
-					timer.unref();
-					settleTimers.set(key, timer);
+				if (summary.state === "awaiting_review") {
+					armSettleTimer(key, workspaceId);
 				}
 			}
 			scheduleSnapshot(workspaceId);
@@ -502,6 +523,7 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 		notifyLanded: (event) => {
 			child?.send({ type: "landed", event });
 		},
+		requestSnapshot: (workspaceId) => scheduleSnapshot(workspaceId),
 		sweep,
 		getStatus: () => ({
 			running: child !== null,

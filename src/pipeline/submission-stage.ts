@@ -6,7 +6,10 @@
 // checked yet (checks.ts). A shadow workspace builds the snapshot commit without moving the ref and runs no checks.
 //
 // A card is snapshotted once per submission, not on every evaluation: the result is kept until the card's
-// `updatedAt` or its session state changes (a card coming back to Review after a rework), or the worker restarts.
+// `updatedAt` or its session state changes (a card coming back to Review after a rework), its Review's settle clock
+// moves (getReviewActivityAt: a turn that ended while the card was already in Review, issue #20: f0ba7's work after
+// an early "no changes" snapshot was never snapshotted), `kanban task resubmit` asks (resubmit.ts), or the worker
+// restarts.
 // A restarted worker re-snapshots the Review cards, as the legacy kit's startup sweep did (their worktree may
 // have changed while it was down). Ported from archive/devteam-kit:services/kanban-autoland.mjs@6da71597
 // (onDevReview, the startup sweep: a running session is not finished work, and is not snapshotted mid-work).
@@ -18,12 +21,14 @@ import type { WorkspacePipelineSettings } from "../config/pipeline-config";
 import type { RuntimeBoardCard } from "../core/api-contract";
 import type { KitChecks } from "../kits/kit-schema";
 import type { EffectiveCard } from "../kits/policy";
+import { getReviewActivityAt } from "../terminal/review-settle";
 import { getTaskWorkspacePathInfo } from "../workspace/task-worktree";
 import { CHECKS_VERSION, type ChecksQueue, resolveChecksEnabled } from "./checks";
 import type { PipelineDecisionOutcome } from "./decision-log";
 import { describeTurnEvidence, EMPTY_DIFF_FIELD, type EmptyDiffRecord } from "./empty-diff";
 import type { PipelineSessionView } from "./engine";
 import type { PipelineWorkspaceState } from "./pipeline-state";
+import { readResubmitRequest } from "./resubmit";
 import { type TakeTaskSnapshotInput, type TaskSnapshot, takeTaskSnapshot } from "./snapshots";
 import { probeTaskHasWork } from "./work-probe";
 
@@ -220,7 +225,15 @@ export function createSubmissionStage(options: CreateSubmissionStageOptions): Su
 				return { hasWork: false, records: [] };
 			}
 			const cacheKey = `${context.workspaceId}:${card.id}`;
-			const key = JSON.stringify([card.updatedAt, session?.state ?? null, context.settings.pipeline.shadow]);
+			// A turn that ends while the card is already in Review changes neither the card nor the session state, only
+			// the Review's clock (issue #20), so that clock is part of the key, as is a `kanban task resubmit` request.
+			const key = JSON.stringify([
+				card.updatedAt,
+				session?.state ?? null,
+				getReviewActivityAt(session),
+				readResubmitRequest(context.state.cards[card.id])?.at ?? null,
+				context.settings.pipeline.shadow,
+			]);
 			const cached = inspections.get(cacheKey);
 			if (cached?.key === key) {
 				return cached.inspection;

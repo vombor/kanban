@@ -184,6 +184,52 @@ describe("submission stage", () => {
 		expect(enqueued[1]?.snapshot).not.toBe(enqueued[0]?.snapshot);
 	});
 
+	it("a turn that ends while the card is already in Review gets a new snapshot (issue #20, f0ba7)", async () => {
+		const { repo, enqueued, inspect, emptyDiffs, context } = setup();
+		const card = createCard({ id: "f0ba7", updatedAt: 1 });
+		// 06:04: the agent saw its plan spec missing and ended its turn: no changes, recorded.
+		const first = session({ taskId: "f0ba7", reviewReason: "hook", stateChangedAt: 1_000, lastHookAt: 1_000 });
+		const empty = await inspect(card, "dev", first);
+		expect(empty.hasWork).toBe(false);
+		expect(emptyDiffs).toHaveLength(1);
+		context.state = emptyState({ f0ba7: { emptyDiff: emptyDiffs[0]?.record } });
+
+		// The orchestrator's message made it do the work in the same session; neither the card nor the session state
+		// changed, only its hooks. The same Review clock is still the cached answer.
+		writeFileSync(join(repo.worktreePath, "schema.prisma"), "model Loyalty {}\n");
+		expect(await inspect(card, "dev", first)).toEqual(empty);
+		const later = await inspect(card, "dev", { ...first, lastHookAt: 9_000 });
+		expect(later.hasWork).toBe(true);
+		expect(later.records.map((record) => [record.stage, record.outcome])).toEqual([
+			["snapshot", "acted"],
+			["checks", "acted"],
+		]);
+		expect(enqueued).toHaveLength(1);
+		// The empty-diff record goes with the submission that has changes.
+		expect(emptyDiffs[1]).toEqual({ workspaceId: "foo", taskId: "f0ba7", record: null });
+	});
+
+	it("a later settled turn that still changed nothing records the empty diff again", async () => {
+		const { inspect, emptyDiffs } = setup();
+		const card = createCard({ id: "f0ba7", updatedAt: 1 });
+		await inspect(card, "dev", session({ reviewReason: "hook", stateChangedAt: 1_000 }));
+		await inspect(card, "dev", session({ reviewReason: "hook", stateChangedAt: 1_000, lastHookAt: 5_000 }));
+		expect(emptyDiffs.map((entry) => entry.record?.cardUpdatedAt)).toEqual([1, 1]);
+	});
+
+	it("a kanban task resubmit request snapshots the card again", async () => {
+		const { repo, enqueued, inspect, context } = setup();
+		const card = createCard({ id: "f0ba7", updatedAt: 1 });
+		const idle = session({ reviewReason: "hook", stateChangedAt: 1_000 });
+		expect((await inspect(card, "dev", idle)).hasWork).toBe(false);
+		writeFileSync(join(repo.worktreePath, "work.txt"), "work\n");
+		expect((await inspect(card, "dev", idle)).hasWork).toBe(false);
+
+		context.state = emptyState({ f0ba7: { resubmit: { at: "2026-10-09T09:00:00.000Z", by: "user" } } });
+		expect((await inspect(card, "dev", idle)).hasWork).toBe(true);
+		expect(enqueued).toHaveLength(1);
+	});
+
 	it("does not check a snapshot the current checker already checked (including one imported from the legacy kit)", async () => {
 		const { repo, enqueued, inspect, context } = setup();
 		writeFileSync(join(repo.worktreePath, "work.txt"), "work\n");

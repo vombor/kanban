@@ -240,7 +240,10 @@ The watchdog (`src/pipeline/watchdog/`, in the pipeline worker) is LLM-free and 
 - **Empty diff** (issue #14): a Review card whose snapshot has no changes against its base is never QA'd or landed.
   If the agent ran (a hook of this run, a turn end through a hook, a final message; never PTY output), the
   orchestrator is told at once: "no changes against <base>: Done or restart?". Nothing moves it to Done, since Done
-  starts its linked Backlog cards. With no turn on record (it likely never ran) recovery gets 10 min first.
+  starts its linked Backlog cards. With no turn on record (it likely never ran) recovery gets 10 min first. A later
+  turn that ends while the card is still in Review (its hooks move the Review's clock, issue #20) gets a new snapshot
+  once it settles: with changes it goes to the QA gate and the record goes. `kanban task resubmit --task-id <id>`
+  asks for one by hand.
 - **Prompts:** a Claude Code or Codex card stuck on a trust, startup or permission dialog (3 min), on every
   workspace. It is flagged, never answered: the trust dialog defaults to "No, exit". Every workspace's main repo
   root is pre-trusted to prevent it.
