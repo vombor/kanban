@@ -127,12 +127,20 @@ The card runs on the given project's board (default: this directory's) with role
 auto-review and the watchdog leave it alone, through the running server like `bench calibrate` (create, start,
 discard). It is watched with Kanban's failure detectors, and the first one that fires ends the run: not signed in,
 no turn started (`no_session`: a sign-in or trust screen takes the prompt as input), image rejection, tool calls
-written as text, a tool-call loop, Cline's silent stall, hung request, context overflow or final provider error,
-a failed session, no progress for 8 min, the time cap and the cost cap. A turn that ends (Review, settled) is checked
-against the task. The card is always discarded.
+written as text, a tool-call loop (one finished call filling 3 of the last 4; a call still waiting for its result
+never counts), Cline's silent stall, hung request, context overflow or final provider error, a failed session, no
+progress for 8 min (only for agents whose session files Kanban can't read), the time cap and the cost cap. A turn
+that ends (Review, settled) is checked against the task. The card is always discarded. What the environment does is
+not the model's silence: a model Lemonade is still loading (`/api/v1/health` doesn't list it yet), a local model's
+first reply (10 min on top, `CLINE_FIRST_REPLY_LOAD_ALLOWANCE_MS`, the same allowance recovery's silent-stall
+reader gives a slow-first-call provider), a model request in flight (the hung check's, twice as long for a local
+first call) and a shell tool whose command still runs. A timeout on a local provider is retried twice
+(`provider_timeout`) before it counts.
 
 It writes `<home>/data/models/vetting/<run>/report.md`, `result.json` (the run and the proposal) and `run.log`, and
-prints the proposed entry: the combination's entry with this role's vetting set to `vetted` (passed) or `rejected`
-with the failure as the reason, and the capabilities seen. It exits 0 only when the run passed. It never edits the
+prints the proposed entry: the combination's entry with this role's vetting set to `vetted` (passed), `rejected`
+with the failure as the reason, or `provisional` with the reason when the harness or the environment caused the
+failure (sign-in, `no_session`, a transient provider error or timeout, a hung request, a failed session), and the
+capabilities seen (a harness failure records no `toolUse` from a run with no tool calls). It exits 0 only when the run passed. It never edits the
 registry. One failed run may be bad luck: the orchestrator decides what to commit. The run lasts minutes, so an
 orchestrator starts it in the background of its own session (it must stay in the session's process tree).

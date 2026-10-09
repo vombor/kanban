@@ -6,7 +6,13 @@ import { describe, expect, it } from "vitest";
 import type { RuntimeTaskSessionSummary } from "../../../src/core/api-contract";
 import { getVettedRegistry } from "../../../src/models/vetted-registry";
 import { buildVetProposal, formatVetReport } from "../../../src/models/vetting/vet-report";
-import { DEFAULT_VET_LIMITS, runVet, type VetRunnerDeps } from "../../../src/models/vetting/vet-runner";
+import {
+	DEFAULT_VET_LIMITS,
+	PROVIDER_TIMEOUT_RETRIES,
+	runVet,
+	TOOL_LOOP_RULE,
+	type VetRunnerDeps,
+} from "../../../src/models/vetting/vet-runner";
 import {
 	checkVetTask,
 	createVetTask,
@@ -102,6 +108,10 @@ function createHarness(agent: FakeAgent, options: { signedIn?: boolean | null; s
 			},
 			discardTask: async (taskId) => {
 				calls.push(`discard ${taskId}`);
+			},
+			deliverInput: async (taskId, text) => {
+				calls.push(`deliver ${taskId} ${text.slice(0, 40)}`);
+				return { ok: true };
 			},
 			readTask: async () => ({ columnId: fake.column, session: fake.session }),
 		},
@@ -220,7 +230,10 @@ describe("kanban models vet: the runner", () => {
 		expect((await runVet(stalled.input, stalled.deps)).failure?.kind).toBe("silent_stall");
 
 		const overflow = createHarness(() => {});
-		overflow.deps.probe = async () => ({ kind: "context_overflow", detail: "prompt is too long" });
+		overflow.deps.probe = async () => ({
+			failure: { kind: "context_overflow", detail: "prompt is too long" },
+			hold: null,
+		});
 		expect((await runVet(overflow.input, overflow.deps)).failure?.kind).toBe("context_overflow");
 
 		const slow = createHarness((fake, at) => {
@@ -228,6 +241,103 @@ describe("kanban models vet: the runner", () => {
 		});
 		expect((await runVet(slow.input, slow.deps)).failure).toMatchObject({ kind: "time_cap" });
 		expect(slow.calls.at(-1)).toBe("discard v0001");
+	});
+});
+
+describe("kanban models vet: harness failures (the first runs, 2026-10-09)", () => {
+	it("counts a tool loop only for one call filling 3 of the last 4, not a first call or two", async () => {
+		const asked: number[] = [];
+		const early = createHarness(goodDevAgent);
+		early.deps.signals.findToolCallLoop = async (_agent, _path, last) => {
+			asked.push(last);
+			return { count: 1, of: 1, call: 'run_commands {"commands":["ls -R"]}' };
+		};
+		expect((await runVet(early.input, early.deps)).outcome).toBe("passed");
+		expect(asked[0]).toBe(TOOL_LOOP_RULE.window);
+
+		const twoOfFour = createHarness(goodDevAgent);
+		twoOfFour.deps.signals.findToolCallLoop = async () => ({ count: 2, of: 4, call: "read_files {}" });
+		expect((await runVet(twoOfFour.input, twoOfFour.deps)).outcome).toBe("passed");
+
+		const looping = createHarness(goodDevAgent);
+		looping.deps.signals.findToolCallLoop = async () => ({ count: 3, of: 4, call: "read_files {}" });
+		const result = await runVet(looping.input, looping.deps);
+		expect(result.failure).toMatchObject({
+			kind: "tool_loop",
+			detail: "one tool call filled 3 of the last 4: read_files {}",
+		});
+		expect(buildVetProposal(getVettedRegistry(), result, null).entry.roles.dev?.status).toBe("rejected");
+	});
+
+	it("leaves the silence to the probe where it reads the agent (a model still loading)", async () => {
+		const loading = createHarness((fake, at) => {
+			fake.session = { ...summary("running", 0), stateChangedAt: 0, lastHookAt: 0, updatedAt: at };
+		});
+		const holds: string[] = [];
+		loading.deps.probe = async () => ({ failure: null, hold: "lemonade is still loading GLM-4.7-Flash-GGUF" });
+		loading.deps.log = (line) => holds.push(line);
+		// No silent_stall at stallMin: the run goes on to the time cap.
+		expect((await runVet(loading.input, loading.deps)).failure?.kind).toBe("time_cap");
+		expect(holds.filter((line) => line.includes("not judging silence"))).toEqual([
+			"vet r1: not judging silence: lemonade is still loading GLM-4.7-Flash-GGUF",
+		]);
+	});
+
+	it("retries a local provider's timeout, then reports it as a harness failure and proposes provisional", async () => {
+		const { deps, calls, input } = createHarness(() => {});
+		let occurrence = 0;
+		deps.board.deliverInput = async (taskId, text) => {
+			calls.push(`deliver ${taskId} ${text.slice(0, 40)}`);
+			occurrence += 1;
+			return { ok: true };
+		};
+		deps.probe = async () => ({
+			failure: {
+				kind: "provider_timeout",
+				detail: "provider timeout while lemonade loads Devstral-Small-2507-GGUF: The operation timed out.",
+				harness: true,
+				occurrence: `s1:${2 + occurrence * 2}`,
+			},
+			hold: null,
+		});
+		const result = await runVet(input, deps);
+		expect(calls.filter((call) => call.startsWith("deliver"))).toHaveLength(PROVIDER_TIMEOUT_RETRIES);
+		expect(calls.at(-1)).toBe("discard v0001");
+		expect(result.failure).toMatchObject({
+			kind: "provider_timeout",
+			harness: true,
+			detail: expect.stringMatching(/^provider timeout while lemonade loads .*\(still after 2 retries\)$/u),
+		});
+		const proposal = buildVetProposal(
+			getVettedRegistry(),
+			{ ...result, toolUse: { native: 0, textual: 0, turns: 1 } },
+			null,
+		);
+		expect(proposal.entry.roles.dev).toMatchObject({
+			status: "provisional",
+			reason: expect.stringContaining("provider_timeout: provider timeout while lemonade loads"),
+			evidence: { summary: expect.stringContaining("for a harness or environment reason") },
+		});
+		// No capability is read off a run the environment cut short.
+		expect(proposal.entry.capabilities?.toolUse).toBeUndefined();
+		expect(formatVetReport(result, proposal, { repoPath: REPO })).toContain("not the model");
+	});
+
+	it("waits for a retry to show up instead of retrying the same error twice", async () => {
+		const { deps, calls, input } = createHarness(() => {});
+		deps.probe = async () => ({
+			failure: {
+				kind: "provider_timeout",
+				detail: "provider timeout on lemonade: timed out",
+				harness: true,
+				occurrence: "s1:2",
+			},
+			hold: null,
+		});
+		const result = await runVet(input, deps);
+		// One retry for the error, then (the same error 2 min later) a second one, then the failure.
+		expect(calls.filter((call) => call.startsWith("deliver"))).toHaveLength(2);
+		expect(result.finishedAt - result.startedAt).toBeGreaterThanOrEqual(4 * 60_000);
 	});
 });
 

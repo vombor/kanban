@@ -30,6 +30,7 @@ describe("tool-call signals", () => {
 			toolCall("read_file", { path: "a" }),
 			...Array.from({ length: 30 }, () => toolCall("execute_command", { command: "npx ts-node server.ts &" })),
 			toolCall("read_file", { path: "b" }),
+			{ role: "user", content: "done" },
 		];
 		expect(findRepeatedToolCall(messages)).toEqual({
 			count: 30,
@@ -39,6 +40,24 @@ describe("tool-call signals", () => {
 		// Only the last `last` calls count.
 		expect(findRepeatedToolCall(messages, 2)?.count).toBe(1);
 		expect(findRepeatedToolCall([{ role: "user", content: "hi" }])).toBeNull();
+	});
+
+	it("never counts a tool call still waiting for its result (Gemma's first ls -R, 2026-10-09)", () => {
+		const call = (id: string) => ({
+			role: "assistant",
+			content: [{ type: "tool_use", id, name: "run_commands", input: { commands: ["ls -R"] } }],
+		});
+		const result = (id: string) => ({
+			role: "user",
+			content: [{ type: "tool_result", tool_use_id: id, content: "" }],
+		});
+		expect(findRepeatedToolCall([{ role: "user", content: "review it" }, call("t1")])).toBeNull();
+		// Answered by id, wherever the result is; an unanswered id never counts, even with messages after it.
+		expect(findRepeatedToolCall([call("t1"), result("t1"), call("t2"), result("t2"), call("t3")])).toMatchObject({
+			count: 2,
+			of: 2,
+		});
+		expect(findRepeatedToolCall([call("t1"), { role: "user", content: "go on" }])).toBeNull();
 	});
 
 	it("counts native tool calls against tool calls written as text", () => {
@@ -86,7 +105,11 @@ describe("createAgentRunSignals", () => {
 				messagesWrittenAt: 1,
 				lastMessage: null,
 			})),
-			readLatestSessionMessages: vi.fn(async () => [toolCall("list_files", {}), toolCall("list_files", {})]),
+			readLatestSessionMessages: vi.fn(async () => [
+				toolCall("list_files", {}),
+				toolCall("list_files", {}),
+				{ role: "user", content: "next" },
+			]),
 		};
 		const signals = createAgentRunSignals({ clineReader: reader, clineSessionsPath: "/cline/sessions" });
 		expect(await signals.isSessionRunning("cline", "/wt/c1/repo")).toBe(true);

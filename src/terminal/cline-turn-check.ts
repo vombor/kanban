@@ -93,6 +93,7 @@ export interface ClineSilentStall {
 	status: string | null;
 	/** The newest progress: a message, a write in the session dir, or the Kanban turn's start, whichever is newest. */
 	lastProgressAt: number;
+	/** Quiet time since `lastProgressAt`, minus the first-reply allowance while the model owes its first reply. */
 	idleMs: number;
 	/** The interrupted tool calls' names. */
 	tools: string[];
@@ -112,8 +113,19 @@ export interface ClineSilentStallInput {
 	 * own (isClineSessionOfRun) is a `no_session` stall; without it such a run is never judged.
 	 */
 	runStartedAt?: number | null;
+	/**
+	 * Extra quiet time an `untouched` session gets while it has no reply from the model yet: a local provider loads
+	 * the model on the first request (Lemonade with three models loading at once took minutes, 2026-10-09). Callers
+	 * pass CLINE_FIRST_REPLY_LOAD_ALLOWANCE_MS for a slow-first-call provider, else nothing.
+	 */
+	firstReplyAllowanceMs?: number;
+	/** The provider says the run's model is still loading: the model owes the reply, so `untouched` is no stall. */
+	modelLoading?: boolean;
 	now: number;
 }
+
+/** The first-reply allowance (firstReplyAllowanceMs) for a provider that loads the model on the first request. */
+export const CLINE_FIRST_REPLY_LOAD_ALLOWANCE_MS = 10 * 60_000;
 
 /**
  * Whether `detail` (a worktree's newest Cline session) belongs to the Kanban run that started at `runStartedAt`: it
@@ -184,6 +196,8 @@ function classifyLastMessage(
  * final reply that ends the turn. Progress is a new message or a write in the session dir (a teammate's messages
  * included); Kanban's PTY output never counts, since an idle TUI repaints. Given `runStartedAt`, a run without a
  * session file of its own is `no_session`, its clock starting at the run's start (or Kanban's later progress).
+ * A model the provider is still loading (`modelLoading`) owes the reply, and its first reply gets
+ * `firstReplyAllowanceMs` on top of the caller's limit: neither is the agent's silence.
  */
 export function evaluateClineSilentStall(input: ClineSilentStallInput): ClineSilentStall | null {
 	const { detail, now } = input;
@@ -207,6 +221,11 @@ export function evaluateClineSilentStall(input: ClineSilentStallInput): ClineSil
 	if (!classified) {
 		return null;
 	}
+	const awaitingFirstReply =
+		classified.kind === "untouched" && !detail.messages.some((message) => message.role === "assistant");
+	if (classified.kind === "untouched" && input.modelLoading === true) {
+		return null;
+	}
 	const lastProgressAt = Math.max(
 		detail.lastWriteAt ?? 0,
 		detail.snapshot.messagesWrittenAt ?? 0,
@@ -221,7 +240,7 @@ export function evaluateClineSilentStall(input: ClineSilentStallInput): ClineSil
 		sessionId: detail.snapshot.sessionId,
 		status: detail.snapshot.status,
 		lastProgressAt,
-		idleMs: Math.max(0, now - lastProgressAt),
+		idleMs: Math.max(0, now - lastProgressAt - (awaitingFirstReply ? (input.firstReplyAllowanceMs ?? 0) : 0)),
 	};
 }
 
@@ -234,6 +253,8 @@ export interface ReadClineSilentStallInput {
 	runStartedAt?: number | null;
 	/** The card's provider (`-P`), for the sign-in reason of a `no_session` stall. */
 	providerId?: string | null;
+	/** See ClineSilentStallInput. */
+	firstReplyAllowanceMs?: number;
 	now: number;
 }
 
@@ -246,6 +267,7 @@ export async function readClineSilentStall(input: ReadClineSilentStallInput): Pr
 		),
 		kanbanProgressAt: input.kanbanProgressAt,
 		runStartedAt: input.runStartedAt,
+		firstReplyAllowanceMs: input.firstReplyAllowanceMs,
 		now: input.now,
 	});
 	return stall?.kind === "no_session"

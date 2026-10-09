@@ -1,7 +1,9 @@
 // What `kanban models vet` leaves behind: `report.md` (people) and `result.json` (the run and the proposed registry
 // entry) in `<home>/data/models/vetting/<run>/`. The proposal is the combination's current entry with this role's
 // vetting replaced: `vetted` after a passed run, `rejected` with the failure as the reason after a failed one (one
-// failure may be bad luck; the orchestrator decides what to commit). Capabilities the run saw are merged in.
+// failure may be bad luck; the orchestrator decides what to commit), and `provisional` with the reason after a failure
+// the harness or the environment caused (`failure.harness`: sign-in, provider, Kanban), which says nothing about the
+// model, so no false rejection is ever proposed. Capabilities the run saw are merged in.
 import {
 	describeCombination,
 	lookupVetting,
@@ -30,7 +32,8 @@ function describeEvidence(result: VetRunResult): string {
 	if (result.outcome === "passed") {
 		return `kanban models vet ${result.role} smoke test passed (${result.checks.map((check) => check.name).join(", ")}) in ${duration} min, ${cost}${tools}`;
 	}
-	return `kanban models vet ${result.role} smoke test failed after ${duration} min (${cost}${tools}): ${result.failure?.kind}: ${result.failure?.detail}`;
+	const by = result.failure?.harness ? " for a harness or environment reason (not the model's)" : "";
+	return `kanban models vet ${result.role} smoke test failed${by} after ${duration} min (${cost}${tools}): ${result.failure?.kind}: ${result.failure?.detail}`;
 }
 
 export function buildVetProposal(
@@ -48,8 +51,9 @@ export function buildVetProposal(
 		verdict.entry.model === combination.model
 			? verdict.entry
 			: null;
+	const status = result.outcome === "passed" ? "vetted" : result.failure?.harness ? "provisional" : "rejected";
 	const vetting: RoleVetting = {
-		status: result.outcome === "passed" ? "vetted" : "rejected",
+		status,
 		at: isoDay(result.finishedAt),
 		cliVersion,
 		evidence: { run: result.runId, summary: describeEvidence(result) },
@@ -57,7 +61,11 @@ export function buildVetProposal(
 	};
 	const capabilities = {
 		...current?.capabilities,
-		...(result.toolUse ? { toolUse: result.toolUse.native > 0 } : {}),
+		// A run the environment cut short (GLM, 2026-10-09: no reply while Lemonade loaded it) shows no tool calls of
+		// the model's, which is no sign it can't make any.
+		...(result.toolUse && (result.toolUse.native > 0 || !result.failure?.harness)
+			? { toolUse: result.toolUse.native > 0 }
+			: {}),
 		...(result.sawImageRejection ? { images: false } : {}),
 		...(result.outcome === "passed" || result.turnEnded ? { turnEnd: result.turnEnded } : {}),
 	};
@@ -78,6 +86,12 @@ export function formatVetReport(result: VetRunResult, proposal: VetProposal, pat
 		"",
 		`Outcome: **${result.outcome.toUpperCase()}**${result.failure ? ` (${result.failure.kind}: ${result.failure.detail})` : ""}`,
 		"",
+		...(result.failure?.harness
+			? [
+					"The harness or the environment caused this failure, not the model: the proposal keeps the role provisional.",
+					"",
+				]
+			: []),
 		`- card: ${result.taskId ?? "none"} (discarded, never landed)`,
 		`- started ${new Date(result.startedAt).toISOString()}, finished ${new Date(result.finishedAt).toISOString()}`,
 		`- cost: ${result.costUSD === null ? "unknown" : `$${result.costUSD.toFixed(2)}`}`,

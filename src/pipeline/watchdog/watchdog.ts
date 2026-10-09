@@ -45,6 +45,7 @@ import { KANBAN_SESSION_CREDENTIAL_ENV, KANBAN_SESSION_WORKSPACE_ENV } from "../
 import { createRoutingPolicy, type RoutingPolicy } from "../../kits/policy";
 import { type KitCatalog, resolveWorkspaceKit } from "../../kits/resolve-kit";
 import { getWorkspaceRoutingVetting } from "../../kits/routing-vetting";
+import { isLocalProvider } from "../../kits/team/bench/prices";
 import { type AgentToolProcessFinder, createAgentToolProcessFinder } from "../../server/process-reaper";
 import {
 	getClineDataDirPath,
@@ -57,6 +58,7 @@ import {
 import { getAgentTurnEndSource } from "../../terminal/agent-session-adapters";
 import { createClineSessionFileReader } from "../../terminal/cline-session-files";
 import {
+	CLINE_FIRST_REPLY_LOAD_ALLOWANCE_MS,
 	type ClineSilentStall,
 	describeClineSilentStall,
 	getSessionProgressAt,
@@ -285,6 +287,7 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 						kanbanProgressAt: input.kanbanProgressAt,
 						runStartedAt: input.runStartedAt,
 						providerId: input.providerId,
+						firstReplyAllowanceMs: isLocalProvider(input.providerId) ? CLINE_FIRST_REPLY_LOAD_ALLOWANCE_MS : 0,
 						now: input.now,
 					})
 				: null);

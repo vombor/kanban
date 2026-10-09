@@ -4,16 +4,19 @@
 //
 // It watches the run with Kanban's failure detectors and stops at the first one: the agent not signed in, no turn
 // started (`no_session`: a sign-in screen takes the prompt as input), an image rejection, tool calls written as text,
-// a tool-call loop, the agent-specific stalls (vet-probe.ts: Cline's silent stall, hung request, context overflow,
-// provider error), a session that failed, no progress for `stallMin`, the time cap and the cost cap. A turn that
-// ends (Review, settled) is then checked against the task (vet-tasks.ts). The card is always discarded, never landed.
+// a tool-call loop (the same finished call filling TOOL_LOOP_RULE's share of the last calls), the agent-specific
+// stalls (vet-probe.ts: Cline's silent stall, hung request, context overflow, provider error), a session that failed,
+// no progress for `stallMin` (only where the probe can't read the agent), the time cap and the cost cap. A provider
+// timeout on a local provider is retried PROVIDER_TIMEOUT_RETRIES times before it counts. A turn that ends (Review,
+// settled) is then checked against the task (vet-tasks.ts). The card is always discarded, never landed.
 //
 // The result is a report and a proposed registry entry (vet-report.ts). It never edits the registry: the Kanban
 // orchestrator commits the proposal to models/vetted.json.
 import type { RuntimeAgentId, RuntimeTaskAgentSettings, RuntimeTaskSessionSummary } from "../../core/api-contract";
+import { buildProviderRetryPrompt } from "../../pipeline/recovery-prompts";
 import { isReviewSettled } from "../../terminal/review-settle";
 import type { ModelCombination, VettingRole } from "../vetted-registry";
-import type { VetFailure, VetProbeInput } from "./vet-probe";
+import type { VetFailure, VetProbeInput, VetProbeVerdict } from "./vet-probe";
 import { checkVetTask, type VetCheck, type VetCheckDeps, type VetTask } from "./vet-tasks";
 
 export interface VetLimits {
@@ -55,6 +58,8 @@ export interface VetRunnerDeps {
 		startTask: (taskId: string) => Promise<void>;
 		/** Stops the card and discards it (never lands). */
 		discardTask: (taskId: string) => Promise<void>;
+		/** Types a message into the card's agent (deliverTaskInput, with delivery confirmation). */
+		deliverInput: (taskId: string, text: string) => Promise<{ ok: boolean; error?: string | null }>;
 		readTask: (taskId: string) => Promise<VetBoardState>;
 	};
 	signals: {
@@ -65,13 +70,15 @@ export interface VetRunnerDeps {
 			agentId: RuntimeAgentId,
 			workspacePath: string,
 		) => Promise<{ native: number; textual: number; turns: number } | null>;
+		/** The most repeated finished tool call among the last `last` (findRepeatedToolCall). */
 		findToolCallLoop: (
 			agentId: RuntimeAgentId,
 			workspacePath: string,
+			last: number,
 		) => Promise<{ count: number; of: number; call: string } | null>;
 	};
-	/** The agent-specific failure detectors (vet-probe.ts). */
-	probe: (input: VetProbeInput) => Promise<VetFailure | null>;
+	/** The agent-specific failure detectors (vet-probe.ts); null where they can't read the agent. */
+	probe: (input: VetProbeInput) => Promise<VetProbeVerdict | null>;
 	findWorktreePath: (taskId: string) => Promise<string | null>;
 	/** The card's cost so far (the scoreboard's metrics), or null when it can't be told. */
 	measureCostUSD: (taskId: string) => Promise<number | null>;
@@ -113,6 +120,15 @@ export interface VetRunResult {
 }
 
 const COST_CHECK_MS = 60_000;
+/**
+ * A loop is one finished tool call filling `minRepeats` of the last `window` calls. The first runs (2026-10-09) were
+ * failed as loops after one or two calls ("1 of the last 1"), since any most-repeated call counted.
+ */
+export const TOOL_LOOP_RULE = { window: 4, minRepeats: 3 };
+/** Retries of a local provider's timeout (a model still loading) before it counts as `provider_timeout`. */
+export const PROVIDER_TIMEOUT_RETRIES = 2;
+/** How long a retry may take to show up in the session before the same error counts again. */
+const RETRY_PICKUP_MS = 120_000;
 
 function toAgentSettings(combination: ModelCombination): RuntimeTaskAgentSettings | undefined {
 	if (!combination.provider && !combination.model) {
@@ -163,7 +179,7 @@ export async function runVet(input: VetRunInput, deps: VetRunnerDeps): Promise<V
 	});
 
 	if ((await deps.signals.isSignedIn(agentId)) === false) {
-		return finish({ kind: "sign_in", detail: `${agentId} has no login it can start a run with` });
+		return finish({ kind: "sign_in", detail: `${agentId} has no login it can start a run with`, harness: true });
 	}
 	taskId = await deps.board.createTask({
 		title: `VET ${input.role}: ${agentId} ${combination.model ?? "(default model)"} (${input.runId})`,
@@ -177,6 +193,8 @@ export async function runVet(input: VetRunInput, deps: VetRunnerDeps): Promise<V
 		const runStartedAt = deps.now();
 		let lastCostCheck = 0;
 		let lastProgressAt = runStartedAt;
+		let lastHold: string | null = null;
+		const timeoutRetries: Array<{ occurrence: string | undefined; at: number }> = [];
 		for (;;) {
 			await deps.sleep(limits.pollSec * 1000);
 			const now = deps.now();
@@ -198,8 +216,8 @@ export async function runVet(input: VetRunInput, deps: VetRunnerDeps): Promise<V
 					sawImageRejection = true;
 					return finish({ kind: "image_rejection", detail: "the model rejected an image (no images support)" });
 				}
-				const loop = await deps.signals.findToolCallLoop(agentId, worktreePath);
-				if (loop) {
+				const loop = await deps.signals.findToolCallLoop(agentId, worktreePath, TOOL_LOOP_RULE.window);
+				if (loop && loop.count >= TOOL_LOOP_RULE.minRepeats) {
 					return finish({
 						kind: "tool_loop",
 						detail: `one tool call filled ${loop.count} of the last ${loop.of}: ${loop.call.slice(0, 160)}`,
@@ -216,6 +234,7 @@ export async function runVet(input: VetRunInput, deps: VetRunnerDeps): Promise<V
 				return finish({
 					kind: "session_failed",
 					detail: `the session failed (${session.reviewReason ?? "no reason"})`,
+					harness: true,
 				});
 			}
 			const progressAt = Math.max(
@@ -226,19 +245,49 @@ export async function runVet(input: VetRunInput, deps: VetRunnerDeps): Promise<V
 			if (progressAt > lastProgressAt) {
 				lastProgressAt = progressAt;
 			}
-			if (worktreePath) {
-				const failure = await deps.probe({
-					agentId,
-					worktreePath,
-					providerId: combination.provider,
-					runStartedAt: session?.startedAt ?? runStartedAt,
-					kanbanProgressAt: lastProgressAt,
-					stallMin: limits.stallMin,
-					now,
-				});
-				if (failure) {
-					return finish(failure);
+			const verdict = worktreePath
+				? await deps.probe({
+						agentId,
+						worktreePath,
+						providerId: combination.provider,
+						model: combination.model,
+						agentPid: session?.pid ?? null,
+						runStartedAt: session?.startedAt ?? runStartedAt,
+						kanbanProgressAt: lastProgressAt,
+						stallMin: limits.stallMin,
+						now,
+					})
+				: null;
+			if (verdict && verdict.hold !== lastHold) {
+				lastHold = verdict.hold;
+				if (verdict.hold) {
+					deps.log(`vet ${input.runId}: not judging silence: ${verdict.hold}`);
 				}
+			}
+			const failure = verdict?.failure ?? null;
+			if (failure?.kind === "provider_timeout") {
+				const last = timeoutRetries.at(-1);
+				if (last && last.occurrence === failure.occurrence && now - last.at < RETRY_PICKUP_MS) {
+					continue;
+				}
+				if (timeoutRetries.length >= PROVIDER_TIMEOUT_RETRIES) {
+					return finish({
+						...failure,
+						detail: `${failure.detail} (still after ${timeoutRetries.length} retries)`,
+					});
+				}
+				timeoutRetries.push({ occurrence: failure.occurrence, at: now });
+				const delivery = await deps.board.deliverInput(taskId, buildProviderRetryPrompt(failure.detail));
+				deps.log(
+					`vet ${input.runId}: ${failure.detail}; retry ${timeoutRetries.length}/${PROVIDER_TIMEOUT_RETRIES} ${delivery.ok ? "sent" : `not delivered (${delivery.error ?? "no reason"})`}`,
+				);
+				if (!delivery.ok) {
+					return finish({ ...failure, detail: `${failure.detail} (the retry wasn't delivered)` });
+				}
+				continue;
+			}
+			if (failure) {
+				return finish(failure);
 			}
 			if (now - runStartedAt >= limits.startMin * 60_000) {
 				const started = worktreePath ? await deps.signals.hasStartedTurn(agentId, worktreePath) : null;
@@ -246,6 +295,7 @@ export async function runVet(input: VetRunInput, deps: VetRunnerDeps): Promise<V
 					return finish({
 						kind: "no_session",
 						detail: `no turn started in ${limits.startMin} min (a sign-in or trust screen takes the prompt as input)`,
+						harness: true,
 					});
 				}
 			}
@@ -256,7 +306,8 @@ export async function runVet(input: VetRunInput, deps: VetRunnerDeps): Promise<V
 				const checks = await checkVetTask(input.task, input.repoPath, deps.checks);
 				return finish(null, checks);
 			}
-			if (session?.state === "running" && now - lastProgressAt >= limits.stallMin * 60_000) {
+			// Where the probe reads the agent, its silent-stall reader owns the silence (model loading, first reply, tools).
+			if (!verdict && session?.state === "running" && now - lastProgressAt >= limits.stallMin * 60_000) {
 				return finish({
 					kind: "silent_stall",
 					detail: `running with no progress for ${minutes(now - lastProgressAt)} min (no hook, no write)`,

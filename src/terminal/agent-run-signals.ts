@@ -44,6 +44,9 @@ export interface AgentRunSignals {
 
 interface ToolUseBlock {
 	type?: unknown;
+	/** A tool_use's id, which its tool_result names as `tool_use_id`. */
+	id?: unknown;
+	tool_use_id?: unknown;
 	name?: unknown;
 	input?: unknown;
 	text?: unknown;
@@ -61,17 +64,37 @@ function roleOf(message: unknown): unknown {
 	return message && typeof message === "object" ? (message as { role?: unknown }).role : undefined;
 }
 
-// Nova 2 Lite QA (calibration v5, 10/06) re-ran `npx ts-node server.ts &` 334 times in 75 min ($64.84, 215M input
-// tokens) and flipped one CSS line 200 times.
-export function findRepeatedToolCall(messages: readonly unknown[], last = 60): ToolCallLoop | null {
-	const calls: string[] = [];
+/** The ids of the tool calls that got a result (a `tool_result` block naming them). */
+function collectAnsweredToolUseIds(messages: readonly unknown[]): Set<string> {
+	const ids = new Set<string>();
 	for (const message of messages) {
 		for (const block of contentBlocks(message)) {
-			if (block.type === "tool_use") {
-				calls.push(`${String(block.name)} ${JSON.stringify(block.input)}`);
+			if (block.type === "tool_result" && typeof block.tool_use_id === "string") {
+				ids.add(block.tool_use_id);
 			}
 		}
 	}
+	return ids;
+}
+
+// Nova 2 Lite QA (calibration v5, 10/06) re-ran `npx ts-node server.ts &` 334 times in 75 min ($64.84, 215M input
+// tokens) and flipped one CSS line 200 times. Only finished calls count: a call still waiting for its result (no
+// `tool_result` with its id; a call without an id when nothing came after it) may be a command that still runs, and
+// `kanban models vet` took a first, still running `ls -R` for a loop of one (2026-10-09).
+export function findRepeatedToolCall(messages: readonly unknown[], last = 60): ToolCallLoop | null {
+	const answered = collectAnsweredToolUseIds(messages);
+	const calls: string[] = [];
+	messages.forEach((message, index) => {
+		for (const block of contentBlocks(message)) {
+			if (block.type !== "tool_use") {
+				continue;
+			}
+			const finished = typeof block.id === "string" ? answered.has(block.id) : index < messages.length - 1;
+			if (finished) {
+				calls.push(`${String(block.name)} ${JSON.stringify(block.input)}`);
+			}
+		}
+	});
 	const tail = calls.slice(-last);
 	const counts = new Map<string, number>();
 	let best: string | null = null;

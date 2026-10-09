@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { Command } from "commander";
-
+import { readLemonadeModelListSettings } from "../config/model-lists-config";
 import {
 	getWorkspacePipelineSettings,
 	readPipelineConfig,
@@ -24,6 +24,7 @@ import { createGitProcessEnv } from "../core/git-process-env";
 import { listAllowedCombinations } from "../kits/card-routing-check";
 import { loadKitCatalog, resolveWorkspaceKit } from "../kits/resolve-kit";
 import { measureCard } from "../kits/team/scoreboard/scoreboard-store";
+import { fetchLemonadeModelLoaded, lemonadeApiBaseUrl } from "../models/lemonade-models";
 import {
 	describeCombination,
 	getEntryRoleStatus,
@@ -38,6 +39,7 @@ import { createVetProbe } from "../models/vetting/vet-probe";
 import { buildVetProposal, formatVetReport } from "../models/vetting/vet-report";
 import { DEFAULT_VET_LIMITS, runVet, type VetLimits } from "../models/vetting/vet-runner";
 import { createVetTask, readTextIfExists, type VetCheckDeps, writeScratchFiles } from "../models/vetting/vet-tasks";
+import { createAgentToolProcessFinder } from "../server/process-reaper";
 import { getModelVettingRunsPath } from "../state/kanban-home";
 import { createAgentRunSignals } from "../terminal/agent-run-signals";
 import { runGit } from "../workspace/git-utils";
@@ -303,7 +305,11 @@ async function runVetCommand(options: VetOptions): Promise<number> {
 	log(
 		`vet ${runId}: ${describeCombination(combination)} for ${role}; scratch repo ${repoPath}; project ${target.workspaceId} hosts the card`,
 	);
-	const [{ config }, runtimeConfig] = await Promise.all([readPipelineConfig(), loadGlobalRuntimeConfig()]);
+	const [{ config }, runtimeConfig, lemonade] = await Promise.all([
+		readPipelineConfig(),
+		loadGlobalRuntimeConfig(),
+		readLemonadeModelListSettings(),
+	]);
 	const runtimeClient = createRuntimeTrpcClient(target.workspaceId);
 	const signals = createAgentRunSignals();
 	const projectArgs = { cwd: repoPathOfProject, projectPath: repoPathOfProject };
@@ -334,6 +340,10 @@ async function runVetCommand(options: VetOptions): Promise<number> {
 				discardTask: async (taskId) => {
 					await trashTask({ ...projectArgs, taskId, landing: "discard" });
 				},
+				deliverInput: async (taskId, text) => {
+					const delivery = await runtimeClient.runtime.deliverTaskInput.mutate({ taskId, text });
+					return { ok: delivery.ok, error: delivery.error ?? delivery.status };
+				},
 				readTask: async (taskId) => {
 					const state = await runtimeClient.workspace.getState.query();
 					const column = state.board.columns.find((candidate) =>
@@ -350,11 +360,14 @@ async function runVetCommand(options: VetOptions): Promise<number> {
 					return rejection === null ? null : rejection !== false;
 				},
 				countToolUse: (id, path) => signals.countToolUse(id, path),
-				findToolCallLoop: (id, path) => signals.findToolCallLoop(id, path),
+				findToolCallLoop: (id, path, last) => signals.findToolCallLoop(id, path, last),
 			},
 			probe: createVetProbe({
 				clineDataDir: config.agents.cline.dataDir,
 				hungMin: config.pipeline.recovery.hungMin,
+				isLemonadeModelLoaded: async (model) =>
+					await fetchLemonadeModelLoaded(lemonadeApiBaseUrl(lemonade.settings.url), model),
+				findRunningTool: createAgentToolProcessFinder(),
 			}),
 			findWorktreePath: async (taskId) => {
 				for (const path of getTaskWorktreeCandidatePaths(repoPathOfProject, taskId)) {

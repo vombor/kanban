@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ClineSessionDetail } from "../../../src/terminal/cline-session-files";
 import {
+	CLINE_FIRST_REPLY_LOAD_ALLOWANCE_MS,
 	describeClineSilentStall,
 	evaluateClineSilentStall,
 	isClineSessionOfRun,
@@ -47,5 +48,37 @@ describe("Cline silent stall: a run with no session file of its own (issue #9)",
 		expect(
 			evaluateClineSilentStall({ detail: null, kanbanProgressAt: RUN + 5 * MIN, runStartedAt: RUN, now })?.idleMs,
 		).toBe(4 * MIN);
+	});
+});
+
+describe("Cline silent stall: a model the provider is still loading (kanban models vet, 2026-10-09)", () => {
+	const prompt = { role: "user", content: [{ type: "text", text: "go" }], outputTokens: null, ts: RUN + 5_000 };
+	const waiting: ClineSessionDetail = { ...detail(RUN, RUN + 5_000), messages: [prompt] };
+
+	it("gives the first reply the load allowance, and no stall while the model loads", () => {
+		const now = RUN + 5_000 + 12 * MIN;
+		expect(evaluateClineSilentStall({ detail: waiting, kanbanProgressAt: RUN, now })?.idleMs).toBe(12 * MIN);
+		expect(
+			evaluateClineSilentStall({
+				detail: waiting,
+				kanbanProgressAt: RUN,
+				firstReplyAllowanceMs: CLINE_FIRST_REPLY_LOAD_ALLOWANCE_MS,
+				now,
+			})?.idleMs,
+		).toBe(2 * MIN);
+		expect(evaluateClineSilentStall({ detail: waiting, kanbanProgressAt: RUN, modelLoading: true, now })).toBeNull();
+	});
+
+	it("gives no allowance once the model has replied", () => {
+		const reply = { role: "assistant", content: [{ type: "text", text: "on it" }], outputTokens: 3, ts: RUN + MIN };
+		const later = { ...prompt, ts: RUN + 2 * MIN };
+		const replied: ClineSessionDetail = { ...detail(RUN, RUN + 2 * MIN), messages: [prompt, reply, later] };
+		const stall = evaluateClineSilentStall({
+			detail: replied,
+			kanbanProgressAt: RUN,
+			firstReplyAllowanceMs: CLINE_FIRST_REPLY_LOAD_ALLOWANCE_MS,
+			now: RUN + 12 * MIN,
+		});
+		expect(stall).toMatchObject({ kind: "untouched", idleMs: 10 * MIN });
 	});
 });

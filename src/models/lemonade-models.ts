@@ -24,6 +24,7 @@ const lemonadeModelSchema = z.object({
 const lemonadeModelsResponseSchema = z.object({ data: z.array(z.unknown()).default([]) });
 const lemonadeParamsSchema = z.looseObject({ ctx_size: z.number().optional() });
 const lemonadeHealthSchema = z.looseObject({
+	model_loaded: z.string().nullable().optional(),
 	max_models: z.looseObject({ llm: z.number().optional() }).optional(),
 	all_models_loaded: z
 		.array(
@@ -147,6 +148,26 @@ export async function fetchLemonadeMaxLoadedLlms(
 		await fetchJson(`${apiBaseUrl.replace(/\/+$/u, "")}/health`, fetchImpl, timeoutMs),
 	);
 	return health.success ? (health.data.max_models?.llm ?? null) : null;
+}
+
+/**
+ * Whether Lemonade has `modelId` loaded right now (/api/v1/health `all_models_loaded`, or `model_loaded`): Lemonade
+ * loads a model on its first request and lists it only once llama-server is up, so a model it doesn't list while a
+ * request for it is open is still loading. Null when Lemonade can't be asked or answers something else.
+ */
+export async function fetchLemonadeModelLoaded(
+	apiBaseUrl: string,
+	modelId: string,
+	fetchImpl: typeof fetch = fetch,
+	timeoutMs = UPSTREAM_TIMEOUT_MS,
+): Promise<boolean | null> {
+	const payload = await fetchJson(`${apiBaseUrl.replace(/\/+$/u, "")}/health`, fetchImpl, timeoutMs).catch(() => null);
+	const health = lemonadeHealthSchema.safeParse(payload);
+	if (!payload || !health.success) {
+		return null;
+	}
+	const loaded = (health.data.all_models_loaded ?? []).map((model) => model.model_name);
+	return loaded.includes(modelId) || health.data.model_loaded === modelId;
 }
 
 /**

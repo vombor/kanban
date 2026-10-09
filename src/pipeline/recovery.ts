@@ -29,6 +29,7 @@ import type { EscalationTarget, OnOutageAnswer } from "../kits/policy";
 import type { AgentRecoveryProfile } from "../terminal/agent-session-adapters";
 import type { ClineSessionDetail } from "../terminal/cline-session-files";
 import {
+	CLINE_FIRST_REPLY_LOAD_ALLOWANCE_MS,
 	type ClineSilentStall,
 	describeClineSilentStall,
 	evaluateClineSilentStall,
@@ -732,6 +733,7 @@ function decideSilentStall(input: RecoveryCardInput, canCancel: boolean): Recove
 	const stall = evaluateClineSilentStall({
 		detail: input.detail,
 		kanbanProgressAt: Math.max(getSessionProgressAt(input.session) ?? 0, Number.isFinite(sentAt) ? sentAt : 0),
+		firstReplyAllowanceMs: input.slowFirstCall ? CLINE_FIRST_REPLY_LOAD_ALLOWANCE_MS : 0,
 		now,
 	});
 	if (!stall || stall.idleMs < settings.stallNudgeMin * 60_000) {
