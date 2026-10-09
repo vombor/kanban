@@ -286,13 +286,13 @@ describe("ProjectNavigationPanel width persistence", () => {
 		expect(container.textContent).not.toContain("Report issue");
 	});
 
-	it("has no Kanban wordmark or version: the Project row is the top of the sidebar, at the top bar's height", () => {
+	it("has no Kanban wordmark or version: the Project row is the top of the sidebar, with room below the selector", () => {
 		renderPanel();
 		const sidebar = getSidebar(container);
 		expect(sidebar.textContent).not.toContain("vtest");
 		expect(sidebar.textContent?.startsWith("Project:")).toBe(true);
 		const row = container.querySelector('button[aria-label="Project"]')?.parentElement;
-		expect(row?.className).toContain("h-10");
+		expect(row?.className).toContain("h-11");
 		const firstRow = Array.from(sidebar.children).find((child) => child.getAttribute("role") !== "separator");
 		expect(firstRow).toBe(row);
 		expect(row?.nextElementSibling?.getAttribute("data-testid")).toBe("kanban-agent-header");

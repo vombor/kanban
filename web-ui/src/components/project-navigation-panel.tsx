@@ -277,7 +277,7 @@ export function ProjectNavigationPanel({
 				/>
 			)}
 			<div
-				className="flex h-10 min-h-[40px] shrink-0 items-center gap-1 pl-3 pr-2"
+				className="flex h-11 min-h-[44px] shrink-0 items-center gap-1 pl-3 pr-2"
 				style={{ borderBottom: "1px solid var(--color-divider)" }}
 			>
 				<span className="shrink-0 pr-0.5 text-xs text-text-secondary">Project:</span>
