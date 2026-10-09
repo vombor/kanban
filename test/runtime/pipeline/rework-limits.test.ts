@@ -585,11 +585,11 @@ describe("rework limits", () => {
 		expect(escalated?.sibling).toBeUndefined();
 
 		const result = await handBack(harness, REWORK_T0 + 60_000, 0);
-		expect(result.reworks).toBe(false);
-		expect(result.qaLogSection).toContain("the QA gate gives the same snapshot a new QA card");
+		expect(result).toMatchObject({ reworks: false, requeuesQa: true });
+		expect(result.qaLogSection).toContain("its current snapshot gets a new QA card with the kit's current QA model");
 	});
 
-	it("a handback after a STALLED escalation says the pipeline won't rework it, and doesn't", async () => {
+	it("a handback after a STALLED escalation refuses extra rounds, requeues QA and never reworks the STALLED", async () => {
 		const harness = createHarness({
 			onFail: (input) =>
 				input.cause === "stalled"
@@ -600,9 +600,9 @@ describe("rework limits", () => {
 		await harness.tick({ review: [DEV] }, [SESSION]);
 		expect(readEscalationRecord(readQaflow(await harness.entry("d1111")))?.cause).toBe("stalled");
 
-		const result = await handBack(harness, REWORK_T0 + 60_000, 2);
-		expect(result.reworks).toBe(false);
-		expect(result.qaLogSection).toContain("STALLED QA round, which the pipeline does not rework");
+		await expect(handBack(harness, REWORK_T0 + 60_000, 2)).rejects.toThrow("--extra-rounds has no FAIL to rework");
+		const result = await handBack(harness, REWORK_T0 + 60_000, 0);
+		expect(result).toMatchObject({ reworks: false, requeuesQa: true });
 		harness.actions.length = 0;
 		harness.setNow(REWORK_T0 + 2 * 60_000);
 		await harness.tick({ review: [DEV] }, [SESSION]);

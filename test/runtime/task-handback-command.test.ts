@@ -127,7 +127,56 @@ describe("kanban task handback", () => {
 		});
 	});
 
-	it("after a STALLED escalation it keeps the card in Backlog and says the pipeline won't rework it", async () => {
+	it.each([
+		["stalled", "no verdict"],
+		["qa_agent_error", "the QA agent's own runs failed"],
+	])(
+		"after a STALLED escalation (%s) it moves the card to Review for a new QA round (issue #16)",
+		async (cause, why) => {
+			await withTemporaryKanbanHome(async () => {
+				harness.store = createWorkspaceStateStore({
+					board: createBoard({ backlog: [createCard({ id: "d1111", title: "BLOCKED: Wishlist" })] }),
+					sessions: {},
+					revision: 1,
+				});
+				await createPipelineStateStore().update("ws-1", (state) => {
+					state.cards.d1111 = {
+						qaCreated: "snap-1",
+						qaCard: "qa001",
+						qaflow: {
+							handled: ["r1|STALLED|x"],
+							escalated: { ...ESCALATED, round: 1, cause, reason: "QA stalled" },
+						},
+					};
+					return state;
+				});
+
+				const result = await handbackTask({
+					cwd: "/repo",
+					taskId: "d1111",
+					note: "QA model fixed",
+					extraRounds: 0,
+				});
+
+				expect(result).toMatchObject({ ok: true, task: { id: "d1111", column: "review" } });
+				expect(result.message).toContain("QA gate QAs its current snapshot again with the kit's current QA model");
+				expect(findCardInBoard(harness.store.stored.board, "d1111")).toMatchObject({
+					columnId: "review",
+					card: { title: "Wishlist" },
+				});
+				// The gate's one-QA-card-per-snapshot mark goes; the old QA card stays recorded.
+				const entry = (await createPipelineStateStore().load("ws-1")).cards.d1111;
+				expect(entry?.qaCreated).toBeUndefined();
+				expect(entry?.qaCard).toBe("qa001");
+				expect(readEscalationRecord(readQaflow(entry))).toBeNull();
+				const qaLog = readFileSync(getPipelineQaLogPath("ws-1"), "utf8");
+				expect(qaLog).toContain("## HANDBACK d1111: back to the pipeline for a new QA round\n");
+				expect(qaLog).toContain(`STALLED QA round (${why})`);
+			});
+		},
+	);
+
+	it("refuses --extra-rounds after a STALLED escalation, changing nothing", async () => {
 		await withTemporaryKanbanHome(async () => {
 			harness.store = createWorkspaceStateStore({
 				board: createBoard({ backlog: [createCard({ id: "d1111", title: "BLOCKED: Wishlist" })] }),
@@ -136,10 +185,37 @@ describe("kanban task handback", () => {
 			});
 			await escalate("d1111", { ...ESCALATED, cause: "stalled", reason: "QA stalled" });
 
-			const result = await handbackTask({ cwd: "/repo", taskId: "d1111", note: "retry", extraRounds: 1 });
-
-			expect(result.message).toContain("escalated over a STALLED QA round, which the pipeline does not rework");
+			await expect(handbackTask({ cwd: "/repo", taskId: "d1111", note: "retry", extraRounds: 1 })).rejects.toThrow(
+				/escalated over a STALLED QA round, not a FAIL .*Hand it back without --extra-rounds: it goes to Review/u,
+			);
+			expect(readEscalationRecord(readQaflow((await createPipelineStateStore().load("ws-1")).cards.d1111))).toEqual({
+				...ESCALATED,
+				cause: "stalled",
+				reason: "QA stalled",
+			});
 			expect(findCardInBoard(harness.store.stored.board, "d1111")?.columnId).toBe("backlog");
+		});
+	});
+
+	it("keeps a card in Backlog after a STALLED escalation to another model: its sibling has the task", async () => {
+		await withTemporaryKanbanHome(async () => {
+			harness.store = createWorkspaceStateStore({
+				board: createBoard({ backlog: [createCard({ id: "d1111", title: "BLOCKED: Wishlist" })] }),
+				sessions: {},
+				revision: 1,
+			});
+			await escalate("d1111", {
+				...ESCALATED,
+				cause: "stalled",
+				reason: "QA stalled",
+				to: { agentId: "codex", model: { modelId: "gpt-x" } },
+				sibling: { taskId: "s0001", tag: "preserve/d1111-x", started: true },
+			});
+
+			const result = await handbackTask({ cwd: "/repo", taskId: "d1111", note: "keep it", extraRounds: 0 });
+
+			expect(findCardInBoard(harness.store.stored.board, "d1111")?.columnId).toBe("backlog");
+			expect(result.message).toBe("Escalation cleared, no extra rounds: restart or rework the card yourself.");
 		});
 	});
 

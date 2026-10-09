@@ -127,7 +127,7 @@ async function startCardSession(
 	workspace: TaskWorkspace,
 	card: RuntimeBoardCard,
 	prompt: string,
-	options: { agentId?: RuntimeAgentId; resumeFromTrash?: boolean } = {},
+	options: { agentId?: RuntimeAgentId; resumeFromTrash?: boolean; requireNewTurn?: boolean } = {},
 ): Promise<{ state: string }> {
 	const ensured = await workspace.client.workspace.ensureWorktree.mutate({ taskId: card.id, baseRef: card.baseRef });
 	if (!ensured.ok) {
@@ -144,6 +144,7 @@ async function startCardSession(
 		agentId,
 		agentSettings: card.agentSettings,
 		...(options.resumeFromTrash ? { resumeFromTrash: true } : {}),
+		...(options.requireNewTurn ? { requireNewTurn: true } : {}),
 	});
 	if (!started.ok || !started.summary) {
 		throw new Error(started.error ?? "Could not start task session.");
@@ -218,9 +219,11 @@ async function resumeOne(workspace: TaskWorkspace, taskId: string, dryRun: boole
 	if (dryRun) {
 		return { ...result, ok: true, dryRun: true };
 	}
+	// A live session that finished its turn is refused rather than reattached as "resumed" (issue #16).
 	const started = await startCardSession(workspace, card, launch.prompt, {
 		agentId,
 		resumeFromTrash: launch.continueConversation,
+		requireNewTurn: true,
 	});
 	// A card restart recovery marked as orphaned is no longer one, and a resume by hand ends a recovery escalation.
 	await updateTrackedPipelineCardFlow(workspace.workspaceId, taskId, (qaflow) => ({

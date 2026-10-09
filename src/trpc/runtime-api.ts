@@ -84,6 +84,14 @@ async function resolveExistingTaskCwdOrEnsure(options: {
 	}
 }
 
+/**
+ * Why a start that needs a new turn (`requireNewTurn`) is refused: the task's live session has finished its turn, so
+ * startTaskSession would hand it back unchanged and the agent would do nothing (notes f423d, issue #16).
+ */
+function describeFinishedLiveSession(taskId: string): string {
+	return `Task "${taskId}" has a live session that finished its turn (awaiting review); starting it would only reattach that session, with no new turn. To give it more work in the same conversation: kanban task send ${taskId} "<what to do>". If it was escalated over a STALLED QA round: kanban task handback --task-id ${taskId} --note "<why>" puts it back in Review for a new QA round.`;
+}
+
 export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrpcContext["runtimeApi"] {
 	const buildConfigResponse = async (
 		runtimeConfig: RuntimeConfigState,
@@ -166,6 +174,18 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 				//   if the user changes the model on the card, the next session launch
 				//   (including trash-restore) uses the updated values.
 				const terminalManager = await deps.getScopedTerminalManager(workspaceScope);
+				// The session manager's own reuse rule: a live session whose turn ended would be handed back unchanged.
+				if (
+					body.requireNewTurn &&
+					terminalManager.willReuseLiveSession(body.taskId) &&
+					terminalManager.getSummary(body.taskId)?.state !== "running"
+				) {
+					return {
+						ok: false,
+						summary: terminalManager.getSummary(body.taskId),
+						error: describeFinishedLiveSession(body.taskId),
+					};
+				}
 				const previousTerminalAgentId = body.resumeFromTrash
 					? (terminalManager.getSummary(body.taskId)?.agentId ?? null)
 					: null;

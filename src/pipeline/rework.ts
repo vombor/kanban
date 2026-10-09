@@ -213,6 +213,20 @@ export function readEscalationRecord(qaflow: Record<string, unknown>): Escalatio
 	return isPlainObject(qaflow.escalated) ? (qaflow.escalated as unknown as EscalationRecord) : null;
 }
 
+/** A STALLED QA round (no verdict, or the QA agent's own errors): QA never judged the card's work. */
+export function isStalledEscalation(escalated: EscalationRecord): boolean {
+	return escalated.cause === "stalled" || escalated.cause === "qa_agent_error";
+}
+
+/**
+ * A STALLED escalation to the orchestrator, which `kanban task handback` answers with a new QA round (handback.ts).
+ * One that handed the task to another model has a sibling doing it: the original stays in Backlog, since a QA'd
+ * original could land next to it.
+ */
+export function isQaRequeueEscalation(escalated: EscalationRecord): boolean {
+	return isStalledEscalation(escalated) && (escalated.to ?? "orchestrator") === "orchestrator" && !escalated.sibling;
+}
+
 function readStrings(value: unknown): string[] {
 	return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
@@ -517,7 +531,9 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 				`- ${at} by Kanban. Card "${stripBlockedPrefix(card.title ?? "").slice(0, 80)}" (${scope.dev.agentId} on ${describeModel(scope.dev.model)}) goes to Backlog as BLOCKED; the pipeline stops acting on it.`,
 				...(input.details ?? []).map((detail) => `- ${detail}`),
 				...(siblingLine ? [siblingLine] : []),
-				`- To hand it back to the pipeline: kanban task handback --task-id ${card.id} --note "<why>" [--extra-rounds N] (N more FAIL rounds; with N > 0 the pipeline reworks this FAIL).`,
+				isQaRequeueEscalation(escalation)
+					? `- To hand it back to the pipeline: kanban task handback --task-id ${card.id} --note "<why>" (no --extra-rounds: QA gave no verdict, so the card goes to Review and its current snapshot is QA'd again with the kit's current QA model).`
+					: `- To hand it back to the pipeline: kanban task handback --task-id ${card.id} --note "<why>" [--extra-rounds N] (N more FAIL rounds; with N > 0 the pipeline reworks this FAIL).`,
 			].join("\n")}\n`,
 		);
 		const blocked = await run({ ...scopeOf(scope), kind: "blockTask", taskId: card.id });

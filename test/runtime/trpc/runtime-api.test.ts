@@ -330,6 +330,43 @@ describe("createRuntimeApi startTaskSession", () => {
 		expect(terminalManager.startTaskSession).toHaveBeenCalledWith(expect.objectContaining({ guardrails }));
 	});
 
+	it("refuses a start that needs a new turn when it would only reattach a finished live session (issue #16)", async () => {
+		taskWorktreeMocks.resolveTaskCwd.mockResolvedValue("/tmp/existing-worktree");
+		let reused = true;
+		let state: RuntimeTaskSessionSummary["state"] = "awaiting_review";
+		const terminalManager = {
+			startTaskSession: vi.fn(async () => createSummary()),
+			applyTurnCheckpoint: vi.fn(),
+			willReuseLiveSession: vi.fn(() => reused),
+			getSummary: vi.fn(() => createSummary({ state })),
+		};
+		const api = createTestRuntimeApi({
+			getActiveWorkspaceId: vi.fn(() => "workspace-1"),
+			loadScopedRuntimeConfig: vi.fn(async () => createRuntimeConfigState()),
+			setActiveRuntimeConfig: vi.fn(),
+			getScopedTerminalManager: vi.fn(async () => terminalManager as never),
+			resolveInteractiveShellCommand: vi.fn(),
+		});
+		const scope = { workspaceId: "workspace-1", workspacePath: "/tmp/repo" };
+		const start = { taskId: "task-1", baseRef: "main", prompt: "Fix it", requireNewTurn: true };
+
+		const refused = await api.startTaskSession(scope, start);
+		expect(refused).toMatchObject({ ok: false, summary: { state: "awaiting_review" } });
+		expect(refused.error).toContain("finished its turn (awaiting review)");
+		expect(refused.error).toContain('kanban task send task-1 "<what to do>"');
+		expect(terminalManager.startTaskSession).not.toHaveBeenCalled();
+
+		// Without the flag (the browser's reattach), or when it would start a new process, or the live one still
+		// works, the start goes on.
+		expect((await api.startTaskSession(scope, { ...start, requireNewTurn: undefined })).ok).toBe(true);
+		reused = false;
+		expect((await api.startTaskSession(scope, start)).ok).toBe(true);
+		reused = true;
+		state = "running";
+		expect((await api.startTaskSession(scope, start)).ok).toBe(true);
+		expect(terminalManager.startTaskSession).toHaveBeenCalledTimes(3);
+	});
+
 	it("gives each new agent process a session credential bound to its workspace, and keeps a live session's", async () => {
 		taskWorktreeMocks.resolveTaskCwd.mockResolvedValue("/tmp/existing-worktree");
 		guardrailMocks.resolveTaskGuardrails.mockResolvedValue(null);

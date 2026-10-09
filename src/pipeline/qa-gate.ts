@@ -22,7 +22,7 @@
 // and qa/qa-card.cjs@6da71597. Rules kept, each with a test in test/runtime/pipeline/qa-gate.test.ts:
 // - one QA card per snapshot (`qaCreated`, the legacy field), none while another QA card reviews the dev card,
 //   none for a snapshot that already has a verdict (an empty snapshot never gets here: the submission stage
-//   finds no work in it);
+//   finds no work in it), where a STALLED older than the dev card's last handback is no verdict (issue #16);
 // - no QA while the dev card's session is still running (dc6e70d/9091f4b: QA of a half-done card);
 // - QA slots machine-wide, oldest first (ddbc9ae); a queued QA card waits while its dev card is In Progress again
 //   instead of starting on the old snapshot (afea137, bfb20); a QA card running past `timeoutMin` frees its slot;
@@ -563,11 +563,13 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			const qaTaskId = String(devEntry.qaCard ?? "?");
 			return { outcome: "none", note: describeExisting(qaTaskId, readQaGateEntry(state.cards[qaTaskId]), short) };
 		}
-		// A STALLED from the QA agent's own errors doesn't count once the card was handed back: it never judged the work.
+		// A STALLED (no verdict, or the QA agent's own errors) doesn't count once the card was handed back: it never
+		// judged the work, and the handback asks for a new QA round of the snapshot (handback.ts, issue #16).
 		const handbackAt = readLastHandbackAt(devEntry);
 		if (
 			readQaVerdictRecords(devEntry).some(
-				(verdict) => verdict.snapshot === qaSnapshot.commit && !(verdict.qaAgentError && verdict.at < handbackAt),
+				(verdict) =>
+					verdict.snapshot === qaSnapshot.commit && !(verdict.verdict === "STALLED" && verdict.at < handbackAt),
 			)
 		) {
 			return { outcome: "none", note: `snapshot ${short} already has a QA verdict` };

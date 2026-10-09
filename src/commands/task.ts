@@ -1153,6 +1153,9 @@ export async function startTask(input: { cwd: string; taskId: string; projectPat
 			baseRef: task.baseRef,
 			agentId: task.agentId,
 			agentSettings: task.agentSettings,
+			// A live session whose turn has ended is refused, not reattached in In Progress with no new turn: the card
+			// would sit there, since session sync only moves it on a newer session change (issue #16).
+			requireNewTurn: true,
 		});
 		if (!started.ok || !started.summary) {
 			throw new Error(started.error ?? "Could not start task session.");
@@ -1426,8 +1429,10 @@ export async function approveTask(input: { cwd: string; taskId: string; projectP
 /**
  * `kanban task handback`: gives an escalated card back to the pipeline (src/pipeline/handback.ts). The card loses its
  * `BLOCKED: ` title prefix; with `--extra-rounds N` it goes from Backlog to Review, where the pipeline reworks the
- * FAIL that escalated it with N more FAIL rounds. Without extra rounds, or after a STALLED QA round (never reworked),
- * it stays in Backlog for you to restart, and the result says so.
+ * FAIL that escalated it with N more FAIL rounds. After a STALLED QA round escalated to the orchestrator (QA gave the
+ * work no verdict) it goes to Review too, and the QA gate QAs its current snapshot again with the kit's current QA
+ * model (issue #16); `--extra-rounds` is refused there. Otherwise it stays in Backlog for you to restart, and the
+ * result says so.
  */
 export async function handbackTask(input: {
 	cwd: string;
@@ -1491,7 +1496,7 @@ export async function handbackTask(input: {
 				card = updated.task;
 			}
 		}
-		if (result.reworks && columnId === "backlog") {
+		if ((result.reworks || result.requeuesQa) && columnId === "backlog") {
 			const moved = moveTaskToColumn(board, card.id, "review");
 			if (moved.moved) {
 				board = moved.board;
@@ -1507,10 +1512,10 @@ export async function handbackTask(input: {
 		workspacePath: workspaceRepoPath,
 		handback: result.handback,
 		...(runoffReopened ? { runoffReopened } : {}),
-		message: result.reworks
-			? `Escalation cleared with ${input.extraRounds} more FAIL round(s); the pipeline reworks the card's last FAIL once it is in Review.`
-			: input.extraRounds > 0
-				? `Escalation cleared with ${input.extraRounds} more FAIL round(s), but it was escalated over a STALLED QA round, which the pipeline does not rework: restart the card (or change it) so it gets a new snapshot and QA round.`
+		message: result.requeuesQa
+			? "Escalation cleared; it was a STALLED QA round, so the card is back in Review and the QA gate QAs its current snapshot again with the kit's current QA model."
+			: result.reworks
+				? `Escalation cleared with ${input.extraRounds} more FAIL round(s); the pipeline reworks the card's last FAIL once it is in Review.`
 				: "Escalation cleared, no extra rounds: restart or rework the card yourself.",
 	};
 }
@@ -2032,13 +2037,13 @@ export function registerTaskCommand(program: Command): void {
 	task
 		.command("handback")
 		.description(
-			"Give an escalated task back to the pipeline (landing mode qa): clears the escalation, drops the BLOCKED: prefix.",
+			"Give an escalated task back to the pipeline (landing mode qa): clears the escalation, drops the BLOCKED: prefix; after a STALLED QA round it goes to Review for a new QA round.",
 		)
 		.requiredOption("--task-id <id>", "Task ID.")
 		.requiredOption("--note <text>", "Why it goes back (recorded in the QA log and the pipeline state).")
 		.option(
 			"--extra-rounds <n>",
-			"Grant N more FAIL rounds; the task moves to Review and the pipeline reworks the FAIL that escalated it.",
+			"Grant N more FAIL rounds; the task moves to Review and the pipeline reworks the FAIL that escalated it. Refused after a STALLED QA round, whose handback re-QAs the task instead.",
 			"0",
 		)
 		.option("--by <name>", "Who hands it back (default: orchestrator).")

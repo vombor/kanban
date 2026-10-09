@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { RuntimeBoardCard, RuntimeBoardColumnId } from "../../../src/core/api-contract";
+import { handBackTask } from "../../../src/pipeline/handback";
 import { readQaGateEntry, readQaVerdictRecords } from "../../../src/pipeline/qa-gate";
 import type { QaVerdict } from "../../../src/pipeline/qa-verdict";
 import { createPipelineWorkerHarness, createSnapshot, type QaGateHarnessAction } from "../../utilities/pipeline-worker";
@@ -569,6 +570,83 @@ describe("QA gate", () => {
 		expect(kinds(harness.actions)).toEqual(["finishTask:qa001", "createTask:s0001", "startTask:s0001"]);
 		const [record] = readQaVerdictRecords((await harness.store.load("foo")).cards.d1111);
 		expect(record).toMatchObject({ verdict: "STALLED", notes: expect.stringContaining("unusable verdict.json") });
+	});
+
+	it("re-QAs the snapshot after a handback of a STALLED escalated to the orchestrator (notes f423d, issue #16)", async () => {
+		const harness = createHarness({
+			config: { pipeline: { qa: { maxNudges: 1, verdictGraceSec: 20 } }, workspaces: { foo: QA_WORKSPACE } },
+		});
+		// The dev card is itself a fallback sibling, so its STALLED can't hand the task to the fallback again.
+		await harness.store.update("foo", (state) => {
+			state.cards.d1111 = { sibling: { of: "dbd53", kind: "escalation", at: "2026-10-07T09:00:00.000Z" } };
+			return state;
+		});
+		await startQa(harness);
+		// The QA card writes no verdict: grace, one nudge, grace again, STALLED.
+		await send(harness, qaInReview);
+		harness.setNow(T0 + 21_000);
+		await send(harness, qaInReview);
+		harness.setNow(T0 + 30_000);
+		await send(harness, qaInReview);
+		harness.setNow(T0 + 51_000);
+		await send(harness, qaInReview);
+		let state = await harness.store.load("foo");
+		expect(readQaVerdictRecords(state.cards.d1111)).toMatchObject([{ qaTaskId: "qa001", verdict: "STALLED" }]);
+		expect((state.cards.d1111?.qaflow as Record<string, unknown>).escalated).toMatchObject({
+			to: "orchestrator",
+			cause: "stalled",
+		});
+		expect(createdTasks(harness.actions)).toEqual([]);
+		expect(harness.actions.some((action) => action.kind === "blockTask" && action.taskId === "d1111")).toBe(true);
+		expect(readFileSync(harness.qaLogPath("foo"), "utf8")).toContain(
+			'kanban task handback --task-id d1111 --note "<why>" (no --extra-rounds: QA gave no verdict',
+		);
+
+		// Escalated in Backlog: nothing. Without a handback the STALLED stays the snapshot's verdict.
+		const dev = createCard({ id: "d1111", ...OPENAI_DEV });
+		const qaDone = createCard({ id: "qa001", role: "qa", reviewsTaskId: "d1111" });
+		harness.actions.length = 0;
+		await send(harness, { backlog: [dev], trash: [qaDone] });
+		expect(createdTasks(harness.actions)).toEqual([]);
+
+		harness.setNow(T0 + 120_000);
+		await expect(
+			handBackTask(harness.store, {
+				workspaceId: "foo",
+				taskId: "d1111",
+				note: "QA model fixed",
+				extraRounds: 1,
+				by: "orchestrator",
+				now: T0 + 120_000,
+			}),
+		).rejects.toThrow("escalated over a STALLED QA round, not a FAIL");
+		const handedBack = await handBackTask(harness.store, {
+			workspaceId: "foo",
+			taskId: "d1111",
+			note: "QA model fixed",
+			extraRounds: 0,
+			by: "orchestrator",
+			now: T0 + 120_000,
+		});
+		expect(handedBack).toMatchObject({ requeuesQa: true, reworks: false });
+
+		// `kanban task handback` moved it to Review: the same snapshot gets a new QA round, and the old STALLED is not
+		// acted on again.
+		harness.setNow(T0 + 130_000);
+		await send(harness, { review: [dev], trash: [qaDone] });
+		expect(createdTasks(harness.actions)).toMatchObject([
+			{
+				taskId: "qa002",
+				role: "qa",
+				reviewsTaskId: "d1111",
+				agentId: "cline",
+				agentSettings: { modelId: "us.anthropic.claude-haiku-4-5-20251001-v1:0" },
+			},
+		]);
+		expect(harness.actions.some((action) => action.kind === "blockTask")).toBe(false);
+		state = await harness.store.load("foo");
+		expect(state.cards.d1111).toMatchObject({ qaCreated: "snap-d1111", qaCard: "qa002" });
+		expect(readQaGateEntry(state.cards.qa002)).toMatchObject({ snapshot: "snap-d1111", round: 2 });
 	});
 
 	describe("a QA card whose own agent failed (issue #12)", () => {

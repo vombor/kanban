@@ -105,7 +105,7 @@ on). There is no `pause` command.
 |---|---|
 | Approve & land without QA (landing `qa`) | the card's Approve & land button, or `kanban task approve --task-id <id>` |
 | Done on a card with unlanded work | `kanban task done --task-id <id> --land` or `--discard` (the browser asks "land or discard?"; a Done with no choice is refused). On landing `off`/`commit`/`pr` there is nothing to land: commit it (Commit / Open PR) or `--discard` (the browser asks "discard uncommitted work?"); pushed work passes |
-| Hand an escalated card back | `kanban task handback --task-id <id> --note "<why>" [--extra-rounds N] [--by NAME]` |
+| Hand an escalated card back | `kanban task handback --task-id <id> --note "<why>" [--extra-rounds N] [--by NAME]`; after a STALLED QA round it goes to Review for a new QA round with the kit's current QA model (no `--extra-rounds` there) |
 | Release a held PASS (runoff) | `kanban task release-hold --task-id <id> --land` or `--discard [--tag preserve/<id>-<model>] [--note …]` |
 | Who moved a card to Done, or deleted it | `kanban task history [<id>] [--limit N]`: every Done (also refused or skipped ones) and every delete from `data/<ws>/task-history.jsonl`, with trigger (`cli`, `browser`, `approve`, `auto_review`, `pipeline`, `hold_release`, `watchdog`), caller (user, card or orchestrator session, unknown; `null` for in-process triggers), from-column, landing choice and outcome, sessions stopped, worktree deleted |
 | Type into a card | `kanban task send <id> "<text>"` or `@file` (`--no-enter` to only type) |
@@ -121,7 +121,9 @@ on). There is no `pause` command.
 - **Never `stopTaskSession` to switch models**: the session ends "interrupted" and the card moves. Use
   `restart-fresh`.
 - **Never `kanban task start` a Review card** to revive it: start refuses Review cards and returns a live session
-  unchanged. Use `resume`.
+  unchanged. Use `resume`. On a card whose session is still open but finished its turn (awaiting review), start
+  and resume refuse rather than reattach it with no new turn: `kanban task send <id> "<text>"` gives it one, and a
+  card escalated over a STALLED QA round goes back through `kanban task handback`.
 - **Calibration cards belong to their runner** (`role: "calibration"`, title `QA-CAL …`). The pipeline, auto-review
   and the watchdog's stall checks leave them alone, and session sync still moves them because the runner waits for
   Review. Only one runner works on a calibration (`runner.pid`, taken over from a dead holder). A rerun retries runs

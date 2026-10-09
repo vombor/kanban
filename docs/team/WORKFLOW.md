@@ -141,7 +141,12 @@ dev card stops ─▶ Review (settled) ─▶ snapshot refs/kanban/snapshots/<id
   `kanban task handback` clears an escalation.
 - **Handback** is append-only: the escalation moves into `handbacks[]`, `## HANDBACK` goes in the QA log, and the
   `BLOCKED: ` prefix is dropped. Extra rounds (`--extra-rounds N`) rework the escalating FAIL once. Nudge and retry
-  budgets restart. More rounds than the cap is a budget call: only on the user's say-so.
+  budgets restart. More rounds than the cap is a budget call: only on the user's say-so. A STALLED QA round
+  (no verdict, or the QA agent's own errors) never judged the work, so after a STALLED escalated to the
+  orchestrator the handback re-QAs the card: it goes to Review and its current snapshot gets a new QA card with the
+  kit's current QA model (fix the QA model first, `kanban kit set roles.qa.model …`). `--extra-rounds` is refused
+  there, since there is no FAIL to rework; hand back a FAIL from the new round with it as usual. A STALLED escalated
+  to another model stays in Backlog: its sibling has the task (issue #16).
 - **Runoffs** (team kit): several cards race the same task. Each one's PASS is held, and once every card has passed
   or escalated, the best mean QA score wins (then fewer FAIL rounds, then lower cost). The winner lands, and losers
   are tagged and discarded. The group is recorded before any card is created, so no card can land outside it. No

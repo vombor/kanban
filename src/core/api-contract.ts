@@ -1094,6 +1094,11 @@ export const runtimeTaskSessionStartRequestSchema = z.object({
 	rows: z.number().int().positive().optional(),
 	agentId: runtimeAgentIdSchema.optional(),
 	agentSettings: runtimeAgentSettingsSchema.optional(),
+	/**
+	 * The caller wants a turn of work (`kanban task start`): refused instead of handing back a live session whose turn
+	 * has ended (awaiting_review), which would only reattach it with no new turn (issue #16).
+	 */
+	requireNewTurn: z.boolean().optional(),
 });
 export type RuntimeTaskSessionStartRequest = z.infer<typeof runtimeTaskSessionStartRequestSchema>;
 

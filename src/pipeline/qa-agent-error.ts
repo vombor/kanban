@@ -40,7 +40,10 @@ export function readQaAgentErrors(entry: PipelineCardState | undefined): QaAgent
 		: [];
 }
 
-/** When the dev card was last handed back (`kanban task handback`): earlier QA agent errors no longer count. */
+/**
+ * When the dev card was last handed back (`kanban task handback`): earlier QA agent errors and STALLED verdicts no
+ * longer count.
+ */
 export function readLastHandbackAt(entry: PipelineCardState | undefined): number {
 	const qaflow = isPlainObject(entry?.qaflow) ? entry.qaflow : {};
 	const last = Array.isArray(qaflow.handbacks) ? qaflow.handbacks.at(-1) : undefined;

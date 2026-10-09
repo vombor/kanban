@@ -63,6 +63,8 @@ describe("kanban task resume", () => {
 				prompt: RESTART_RESUME_NOTE,
 				agentId: "claude",
 				resumeFromTrash: true,
+				// A live session that finished its turn is refused, never reattached as "resumed" (issue #16).
+				requireNewTurn: true,
 			}),
 		);
 	});
