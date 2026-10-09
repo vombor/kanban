@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { OrchestratorWaitBadge } from "@/components/orchestrator-wait-badge";
+import { HEADER_ROW_HEIGHT_CLASS } from "@/components/shared/header-row";
 import {
 	getRuntimeShortcutIconComponent,
 	getRuntimeShortcutPickerOption,
@@ -396,7 +397,7 @@ export function TopBar({
 	return (
 		<>
 			<nav
-				className="kb-top-bar flex flex-nowrap items-center h-10 min-h-[40px] min-w-0 bg-surface-1"
+				className={cn("kb-top-bar flex flex-nowrap items-center min-w-0 bg-surface-1", HEADER_ROW_HEIGHT_CLASS)}
 				style={{
 					paddingLeft: onBack ? 6 : 12,
 					paddingRight: 8,
@@ -404,7 +405,7 @@ export function TopBar({
 				}}
 			>
 				{/* ---- Left side: hamburger/back, path, hints, git ---- */}
-				<div className="flex flex-nowrap items-center h-10 flex-1 min-w-0 overflow-hidden gap-1.5">
+				<div className="flex flex-nowrap items-center h-full flex-1 min-w-0 overflow-hidden gap-1.5">
 					{isMobile && onToggleSidebar ? (
 						<span className="relative shrink-0">
 							<Button
@@ -519,7 +520,7 @@ export function TopBar({
 				</div>
 
 				{/* ---- Right side: actions ---- */}
-				<div className="flex flex-nowrap items-center h-10 pr-0.5 shrink-0">
+				<div className="flex flex-nowrap items-center h-full pr-0.5 shrink-0">
 					{/* Desktop: inline shortcut, terminal, debug buttons */}
 					{!isMobile ? (
 						<>

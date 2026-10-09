@@ -2,6 +2,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { HEADER_ROW_HEIGHT_CLASS } from "@/components/shared/header-row";
 import { TopBar } from "@/components/top-bar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -107,6 +108,21 @@ describe("TopBar script shortcut onboarding", () => {
 
 		expect(container.textContent).toContain("project");
 		expect(findButtonByText(container, "Open")).toBeNull();
+	});
+
+	it("is as tall as the sidebar's project-selector row, so their dividers line up", async () => {
+		await act(async () => {
+			root.render(
+				<TooltipProvider>
+					<TopBar workspacePath="/repo/project" />
+				</TooltipProvider>,
+			);
+		});
+
+		const nav = container.querySelector("nav.kb-top-bar");
+		for (const className of HEADER_ROW_HEIGHT_CLASS.split(" ")) {
+			expect(nav?.classList.contains(className)).toBe(true);
+		}
 	});
 
 	it("opens settings when the runtime hint is clicked", async () => {

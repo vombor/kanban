@@ -4,6 +4,7 @@ import { KanbanAgentHeader } from "@/components/kanban-agent-header";
 import { OrchestratorWaitBadge } from "@/components/orchestrator-wait-badge";
 import { ProjectActionsMenu } from "@/components/project-actions-menu";
 import { ProjectSwitcher } from "@/components/project-switcher";
+import { HEADER_ROW_HEIGHT_CLASS } from "@/components/shared/header-row";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
 import {
@@ -277,7 +278,7 @@ export function ProjectNavigationPanel({
 				/>
 			)}
 			<div
-				className="flex h-11 min-h-[44px] shrink-0 items-center gap-1 pl-3 pr-2"
+				className={cn("flex shrink-0 items-center gap-1 pl-3 pr-2", HEADER_ROW_HEIGHT_CLASS)}
 				style={{ borderBottom: "1px solid var(--color-divider)" }}
 			>
 				<span className="shrink-0 pr-0.5 text-xs text-text-secondary">Project:</span>
