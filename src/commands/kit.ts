@@ -20,6 +20,14 @@ import {
 import { migrateWorkspaceOverrides, type OverrideMigrationPlan } from "../kits/migrate-overrides";
 import { describeProjectSettings, readKitSettingsHistory } from "../kits/project-settings";
 import { loadKitCatalog, resolveKitByName, resolveWorkspaceKit } from "../kits/resolve-kit";
+import {
+	createUserKit,
+	editUserKit,
+	formatKitValue,
+	type KitKeyChange,
+	type UserKitCreatePlan,
+	type UserKitEditPlan,
+} from "../kits/user-kit-edit";
 import { fetchLemonadeMaxLoadedLlms, lemonadeApiBaseUrl } from "../models/lemonade-models";
 import { getKanbanKitsPath, getKitSettingsHistoryPath } from "../state/kanban-home";
 import type { KitSettingChangeResponse } from "../trpc/kit-settings-api";
@@ -206,6 +214,51 @@ function formatMigrationPlan(plan: OverrideMigrationPlan & { written: boolean },
 		lines.push(`  ${row.from} -> ${[...new Set(targets)].join("; ")}`);
 	}
 	lines.push(dryRun ? "Dry run: nothing written." : "Written.");
+	return lines;
+}
+
+function formatKitChanges(changes: KitKeyChange[]): string[] {
+	return changes.map((change) => `  ${change.key}: ${formatKitValue(change.from)} -> ${formatKitValue(change.to)}`);
+}
+
+function formatCreateResult(result: UserKitCreatePlan & { written: boolean; historyPath: string }): string[] {
+	return [
+		`Kit ${result.name} (${result.path}): a complete copy of ${result.from}, resolved over default.`,
+		...(result.changes.length > 0
+			? [
+					`Differences from ${result.from} (key: ${result.from} -> ${result.name}):`,
+					...formatKitChanges(result.changes),
+				]
+			: [`Same as ${result.from}.`]),
+		result.written
+			? `Written. History: ${result.historyPath}. Use it for a project with kanban kit apply ${result.name} --project <path>.`
+			: "Dry run: nothing written.",
+	];
+}
+
+function formatEditResult(
+	result: UserKitEditPlan & { written: boolean; backupPath: string | null; historyPath: string },
+	dryRun: boolean,
+): string[] {
+	if (result.changes.length === 0) {
+		return [`Kit ${result.name} (${result.path}): nothing changed.`];
+	}
+	const lines = [`Kit ${result.name} (${result.path}):`, ...formatKitChanges(result.changes)];
+	if (result.workspaces.length === 0) {
+		lines.push("No workspace uses this kit.");
+	} else {
+		lines.push(
+			`Workspaces on this kit${dryRun ? " (they would pick the change up at once)" : ", in effect for them now"}:`,
+		);
+		for (const { workspaceId, shadowedBy } of result.workspaces) {
+			lines.push(
+				`  ${workspaceId}${shadowedBy.length > 0 ? ` (its own project settings still win for ${shadowedBy.join(", ")})` : ""}`,
+			);
+		}
+	}
+	lines.push(
+		dryRun ? "Dry run: nothing written." : `Written. Backup: ${result.backupPath}. History: ${result.historyPath}.`,
+	);
 	return lines;
 }
 
@@ -433,6 +486,84 @@ export function registerKitCommand(program: Command): void {
 		.option("--json", "Print as JSON.")
 		.action(async (key: string, options: { project?: string; json?: boolean }) => {
 			await changeKitSetting(options, async (client) => await client.kit.unset.mutate({ key }), "Kit unset");
+		});
+
+	kit.command("create")
+		.description(
+			"The user's: make a user kit (<home>/kits/<name>.json) as a complete copy of another kit, resolved over default (kits don't inherit), with team-definition keys changed by --set. Prints how it differs from --from.",
+		)
+		.argument("<name>", "Name of the new kit (lowercase letters, digits, '-', '_'; not a built-in or existing kit).")
+		.requiredOption("--from <kit>", "The kit to copy (built-in or user).")
+		.option(
+			"--set <key=value>",
+			"Set a team-definition key (e.g. fallback.on.conflict=false; the value is JSON or text). Repeatable.",
+			collect,
+			[],
+		)
+		.option("--description <text>", "The kit's description.")
+		.option("--dry-run", "Print the differences; write nothing.")
+		.option("--json", "Print as JSON.")
+		.action(
+			async (
+				name: string,
+				options: { from: string; set: string[]; description?: string; dryRun?: boolean; json?: boolean },
+			) => {
+				try {
+					const result = await createUserKit({
+						name,
+						from: options.from,
+						set: parseSetAssignments(options.set),
+						description: options.description,
+						dryRun: options.dryRun === true,
+					});
+					if (options.json) {
+						printJson({ ok: true, ...result });
+					} else {
+						printLines(formatCreateResult(result));
+					}
+				} catch (error) {
+					process.stderr.write(`Kit create failed: ${toErrorMessage(error)}\n`);
+					process.exitCode = 1;
+				}
+			},
+		);
+
+	kit.command("edit")
+		.description(
+			"The user's: change team-definition keys of a user kit (never a built-in one). Validated, backed up under <home>/backups/kits/, written atomically; every workspace on the kit picks the change up at once (they are listed).",
+		)
+		.argument("<name>", "User kit name.")
+		.option(
+			"--set <key=value>",
+			"Set a team-definition key (e.g. fallback.on.qaStalled=false; the value is JSON or text). Repeatable.",
+			collect,
+			[],
+		)
+		.option(
+			"--unset <key>",
+			"Remove a key from the kit, so the default kit's value applies. Repeatable.",
+			collect,
+			[],
+		)
+		.option("--dry-run", "Print what would change; write nothing.")
+		.option("--json", "Print as JSON.")
+		.action(async (name: string, options: { set: string[]; unset: string[]; dryRun?: boolean; json?: boolean }) => {
+			try {
+				const result = await editUserKit({
+					name,
+					set: parseSetAssignments(options.set),
+					unset: options.unset,
+					dryRun: options.dryRun === true,
+				});
+				if (options.json) {
+					printJson({ ok: true, ...result });
+				} else {
+					printLines(formatEditResult(result, options.dryRun === true));
+				}
+			} catch (error) {
+				process.stderr.write(`Kit edit failed: ${toErrorMessage(error)}\n`);
+				process.exitCode = 1;
+			}
 		});
 
 	kit.command("migrate-overrides")

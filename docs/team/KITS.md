@@ -263,7 +263,7 @@ can edit and land repo files, which is the problem this avoids. They are the res
 atomically under the config lock, and moved with the rest of `workspaces.<id>` by `kanban project rename-id`.
 Every change is appended to `data/<ws>/kit-settings-history.jsonl` (one JSON line: `at`, `kitName`, `key`, `from`,
 `to`, `by` = user / orchestrator with its session id / a user-run command, `via` = `kit set`, `kit unset`,
-`kit apply` or `kit migrate-overrides`). `kanban kit show --project` prints its path and the last change.
+`kit apply`, `kit migrate-overrides` or `kit edit` (the user changed the kit itself, [Writing a user kit](#writing-a-user-kit))). `kanban kit show --project` prints its path and the last change.
 
 ### The scripted checks' environment (`checks.*`)
 
@@ -638,32 +638,73 @@ The scoreboard is the team kit's score of its routing decisions. It is not the c
 
 ## Writing a user kit
 
-1. Start from the kit closest to what you want: `kanban kit show team --json` prints it resolved.
-2. Write `<home>/kits/<name>.json` with only the keys that differ from `default`. The file name must equal
-   `name`, and `default`, `team` and `team-local` are taken.
+User kits are made and changed only by the user, with two commands (an agent session can't run either:
+`USER_ONLY_COMMANDS` in `src/isolation/cli-scope.ts`; an orchestrator asks the user). Code:
+`src/kits/user-kit-edit.ts`.
 
-   ```jsonc
-   {
-     "kit": 1,
-     "name": "claude-qa",
-     "description": "Claude Code builds, Codex reviews, one rework, then Codex takes over (approved), then the orchestrator",
-     "roles": {
-       "dev": { "agent": "claude" },
-       "qa": { "agent": "codex" },
-       "fallback": { "agent": "codex", "model": "gpt-6.1-sol" }
-     },
-     "qa": { "enabled": true, "requireDifferentVendor": true },
-     "onFail": { "rework": "same-model", "reworkRounds": 1, "conflict": "rework", "then": "escalate" },
-     "fallback": { "on": { "qaFails": true, "qaStalled": true }, "requireApproval": true },
-     "recommends": { "landingMode": "qa" }
-   }
-   ```
+- `kanban kit create <name> --from <kit> [--set <key>=<value> ...] [--description <text>] [--dry-run]` writes
+  `<home>/kits/<name>.json`: the `--from` kit as it resolves over `default`, so the file is a complete copy (kits
+  don't inherit, see below), with the `--set` keys applied the way the resolver applies them (a role's `model`
+  replaces its `tier` and back). It prints every key that differs from `--from`. Refused: a taken name (`default`,
+  `team`, `team-local`, an existing user kit, a refused kit file of that name), a name that isn't a file name, and
+  a key or value the full kit schema refuses.
+- `kanban kit edit <name> --set <key>=<value> ... [--unset <key> ...] [--dry-run]` changes keys of an existing
+  **user** kit (a built-in kit changes only with a Kanban release: copy it with `kit create`). `--unset` removes a
+  key from the file, so the `default` kit's value applies. The result is validated, the old file copied to
+  `<home>/backups/kits/<name>.json.<UTC time>`, and the new one written atomically. It prints the workspaces on the
+  kit: they pick the change up at once (and it names any changed key a workspace's own stored override still wins
+  for). Refused when it would newly route a workspace on the kit to a combination the vetted model registry refuses,
+  like `kit set`.
 
-3. `kanban kit list` shows it, or the reason it was refused (bad key, bad tier reference, name clash).
-4. `kanban kit apply claude-qa --project <ws> --dry-run` prints what would change. Without `--dry-run` it writes
-   `workspaces.<ws>.kit` and keeps the workspace's existing overrides. Add `--landing qa` to switch the landing
-   mode in the same step.
-5. Check the result: `kanban kit show --project <ws>` (every value and its source) and `kanban doctor <path>`.
+Both take only team-definition keys: `kit` and `name` identify the kit, legacy keys (`escalate.*`, `dev.*`, ...)
+have new names, and project facts (`qa.blurb`, `land.postLand`, `checks.*`, ...) are each project's
+(`kanban kit set`). A value is JSON when it parses as JSON (`false`, `3`, `["a"]`), else text. Every create and
+edit is logged to `<home>/data/kit-history.jsonl` (`at`, `kitName`, `key`, `from` → `to`, `by`, `via` =
+`kit create` | `kit edit`); an edit also goes to the `kit-settings-history.jsonl` of each workspace on the kit
+(`via: "kit edit"`), so `kanban kit show --project` shows it.
+
+```sh
+kanban kit create claude-qa --from team --set roles.dev.agent=claude --set onFail.reworkRounds=1 --dry-run
+kanban kit apply claude-qa --project <ws> --dry-run   # then without --dry-run; --landing qa to switch landing too
+kanban kit show --project <ws>                          # every value and its source; then kanban doctor <path>
+```
+
+**foo: team with three fallback triggers off.** foo runs on `team` with overrides from before the team/project
+split. `migrate-overrides` turns them into project settings plus a user kit named by `--into` (its legacy
+`escalate.*` / `onOutage.then` keys are dropped as redundant, since `team` already has every trigger on and no
+approval, so no stored trigger override is left to shadow the kit), then the edit turns the three triggers off. The
+`qaFails` and `outage` triggers and everything else stay as foo has them:
+
+```sh
+kanban kit migrate-overrides --project foo --into team-foo --dry-run   # then without --dry-run
+kanban kit edit team-foo --set fallback.on.qaStalled=false --set fallback.on.conflict=false --set fallback.on.unchanged=false
+kanban kit show --project foo
+```
+
+### The kit file format
+
+What `kit create` writes, and what `kanban kit list` reads from `<home>/kits/<name>.json`. The file name must equal
+`name`. A kit file may leave out any key `default` has (it resolves over `default`), though the commands always
+write complete copies:
+
+```jsonc
+{
+  "kit": 1,
+  "name": "claude-qa",
+  "description": "Claude Code builds, Codex reviews, one rework, then Codex takes over (approved), then the orchestrator",
+  "roles": {
+    "dev": { "agent": "claude" },
+    "qa": { "agent": "codex" },
+    "fallback": { "agent": "codex", "model": "gpt-6.1-sol" }
+  },
+  "qa": { "enabled": true, "requireDifferentVendor": true },
+  "onFail": { "rework": "same-model", "reworkRounds": 1, "conflict": "rework", "then": "escalate" },
+  "fallback": { "on": { "qaFails": true, "qaStalled": true }, "requireApproval": true },
+  "recommends": { "landingMode": "qa" }
+}
+```
+
+`kanban kit list` shows each kit, or the reason a file was refused (bad key, bad tier reference, name clash).
 
 Per-project models and facts belong in project settings, not in a copy of the kit: `kanban kit set` (the user or
 the project's orchestrator, [Project settings](#project-settings)), or at apply time
@@ -677,3 +718,4 @@ What a kit can't do, on purpose:
 - **No mechanics.** Landing mode, shadow, check scripts, limits and timings are core settings
   ([CONFIG.md](CONFIG.md)).
 - **No inheritance.** A kit is resolved only over `default`, never over another user kit or another workspace.
+  `kanban kit create --from` copies a kit instead, so a later change to the original doesn't reach the copy.

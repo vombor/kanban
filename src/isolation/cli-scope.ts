@@ -71,6 +71,9 @@ export const USER_ONLY_COMMANDS = [
 	"plan approve",
 	// Moves team keys into a new user kit and switches the project to it: a change of the project's team.
 	"kit migrate-overrides",
+	// Write user kit files: the team definition of every project on that kit (src/kits/user-kit-edit.ts).
+	"kit create",
+	"kit edit",
 	// Lets a project route to combinations the vetted model registry hasn't vetted yet.
 	"models allow-provisional",
 	// Creates the machine's Kanban GitHub App, whose key the server keeps (src/github-app/).

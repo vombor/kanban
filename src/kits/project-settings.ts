@@ -153,10 +153,11 @@ export function classifyStoredOverrides(overrides: Record<string, unknown>, kit:
 export type KitSettingsActor =
 	| { kind: "user" }
 	| { kind: "orchestrator"; taskId: string }
-	/** A user-run CLI command that writes in-process (`kit apply`, `kit migrate-overrides`). */
+	/** A user-run CLI command that writes in-process (`kit apply`, `kit migrate-overrides`, `kit create|edit`). */
 	| { kind: "user-command" };
 
-export type KitSettingsVia = "kit set" | "kit unset" | "kit apply" | "kit migrate-overrides";
+/** `kit edit` changes the kit itself (src/kits/user-kit-edit.ts); it is logged for every workspace on that kit. */
+export type KitSettingsVia = "kit set" | "kit unset" | "kit apply" | "kit migrate-overrides" | "kit edit";
 
 export interface KitSettingsHistoryEntry {
 	at: string;

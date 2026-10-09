@@ -346,6 +346,20 @@ export function getKanbanKitsPath(homePath = getKanbanHomePath()): string {
 	return join(homePath, KITS_DIR);
 }
 
+/** Copies of user kit files that `kanban kit edit` replaced (`<home>/backups/kits`). */
+export function getKitBackupsPath(homePath = getKanbanHomePath()): string {
+	return join(getKanbanBackupsPath(homePath), KITS_DIR);
+}
+
+/**
+ * Every `kanban kit create|edit` of a user kit, one JSON line each (`<home>/data/kit-history.jsonl`,
+ * src/kits/user-kit-edit.ts): who, when, which kit, key, old → new. Machine-wide because a kit is; an edit also lands
+ * in the kit settings history of each workspace on the kit.
+ */
+export function getKitHistoryPath(homePath = getKanbanHomePath()): string {
+	return join(getKanbanDataPath(homePath), "kit-history.jsonl");
+}
+
 /** Per-workspace pipeline data and machine-wide caches (`<home>/data`). */
 export function getKanbanDataPath(homePath = getKanbanHomePath()): string {
 	return join(homePath, DATA_DIR);

@@ -37,6 +37,8 @@ export function renderClaudeMdSection(): string {
   \`qa.promptNotes.*\`, \`qa.serversScript\`, \`qa.preview\`, \`land.postLand\`, \`plan.rules\`, \`checks.*\`,
   \`worktrees.symlinkIgnored.*\`);
   \`kanban kit unset <key>\` removes one. Flow keys are refused: another team is another kit, the user's \`kanban kit apply\`.
+- Kits are created and changed only by the user (\`kanban kit create <name> --from <kit>\`, \`kanban kit edit <name>\`);
+  for a team change (another trigger, flow or QA rule), ask the user and give them the command.
 - You may add, change and remove the project's top-bar shortcuts (any label, command, icon) for the user:
   \`kanban shortcut add --label <label> --command "<command>" [--icon <icon>] --project <path>\` (\`list\`, \`remove\`);
   \`{port}\` in a command is a free port per run, \`{url}\` the browser's way to it (docs/fork/shortcuts.md).
