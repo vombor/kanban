@@ -364,7 +364,13 @@ describe("decideRecovery: Review cards", () => {
 			decideRecovery(
 				input({
 					detail: detail([message("assistant", "Let me check:")]),
-					capacityHold: { provider: "lemonade", maxLoadedModels: 1, holders: ["other (glm)"] },
+					capacityHold: {
+						provider: "lemonade",
+						maxLoadedModels: 1,
+						loadedModels: 1,
+						holders: ["other (glm)"],
+						otherWorkspaceHolders: 0,
+					},
 				}),
 			),
 			"wait",

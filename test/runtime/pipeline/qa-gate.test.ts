@@ -328,7 +328,11 @@ describe("QA gate", () => {
 				.filter((record) => record.stage === "qa_start")
 				.map((record) => [record.taskId, record.outcome, record.note]);
 		expect(starts()).toEqual([
-			["qa001", "none", "waiting for provider lemonade (max 1 loaded model(s)): held by d2222 (GLM-4.7-Flash-GGUF)"],
+			[
+				null,
+				"none",
+				"waiting for lemonade capacity: 1/1 model(s) loaded (held by d2222 (GLM-4.7-Flash-GGUF)); queued: qa001",
+			],
 		]);
 
 		// d2222 finished (it gets a QA card of its own): GLM is free, so Gemma may load.
@@ -411,7 +415,7 @@ describe("QA gate", () => {
 			expect(slotWaits(harness, "bar")).toEqual([
 				[
 					"none",
-					"waiting for a QA slot: 2/2 machine-wide slot(s) taken (0 by this project, 2 by other projects); queued: qa003",
+					"waiting for a QA slot: 2/2 cloud slot(s) taken (0 by this project, 2 by other projects); queued: qa003",
 				],
 			]);
 
@@ -438,7 +442,7 @@ describe("QA gate", () => {
 			expect(kinds(harness.actions)).toEqual(["createTask:qa004"]);
 			expect(slotWaits(harness, "foo").at(-1)).toEqual([
 				"none",
-				"waiting for a QA slot: 2/2 machine-wide slot(s) taken (1 by this project, 1 by other projects); queued: qa004",
+				"waiting for a QA slot: 2/2 cloud slot(s) taken (1 by this project, 1 by other projects); queued: qa004",
 			]);
 
 			// qa002's last message is the "Command was aborted" tool result, silent for 14 min: still within hungMin.
@@ -501,6 +505,116 @@ describe("QA gate", () => {
 			const state = await harness.store.load("foo");
 			expect(readQaVerdictRecords(state.cards.d1111)).toMatchObject([{ qaTaskId: "qa001", verdict: "PASS" }]);
 			expect(readQaGateEntry(state.cards.qa001)).toMatchObject({ status: "ingested" });
+		});
+	});
+
+	// User's decision 2026-10-09 (after #18): notes' Lemonade QA card had taken a machine-wide slot foo's Bedrock QA
+	// needed. Local QA counts only against its provider's capacity, cloud QA only against the slots.
+	describe("QA pools: cloud slots and local provider capacity", () => {
+		const LOCAL_WORKSPACE = {
+			landing: { mode: "qa" },
+			kit: { name: "team-local" },
+			models: { allowProvisional: true },
+		};
+		const onGlm = {
+			agentId: "cline" as const,
+			agentSettings: { providerId: "lemonade", modelId: "GLM-4.7-Flash-GGUF" },
+		};
+		const onGemma = {
+			agentId: "cline" as const,
+			agentSettings: { providerId: "lemonade", modelId: "Gemma-4-12B-it-GGUF" },
+		};
+		const localQa = (id: string, devId: string) => createCard({ id, role: "qa", reviewsTaskId: devId, ...onGemma });
+		const cloudQa = (id: string, devId: string) => createCard({ id, role: "qa", reviewsTaskId: devId });
+		const waits = (harness: ReturnType<typeof createHarness>, workspaceId: string) =>
+			harness
+				.readDecisions(workspaceId)
+				.filter((record) => record.stage === "qa_start" && record.taskId === null)
+				.map((record) => record.note);
+		const startNote = (harness: ReturnType<typeof createHarness>, workspaceId: string, taskId: string) =>
+			harness.readCardDecisions(workspaceId, "qa_start").find((record) => record.taskId === taskId)?.note;
+
+		it("a running Lemonade QA card holds no cloud slot, and a cloud QA card in the only slot doesn't hold Lemonade QA", async () => {
+			const harness = createHarness({
+				config: { pipeline: { qa: { slots: 1 } }, workspaces: { foo: QA_WORKSPACE, notes: LOCAL_WORKSPACE } },
+			});
+			const n1 = createCard({ id: "n1111", ...onGlm });
+			const n2 = createCard({ id: "n2222", ...onGlm });
+			const d1 = createCard({ id: "d1111", ...OPENAI_DEV });
+
+			// notes' QA card starts on Gemma in Lemonade's capacity, not in a slot.
+			await send(harness, { review: [n1] }, { workspaceId: "notes" });
+			await send(harness, { backlog: [localQa("qa001", "n1111")], review: [n1] }, { workspaceId: "notes" });
+			expect(kinds(harness.actions)).toEqual(["createTask:qa001", "startTask:qa001"]);
+			expect(startNote(harness, "notes", "qa001")).toBe(
+				"started QA of n1111 round 1 (lemonade capacity, max 1 loaded model(s))",
+			);
+
+			// While it runs, foo's Bedrock QA card takes the only cloud slot.
+			harness.actions.length = 0;
+			await send(harness, { in_progress: [localQa("qa001", "n1111")], review: [n1] }, { workspaceId: "notes" });
+			await send(harness, { review: [d1] });
+			await send(harness, { backlog: [cloudQa("qa002", "d1111")], review: [d1] });
+			expect(kinds(harness.actions)).toEqual(["createTask:qa002", "startTask:qa002"]);
+			expect(startNote(harness, "foo", "qa002")).toBe("started QA of d1111 round 1 (cloud slot 1/1)");
+
+			// notes' next QA card (the model Lemonade already holds) starts although the cloud slot is taken.
+			harness.actions.length = 0;
+			await send(harness, { in_progress: [localQa("qa001", "n1111")], review: [n1, n2] }, { workspaceId: "notes" });
+			await send(
+				harness,
+				{ backlog: [localQa("qa003", "n2222")], in_progress: [localQa("qa001", "n1111")], review: [n1, n2] },
+				{ workspaceId: "notes" },
+			);
+			expect(kinds(harness.actions)).toEqual(["createTask:qa003", "startTask:qa003"]);
+			expect(waits(harness, "foo")).toEqual([]);
+			expect(waits(harness, "notes")).toEqual([]);
+		});
+
+		it("Lemonade QA waits for Lemonade capacity held by another project, recorded once, and starts when it frees", async () => {
+			const harness = createHarness({
+				config: {
+					workspaces: {
+						notes: LOCAL_WORKSPACE,
+						// Shadow: evaluated without a QA tick, yet its In Progress cards hold Lemonade.
+						bar: { ...LOCAL_WORKSPACE, pipeline: { shadow: true } },
+					},
+				},
+			});
+			const n1 = createCard({ id: "n1111", ...onGlm });
+			const b1 = createCard({ id: "b1111", ...onGlm });
+			await send(harness, { in_progress: [b1] }, { workspaceId: "bar" });
+			await send(harness, { review: [n1] }, { workspaceId: "notes" });
+			const notesBoard = { backlog: [localQa("qa001", "n1111")], review: [n1] };
+			await send(harness, notesBoard, { workspaceId: "notes" });
+			await send(harness, notesBoard, { workspaceId: "notes" });
+			expect(kinds(harness.actions)).toEqual(["createTask:qa001"]);
+			expect(waits(harness, "notes")).toEqual([
+				"waiting for lemonade capacity: 1/1 model(s) loaded (held by 1 card(s) of other projects); queued: qa001",
+			]);
+
+			// bar's card leaves In Progress: GLM is unloaded, so notes is evaluated again with no snapshot of its own.
+			harness.actions.length = 0;
+			await send(harness, { review: [b1] }, { workspaceId: "bar" });
+			expect(kinds(harness.actions)).toEqual(["startTask:qa001"]);
+			expect(harness.actions[0]).toMatchObject({ workspaceId: "notes" });
+		});
+
+		it("a cloud QA card waits only for cloud slots, with the per-pool wait line", async () => {
+			const harness = createHarness({
+				config: { pipeline: { qa: { slots: 1 } }, workspaces: { foo: QA_WORKSPACE, notes: LOCAL_WORKSPACE } },
+			});
+			const n1 = createCard({ id: "n1111", ...onGlm });
+			const d1 = createCard({ id: "d1111", ...OPENAI_DEV });
+			const d2 = createCard({ id: "d2222", ...OPENAI_DEV });
+			// A Lemonade dev card runs in notes: no cloud QA card waits for it.
+			await send(harness, { in_progress: [n1] }, { workspaceId: "notes" });
+			await send(harness, { review: [d1, d2] });
+			await send(harness, { backlog: [cloudQa("qa001", "d1111"), cloudQa("qa002", "d2222")], review: [d1, d2] });
+			expect(kinds(harness.actions)).toEqual(["createTask:qa001", "createTask:qa002", "startTask:qa001"]);
+			expect(waits(harness, "foo")).toEqual([
+				"waiting for a QA slot: 1/1 cloud slot(s) taken (1 by this project, 0 by other projects); queued: qa002",
+			]);
 		});
 	});
 

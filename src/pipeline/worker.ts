@@ -640,6 +640,10 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			);
 			// Features acting on held cards (the team kit's runoffs) see the state the QA gate and the rework stage just wrote.
 			await features.tick(workspaceId, { snapshot, state: await store.load(workspaceId), now: now() });
+		} else {
+			// No QA here, but its In Progress cards still hold their local provider for other projects' QA cards.
+			qaGate.observe?.({ snapshot, agentDefaultModels });
+			wakeSlotWaiters();
 		}
 		if (records.length > 0) {
 			await decisionLog.append(records);

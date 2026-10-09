@@ -464,8 +464,9 @@ LRU keeps all three, and a full set of pinned models makes the next load fail wi
 Kanban's own limit, `models.providerCapacity.lemonade.maxLoadedModels` (default 1), must match Lemonade's:
 
 - recovery's retries, nudges and restart resumes, and the QA gate's QA card starts, wait while In Progress cards
-  hold that many other Lemonade models. The QA gate records the hold once ("waiting for provider lemonade … held
-  by …");
+  hold that many other Lemonade models (for QA, In Progress cards of every project). A Lemonade QA card takes no
+  cloud QA slot (`pipeline.qa.slots`) and waits for nothing else. The QA gate records the wait once per change
+  ("waiting for lemonade capacity: 1/1 model(s) loaded (held by …); queued: …");
 - `kanban bench calibrate` refuses a spec with more Lemonade models than that and `parallel` above it.
 
 Above Lemonade's value, cards on different models make it reload on every request. Below it, QA cards wait for

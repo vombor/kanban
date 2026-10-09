@@ -10,20 +10,26 @@ import type { EffectiveModel } from "../core/effective-agent";
 export interface CapacityCard {
 	taskId: string;
 	model: EffectiveModel | null;
+	/** Set for another workspace's card: the QA gate counts every project's cards on a provider (one machine). */
+	workspaceId?: string;
 }
 
 export interface ProviderCapacityHold {
 	provider: string;
 	maxLoadedModels: number;
-	/** The In Progress cards holding the other models, "<taskId> (<model>)". */
+	/** Models the provider holds now (at least `maxLoadedModels`). */
+	loadedModels: number;
+	/** The caller's own In Progress cards holding the other models, "<taskId> (<model>)". */
 	holders: string[];
+	/** Other workspaces' cards holding them, only counted: their cards are theirs. */
+	otherWorkspaceHolders: number;
 }
 
 /** Null when the card's model may run now; otherwise who holds the provider. */
 export function findProviderCapacityHold(input: {
 	taskId: string;
 	model: EffectiveModel | null;
-	/** The workspace's other In Progress cards with their effective models. */
+	/** The workspace's other In Progress cards with their effective models (other workspaces' carry `workspaceId`). */
 	inProgress: readonly CapacityCard[];
 	capacity: Readonly<Record<string, { maxLoadedModels: number }>>;
 }): ProviderCapacityHold | null {
@@ -32,19 +38,23 @@ export function findProviderCapacityHold(input: {
 	if (!provider || !limit || !input.model) {
 		return null;
 	}
-	const loaded = new Map<string, string[]>();
+	const loaded = new Map<string, CapacityCard[]>();
 	for (const other of input.inProgress) {
-		if (other.taskId === input.taskId || other.model?.provider !== provider) {
+		const self = other.taskId === input.taskId && other.workspaceId === undefined;
+		if (self || other.model?.provider !== provider) {
 			continue;
 		}
-		loaded.set(other.model.model, [...(loaded.get(other.model.model) ?? []), other.taskId]);
+		loaded.set(other.model.model, [...(loaded.get(other.model.model) ?? []), other]);
 	}
 	if (loaded.has(input.model.model) || loaded.size < limit.maxLoadedModels) {
 		return null;
 	}
+	const holders = [...loaded].flatMap(([model, cards]) => cards.map((card) => ({ card, model })));
 	return {
 		provider,
 		maxLoadedModels: limit.maxLoadedModels,
-		holders: [...loaded].flatMap(([model, taskIds]) => taskIds.map((taskId) => `${taskId} (${model})`)),
+		loadedModels: loaded.size,
+		holders: holders.filter(({ card }) => !card.workspaceId).map(({ card, model }) => `${card.taskId} (${model})`),
+		otherWorkspaceHolders: holders.filter(({ card }) => card.workspaceId).length,
 	};
 }

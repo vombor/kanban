@@ -403,7 +403,13 @@ describe("findProviderCapacityHold (1ce45df)", () => {
 			inProgress: [{ taskId: "other", model: lemonade("qwen") }],
 			capacity,
 		});
-		expect(hold).toEqual({ provider: "lemonade", maxLoadedModels: 1, holders: ["other (qwen)"] });
+		expect(hold).toEqual({
+			provider: "lemonade",
+			maxLoadedModels: 1,
+			loadedModels: 1,
+			holders: ["other (qwen)"],
+			otherWorkspaceHolders: 0,
+		});
 	});
 
 	it("lets the same model, other providers and providers without a limit through", () => {

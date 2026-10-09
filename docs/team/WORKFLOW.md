@@ -108,6 +108,14 @@ dev card stops ─▶ Review (settled) ─▶ snapshot refs/kanban/snapshots/<id
   wait and stops the old run, so the stale snapshot never gets QA. A project without checks, or a snapshot whose
   package.json has none of the check scripts, gets its QA card right away. Why: QA used to start at the same moment
   the checks were queued, never saw them, and foo 27549 landed with only a checks ERROR.
+- **Two QA pools.** Queued QA cards start oldest first. A cloud QA card waits for one of the `pipeline.qa.slots` (2)
+  cloud slots, counted over every project. A QA card on a local provider (Lemonade) takes no slot: it waits only for
+  that provider's `models.providerCapacity.<provider>.maxLoadedModels`, counted over every project's In Progress
+  cards on it, dev, fallback and QA alike (a running QA card is In Progress, so it is counted once). So a cloud QA
+  card never waits for a local one, and the reverse. Each wait is logged once per change, with other projects' cards
+  only counted ("waiting for a QA slot: 2/2 cloud slot(s) taken …", "waiting for lemonade capacity: 1/1 model(s)
+  loaded …"), and a slot or a provider model freed in one project re-evaluates the projects waiting for it. Why:
+  notes' Lemonade QA card took a machine-wide slot foo's Bedrock QA needed (2026-10-09, after issue #18).
 - **QA only records.** A QA card reviews the snapshot (diffed against its merge-base, so work landed on the base since
   doesn't read as a revert), tests it in a scratch copy with the project's own tooling, and writes
   `<outbox>/<qa id>/verdict.json` plus artifacts. It never runs `kanban`, never moves cards and never writes the Kanban
@@ -285,6 +293,7 @@ it also resumes Claude cards with `claude --continue` and a short resume note), 
   work is done.
 - Lemonade loads one model at a time (`models.providerCapacity.lemonade.maxLoadedModels: 1`): recovery's work and
   QA card starts on another Lemonade model wait while In Progress cards hold one (KITS.md, the `team-local` kit).
+  Lemonade QA cards use that capacity, never a cloud QA slot (§ "Two QA pools").
 
 ## 12. Where it runs
 

@@ -113,7 +113,7 @@ switching a workspace to landing `qa` starts the worker without a Kanban restart
 |---|---|---|
 | `paused` | `false` | stops the worker for landing and recovery (the watchdog still runs if `watchdog.mode` is not `off`) |
 | `workerEntry` | null | another build's `dist/cli.js` for the worker (the dev pod's "fix it live" loop); the host runs `<entry> pipeline worker` |
-| `qa.slots` | 2 | QA cards running at once, machine-wide |
+| `qa.slots` | 2 | cloud QA cards running at once, machine-wide; a QA card on a local provider (Lemonade) takes no slot and waits only for `models.providerCapacity` |
 | `qa.timeoutMin` | 60 | a running QA card's slot is freed after this |
 | `qa.maxNudges` | 2 | nudges for a missing or invalid `verdict.json` before STALLED |
 | `qa.verdictGraceSec` | 20 | wait for `verdict.json` after the QA card stops (8495ed2) |
@@ -194,7 +194,7 @@ session `__home_agent__:<ws>:<selected agent>` of the workspace the items are ab
 | `models.providers.default` | `bedrock` | the provider for Cline models |
 | `models.providers.fallback` | `{}` | model id → provider, for models proven not to work on the default |
 | `models.providers.deprecated` | `{}` | documented workarounds `kanban models providers --cleanup` removes |
-| `models.providerCapacity.<id>.maxLoadedModels` | `lemonade: 1` | recovery's retries, nudges and resumes and the QA gate's QA card starts wait while another In Progress card holds a different model on that provider; `kanban bench calibrate` refuses a spec that would run more at once (merged over the default) |
+| `models.providerCapacity.<id>.maxLoadedModels` | `lemonade: 1` | recovery's retries, nudges and resumes wait while another In Progress card of the project holds a different model on that provider, and the QA gate's QA card starts while In Progress cards of any project do (dev, fallback and QA cards alike); a local provider's QA cards are limited only by this, never by `pipeline.qa.slots`; `kanban bench calibrate` refuses a spec that would run more at once (merged over the default) |
 | `models.bedrockRegion` | `us-west-2` | probes |
 | `models.lists.lemonade.url`, `.requireLabels` | `http://localhost:13305`, `["tool-calling"]` | the model-lists route `GET /api/model-lists/lemonade` (read on every request) |
 | `agents.pretrust` | `true` | pre-trust every workspace's main repo root for Claude Code and Codex |
