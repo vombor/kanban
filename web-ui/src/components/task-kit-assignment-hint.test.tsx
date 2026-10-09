@@ -57,6 +57,58 @@ describe("TaskKitAssignmentHint", () => {
 		).toBe("");
 	});
 
+	it("warns, without refusing, when the pick is not vetted for dev work on the project", () => {
+		const devAssignment = {
+			kitName: "team",
+			outcome: "applied",
+			proposal: PROPOSAL,
+			vettedDev: [
+				{ agentId: "cline", providerId: "bedrock", modelId: "us.openai.gpt-6.1-sol", status: "provisional" },
+				{ agentId: "codex", providerId: "bedrock", modelId: "us.openai.gpt-6.1-sol", status: "vetted" },
+			],
+		} satisfies RuntimeDevAssignmentResponse;
+		expect(
+			render(
+				<TaskKitAssignmentHint
+					devAssignment={devAssignment}
+					agentId="cline"
+					agentSettings={{ ...PROPOSAL.agentSettings }}
+				/>,
+			),
+		).toBe("from kit team");
+		// Codex reads no provider: a pick without one still matches the entry.
+		expect(
+			render(
+				<TaskKitAssignmentHint
+					devAssignment={devAssignment}
+					agentId="codex"
+					agentSettings={{ modelId: "us.openai.gpt-6.1-sol" }}
+				/>,
+			),
+		).toBe("");
+		expect(
+			render(
+				<TaskKitAssignmentHint
+					devAssignment={devAssignment}
+					agentId={undefined}
+					agentSettings={undefined}
+					defaultAgentId="claude"
+				/>,
+			),
+		).toContain("not vetted for dev work on this project");
+		const refused = {
+			kitName: "team",
+			outcome: "refused",
+			proposal: { ...PROPOSAL, refused: "cline + bedrock + us.openai.gpt-6.1-sol is only provisional" },
+			vettedDev: [],
+		} satisfies RuntimeDevAssignmentResponse;
+		expect(
+			render(<TaskKitAssignmentHint devAssignment={refused} agentId="claude" agentSettings={undefined} />),
+		).toContain(
+			"The kit's own pick is refused: cline + bedrock + us.openai.gpt-6.1-sol is only provisional. You can still create the card",
+		);
+	});
+
 	it("shows a shadow proposal as not applied", () => {
 		expect(
 			render(

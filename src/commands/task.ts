@@ -1,4 +1,6 @@
 import type { Command } from "commander";
+import { readPipelineConfig } from "../config/pipeline-config";
+import { loadGlobalRuntimeConfig } from "../config/runtime-config";
 import { getRuntimeAgentCatalogEntry } from "../core/agent-catalog";
 import type {
 	RuntimeAgentId,
@@ -32,6 +34,8 @@ import {
 	removeTaskDependency,
 	updateTask,
 } from "../core/task-board-mutations";
+import { readSessionCredential } from "../isolation/cli-scope";
+import { type CardRoutingCheck, checkCardRouting, decideCardRouting } from "../kits/card-routing-check";
 import {
 	type DevAssignmentDecision,
 	decideDevReassignment,
@@ -42,6 +46,7 @@ import {
 	recordDevAssignment,
 	resolveDevAssignment,
 } from "../kits/dev-assignment";
+import { loadKitCatalog, resolveWorkspaceKit } from "../kits/resolve-kit";
 import {
 	describeRunoffLandBar,
 	describeRunoffLoserWayOut,
@@ -558,6 +563,21 @@ async function deleteTaskWorkspace(
 	}
 }
 
+/** A refused explicit agent/model stops the command; the user's own gets a warning (src/kits/card-routing-check.ts). */
+function enforceCardRouting(check: CardRoutingCheck): void {
+	if (check.kind === "refuse") {
+		throw new Error(check.message);
+	}
+	if (check.kind === "warn") {
+		process.stderr.write(`Warning: ${check.message}\n`);
+	}
+}
+
+/** Whether this CLI runs in an agent session (it has the session's credential), not the user's shell. */
+function isAgentSessionCaller(): boolean {
+	return readSessionCredential(process.env) !== null;
+}
+
 function formatDevAssignment(decision: DevAssignmentDecision): JsonRecord {
 	return { kit: decision.kitName, outcome: decision.outcome, proposal: decision.proposal };
 }
@@ -632,6 +652,24 @@ export async function createTask(input: {
 			: null;
 	if (devAssignment) {
 		reportDevAssignment(devAssignment);
+		if (devAssignment.outcome === "refused") {
+			throw new Error(
+				`kit ${devAssignment.kitName} would put this card on a combination the vetted model registry doesn't allow: ${devAssignment.proposal?.refused}. The orchestrator sets a vetted dev model (kanban kit set roles.dev.model ...; kanban models list shows them), or the user picks one with --agent-id/--model.`,
+			);
+		}
+	}
+	// An explicit agent/model on a dev or plan card is a routing choice too: an agent session's must be vetted.
+	if (hasExplicitDevAssignment(input)) {
+		enforceCardRouting(
+			await checkCardRouting({
+				workspaceId,
+				role: input.role,
+				agentId: input.agentId,
+				agentSettings: input.agentSettings,
+				selectedAgentId: (await loadGlobalRuntimeConfig()).selectedAgentId,
+				fromAgentSession: isAgentSessionCaller(),
+			}),
+		);
 	}
 	const created = await updateRuntimeWorkspaceState(runtimeClient, workspaceRepoPath, (state) => {
 		const resolvedBaseRef = (input.baseRef ?? "").trim() || resolveTaskBaseRef(state);
@@ -708,6 +746,19 @@ export async function createTask(input: {
 	};
 }
 
+async function loadCardRoutingContext(workspaceId: string) {
+	const [{ config }, catalog, runtimeConfig] = await Promise.all([
+		readPipelineConfig(),
+		loadKitCatalog(),
+		loadGlobalRuntimeConfig(),
+	]);
+	return {
+		config,
+		kitName: resolveWorkspaceKit(config, workspaceId, catalog).kitName,
+		selectedAgentId: runtimeConfig.selectedAgentId,
+	};
+}
+
 async function updateTaskCommand(input: {
 	cwd: string;
 	taskId: string;
@@ -742,6 +793,8 @@ async function updateTaskCommand(input: {
 	const workspaceRepoPath = workspace.repoPath;
 	const workspaceId = workspace.workspaceId;
 	const runtimeClient = createRuntimeTrpcClient(workspaceId);
+	const changesRouting = input.agentId !== undefined || input.providerId !== undefined || input.modelId !== undefined;
+	const routingContext = changesRouting ? await loadCardRoutingContext(workspaceId) : null;
 	let mergedAgentSettings: RuntimeTaskAgentSettings | null | undefined;
 	// Set by the mutation callback (TypeScript would narrow a plain `let ... = null` to null).
 	let clearedAgent = null as { task: RuntimeBoardCard; columnId: RuntimeBoardColumnId } | null;
@@ -756,6 +809,18 @@ async function updateTaskCommand(input: {
 			reasoningEffort: input.reasoningEffort,
 		});
 		mergedAgentSettings = agentSettings;
+		if (routingContext) {
+			enforceCardRouting(
+				decideCardRouting({
+					...routingContext,
+					workspaceId,
+					role: resolveCardRole(taskRecord.task),
+					agentId: input.agentId === undefined ? taskRecord.task.agentId : input.agentId,
+					agentSettings: agentSettings ?? undefined,
+					fromAgentSession: isAgentSessionCaller(),
+				}),
+			);
+		}
 
 		const updatedTask = updateTask(runtimeState.board, input.taskId, {
 			title: input.title ?? taskRecord.task.title,

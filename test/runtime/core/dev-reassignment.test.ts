@@ -53,7 +53,8 @@ const TEAM_TIER3 = { providerId: "bedrock", modelId: "us.openai.gpt-6.1-sol" };
 function writeKit(kit: string | null, extra: Record<string, unknown> = {}): void {
 	const path = getKanbanGlobalConfigPath();
 	mkdirSync(dirname(path), { recursive: true });
-	const workspace = { ...(kit ? { kit: { name: kit } } : {}), ...extra };
+	// The team kits' dev models are provisional in the vetted model registry: allowed here unless a test says otherwise.
+	const workspace = { ...(kit ? { kit: { name: kit }, models: { allowProvisional: true } } : {}), ...extra };
 	writeFileSync(path, JSON.stringify({ workspaces: { [WORKSPACE_ID]: workspace } }));
 }
 
@@ -120,6 +121,25 @@ describe("kanban task reassign", () => {
 					previous: { agentId: null, agentSettings: null },
 				}),
 			]);
+		});
+	});
+
+	it("leaves a card alone when the vetted model registry refuses the kit's dev role, as task create does", async () => {
+		await withTemporaryKanbanHome(async () => {
+			writeKit("team", { models: { allowProvisional: false } });
+			useStore({ backlog: [createCard({ id: "b0001", title: "Notes", prompt: "Notes" })] });
+			const revision = harness.store?.stored.revision;
+			const result = await reassign();
+			expect(statuses(result)).toEqual([["b0001", "refused"]]);
+			expect((result.tasks as Array<{ proposal?: { refused?: string } }>)[0]?.proposal?.refused).toContain(
+				"cline + bedrock + us.openai.gpt-6.1-sol is only provisional for dev work",
+			);
+			expect(storedCard("b0001")?.agentId).toBeUndefined();
+			expect(harness.store?.stored.revision).toBe(revision);
+			expect(readLog()).toEqual([]);
+			await expect(createTask({ cwd: "/repo", title: "New", prompt: "New" })).rejects.toThrow(
+				/vetted model registry doesn't allow/u,
+			);
 		});
 	});
 

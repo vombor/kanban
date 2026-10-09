@@ -112,13 +112,19 @@ describe("kanban bench runoff create", () => {
 
 	it("records the group in runoffs.json before it creates the cards, one per model on the same prompt and base", async () => {
 		await withTemporaryKanbanHome(async () => {
-			writeConfig({ workspaces: { "ws-1": { kit: { name: "team" }, landing: { mode: "qa" } } } });
+			writeConfig({
+				workspaces: {
+					"ws-1": { kit: { name: "team" }, models: { allowProvisional: true }, landing: { mode: "qa" } },
+				},
+			});
 			harness.store = createWorkspaceStateStore({ board: createBoard({}), sessions: {}, revision: 1 });
 			harness.runoffsPath = getWatchdogWorkspacePaths("ws-1").runoffs;
 
 			const result = await run(CREATE);
 
-			expect(result.stderr).toBe("");
+			// The user's own runoff on a combination the vetted model registry doesn't know: a warning, not a refusal.
+			expect(result.stderr).toContain("codex + gpt-6.1 is not vetted for dev work");
+			expect(result.stderr).not.toContain("kimi-k3");
 			expect(result.exitCode).toBe(0);
 			const [runoff] = (await readRunoffs(harness.runoffsPath)).runoffs;
 			expect(runoff).toMatchObject({ name: "coupons", base: "main", prompt: "inline", decided: null });
@@ -151,6 +157,29 @@ describe("kanban bench runoff create", () => {
 			expect(again.exitCode).toBe(2);
 			expect(again.stderr).toContain('already has a runoff named "coupons"');
 			expect(JSON.parse(readFileSync(harness.runoffsPath, "utf8")).runoffs).toHaveLength(1);
+		});
+	});
+
+	it("refuses an agent session's runoff on a combination the vetted model registry doesn't allow", async () => {
+		await withTemporaryKanbanHome(async () => {
+			writeConfig({
+				workspaces: {
+					"ws-1": { kit: { name: "team" }, models: { allowProvisional: true }, landing: { mode: "qa" } },
+				},
+			});
+			harness.store = createWorkspaceStateStore({ board: createBoard({}), sessions: {}, revision: 1 });
+			harness.runoffsPath = getWatchdogWorkspacePaths("ws-1").runoffs;
+			process.env.KANBAN_SESSION_CREDENTIAL = "orchestrator-credential";
+			try {
+				const result = await run(CREATE);
+				expect(result.exitCode).toBe(2);
+				expect(result.stderr).toMatch(
+					/ws-1 routes only to combinations the vetted model registry allows: codex \+ gpt-6\.1/u,
+				);
+				expect(harness.store.stored.board.columns.flatMap((column) => column.cards)).toEqual([]);
+			} finally {
+				delete process.env.KANBAN_SESSION_CREDENTIAL;
+			}
 		});
 	});
 

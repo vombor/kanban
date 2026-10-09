@@ -153,14 +153,6 @@
 			}
 		]
 	},
-	"dropped": [
-		{
-			"provider": "lemonade",
-			"model": "LMX-Omni-52B-Halo",
-			"at": "2026-10-09",
-			"why": "a Lemonade collection (Qwen3.6-35B-A3B + Flux + Whisper + Kokoro) without the tool-calling label, so it is not in Cline's Lemonade list; route to Qwen3.6-35B-A3B-MTP-GGUF instead"
-		}
-	],
 	"tierRules": {
 		"dev": "Lemonade models with the tool-calling label; cost 0",
 		"qa": "a different vendor (model family) than the dev model",

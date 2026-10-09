@@ -20,6 +20,7 @@ import { z } from "zod";
 
 import { landingModeSchema } from "../config/pipeline-config";
 import { runtimeAgentIdSchema, runtimeTaskRoleSchema } from "../core/api-contract";
+import { getVettedRegistry, listModelWideRejections } from "../models/vetted-registry";
 
 export const KIT_SCHEMA_VERSION = 1;
 
@@ -326,6 +327,7 @@ export const kitDocumentObjectSchema = z
 			.optional(),
 		features: z.array(kitFeatureSchema).optional(),
 		tiers: z.record(z.string(), z.array(kitTierEntrySchema)).optional(),
+		/** A user kit's own dropped models; the built-in kits' are in the vetted model registry (rejected, scope model). */
 		dropped: z.array(kitDroppedModelSchema).optional(),
 		tierRules: z.record(z.string(), z.string()).optional(),
 		tierNotes: z.record(z.string(), z.string()).optional(),
@@ -349,12 +351,16 @@ export interface KitIssue {
 
 // A dropped model is dropped on every provider: the provider is only the transport (the fork switch moved models
 // from openai-native to bedrock under the same id). Ported from archive/devteam-kit:services/kanban-autoland.mjs@6da71597
-// ("same MODEL is the rule").
+// ("same MODEL is the rule"). The rejected models live in the vetted model registry (models/vetted.json, `rejected`
+// with `scope: "model"`); a kit's own `dropped` list (user kits) still counts on top.
 function isDroppedModel(kit: KitDocument, entry: { model: string }): boolean {
-	return (kit.dropped ?? []).some((dropped) => dropped.model === entry.model);
+	return (
+		(kit.dropped ?? []).some((dropped) => dropped.model === entry.model) ||
+		listModelWideRejections(getVettedRegistry()).some((rejected) => rejected.model === entry.model)
+	);
 }
 
-/** The tier's usable entries: everything not in `dropped`. */
+/** The tier's usable entries: everything not in `dropped` or rejected model-wide in the vetted model registry. */
 export function getUsableTierEntries(kit: KitDocument, tier: string): KitTierEntry[] {
 	return (kit.tiers?.[tier] ?? []).filter((entry) => !isDroppedModel(kit, entry));
 }

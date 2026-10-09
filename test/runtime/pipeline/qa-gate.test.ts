@@ -9,7 +9,7 @@ import { createPipelineWorkerHarness, createSnapshot, type QaGateHarnessAction }
 import { createBoard, createCard } from "../../utilities/workspace-state-store";
 
 const T0 = Date.parse("2026-10-07T10:00:00.000Z");
-const QA_WORKSPACE = { landing: { mode: "qa" }, kit: { name: "team" } };
+const QA_WORKSPACE = { landing: { mode: "qa" }, kit: { name: "team" }, models: { allowProvisional: true } };
 const OPENAI_DEV = {
 	agentId: "cline" as const,
 	agentSettings: { providerId: "bedrock", modelId: "us.openai.gpt-6.1-sol" },
@@ -296,7 +296,11 @@ describe("QA gate", () => {
 
 	it("starts no QA card on a provider at its capacity while In Progress cards hold another model there", async () => {
 		const harness = createHarness({
-			config: { workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team-local" } } } },
+			config: {
+				workspaces: {
+					foo: { landing: { mode: "qa" }, kit: { name: "team-local" }, models: { allowProvisional: true } },
+				},
+			},
 		});
 		const onGlm = {
 			agentId: "cline" as const,

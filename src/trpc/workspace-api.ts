@@ -24,6 +24,7 @@ import {
 import { getDetailTerminalTaskId } from "../core/detail-terminal-session";
 import type { RuntimeCaller } from "../isolation/session-identity";
 import { recordBrowserDevAssignments } from "../kits/browser-dev-assignment-log";
+import { listWorkspaceVettedCombinations } from "../kits/card-routing-check";
 import { resolveDevAssignment } from "../kits/dev-assignment";
 import { findOrchestratorWait } from "../server/orchestrator-wait";
 import type { PreparedWorktreeReap } from "../server/process-reaper";
@@ -419,6 +420,7 @@ export function createWorkspaceApi(deps: CreateWorkspaceApiDependencies): Runtim
 				kitName: decision.kitName,
 				outcome: decision.outcome,
 				proposal: decision.proposal,
+				vettedDev: await listWorkspaceVettedCombinations(workspaceScope.workspaceId, "dev"),
 			} satisfies RuntimeDevAssignmentResponse;
 		},
 		searchFiles: async (workspaceScope, input) => {

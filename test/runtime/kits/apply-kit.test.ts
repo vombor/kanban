@@ -29,7 +29,11 @@ describe("applyWorkspaceKit", () => {
 					other: { landing: { mode: "commit" } },
 				},
 			});
-			const result = await applyWorkspaceKit({ workspaceId: "foo", kitName: "team" });
+			// The team kit's defaults are provisional in the vetted model registry: refused unless the user allows them.
+			await expect(applyWorkspaceKit({ workspaceId: "foo", kitName: "team" })).rejects.toThrow(
+				/vetted model registry refuses: roles\.dev: cline \+ bedrock \+ us\.openai\.gpt-6\.1-sol is only provisional/u,
+			);
+			const result = await applyWorkspaceKit({ workspaceId: "foo", kitName: "team", allowProvisional: true });
 			expect(result.written).toBe(true);
 			expect(result.kitName).toEqual({ from: "default", to: "team" });
 			expect(result.landing).toEqual({ from: "off", to: "off" });
@@ -43,7 +47,11 @@ describe("applyWorkspaceKit", () => {
 			expect(config.selectedAgentId).toBe("claude");
 			expect(config.processes).toEqual({ reaper: { mode: "report" } });
 			expect(config.workspaces).toEqual({
-				foo: { landing: { mode: "off" }, kit: { name: "team", overrides: { "qa.blurb": "Project: Pawsome" } } },
+				foo: {
+					landing: { mode: "off" },
+					kit: { name: "team", overrides: { "qa.blurb": "Project: Pawsome" } },
+					models: { allowProvisional: true },
+				},
 				other: { landing: { mode: "commit" } },
 			});
 		});
@@ -52,7 +60,9 @@ describe("applyWorkspaceKit", () => {
 	it("sets the landing mode only with --landing, and edits overrides", async () => {
 		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
 			writeConfig(globalConfigPath, {
-				workspaces: { foo: { kit: { name: "team", overrides: { "qa.blurb": "x" } } } },
+				workspaces: {
+					foo: { kit: { name: "team", overrides: { "qa.blurb": "x" } }, models: { allowProvisional: true } },
+				},
 			});
 			await applyWorkspaceKit({
 				workspaceId: "foo",
@@ -65,6 +75,7 @@ describe("applyWorkspaceKit", () => {
 				foo: {
 					landing: { mode: "qa" },
 					kit: { name: "team", overrides: { "qa.promptNotes.dbSetup": "npx prisma migrate deploy" } },
+					models: { allowProvisional: true },
 				},
 			});
 		});
@@ -97,14 +108,18 @@ describe("applyWorkspaceKit", () => {
 
 	it("writes nothing on a dry run, and drops the kit entry for default without overrides", async () => {
 		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
-			writeConfig(globalConfigPath, { workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" } } } });
+			writeConfig(globalConfigPath, {
+				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" }, models: { allowProvisional: true } } },
+			});
 			const dryRun = await applyWorkspaceKit({ workspaceId: "foo", kitName: "default", dryRun: true });
 			expect(dryRun.written).toBe(false);
 			expect(readConfig(globalConfigPath).workspaces).toEqual({
-				foo: { landing: { mode: "qa" }, kit: { name: "team" } },
+				foo: { landing: { mode: "qa" }, kit: { name: "team" }, models: { allowProvisional: true } },
 			});
 			await applyWorkspaceKit({ workspaceId: "foo", kitName: "default" });
-			expect(readConfig(globalConfigPath).workspaces).toEqual({ foo: { landing: { mode: "qa" } } });
+			expect(readConfig(globalConfigPath).workspaces).toEqual({
+				foo: { landing: { mode: "qa" }, models: { allowProvisional: true } },
+			});
 		});
 	});
 });

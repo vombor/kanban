@@ -241,7 +241,11 @@ export async function applyIssueSync(input: IssueApplyInput, deps: IssueApplyDep
 			startInPlanMode: planCard?.startInPlanMode ?? false,
 			planCard,
 			devAssignment,
-			planNote,
+			// A refused kit proposal (the vetted model registry) leaves the card without an agent; it is never started here.
+			planNote:
+				devAssignment?.outcome === "refused"
+					? `no kit model: ${devAssignment.proposal?.refused ?? "refused by the vetted model registry"}`
+					: planNote,
 		});
 	}
 

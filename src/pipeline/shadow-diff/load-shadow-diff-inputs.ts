@@ -8,6 +8,7 @@ import type { RuntimeAgentId, RuntimeBoardData } from "../../core/api-contract";
 import { type DevAssignmentLogEntry, getDevAssignmentLogPath } from "../../kits/dev-assignment";
 import { createRoutingPolicy } from "../../kits/policy";
 import { type KitCatalog, resolveWorkspaceKit } from "../../kits/resolve-kit";
+import { getWorkspaceRoutingVetting } from "../../kits/routing-vetting";
 import { getLegacyKitChecksStatePaths, getPipelineDecisionLogPath } from "../../state/kanban-home";
 import { loadWorkspaceBoardById } from "../../state/workspace-state";
 import type { PipelineDecisionRecord } from "../decision-log";
@@ -127,7 +128,7 @@ export async function loadShadowDiffInput(
 		board,
 		selectedAgentId,
 		kitName: resolved.kitName,
-		policy: createRoutingPolicy(resolved.kit),
+		policy: createRoutingPolicy(resolved.kit, getWorkspaceRoutingVetting(options.config, options.workspaceId)),
 		maxFailRounds: options.config.pipeline.rework.maxFailRounds,
 		legacyResets,
 		issues,

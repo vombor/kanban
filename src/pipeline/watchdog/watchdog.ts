@@ -44,6 +44,7 @@ import { resolveIsolationMode } from "../../isolation/isolation-settings";
 import { KANBAN_SESSION_CREDENTIAL_ENV, KANBAN_SESSION_WORKSPACE_ENV } from "../../isolation/session-identity";
 import { createRoutingPolicy, type RoutingPolicy } from "../../kits/policy";
 import { type KitCatalog, resolveWorkspaceKit } from "../../kits/resolve-kit";
+import { getWorkspaceRoutingVetting } from "../../kits/routing-vetting";
 import { type AgentToolProcessFinder, createAgentToolProcessFinder } from "../../server/process-reaper";
 import {
 	getClineDataDirPath,
@@ -363,7 +364,10 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 		workspaceId: string,
 	): Promise<{ policy: RoutingPolicy; kitName: string }> => {
 		const resolution = resolveWorkspaceKit(parsed.config, workspaceId, await deps.loadCatalog());
-		return { policy: createRoutingPolicy(resolution.kit), kitName: resolution.kitName };
+		return {
+			policy: createRoutingPolicy(resolution.kit, getWorkspaceRoutingVetting(parsed.config, workspaceId)),
+			kitName: resolution.kitName,
+		};
 	};
 
 	const runJob = async (

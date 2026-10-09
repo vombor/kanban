@@ -50,3 +50,27 @@ export function isKitProposalSelected(
 		agentSettings?.providerId === proposal.agentSettings?.providerId
 	);
 }
+
+/**
+ * Whether the dialog's agent and model are among the combinations the project may route dev work to (the runtime's
+ * vetted model registry). True when the project's kit routes nothing (no list). Providers count only where both
+ * sides name one, as in the runtime's lookup.
+ */
+export function isVettedDevSelection(
+	devAssignment: RuntimeDevAssignmentResponse | null,
+	agentId: RuntimeAgentId | undefined,
+	agentSettings: RuntimeTaskAgentSettings | undefined,
+): boolean {
+	const vetted = devAssignment?.vettedDev;
+	if (!vetted || !agentId) {
+		return true;
+	}
+	const modelId = agentSettings?.modelId?.trim() || null;
+	const providerId = agentSettings?.providerId?.trim() || null;
+	return vetted.some(
+		(entry) =>
+			entry.agentId === agentId &&
+			entry.modelId === modelId &&
+			(entry.providerId === null || providerId === null || entry.providerId === providerId),
+	);
+}

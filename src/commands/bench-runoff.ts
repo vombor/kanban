@@ -5,11 +5,12 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import type { Command } from "commander";
-
 import { getWorkspacePipelineSettings, readPipelineConfig } from "../config/pipeline-config";
 import { loadGlobalRuntimeConfig } from "../config/runtime-config";
 import type { RuntimeAgentId, RuntimeBoardCard, RuntimeBoardColumnId } from "../core/api-contract";
 import { createUniqueTaskId } from "../core/task-id";
+import { readSessionCredential } from "../isolation/cli-scope";
+import { decideCardRouting } from "../kits/card-routing-check";
 import { resolveProposalProvider } from "../kits/dev-assignment";
 import { resolveKitRole } from "../kits/kit-roles";
 import type { KitDocument } from "../kits/kit-schema";
@@ -144,12 +145,32 @@ async function runCreate(name: string, options: CreateOptions): Promise<number> 
 		resolveProvider: (contender) => resolveProposalProvider(contender.agentId, contender, config.models),
 		existing: runoffs,
 	});
-	const warnings =
-		settings.landing.mode === "qa"
+	// Every racer is a dev-work route: an agent session may race only combinations the vetted model registry allows;
+	// the user's own runoff gets a warning (src/kits/card-routing-check.ts).
+	const routingWarnings = planned.flatMap((card) => {
+		const check = decideCardRouting({
+			config,
+			kitName,
+			workspaceId: target.workspaceId,
+			role: "dev",
+			agentId: card.agentId,
+			agentSettings: card.agentSettings,
+			selectedAgentId: runtimeConfig.selectedAgentId,
+			fromAgentSession: readSessionCredential(process.env) !== null,
+		});
+		if (check.kind === "refuse") {
+			throw new Error(check.message);
+		}
+		return check.kind === "warn" ? [check.message] : [];
+	});
+	const warnings = [
+		...routingWarnings,
+		...(settings.landing.mode === "qa"
 			? []
 			: [
 					`workspace ${target.workspaceId} has landing mode ${settings.landing.mode}: the pipeline only QAs, holds and decides runoffs with landing qa`,
-				];
+				]),
+	];
 	if (options.dryRun) {
 		const payload = { ok: true, dryRun: true, name, runoffsPath, cards: planned, warnings };
 		if (options.json) {

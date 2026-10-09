@@ -289,7 +289,14 @@ describe("rework loop in the pipeline worker (team kit)", () => {
 	it("does nothing in shadow", async () => {
 		const harness = createPipelineWorkerHarness({
 			config: {
-				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" }, pipeline: { shadow: true } } },
+				workspaces: {
+					foo: {
+						landing: { mode: "qa" },
+						kit: { name: "team" },
+						models: { allowProvisional: true },
+						pipeline: { shadow: true },
+					},
+				},
 			},
 		});
 		harnesses.push(harness);

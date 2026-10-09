@@ -12,7 +12,7 @@ import { createPipelineWorkerHarness, createSnapshot, type QaGateHarnessAction }
 import { createBoard, createCard } from "../../utilities/workspace-state-store";
 
 const T0 = Date.parse("2026-10-07T10:00:00.000Z");
-const QA_WORKSPACE = { landing: { mode: "qa" }, kit: { name: "team" } };
+const QA_WORKSPACE = { landing: { mode: "qa" }, kit: { name: "team" }, models: { allowProvisional: true } };
 const DEV = createCard({ id: "d1111" });
 
 function createdTasks(actions: QaGateHarnessAction[]) {

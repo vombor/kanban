@@ -570,6 +570,7 @@ export function TaskCreateDialog({
 						devAssignment={kitDevAssignment}
 						agentId={agentId}
 						agentSettings={agentSettings}
+						defaultAgentId={defaultAgentId ?? undefined}
 					/>
 				</div>
 			</DialogBody>

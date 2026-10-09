@@ -16,6 +16,7 @@ import { getBuiltInKits, loadKitCatalog, resolveWorkspaceKit } from "../../../sr
 import { getKitSettingsHistoryPath } from "../../../src/state/kanban-home";
 import { createCardHistory, createEffectiveCard } from "../../utilities/effective-card";
 import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
+import { PROVISIONAL_ALLOWED } from "../../utilities/routing-vetting";
 
 const team = () => {
 	const kit = getBuiltInKits().get("team");
@@ -149,7 +150,9 @@ describe("project settings: which keys a project may set", () => {
 describe("project settings: set and unset", () => {
 	it("sets a role's model at once (kit < project), logs who changed it, and unset brings the kit's value back", async () => {
 		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
-			writeConfig(globalConfigPath, { workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" } } } });
+			writeConfig(globalConfigPath, {
+				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" }, models: { allowProvisional: true } } },
+			});
 			const result = await setProjectKitSetting({
 				workspaceId: "foo",
 				key: "roles.fallback.model",
@@ -176,7 +179,7 @@ describe("project settings: set and unset", () => {
 			expect(resolved.sources["roles.fallback.model"]).toBe("project");
 			// The kit's flow still decides when; the project only picked the model.
 			expect(
-				createRoutingPolicy(resolved.kit).onFail({
+				createRoutingPolicy(resolved.kit, PROVISIONAL_ALLOWED).onFail({
 					dev: createEffectiveCard({ agentId: "cline", model: "us.openai.gpt-6.1-sol" }),
 					cause: "stalled",
 					verdict: null,
@@ -240,22 +243,25 @@ describe("project settings: set and unset", () => {
 		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
 			writeConfig(globalConfigPath, {
 				workspaces: {
-					foo: { kit: { name: "team", overrides: { "dev.agent": "codex", "onOutage.then": "orchestrator" } } },
+					foo: {
+						kit: { name: "team", overrides: { "dev.agent": "codex", "onOutage.then": "orchestrator" } },
+						models: { allowProvisional: true },
+					},
 				},
 			});
 			const result = await setProjectKitSetting({
 				workspaceId: "foo",
 				key: "roles.dev.agent",
-				value: "claude",
+				value: "cline",
 				by: { kind: "user" },
 			});
 			expect(readWorkspace(globalConfigPath, "foo").kit).toEqual({
 				name: "team",
-				overrides: { "onOutage.then": "orchestrator", "roles.dev.agent": "claude" },
+				overrides: { "onOutage.then": "orchestrator", "roles.dev.agent": "cline" },
 			});
 			expect(result.changes.map(({ key, from, to }) => ({ key, from, to }))).toEqual([
 				{ key: "dev.agent", from: "codex", to: undefined },
-				{ key: "roles.dev.agent", from: undefined, to: "claude" },
+				{ key: "roles.dev.agent", from: undefined, to: "cline" },
 			]);
 			// A team key stored before the split is the user's to remove (kit apply --unset / migrate-overrides).
 			await expect(

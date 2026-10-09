@@ -13,6 +13,7 @@ import { getKitSettingsHistoryPath } from "../state/kanban-home";
 import { evaluateKitRecommendedSettings, type KitRecommendedSettingStatus } from "./kit-recommendations";
 import { appendKitSettingsHistory, classifyKitSettingKey, diffOverridesForHistory } from "./project-settings";
 import { DEFAULT_KIT_NAME, loadKitCatalog, readKitValue, resolveKitByName, resolveWorkspaceKit } from "./resolve-kit";
+import { describeRefusedKitRoutes, getWorkspaceRoutingVetting } from "./routing-vetting";
 
 export interface ApplyKitInput {
 	workspaceId: string;
@@ -21,6 +22,8 @@ export interface ApplyKitInput {
 	set?: Record<string, unknown>;
 	unset?: string[];
 	dryRun?: boolean;
+	/** The user allows provisional registry combinations for the workspace (`workspaces.<id>.models.allowProvisional`). */
+	allowProvisional?: boolean;
 	configPath?: string;
 	kitsDir?: string;
 	historyPath?: string;
@@ -81,6 +84,17 @@ export async function applyWorkspaceKit(input: ApplyKitInput): Promise<ApplyKitR
 	if (!after.ok) {
 		throw new Error(`Kit ${input.kitName} does not resolve for ${input.workspaceId}: ${after.error}`);
 	}
+	// The kit's defaults and the project's role models must be combinations the vetted model registry allows. Routes
+	// the workspace already had refused (re-applying its kit with a fact) are doctor's to report, not a new refusal.
+	const vetting = getWorkspaceRoutingVetting(config, input.workspaceId);
+	const allowedVetting = { ...vetting, allowProvisional: vetting.allowProvisional || input.allowProvisional === true };
+	const refusedBefore = new Set(describeRefusedKitRoutes(before.kit, vetting));
+	const refused = describeRefusedKitRoutes(after.kit, allowedVetting).filter((line) => !refusedBefore.has(line));
+	if (refused.length > 0) {
+		throw new Error(
+			`Kit ${input.kitName} would route ${input.workspaceId} to combinations the vetted model registry refuses: ${refused.join("; ")}`,
+		);
+	}
 	const keys = new Set([...Object.keys(before.sources), ...Object.keys(after.sources)]);
 	const changes: KitValueChange[] = [];
 	for (const key of [...keys].sort()) {
@@ -123,6 +137,10 @@ export async function applyWorkspaceKit(input: ApplyKitInput): Promise<ApplyKitR
 				delete entry.kit;
 			} else {
 				entry.kit = { name: input.kitName, overrides };
+			}
+			if (input.allowProvisional === true) {
+				const models = entry.models && typeof entry.models === "object" ? entry.models : {};
+				entry.models = { ...models, allowProvisional: true };
 			}
 			if (input.landing) {
 				const current = entry.landing && typeof entry.landing === "object" ? entry.landing : {};

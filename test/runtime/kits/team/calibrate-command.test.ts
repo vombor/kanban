@@ -90,7 +90,15 @@ describe("kanban bench calibrate", () => {
 	it("refuses rule names the kit doesn't have", async () => {
 		await withTemporaryKanbanHome(async ({ userHomePath }) => {
 			const { writeSpec } = await createWorkspace(userHomePath, "team");
-			const spec = writeSpec([{ key: "haiku", agent: "cline", rules: ["drive", "nope"] }]);
+			const spec = writeSpec([
+				{
+					key: "haiku",
+					agent: "cline",
+					provider: "bedrock",
+					model: "us.anthropic.claude-haiku-5-5",
+					rules: ["drive", "nope"],
+				},
+			]);
 			await expect(runCalibrateCommand(spec, { print: true })).rejects.toThrow(
 				/model haiku: rule nope is not in kit team's qa\.rules \(drive\)/u,
 			);
@@ -100,7 +108,15 @@ describe("kanban bench calibrate", () => {
 	it("--print checks the dev prompts and refs without creating cards", async () => {
 		await withTemporaryKanbanHome(async ({ userHomePath }) => {
 			const { writeSpec, head } = await createWorkspace(userHomePath, "team");
-			const spec = writeSpec([{ key: "haiku", agent: "cline", rules: ["drive"] }]);
+			const spec = writeSpec([
+				{
+					key: "haiku",
+					agent: "cline",
+					provider: "bedrock",
+					model: "us.anthropic.claude-haiku-5-5",
+					rules: ["drive"],
+				},
+			]);
 			const output: string[] = [];
 			vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
 				output.push(String(chunk));
@@ -117,7 +133,15 @@ describe("kanban bench calibrate", () => {
 	it("starts a detached --worker for the calibration and hands it the runner lock", async () => {
 		await withTemporaryKanbanHome(async ({ userHomePath }) => {
 			const { writeSpec, workspaceId, repoPath } = await createWorkspace(userHomePath, "team");
-			const spec = writeSpec([{ key: "haiku", agent: "cline", rules: ["drive"] }]);
+			const spec = writeSpec([
+				{
+					key: "haiku",
+					agent: "cline",
+					provider: "bedrock",
+					model: "us.anthropic.claude-haiku-5-5",
+					rules: ["drive"],
+				},
+			]);
 			const output = captureStdout();
 			// A live pid other than this process: the worker is running.
 			const workerPid = process.ppid;
@@ -170,7 +194,15 @@ describe("kanban bench calibrate", () => {
 		it("gives the detached worker a child credential bound to its pid, then lets it start", async () => {
 			await withTemporaryKanbanHome(async ({ userHomePath }) => {
 				const { writeSpec, workspaceId } = await createWorkspace(userHomePath, "team");
-				const spec = writeSpec([{ key: "haiku", agent: "cline", rules: ["drive"] }]);
+				const spec = writeSpec([
+					{
+						key: "haiku",
+						agent: "cline",
+						provider: "bedrock",
+						model: "us.anthropic.claude-haiku-5-5",
+						rules: ["drive"],
+					},
+				]);
 				captureStdout();
 				const workerPid = process.ppid;
 				const { fake, child, spawn } = createFakeSpawn(workerPid);
@@ -204,7 +236,11 @@ describe("kanban bench calibrate", () => {
 		function setIsolationMode(workspaceId: string, mode: "off" | "report" | "enforce") {
 			writeFileSync(
 				getKanbanGlobalConfigPath(),
-				JSON.stringify({ workspaces: { [workspaceId]: { kit: { name: "team" }, isolation: { mode } } } }),
+				JSON.stringify({
+					workspaces: {
+						[workspaceId]: { kit: { name: "team" }, models: { allowProvisional: true }, isolation: { mode } },
+					},
+				}),
 			);
 		}
 
@@ -213,7 +249,15 @@ describe("kanban bench calibrate", () => {
 				await withTemporaryKanbanHome(async ({ userHomePath }) => {
 					const { writeSpec, workspaceId } = await createWorkspace(userHomePath, "team");
 					setIsolationMode(workspaceId, mode);
-					const spec = writeSpec([{ key: "haiku", agent: "cline", rules: ["drive"] }]);
+					const spec = writeSpec([
+						{
+							key: "haiku",
+							agent: "cline",
+							provider: "bedrock",
+							model: "us.anthropic.claude-haiku-5-5",
+							rules: ["drive"],
+						},
+					]);
 					const lock = getCalibrationPaths(workspaceId, "t1").lock;
 					// The bind is refused: the worker is stopped before it does anything, the lock released.
 					const refusedBind = createFakeSpawn(process.ppid);
@@ -254,7 +298,15 @@ describe("kanban bench calibrate", () => {
 				await withTemporaryKanbanHome(async ({ userHomePath }) => {
 					const { writeSpec, workspaceId } = await createWorkspace(userHomePath, "team");
 					setIsolationMode(workspaceId, "off");
-					const spec = writeSpec([{ key: "haiku", agent: "cline", rules: ["drive"] }]);
+					const spec = writeSpec([
+						{
+							key: "haiku",
+							agent: "cline",
+							provider: "bedrock",
+							model: "us.anthropic.claude-haiku-5-5",
+							rules: ["drive"],
+						},
+					]);
 					captureStdout();
 					const { fake, child, spawn } = createFakeSpawn(process.ppid);
 					const isolation =
@@ -303,7 +355,15 @@ describe("kanban bench calibrate", () => {
 	it("releases the runner lock when the worker could not be spawned", async () => {
 		await withTemporaryKanbanHome(async ({ userHomePath }) => {
 			const { writeSpec, workspaceId } = await createWorkspace(userHomePath, "team");
-			const spec = writeSpec([{ key: "haiku", agent: "cline", rules: ["drive"] }]);
+			const spec = writeSpec([
+				{
+					key: "haiku",
+					agent: "cline",
+					provider: "bedrock",
+					model: "us.anthropic.claude-haiku-5-5",
+					rules: ["drive"],
+				},
+			]);
 			const output = captureStdout();
 			const { fake, spawn } = createFakeSpawn(undefined);
 			expect(await runCalibrateCommand(spec, {}, { spawn })).toBe(0);

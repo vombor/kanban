@@ -39,6 +39,7 @@ import { providerForModel } from "../models/cline-providers";
 import { getKanbanWorkspaceDataPath } from "../state/kanban-home";
 import { createRoutingPolicy } from "./policy";
 import { DEFAULT_KIT_NAME, loadKitCatalog, resolveWorkspaceKit, type WorkspaceKitResolution } from "./resolve-kit";
+import { getStrictRoutingVetting, getWorkspaceRoutingVetting, type RoutingVetting } from "./routing-vetting";
 
 export const DEV_ASSIGNMENT_LOG_FILENAME = "dev-assignment.jsonl";
 
@@ -57,6 +58,8 @@ export interface DevAssignmentProposal {
 	agentSettings?: RuntimeTaskAgentSettings;
 	/** The kit tier the model came from (`dev.model: { tier }`), for display. */
 	tier: string | null;
+	/** The vetted model registry doesn't allow it for dev work: never applied (src/kits/routing-vetting.ts). */
+	refused?: string;
 }
 
 export type DevAssignmentOutcome =
@@ -66,6 +69,8 @@ export type DevAssignmentOutcome =
 	| "explicit"
 	/** `pipeline.shadow` is on: logged, not applied. */
 	| "shadow"
+	/** The kit's dev role is not allowed by the vetted model registry: not applied, the creator must choose. */
+	| "refused"
 	/** Stored on the card. */
 	| "applied";
 
@@ -110,8 +115,9 @@ export function proposeDevAssignment(input: {
 	request: Pick<DevAssignmentRequest, "workspaceId" | "title" | "prompt">;
 	resolved: Pick<WorkspaceKitResolution, "kit">;
 	models: PipelineConfig["models"];
+	vetting?: RoutingVetting;
 }): DevAssignmentProposal | null {
-	const answer = createRoutingPolicy(input.resolved.kit).devAssignment({
+	const answer = createRoutingPolicy(input.resolved.kit, input.vetting ?? getStrictRoutingVetting()).devAssignment({
 		workspaceId: input.request.workspaceId,
 		title: input.request.title,
 		prompt: input.request.prompt,
@@ -120,14 +126,16 @@ export function proposeDevAssignment(input: {
 	if (!answer) {
 		return null;
 	}
+	const refused = answer.refused ? { refused: answer.refused } : {};
 	if (!answer.model) {
-		return { agentId: answer.agentId, tier: answer.tier ?? null };
+		return { agentId: answer.agentId, tier: answer.tier ?? null, ...refused };
 	}
 	const providerId = resolveProposalProvider(answer.agentId, answer.model, input.models);
 	return {
 		agentId: answer.agentId,
 		agentSettings: { ...(providerId ? { providerId } : {}), modelId: answer.model.model },
 		tier: answer.tier ?? null,
+		...refused,
 	};
 }
 
@@ -142,13 +150,21 @@ export function decideDevAssignment(input: {
 		agentId: request.agentId ?? undefined,
 		agentSettings: cloneRuntimeTaskAgentSettings(request.agentSettings),
 	};
-	const proposal = proposeDevAssignment({ request, resolved, models: config.models });
+	const proposal = proposeDevAssignment({
+		request,
+		resolved,
+		models: config.models,
+		vetting: getWorkspaceRoutingVetting(config, request.workspaceId),
+	});
 	const base = { workspaceId: request.workspaceId, kitName: resolved.kitName, proposal, issues: resolved.issues };
 	if (!proposal) {
 		return { ...base, outcome: "none", ...requested };
 	}
 	if (hasExplicitDevAssignment(request)) {
 		return { ...base, outcome: "explicit", ...requested };
+	}
+	if (proposal.refused) {
+		return { ...base, outcome: "refused", ...requested };
 	}
 	if (getWorkspacePipelineSettings(config, request.workspaceId).pipeline.shadow) {
 		return { ...base, outcome: "shadow", ...requested };
@@ -223,6 +239,11 @@ export type DevReassignmentStatus =
 	| "explicit"
 	/** `pipeline.shadow` is on: the proposal is logged, not applied. */
 	| "shadow"
+	/**
+	 * The kit's dev role is a combination the vetted model registry doesn't allow (`proposal.refused` says why): the
+	 * card is left as it is, as task create refuses it.
+	 */
+	| "refused"
 	/** The kit has no dev assignment (the `default` kit): the card keeps running on the selected agent. */
 	| "no_proposal"
 	/** Not in Backlog: a started card's agent never changes. */

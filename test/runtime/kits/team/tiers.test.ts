@@ -4,6 +4,7 @@ import { createRoutingPolicy } from "../../../../src/kits/policy";
 import { getBuiltInKits, getDefaultKit, resolveKitLayers } from "../../../../src/kits/resolve-kit";
 import { buildTiersReport, formatTiersReport } from "../../../../src/kits/team/tiers/tiers-report";
 import { createCardHistory, createEffectiveCard } from "../../../utilities/effective-card";
+import { PROVISIONAL_ALLOWED } from "../../../utilities/routing-vetting";
 
 function team(overrides: Record<string, unknown> = {}) {
 	const kit = getBuiltInKits().get("team");
@@ -18,7 +19,7 @@ function team(overrides: Record<string, unknown> = {}) {
 }
 
 const escalateAfterStall = (kit: ReturnType<typeof team>) =>
-	createRoutingPolicy(kit).onFail({
+	createRoutingPolicy(kit, PROVISIONAL_ALLOWED).onFail({
 		dev: createEffectiveCard({ agentId: "cline", model: "us.openai.gpt-6.1-sol" }),
 		cause: "stalled",
 		verdict: null,

@@ -361,6 +361,10 @@ export function registerKitCommand(program: Command): void {
 		)
 		.option("--unset <key>", "Remove a stored override (a team key too). Repeatable.", collect, [])
 		.option("--dry-run", "Print what would change; write nothing.")
+		.option(
+			"--allow-provisional",
+			"Also allow the vetted model registry's provisional combinations for this project (workspaces.<id>.models.allowProvisional).",
+		)
 		.option("--json", "Print as JSON.")
 		.action(
 			async (
@@ -371,6 +375,7 @@ export function registerKitCommand(program: Command): void {
 					set: string[];
 					unset: string[];
 					dryRun?: boolean;
+					allowProvisional?: boolean;
 					json?: boolean;
 				},
 			) => {
@@ -383,6 +388,7 @@ export function registerKitCommand(program: Command): void {
 						set: parseSetAssignments(options.set),
 						unset: options.unset,
 						dryRun: options.dryRun === true,
+						allowProvisional: options.allowProvisional === true,
 					});
 					if (options.json) {
 						printJson({ ok: true, ...result });

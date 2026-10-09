@@ -411,7 +411,9 @@ describe("runoffs feature in the pipeline worker", () => {
 		let snapshot = "snap-d1111";
 		const releaseHold = vi.fn();
 		const harness = createPipelineWorkerHarness({
-			config: { workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" } } } },
+			config: {
+				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" }, models: { allowProvisional: true } } },
+			},
 			snapshot: (taskId) => (taskId === "d1111" ? snapshot : `snap-${taskId}`),
 			createFeatures: ({ bus, appendQaLog, root }) => {
 				const path = join(root, "data", "foo", "runoffs.json");
@@ -478,7 +480,9 @@ describe("runoffs feature in the pipeline worker", () => {
 	it("lands a decided runoff's winner after a land conflict once its rebase passes QA; a loser's PASS stays held", async () => {
 		const releaseHold = vi.fn();
 		const harness = createPipelineWorkerHarness({
-			config: { workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" } } } },
+			config: {
+				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" }, models: { allowProvisional: true } } },
+			},
 			snapshot: (taskId) => `snap-${taskId}-rebased`,
 			createFeatures: ({ bus, appendQaLog, root }) => {
 				const path = join(root, "data", "foo", "runoffs.json");
@@ -556,7 +560,14 @@ describe("runoffs feature in the pipeline worker", () => {
 		const tickHandler = vi.fn();
 		const harness = createPipelineWorkerHarness({
 			config: {
-				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" }, pipeline: { shadow: true } } },
+				workspaces: {
+					foo: {
+						landing: { mode: "qa" },
+						kit: { name: "team" },
+						models: { allowProvisional: true },
+						pipeline: { shadow: true },
+					},
+				},
 			},
 			createFeatures: ({ bus }) => {
 				const registry = createPipelineFeatureRegistry({ bus });

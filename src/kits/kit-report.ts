@@ -5,6 +5,7 @@
 import type { LandingMode, PipelineConfig } from "../config/pipeline-config";
 import type { RuntimeAgentId, RuntimeBoardCard } from "../core/api-contract";
 import type { EffectiveModel } from "../core/effective-agent";
+import { describeCombination } from "../models/vetted-registry";
 import {
 	describeRecommendedValue,
 	evaluateKitRecommendedSettings,
@@ -27,6 +28,12 @@ import {
 } from "./policy";
 import type { ClassifiedOverrides, KitSettingsHistoryEntry } from "./project-settings";
 import { type ResolvedKit, readKitValue } from "./resolve-kit";
+import {
+	checkKitRoutes,
+	getStrictRoutingVetting,
+	getWorkspaceRoutingVetting,
+	type KitRouteCheck,
+} from "./routing-vetting";
 
 /** The `workspaceId` `kanban kit show` passes when it shows a kit without a project. */
 export const NO_WORKSPACE_ID = "(none)";
@@ -81,6 +88,8 @@ export interface KitReport {
 	onOutage: { minutes: number; answer: OnOutageAnswer };
 	/** QA answers the kit refuses (for example a route whose QA vendor equals the dev vendor). */
 	warnings: string[];
+	/** Every combination the kit routes to, against the vetted model registry (this workspace's rule). */
+	vetting: KitRouteCheck[];
 	/** Shown, never applied without `kanban kit apply --landing`. */
 	recommendedLandingMode: LandingMode | null;
 	/** `recommends.settings` against the config the report was built with; never applied by the kit. */
@@ -152,7 +161,11 @@ export function buildKitReport(input: {
 	projectSettings?: KitProjectSettingsReport | null;
 }): KitReport {
 	const { kit } = input.resolved;
-	const policy = createRoutingPolicy(kit);
+	const vetting =
+		input.workspaceId === NO_WORKSPACE_ID
+			? getStrictRoutingVetting()
+			: getWorkspaceRoutingVetting(input.config, input.workspaceId);
+	const policy = createRoutingPolicy(kit, vetting);
 	const devAssignment = policy.devAssignment({ workspaceId: input.workspaceId, title: "", prompt: "", role: "dev" });
 	const devAgentId = devAssignment?.agentId ?? input.selectedAgentId;
 	const qa = listSampleDevModels(kit, devAssignment?.model ?? null).map((devModel) => {
@@ -208,7 +221,7 @@ export function buildKitReport(input: {
 		projectSettings: input.projectSettings ?? null,
 		values: listKitValues(input.resolved),
 		devAssignment,
-		planAssignment: answerPlanAssignment(kit),
+		planAssignment: answerPlanAssignment(kit, vetting),
 		qa,
 		onFail,
 		onPass: policy.onPass({ dev: sample, verdict: { verdict: "PASS", round: 1 } }),
@@ -217,6 +230,7 @@ export function buildKitReport(input: {
 			answer: policy.onOutage({ dev: sample, heldMin: outageMinutes, maxMin: input.outageMaxMin }),
 		},
 		warnings,
+		vetting: checkKitRoutes(kit, vetting),
 		recommendedLandingMode: kit.recommends?.landingMode ?? null,
 		localResidency: input.localResidency ?? null,
 		recommendedSettings: evaluateKitRecommendedSettings(
@@ -399,6 +413,14 @@ export function formatKitReport(report: KitReport): string[] {
 		for (const finding of report.localResidency) {
 			lines.push(
 				`  ${finding.level === "pass" ? "ok  " : "WARN"} ${finding.message}${finding.hint ? ` → ${finding.hint}` : ""}`,
+			);
+		}
+	}
+	if (report.vetting.length > 0) {
+		lines.push("", "Routing against the vetted model registry (kanban models list):");
+		for (const route of report.vetting) {
+			lines.push(
+				`  ${route.check.ok ? `ok (${route.check.verdict.status})` : "REFUSED"} ${route.label} → ${describeCombination(route.combination)} for ${route.role}${route.check.ok ? "" : `: ${route.check.message}`}`,
 			);
 		}
 	}

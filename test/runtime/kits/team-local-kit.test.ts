@@ -7,6 +7,7 @@ import { answerPlanAssignment, createRoutingPolicy } from "../../../src/kits/pol
 import { getBuiltInKits, getDefaultKit, resolveKitLayers } from "../../../src/kits/resolve-kit";
 import { listKitModels } from "../../../src/kits/team/bench/price-sync-job";
 import { createCardHistory, createEffectiveCard } from "../../utilities/effective-card";
+import { PROVISIONAL_ALLOWED } from "../../utilities/routing-vetting";
 
 const GLM = { provider: "lemonade", model: "GLM-4.7-Flash-GGUF" };
 const DEVSTRAL = { provider: "lemonade", model: "Devstral-Small-2507-GGUF" };
@@ -63,14 +64,19 @@ describe("team-local kit", () => {
 
 	it("assigns new dev and plan cards to Cline on the dev tier's local model", () => {
 		const { kit } = resolveTeamLocal();
-		expect(createRoutingPolicy(kit).devAssignment({ workspaceId: "ws", title: "", prompt: "", role: "dev" })).toEqual(
-			{
-				agentId: "cline",
-				model: GLM,
-				tier: "dev",
-			},
-		);
-		expect(answerPlanAssignment(kit)).toEqual({
+		expect(
+			createRoutingPolicy(kit, PROVISIONAL_ALLOWED).devAssignment({
+				workspaceId: "ws",
+				title: "",
+				prompt: "",
+				role: "dev",
+			}),
+		).toEqual({
+			agentId: "cline",
+			model: GLM,
+			tier: "dev",
+		});
+		expect(answerPlanAssignment(kit, PROVISIONAL_ALLOWED)).toEqual({
 			kind: "plan",
 			agentId: "cline",
 			model: GLM,
@@ -81,7 +87,7 @@ describe("team-local kit", () => {
 	});
 
 	it("gives every candidate dev model QA from another family", () => {
-		const policy = createRoutingPolicy(resolveTeamLocal().kit);
+		const policy = createRoutingPolicy(resolveTeamLocal().kit, PROVISIONAL_ALLOWED);
 		const qaFor = (model: { provider: string; model: string }) =>
 			policy.qaPolicy({
 				dev: createEffectiveCard({ agentId: "cline", model }),
@@ -98,7 +104,7 @@ describe("team-local kit", () => {
 	});
 
 	it("refuses QA by the dev model's own family", () => {
-		const policy = createRoutingPolicy(resolveTeamLocal({ "qa.routes": [] }).kit);
+		const policy = createRoutingPolicy(resolveTeamLocal({ "qa.routes": [] }).kit, PROVISIONAL_ALLOWED);
 		expect(
 			policy.qaPolicy({
 				dev: createEffectiveCard({ agentId: "cline", model: DEVSTRAL }),
@@ -109,7 +115,7 @@ describe("team-local kit", () => {
 	});
 
 	it("reworks on the same model, then hands the task to the fallback local model at once, and waits out Lemonade outages", () => {
-		const policy = createRoutingPolicy(resolveTeamLocal().kit);
+		const policy = createRoutingPolicy(resolveTeamLocal().kit, PROVISIONAL_ALLOWED);
 		const dev = createEffectiveCard({ agentId: "cline", model: GLM });
 		const limits = { maxFailRounds: 3 };
 		expect(policy.onFail({ dev, cause: "fail", verdict: null, history: createCardHistory([1]), limits })).toEqual({
@@ -162,7 +168,7 @@ describe("team-local kit", () => {
 			selectedAgentId: "claude",
 			maxFailRounds: 3,
 			outageMaxMin: 360,
-			config: parsePipelineConfig({}).config,
+			config: parsePipelineConfig({ workspaces: { local: { models: { allowProvisional: true } } } }).config,
 		});
 		expect(report.warnings).toEqual([]);
 		expect(report.recommendedLandingMode).toBe("qa");

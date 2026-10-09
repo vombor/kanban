@@ -31,6 +31,8 @@ export interface AddProjectInput {
 	name?: string;
 	blurb?: string;
 	agentsMd?: boolean;
+	/** Allow the vetted model registry's provisional combinations for the project (`kit apply --allow-provisional`). */
+	allowProvisional?: boolean;
 	/** Register a repo without commits (New project with the initial commit turned off). */
 	allowUnbornHead?: boolean;
 	/** Resolved projects roots (default: config.json's `projects.roots`). */
@@ -123,6 +125,7 @@ export async function addProject(input: AddProjectInput): Promise<AddProjectResu
 			kitName,
 			landing: input.landing,
 			set: input.blurb !== undefined ? { "qa.blurb": input.blurb } : {},
+			allowProvisional: input.allowProvisional,
 		});
 		configLines.push(`kit ${applied.kitName.to}, landing ${applied.landing.to}`);
 		if (applied.recommendedLandingMode && applied.recommendedLandingMode !== applied.landing.to) {

@@ -17,6 +17,7 @@ import { releaseHold } from "../../../src/pipeline/hold";
 import { readEscalationRecord, readQaflow } from "../../../src/pipeline/rework";
 import { createPipelineActionRunner } from "../../../src/server/pipeline-actions";
 import { createReworkHarness, failVerdict, REWORK_T0, type ReworkHarnessOptions } from "../../utilities/rework-stage";
+import { PROVISIONAL_ALLOWED } from "../../utilities/routing-vetting";
 import {
 	createBoard,
 	createCard,
@@ -50,7 +51,7 @@ function teamPolicy(overrides: Record<string, unknown>) {
 	if (!resolved.ok) {
 		throw new Error(resolved.error);
 	}
-	return createRoutingPolicy(resolved.kit);
+	return createRoutingPolicy(resolved.kit, PROVISIONAL_ALLOWED);
 }
 
 function createGroups(racing: string | null = null) {

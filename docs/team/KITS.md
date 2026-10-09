@@ -18,6 +18,13 @@ A kit is the **team definition**: its roles with a default model each, and the f
 **project settings** on top (role models and project facts, [Project settings](#project-settings)); a different
 team is a different kit.
 
+Every agent + provider + model a kit or a project routes a role to must be in the **vetted model registry**
+(`models/vetted.json`, [MODELS.md](MODELS.md)) for that role: vetted, or provisional where the user allowed
+provisional combinations for the project. The kit gives each role a default; the project picks another within the
+registry. The built-in `team` kit's own defaults (Cline on sol, Codex's and Claude's default models) and all of
+`team-local`'s Lemonade models are provisional, so a project on them needs `--allow-provisional` (or its own vetted
+role models, as foo has).
+
 Code: `src/kits/kit-schema.ts` (schema), `src/kits/kit-roles.ts` (roles and the fallback flow),
 `src/kits/project-settings.ts` (what a project may set), `src/kits/kit-legacy-keys.ts` (keys from before the split), `src/kits/resolve-kit.ts` (resolver), `src/kits/policy.ts` (the one
 evaluator), `kits/default.json`, `kits/team.json`, `kits/team-local.json`. Plan: `docs/fork/kit-merge-plan.md` §3.2-§3.4, §4.0.
@@ -171,7 +178,7 @@ user kit file), never a silent no-op. A missing key means "no answer", so the `d
 | `land.postLand[]` | `{ paths, run, stopUnder? }` | commands the core runs after a land that touched a file matching `paths` (regex) | `[]` | `[]` (foo overrides it) |
 | `features[]` | `scoreboard`, `bench`, `runoffs`, `calibration`, `tiers` | built-in team features that run for the project | `[]` | all five |
 | `tiers.<name>[]` | `{ provider?, model, default?, note? }` | `roles.<role>.tier`, `kanban bench tiers`, `bench runoff create --tier` | | `tier3`, `tier2`, `tier1`, `qa` |
-| `dropped[]` | `{ provider?, model, at?, why? }` | models no tier lookup returns, on any provider | | five models |
+| `dropped[]` | `{ provider?, model, at?, why? }` | a user kit's own models no tier lookup returns, on any provider; the built-in kits' are rejected in the vetted model registry (`rejected.scope: "model"`) | | none (in the registry) |
 | `tierRules`, `tierNotes` | text per tier | shown by `kanban bench tiers` | | |
 | `prices.{region,autoSync}` | | the `bench` feature's daily AWS price check | | `us-west-2`, `true` |
 | `recommends.landingMode` | landing mode | shown by `kanban kit show/apply`, **never applied** without `--landing` | | `qa` |
@@ -225,6 +232,7 @@ kanban kit set land.postLand '[{"paths":"^prisma/","run":"npx prisma generate"}]
 kanban kit unset roles.dev.model --project /projects/foo       # the kit's dev model again
 kanban kit unset roles.fallback --project /projects/foo        # every field of the role
 kanban kit set onFail.reworkRounds 5 --project /projects/foo   # refused: part of the team definition (kit team)
+kanban kit set roles.dev.model gpt-9 --project /projects/foo          # refused: not in the vetted model registry for dev (kanban models vet ...)
 ```
 
 The value is JSON when it parses as JSON (`true`, `3`, `null`, `[…]`, `{…}`, `"text"`), else the text itself. A
@@ -268,8 +276,8 @@ A model id's vendor (for `qa.requireDifferentVendor`) is `getModelVendor()` in `
 `Qwen` → `qwen`, `Gemma` → `google`, `DeepSeek` → `deepseek`), named like the Bedrock vendors so a local and a
 Bedrock model of one family count as one vendor. An id it can't place gives no vendor, and the rule doesn't refuse.
 
-A tier lookup returns the tier's `default` entry, else its first usable one, and skips `dropped` models
-(`src/kits/tier-lookup.ts`).
+A tier lookup returns the tier's `default` entry, else its first usable one, and skips `dropped` models and the
+models the vetted model registry rejects on every agent (`src/kits/tier-lookup.ts`).
 
 ## How the evaluator answers
 
@@ -382,8 +390,8 @@ until `kanban bench calibrate` picks the final ones on the project.
 | Fallback dev model (`roles.fallback`: tier `senior`) | `Qwen3.6-35B-A3B-MTP-GGUF` | a third family, neither the dev nor the QA model, so its sibling is still reviewed by Devstral. 65536 context as Lemonade loads it (its KV cache is small, so a bigger one costs little memory) |
 
 The other coding models are candidates in `tiers` (`Devstral`, `Qwen3.6` and `DeepSeek-V4-Flash-0731-GGUF-BF16` for
-dev; `GLM`, `Qwen3.6` and `Gemma-4-12B-it-GGUF` for QA, the last two with vision). `LMX-Omni-52B-Halo` is in
-`dropped`: it is a Lemonade collection (Qwen3.6 + image + speech models) without the tool-calling label, so Cline's
+dev; `GLM`, `Qwen3.6` and `Gemma-4-12B-it-GGUF` for QA, the last two with vision). `LMX-Omni-52B-Halo` is
+rejected in the vetted model registry: it is a Lemonade collection (Qwen3.6 + image + speech models) without the tool-calling label, so Cline's
 Lemonade list doesn't offer it.
 
 - **FAIL:** same-model rework for 3 rounds (conflicts too), then the fallback: a sibling card on Qwen3.6 takes the
@@ -479,8 +487,8 @@ The other local gotchas:
 
 ```sh
 kanban project create /projects/<name>                    # or: kanban project add /projects/<name>
-kanban kit apply team-local --project /projects/<name> --landing qa --dry-run
-kanban kit apply team-local --project /projects/<name> --landing qa
+kanban kit apply team-local --project /projects/<name> --landing qa --allow-provisional --dry-run
+kanban kit apply team-local --project /projects/<name> --landing qa --allow-provisional   # its models are provisional until vetted
 kanban task reassign --column backlog --project-path /projects/<name>   # existing Backlog cards onto the kit
 kanban kit show --project /projects/<name>                # routing + "Settings this kit needs"
 kanban doctor /projects/<name>                            # warns about unmet settings and missing models

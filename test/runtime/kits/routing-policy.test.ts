@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import { kitDocumentSchema } from "../../../src/kits/kit-schema";
 import { createRoutingPolicy, getModelVendor } from "../../../src/kits/policy";
 import { getBuiltInKits, getDefaultKit, resolveKitLayers } from "../../../src/kits/resolve-kit";
+import type { RoutingVetting } from "../../../src/kits/routing-vetting";
 import { createCardHistory, createEffectiveCard } from "../../utilities/effective-card";
+import { createTestRegistry, PROVISIONAL_ALLOWED } from "../../utilities/routing-vetting";
 
 function teamPolicy(overrides: Record<string, unknown> = {}) {
 	const team = getBuiltInKits().get("team");
@@ -14,7 +16,7 @@ function teamPolicy(overrides: Record<string, unknown> = {}) {
 	if (!resolved.ok) {
 		throw new Error(resolved.error);
 	}
-	return createRoutingPolicy(resolved.kit);
+	return createRoutingPolicy(resolved.kit, PROVISIONAL_ALLOWED);
 }
 
 describe("routing policy evaluator", () => {
@@ -172,14 +174,25 @@ describe("routing policy evaluator", () => {
 			name: "race",
 			onFail: { rework: "same-model", reworkRounds: 2, runoff: { models: [{ agent: "cline", model: "m1" }] } },
 		});
-		const answer = createRoutingPolicy(kit).onFail({
-			dev: createEffectiveCard({ agentId: "cline" }),
-			cause: "fail",
-			verdict: null,
-			history: createCardHistory([1]),
-			limits: { maxFailRounds: 3 },
+		const ask = (vetting: RoutingVetting) =>
+			createRoutingPolicy(kit, vetting).onFail({
+				dev: createEffectiveCard({ agentId: "cline" }),
+				cause: "fail",
+				verdict: null,
+				history: createCardHistory([1]),
+				limits: { maxFailRounds: 3 },
+			});
+		const vetted = {
+			registry: createTestRegistry([{ agentId: "cline", provider: null, model: "m1" }]),
+			allowProvisional: false,
+		};
+		expect(ask(vetted)).toEqual({ action: "runoff", models: [{ agentId: "cline", provider: null, model: "m1" }] });
+		// A racer the vetted model registry doesn't know goes to the orchestrator instead.
+		expect(ask(PROVISIONAL_ALLOWED)).toMatchObject({
+			action: "escalate",
+			to: "orchestrator",
+			reason: expect.stringMatching(/runoff is refused: cline \+ m1 is not vetted for dev work/u),
 		});
-		expect(answer).toEqual({ action: "runoff", models: [{ agentId: "cline", provider: null, model: "m1" }] });
 	});
 
 	it("hands an outage-held card to the fallback after fallback.outageAfterMin (default maxMin), never onto its own model", () => {

@@ -17,6 +17,7 @@ import { LEMONADE_PROVIDER_ID, type ModelProbeOutcome, probeModel } from "../mod
 import { getBedrockProfilesCachePath, loadModelProbeDependencies } from "../models/model-probe-setup";
 import { listWorkspaceIndexEntries, loadWorkspaceBoardById, mutateWorkspaceState } from "../state/workspace-state";
 import { registerModelPricesCommand } from "./model-prices";
+import { registerModelsRegistryCommands } from "./models-registry";
 import { createRuntimeTrpcClient, notifyRuntimeWorkspaceStateUpdated } from "./runtime-trpc-client";
 import { resolveWorkspaceTarget } from "./workspace-target";
 
@@ -267,7 +268,9 @@ async function runProviders(options: ProvidersCommandOptions): Promise<number> {
 }
 
 export function registerModelsCommand(program: Command): void {
-	const models = program.command("models").description("Probe models and manage the Cline provider policy.");
+	const models = program
+		.command("models")
+		.description("The vetted model registry (list, vet), model probes and the Cline provider policy.");
 	models
 		.command("probe")
 		.description(
@@ -317,4 +320,5 @@ export function registerModelsCommand(program: Command): void {
 			}
 		});
 	registerModelPricesCommand(models);
+	registerModelsRegistryCommands(models);
 }

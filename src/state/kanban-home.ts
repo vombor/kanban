@@ -354,6 +354,11 @@ export function getKanbanModelsDataPath(homePath = getKanbanHomePath()): string 
 	return join(getKanbanDataPath(homePath), MODELS_DATA_DIR);
 }
 
+/** `kanban models vet` runs (`<home>/data/models/vetting/<run>`: report.md, result.json, run.log), machine-wide. */
+export function getModelVettingRunsPath(homePath = getKanbanHomePath()): string {
+	return join(getKanbanModelsDataPath(homePath), "vetting");
+}
+
 // The team kit's `bench` feature (plan §2.4, §6.2): model list prices and the AWS Price List cache, machine-wide.
 const PRICES_DATA_DIR = "prices";
 const PRICE_SYNC_LOG_FILENAME = "price-sync.log";

@@ -36,6 +36,7 @@ import {
 	kitDocumentObjectSchema,
 } from "./kit-schema";
 import { DEFAULT_KIT_NAME, type KitCatalog, loadKitCatalog, resolveKitByName } from "./resolve-kit";
+import { describeRefusedKitRoutes, getWorkspaceRoutingVetting } from "./routing-vetting";
 
 /** Project facts a project sets on its kit: a key here, or anything under it. */
 export const PROJECT_FACT_KEYS = [
@@ -271,6 +272,17 @@ async function changeProjectSettings(
 			const resolved = resolveKitByName(catalog, kitName, after);
 			if (!resolved.ok) {
 				throw new KitSettingRefusedError(`${input.key}: kit ${kitName} would not resolve: ${resolved.error}`);
+			}
+			// A project picks its role models within the vetted model registry: a change may not route a role to a
+			// combination it refuses (routes refused already before the change are doctor's to report).
+			const vetting = getWorkspaceRoutingVetting(config, input.workspaceId);
+			const current = resolveKitByName(catalog, kitName, before);
+			const refusedBefore = new Set(current.ok ? describeRefusedKitRoutes(current.kit, vetting) : []);
+			const newlyRefused = describeRefusedKitRoutes(resolved.kit, vetting).filter(
+				(line) => !refusedBefore.has(line),
+			);
+			if (newlyRefused.length > 0) {
+				throw new KitSettingRefusedError(`${input.key}: ${newlyRefused.join("; ")}`);
 			}
 			changes = diffOverridesForHistory(before, after, {
 				at,

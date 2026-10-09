@@ -5,6 +5,7 @@
 // maxLoadedModels`, serializes work by model and must not be above what Lemonade holds, or cards thrash; below it,
 // QA cards wait for nothing. Pure: `kanban doctor` and `kanban kit show` fetch /api/v1/health and print these.
 import type { EffectiveModel } from "../core/effective-agent";
+import { getVettedRegistry } from "../models/vetted-registry";
 import type { KitDocument } from "./kit-schema";
 import { answerPlanAssignment, createRoutingPolicy, type EffectiveCard } from "./policy";
 
@@ -32,7 +33,10 @@ function sampleCard(model: EffectiveModel | null): EffectiveCard {
  * run once someone picks them.
  */
 export function listKitLocalWorkingSet(kit: KitDocument): string[] {
-	const policy = createRoutingPolicy(kit);
+	// The kit as written, provisional models included (local kits are provisional until calibrated); whether a project
+	// may use them is the vetting rows' question (src/kits/routing-vetting.ts).
+	const vetting = { registry: getVettedRegistry(), allowProvisional: true };
+	const policy = createRoutingPolicy(kit, vetting);
 	const dev = policy.devAssignment({ workspaceId: "sample", title: "", prompt: "", role: "dev" })?.model ?? null;
 	const card = sampleCard(dev);
 	const history = { failRounds: [1, 2, 3], reworks: 2, nudges: 0, escalations: 0, handbacks: 0, extraRounds: 0 };
@@ -44,7 +48,7 @@ export function listKitLocalWorkingSet(kit: KitDocument): string[] {
 		history,
 		limits: { maxFailRounds: 3 },
 	});
-	const planAnswer = answerPlanAssignment(kit);
+	const planAnswer = answerPlanAssignment(kit, vetting);
 	const plan = planAnswer.kind === "plan" ? (planAnswer.model ?? null) : null;
 	const models: Array<{ provider?: string | null; model: string } | null> = [
 		dev,

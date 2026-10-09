@@ -828,15 +828,35 @@ export type RuntimeDevAssignmentRequest = z.infer<typeof runtimeDevAssignmentReq
 
 export const runtimeDevAssignmentResponseSchema = z.object({
 	kitName: z.string(),
-	/** `applied`: preselect the proposal. `shadow`: show it, don't apply it. `none`: the kit has no answer. */
-	outcome: z.enum(["none", "explicit", "shadow", "applied"]),
+	/**
+	 * `applied`: preselect the proposal. `shadow`: show it, don't apply it. `none`: the kit has no answer.
+	 * `refused`: the vetted model registry doesn't allow the kit's dev role (`proposal.refused` says why).
+	 */
+	outcome: z.enum(["none", "explicit", "shadow", "applied", "refused"]),
 	proposal: z
 		.object({
 			agentId: runtimeAgentIdEnumSchema,
 			agentSettings: runtimeAgentSettingsSchema.optional(),
 			tier: z.string().nullable(),
+			refused: z.string().optional(),
 		})
 		.nullable(),
+	/**
+	 * The combinations this project may route dev work to (the vetted model registry, src/kits/routing-vetting.ts);
+	 * the dialog warns when the user picks another (allowed: it's the user's call). Null when the project's kit routes
+	 * nothing (`default`). `providerId`/`modelId` null = the agent's own.
+	 */
+	vettedDev: z
+		.array(
+			z.object({
+				agentId: runtimeAgentIdEnumSchema,
+				providerId: z.string().nullable(),
+				modelId: z.string().nullable(),
+				status: z.enum(["vetted", "provisional"]),
+			}),
+		)
+		.nullable()
+		.optional(),
 });
 export type RuntimeDevAssignmentResponse = z.infer<typeof runtimeDevAssignmentResponseSchema>;
 

@@ -122,6 +122,12 @@ export const workspacePipelineSettingsSchema = z
 			.strict()
 			.default({ enabled: true }),
 		kit: workspaceKitRefSchema.nullable().default(null),
+		// Which combinations of the vetted model registry this project may route to (src/kits/routing-vetting.ts):
+		// vetted ones always; provisional ones only when the user allows them (`kanban models allow-provisional`).
+		models: z
+			.object({ allowProvisional: z.boolean().default(false) })
+			.strict()
+			.default({ allowProvisional: false }),
 		// Task-card guardrails (src/guardrails/): `enabled` overrides the machine-wide `guardrails.enabled` either
 		// way (null keeps it). The lists are added to the machine-wide ones: extra deny patterns tighten, extra
 		// writable dirs loosen.

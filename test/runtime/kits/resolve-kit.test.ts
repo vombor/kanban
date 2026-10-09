@@ -249,8 +249,25 @@ describe("kanban kit show report", () => {
 			selectedAgentId: "claude",
 			maxFailRounds: 3,
 			outageMaxMin: 360,
+			config: parsePipelineConfig({ workspaces: { foo: { models: { allowProvisional: true } } } }).config,
+		});
+		expect(report.vetting.every((route) => route.check.ok)).toBe(true);
+		// Without the user's allowance the team kit's provisional defaults show as refused.
+		const strict = buildKitReport({
+			kitName: "team",
+			resolved,
+			workspaceId: "foo",
+			selectedAgentId: "claude",
+			maxFailRounds: 3,
+			outageMaxMin: 360,
 			config: parsePipelineConfig({}).config,
 		});
+		expect(formatKitReport(strict).join("\n")).toMatch(
+			/REFUSED roles\.dev → cline \+ bedrock \+ us\.openai\.gpt-6\.1-sol for dev: .*only provisional/u,
+		);
+		expect(formatKitReport(strict).join("\n")).toContain(
+			"ok (vetted) qa.routes[0] → cline + bedrock + us.anthropic.claude-haiku-4-5-20251001-v1:0 for qa",
+		);
 		const sourceOf = (key: string) => report.values.find((row) => row.key === key)?.source;
 		expect(sourceOf("qa.blurb")).toBe("project");
 		expect(sourceOf("qa.enabled")).toBe("team");

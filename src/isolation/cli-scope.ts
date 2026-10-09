@@ -69,6 +69,8 @@ export const USER_ONLY_COMMANDS = [
 	"plan approve",
 	// Moves team keys into a new user kit and switches the project to it: a change of the project's team.
 	"kit migrate-overrides",
+	// Lets a project route to combinations the vetted model registry hasn't vetted yet.
+	"models allow-provisional",
 ] as const;
 
 /** The plan approval refusal (the server's, src/trpc/plans-api.ts, says the same). */
@@ -81,13 +83,15 @@ function planApprovalRefusal(taskId: string | undefined): string {
  * refused. `issues sync` calls GitHub with the user's own token (the `gh` login or `GH_TOKEN`); `kit set|unset`
  * change the project's settings on its kit (the server checks the caller again, src/trpc/kit-settings-api.ts).
  */
-export const ORCHESTRATOR_OR_USER_COMMANDS = ["issues sync", "kit set", "kit unset"] as const;
+export const ORCHESTRATOR_OR_USER_COMMANDS = ["issues sync", "kit set", "kit unset", "models vet"] as const;
 
 function orchestratorOrUserRefusal(commandPath: string): string {
 	const why =
 		commandPath === "issues sync"
 			? "uses the user's GitHub login"
-			: "changes the project's settings on its kit (role models, project facts)";
+			: commandPath === "models vet"
+				? "starts a smoke-test card on another agent and model"
+				: "changes the project's settings on its kit (role models, project facts)";
 	return `\`kanban ${commandPath}\` ${why}, so only the user or the project's orchestrator runs it, never a card session. Tell your orchestrator what you need.`;
 }
 

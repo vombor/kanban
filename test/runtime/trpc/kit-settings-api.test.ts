@@ -42,7 +42,10 @@ describe("kit settings caller rules", () => {
 	it("applies an allowed change at once and logs a refused one, writing nothing for it", async () => {
 		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
 			mkdirSync(dirname(globalConfigPath), { recursive: true });
-			writeFileSync(globalConfigPath, JSON.stringify({ workspaces: { foo: { kit: { name: "team" } } } }));
+			writeFileSync(
+				globalConfigPath,
+				JSON.stringify({ workspaces: { foo: { kit: { name: "team" }, models: { allowProvisional: true } } } }),
+			);
 			const logged: Array<{ workspaceIds: readonly (string | null)[]; action: string; kind: string }> = [];
 			const api = createKitSettingsApi({
 				log: async (workspaceIds, record) => {
@@ -50,7 +53,11 @@ describe("kit settings caller rules", () => {
 				},
 			});
 			const set = (caller: RuntimeCaller) =>
-				api.set({ caller, workspaceId: "foo", request: { key: "roles.fallback.model", value: "m1" } });
+				api.set({
+					caller,
+					workspaceId: "foo",
+					request: { key: "roles.fallback.model", value: "us.moonshotai.kimi-k3" },
+				});
 
 			for (const caller of [OTHER_ORCHESTRATOR, OWN_CARD, UNKNOWN]) {
 				const response = await set(caller);
@@ -64,11 +71,22 @@ describe("kit settings caller rules", () => {
 			]);
 			expect(JSON.parse(readFileSync(globalConfigPath, "utf8")).workspaces.foo.kit).toEqual({ name: "team" });
 
+			// The orchestrator picks within the vetted model registry: an unknown model is refused with the vet command.
+			const unvetted = await api.set({
+				caller: OWN_ORCHESTRATOR,
+				workspaceId: "foo",
+				request: { key: "roles.fallback.model", value: "m1" },
+			});
+			expect(unvetted).toMatchObject({ ok: false, changes: [] });
+			expect(unvetted.error).toContain("cline + m1 is not vetted for dev work");
+			expect(unvetted.error).toContain("kanban models vet --agent cline --model m1 --role dev");
+			expect(JSON.parse(readFileSync(globalConfigPath, "utf8")).workspaces.foo.kit).toEqual({ name: "team" });
+
 			const response = await set(OWN_ORCHESTRATOR);
 			expect(response).toMatchObject({
 				ok: true,
 				kitName: "team",
-				changes: [{ key: "roles.fallback.model", to: "m1" }],
+				changes: [{ key: "roles.fallback.model", to: "us.moonshotai.kimi-k3" }],
 			});
 			expect(
 				(

@@ -45,6 +45,7 @@ import { checkIsolation } from "./isolation-checks";
 import { checkIssueImport, createIssueCheckDeps, type IssueCheckDeps } from "./issue-checks";
 import { checkKitLemonadeModels, checkKitProjectSettings, checkKitRecommendedSettings } from "./kit-settings-checks";
 import { checkOneOwner } from "./one-owner-checks";
+import { checkRoutingVetting } from "./routing-vetting-checks";
 
 export interface DoctorOptions {
 	/** `kanban doctor <path>`: a project that should be registered. */
@@ -146,6 +147,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
 	);
 	findings.push(...checkKitProjectSettings(projectContext));
 	findings.push(...checkKitRecommendedSettings(projectContext));
+	findings.push(...checkRoutingVetting(projectContext));
 	findings.push(
 		...(await checkKitLemonadeModels({
 			...projectContext,

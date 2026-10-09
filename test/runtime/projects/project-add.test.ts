@@ -59,6 +59,7 @@ describe("kanban project add", () => {
 				landing: "qa",
 				blurb: "Project: shop",
 				base: "main",
+				allowProvisional: true,
 			});
 			expect(result).toMatchObject({ kitName: "team", landingMode: "qa" });
 			const { config } = await readPipelineConfig(globalConfigPath);
@@ -66,6 +67,7 @@ describe("kanban project add", () => {
 				landing: { mode: "qa" },
 				defaultBaseRef: "main",
 				kit: { name: "team", overrides: { "qa.blurb": "Project: shop" } },
+				models: { allowProvisional: true },
 			});
 
 			const plain = createRepo(join(userHomePath, "plain"));
@@ -78,7 +80,7 @@ describe("kanban project add", () => {
 	it("keeps an existing project's kit and landing mode, and says how to change them", async () => {
 		await withTemporaryKanbanHome(async ({ userHomePath, globalConfigPath }) => {
 			const repo = createRepo(join(userHomePath, "app"));
-			const first = await addProject({ repoPath: repo, kit: "team", landing: "off" });
+			const first = await addProject({ repoPath: repo, kit: "team", landing: "off", allowProvisional: true });
 			const second = await addProject({ repoPath: repo, kit: "default", landing: "qa", name: "App" });
 			expect(second).toMatchObject({ kitName: "team", landingMode: "off" });
 			expect(second.warnings.join("\n")).toContain(`kanban kit apply default --project ${first.workspaceId}`);

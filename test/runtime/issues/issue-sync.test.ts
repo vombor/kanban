@@ -301,7 +301,7 @@ describe("issue sync", () => {
 
 	it("creates a plan card for the plan label when the kit has the plan role, a dev card otherwise", async () => {
 		await withTemporaryKanbanHome(async () => {
-			writeConfig({ mode: "on" }, { kit: { name: "team" } });
+			writeConfig({ mode: "on" }, { kit: { name: "team" }, models: { allowProvisional: true } });
 			const h = createHarness();
 			h.github.upsertIssue({
 				number: 5,

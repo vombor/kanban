@@ -25,7 +25,7 @@ const T0 = Date.parse("2026-10-07T23:03:26.000Z");
 const SERVER_START = Date.parse("2026-10-07T23:02:56.000Z");
 const BEFORE = SERVER_START - 20 * 60_000;
 const CONFIG = {
-	workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" } } },
+	workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" }, models: { allowProvisional: true } } },
 	pipeline: { recovery: { mode: "on" }, qa: { slots: 1 } },
 };
 const DEV = { agentId: "cline" as const, agentSettings: { providerId: "bedrock", modelId: "us.openai.gpt-6.1-sol" } };

@@ -86,7 +86,7 @@ function writeConfig(config: Record<string, unknown>): void {
 }
 
 function teamWorkspace(extra: Record<string, unknown> = {}): Record<string, unknown> {
-	return { workspaces: { [WORKSPACE_ID]: { kit: { name: "team" }, ...extra } } };
+	return { workspaces: { [WORKSPACE_ID]: { kit: { name: "team" }, models: { allowProvisional: true }, ...extra } } };
 }
 
 function request(overrides: Partial<DevAssignmentRequest> = {}): DevAssignmentRequest {
@@ -120,7 +120,7 @@ describe("resolveDevAssignment", () => {
 
 	it("never inherits another workspace's kit", async () => {
 		await withTemporaryKanbanHome(async () => {
-			writeConfig({ workspaces: { other: { kit: { name: "team" } } } });
+			writeConfig({ workspaces: { other: { kit: { name: "team" }, models: { allowProvisional: true } } } });
 			expect((await resolveDevAssignment(request())).outcome).toBe("none");
 		});
 	});
@@ -184,24 +184,38 @@ describe("resolveDevAssignment", () => {
 	it("fills the provider from models.providers when the kit names none, and only for agents that read one", async () => {
 		await withTemporaryKanbanHome(async () => {
 			writeConfig({
-				models: { providers: { default: "bedrock", fallback: { "gpt-x": "openai-native" } } },
+				models: {
+					providers: { default: "bedrock", fallback: { "us.anthropic.claude-opus-5-5": "openai-native" } },
+				},
 				workspaces: {
-					[WORKSPACE_ID]: { kit: { name: "team", overrides: { "dev.model": { model: "gpt-x" } } } },
-					plain: { kit: { name: "team", overrides: { "dev.model": { model: "gpt-y" } } } },
-					claude: { kit: { name: "team", overrides: { "dev.agent": "claude", "dev.model": { model: "opus" } } } },
+					[WORKSPACE_ID]: {
+						kit: { name: "team", overrides: { "dev.model": { model: "us.anthropic.claude-opus-5-5" } } },
+						models: { allowProvisional: true },
+					},
+					plain: {
+						kit: { name: "team", overrides: { "dev.model": { model: "us.amazon.nova-2-lite-v1:0" } } },
+						models: { allowProvisional: true },
+					},
+					codex: {
+						kit: {
+							name: "team",
+							overrides: { "dev.agent": "codex", "dev.model": { model: "us.moonshotai.kimi-k3" } },
+						},
+					},
 				},
 			});
 			expect((await resolveDevAssignment(request())).agentSettings).toEqual({
 				providerId: "openai-native",
-				modelId: "gpt-x",
+				modelId: "us.anthropic.claude-opus-5-5",
 			});
 			expect((await resolveDevAssignment(request({ workspaceId: "plain" }))).agentSettings).toEqual({
 				providerId: "bedrock",
-				modelId: "gpt-y",
+				modelId: "us.amazon.nova-2-lite-v1:0",
 			});
-			expect(await resolveDevAssignment(request({ workspaceId: "claude" }))).toMatchObject({
-				agentId: "claude",
-				agentSettings: { modelId: "opus" },
+			expect(await resolveDevAssignment(request({ workspaceId: "codex" }))).toMatchObject({
+				outcome: "applied",
+				agentId: "codex",
+				agentSettings: { modelId: "us.moonshotai.kimi-k3" },
 			});
 		});
 	});
@@ -383,13 +397,25 @@ describe("workspace.getDevAssignment (the create dialog's preselection)", () => 
 				kitName: "default",
 				outcome: "none",
 				proposal: null,
+				vettedDev: null,
 			});
 			writeConfig(teamWorkspace());
-			expect(await createCaller().workspace.getDevAssignment({ prompt: "x" })).toEqual({
+			const answer = await createCaller().workspace.getDevAssignment({ prompt: "x" });
+			expect(answer).toMatchObject({
 				kitName: "team",
 				outcome: "applied",
 				proposal: { agentId: "cline", agentSettings: TEAM_TIER3, tier: "tier3" },
 			});
+			// The dialog warns about a pick outside these (the project allows provisional ones).
+			expect(answer.vettedDev).toContainEqual({
+				agentId: "codex",
+				providerId: "bedrock",
+				modelId: "us.openai.gpt-6.1-sol",
+				status: "vetted",
+			});
+			expect(answer.vettedDev).toContainEqual(
+				expect.objectContaining({ agentId: "cline", modelId: "us.openai.gpt-6.1-sol", status: "provisional" }),
+			);
 		});
 	});
 });

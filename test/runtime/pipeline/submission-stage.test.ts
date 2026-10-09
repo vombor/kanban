@@ -15,7 +15,7 @@ import { createEffectiveCard } from "../../utilities/effective-card";
 import { createRepoWithWorktree } from "../../utilities/git-repo";
 import { createCard } from "../../utilities/workspace-state-store";
 
-const TEAM_QA = { landing: { mode: "qa" }, kit: { name: "team" } };
+const TEAM_QA = { landing: { mode: "qa" }, kit: { name: "team" }, models: { allowProvisional: true } };
 
 function settingsFor(entry: unknown) {
 	const settings = parsePipelineConfig({ workspaces: { foo: entry } }).config.workspaces.foo;

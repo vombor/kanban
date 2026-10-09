@@ -28,6 +28,7 @@ import { KANBAN_SESSION_CREDENTIAL_ENV } from "../isolation/session-identity";
 import type { KitDocument } from "../kits/kit-schema";
 import { getPromptParts } from "../kits/policy";
 import { loadKitCatalog, resolveWorkspaceKit } from "../kits/resolve-kit";
+import { checkRouting, getWorkspaceRoutingVetting } from "../kits/routing-vetting";
 import { locateCard } from "../kits/team/bench/card-locator";
 import { stripReworkSections } from "../kits/team/calibration/calibration-prompt";
 import { type CalibrationDependencies, runCalibration } from "../kits/team/calibration/calibration-runner";
@@ -137,6 +138,25 @@ async function loadTarget(specArgument: string, options: CalibrateOptions): Prom
 	const capacityIssue = findCalibrationCapacityIssue(spec, config.models.providerCapacity);
 	if (capacityIssue && !options.force && !options.print) {
 		throw new Error(`${capacityIssue} (--force to run anyway)`);
+	}
+	// The QA models it compares are QA routes too: only combinations the vetted model registry allows (provisional
+	// ones where the user allowed them for the project). Only the user's own --force runs others, with a warning.
+	const vetting = getWorkspaceRoutingVetting(config, target.workspaceId);
+	for (const model of spec.models) {
+		const check = checkRouting(vetting, "qa", {
+			agentId: model.agent,
+			provider: model.provider ?? null,
+			model: model.model ?? null,
+		});
+		if (check.ok || options.print) {
+			continue;
+		}
+		if (!options.force || readSessionCredential(process.env)) {
+			throw new Error(
+				`model ${model.key}: ${check.message}${readSessionCredential(process.env) ? "" : " (the user's --force runs it anyway)"}`,
+			);
+		}
+		process.stderr.write(`Warning: model ${model.key}: ${check.message}; running it anyway (--force)\n`);
 	}
 	const known = kit.qa?.rules ?? {};
 	for (const model of spec.models) {

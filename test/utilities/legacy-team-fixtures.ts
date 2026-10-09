@@ -8,6 +8,7 @@ import { readClineDefaultModel } from "../../src/core/effective-agent";
 import { createRoutingPolicy, type EffectiveCard, type RoutingPolicy } from "../../src/kits/policy";
 import { getBuiltInKits, getDefaultKit, resolveKitLayers } from "../../src/kits/resolve-kit";
 import { toEffectiveCard } from "../../src/pipeline/engine";
+import { PROVISIONAL_ALLOWED } from "./routing-vetting";
 
 // Fixtures taken from the legacy kit before cutover (test/runtime/kits/fixtures/legacy-team/generate.cjs): a copy of
 // the live kit.config.json (2026-10-07), the cards, and what the legacy code answered for them.
@@ -81,7 +82,7 @@ export function createTeamPolicy(overrides: Record<string, unknown> = {}): Routi
 	if (!resolved.ok) {
 		throw new Error(resolved.error);
 	}
-	return createRoutingPolicy(resolved.kit);
+	return createRoutingPolicy(resolved.kit, PROVISIONAL_ALLOWED);
 }
 
 /**

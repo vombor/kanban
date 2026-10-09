@@ -1,0 +1,369 @@
+{
+	"$schema": "./vetted.schema.json",
+	"registry": 1,
+	"description": "Agent CLI + provider + model combinations Kanban routes work to, vetted per role (docs/team/MODELS.md). Projects route only to combinations vetted for the role (provisional only where the user allows it for the project). Changes go through the Kanban repo: kanban models vet writes a proposal, the Kanban orchestrator commits it.",
+	"entries": [
+		{
+			"agent": "codex",
+			"provider": "bedrock",
+			"model": "us.openai.gpt-6.1-sol",
+			"roles": {
+				"dev": {
+					"status": "vetted",
+					"at": "2026-10-08",
+					"cliVersion": null,
+					"evidence": {
+						"run": "runoffs mai-vs-sol",
+						"summary": "foo's one coder since 2026-10-08 (user: LOCKED, every dev card on Codex): both mai-vs-sol runoffs (5.0), tied kimi-k3 on the same-reviewer re-grade at 4-15x lower cost; dozens of QA-gated dev cards since"
+					}
+				}
+			},
+			"capabilities": { "toolUse": true, "turnEnd": true },
+			"note": "Codex reads its provider from its own config (~/.codex/config.toml: Bedrock), so Kanban names none for Codex cards"
+		},
+		{
+			"agent": "codex",
+			"provider": "bedrock",
+			"model": "us.moonshotai.kimi-k3",
+			"roles": {
+				"dev": {
+					"status": "vetted",
+					"at": "2026-10-08",
+					"cliVersion": null,
+					"evidence": {
+						"run": "runoff tier2-coupons-2026-10-06",
+						"summary": "foo's fallback since 2026-10-08 (user): takes a card over after 3 QA FAILs, a QA stall or an outage; runoff tier2-coupons (096bd), re-grade 10/08 scored it equal to sol on Haiku QA"
+					}
+				}
+			},
+			"capabilities": { "toolUse": true, "turnEnd": true }
+		},
+		{
+			"agent": "cline",
+			"provider": "bedrock",
+			"model": "us.anthropic.claude-haiku-5-5",
+			"roles": {
+				"qa": {
+					"status": "vetted",
+					"at": "2026-10-08",
+					"cliVersion": "3.0.69",
+					"evidence": {
+						"run": null,
+						"summary": "foo's QA on every dev card since 2026-10-08 (user, upgraded from Haiku 4.5); Bedrock Converse tool-call probe OK (kanban models probe). Not calibrated yet: 4.5 scored 2/3 on qa-models v5/v14"
+					}
+				}
+			},
+			"capabilities": { "toolUse": true, "images": true, "turnEnd": true }
+		},
+		{
+			"agent": "cline",
+			"provider": "bedrock",
+			"model": "us.anthropic.claude-opus-5-5",
+			"roles": {
+				"plan": {
+					"status": "vetted",
+					"at": "2026-10-09",
+					"cliVersion": "3.0.69",
+					"evidence": {
+						"run": null,
+						"summary": "foo's planner (plan cards ca9f3, 090cd, ... on 2026-10-09, Cline plan mode)"
+					}
+				},
+				"dev": {
+					"status": "provisional",
+					"at": "2026-10-06",
+					"cliVersion": null,
+					"evidence": {
+						"run": "runoff tier2-coupons-2026-10-06",
+						"summary": "tier-2 runoff candidate (c9e97); not foo's fallback (kimi-k3 on Codex is)"
+					}
+				}
+			},
+			"capabilities": { "toolUse": true, "images": true, "turnEnd": true }
+		},
+		{
+			"agent": "cline",
+			"provider": "bedrock",
+			"model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+			"roles": {
+				"qa": {
+					"status": "vetted",
+					"at": "2026-10-06",
+					"cliVersion": null,
+					"evidence": {
+						"run": "calibration qa-models-v5..v7",
+						"summary": "the team kit's QA for OpenAI-built cards (user 10/06, qa.routes); replaced on foo by Haiku 5.5 on 2026-10-08"
+					}
+				}
+			},
+			"capabilities": { "toolUse": true, "images": true, "turnEnd": true }
+		},
+		{
+			"agent": "cline",
+			"provider": "bedrock",
+			"model": "us.openai.gpt-6.1-sol",
+			"roles": {
+				"dev": {
+					"status": "provisional",
+					"at": "2026-10-06",
+					"cliVersion": null,
+					"evidence": {
+						"run": "runoff tier3-multiregion",
+						"summary": "the team kit's tier-3 default: won tier3-multiregion on Cline (4.0 vs 3.67, ~21 min vs ~2h45), before the switch from openai-native to bedrock; not run on cline 3.x + bedrock since (foo runs sol on Codex)"
+					}
+				}
+			}
+		},
+		{
+			"agent": "cline",
+			"provider": "bedrock",
+			"model": "us.moonshotai.kimi-k3",
+			"roles": {
+				"dev": {
+					"status": "provisional",
+					"at": "2026-10-06",
+					"cliVersion": null,
+					"evidence": {
+						"run": null,
+						"summary": "the team kit's tier-2 candidate; untested on Cline + bedrock (503 outage 10/06)"
+					}
+				}
+			}
+		},
+		{
+			"agent": "cline",
+			"provider": "bedrock",
+			"model": "us.amazon.nova-2-lite-v1:0",
+			"roles": {
+				"dev": {
+					"status": "provisional",
+					"at": "2026-10-07",
+					"cliVersion": "3.0.69",
+					"evidence": {
+						"run": "probe card 717a9",
+						"summary": "dropped 2026-10-05 (ended turns narrating instead of calling tools; ~$26 per 62a99-sized run uncached); back 2026-10-07 with the Cline Bedrock cache patch: 16 turns, 15 tool calls, $0.045, STATUS: DONE on a small task (narrating not ruled out)"
+					}
+				},
+				"qa": {
+					"status": "provisional",
+					"at": "2026-10-07",
+					"cliVersion": "3.0.69",
+					"evidence": {
+						"run": "calibration qa-models-v5",
+						"summary": "QA candidate; in calibration v5 it re-ran one server command 334 times in 75 min ($64.84) before the loop detector; same 717a9 probe as dev"
+					}
+				}
+			},
+			"capabilities": { "toolUse": true }
+		},
+		{
+			"agent": "codex",
+			"provider": null,
+			"model": null,
+			"roles": {
+				"qa": {
+					"status": "provisional",
+					"at": "2026-10-06",
+					"cliVersion": null,
+					"evidence": {
+						"run": null,
+						"summary": "the team kit's roles.qa (Codex's own default model; sol6 was QA until the tier-2 runoff, tierNotes 10/06); no project QAs on it now"
+					}
+				}
+			}
+		},
+		{
+			"agent": "claude",
+			"provider": null,
+			"model": null,
+			"roles": {
+				"plan": {
+					"status": "provisional",
+					"at": "2026-10-07",
+					"cliVersion": null,
+					"evidence": {
+						"run": null,
+						"summary": "the team kit's roles.plan (user 2026-10-07: the Claude CLI's own default model plans for now); foo plans on Opus 5.5 on Cline instead"
+					}
+				}
+			}
+		},
+		{
+			"agent": "cline",
+			"provider": "lemonade",
+			"model": "GLM-4.7-Flash-GGUF",
+			"roles": {
+				"dev": {
+					"status": "provisional",
+					"at": "2026-10-09",
+					"cliVersion": null,
+					"evidence": {
+						"run": null,
+						"summary": "team-local's dev pick before calibration: tool-calling label, 30B-A3B MoE, already Cline's Lemonade default"
+					}
+				},
+				"plan": {
+					"status": "provisional",
+					"at": "2026-10-09",
+					"cliVersion": null,
+					"evidence": { "run": null, "summary": "team-local's planner (the dev model in Cline's plan mode)" }
+				},
+				"qa": {
+					"status": "provisional",
+					"at": "2026-10-09",
+					"cliVersion": null,
+					"evidence": { "run": null, "summary": "team-local's QA for Mistral-built cards (qa.routes)" }
+				}
+			},
+			"capabilities": { "images": false, "contextWindow": 131072, "turnEnd": false },
+			"note": "Lemonade/llama.cpp ends Cline turns without the TaskComplete hook: needs agents.cline.turnDetector.mode on (team-local recommends it)"
+		},
+		{
+			"agent": "cline",
+			"provider": "lemonade",
+			"model": "Devstral-Small-2507-GGUF",
+			"roles": {
+				"qa": {
+					"status": "provisional",
+					"at": "2026-10-09",
+					"cliVersion": null,
+					"evidence": {
+						"run": null,
+						"summary": "team-local's QA pick before calibration: another family (Mistral) than the GLM dev model"
+					}
+				},
+				"dev": {
+					"status": "provisional",
+					"at": "2026-10-09",
+					"cliVersion": null,
+					"evidence": {
+						"run": "calibration v11",
+						"summary": "dev candidate; calibration v11 saw it answer with <run_commands> text instead of native tool calls"
+					}
+				}
+			},
+			"capabilities": { "images": false, "contextWindow": 65536, "turnEnd": false },
+			"note": "text-only; the memory budget assumes Lemonade loads it at 65536"
+		},
+		{
+			"agent": "cline",
+			"provider": "lemonade",
+			"model": "Qwen3.6-35B-A3B-MTP-GGUF",
+			"roles": {
+				"dev": {
+					"status": "provisional",
+					"at": "2026-10-09",
+					"cliVersion": null,
+					"evidence": {
+						"run": null,
+						"summary": "team-local's fallback dev model before calibration (a third family)"
+					}
+				},
+				"qa": {
+					"status": "provisional",
+					"at": "2026-10-09",
+					"cliVersion": null,
+					"evidence": { "run": null, "summary": "QA candidate: the one vision model that is also strong at code" }
+				},
+				"plan": {
+					"status": "provisional",
+					"at": "2026-10-09",
+					"cliVersion": null,
+					"evidence": { "run": null, "summary": "plan candidate (team-local plan.candidates)" }
+				}
+			},
+			"capabilities": { "images": true, "contextWindow": 65536, "turnEnd": false }
+		},
+		{
+			"agent": "cline",
+			"provider": "lemonade",
+			"model": "Gemma-4-12B-it-GGUF",
+			"roles": {
+				"qa": {
+					"status": "provisional",
+					"at": "2026-10-09",
+					"cliVersion": null,
+					"evidence": { "run": null, "summary": "team-local QA candidate: vision + tool-calling, 12B" }
+				}
+			},
+			"capabilities": { "images": true, "contextWindow": 65536, "turnEnd": false }
+		},
+		{
+			"agent": "cline",
+			"provider": "lemonade",
+			"model": "DeepSeek-V4-Flash-0731-GGUF-BF16",
+			"roles": {
+				"dev": {
+					"status": "provisional",
+					"at": "2026-10-09",
+					"cliVersion": null,
+					"evidence": {
+						"run": null,
+						"summary": "team-local dev candidate, untested: a custom import with the tool-calling label and a 1M context"
+					}
+				}
+			},
+			"capabilities": { "turnEnd": false }
+		},
+		{
+			"agent": "cline",
+			"provider": "lemonade",
+			"model": "LMX-Omni-52B-Halo",
+			"rejected": {
+				"at": "2026-10-09",
+				"scope": "model",
+				"reason": "a Lemonade collection (Qwen3.6-35B-A3B + Flux + Whisper + Kokoro) without the tool-calling label, so it is not in Cline's Lemonade list; route to Qwen3.6-35B-A3B-MTP-GGUF instead"
+			}
+		},
+		{
+			"agent": "cline",
+			"provider": "bedrock",
+			"model": "qwen.qwen3-next-80b-a3b",
+			"rejected": {
+				"at": "2026-10-05",
+				"scope": "model",
+				"reason": "3 own QA FAILs on f80db and 58f74; broke large TSX files"
+			}
+		},
+		{
+			"agent": "cline",
+			"provider": "bedrock",
+			"model": "openai.gpt-oss-120b-1:0",
+			"rejected": {
+				"at": "2026-10-05",
+				"scope": "model",
+				"reason": "3 own QA FAILs on de30c (scores ~1/5), context-overflow crashes"
+			}
+		},
+		{
+			"agent": "cline",
+			"provider": "bedrock",
+			"model": "nvidia.nemotron-super-3-120b",
+			"rejected": {
+				"at": "2026-10-05",
+				"scope": "model",
+				"reason": "3 own QA FAILs on 43360 (Docker/CI); user read its output: cannot perform. Work kept as tag preserve/43360-nemotron-r3"
+			}
+		},
+		{
+			"agent": "cline",
+			"provider": "openai-native",
+			"model": "us.openai.gpt-6-luna",
+			"rejected": {
+				"at": "2026-10-06",
+				"scope": "model",
+				"reason": "lost the tier-3 runoff to gpt-6.1-sol (3.67 vs 4.0, ~2h45 vs ~21 min); user: tier 3 = sol 6.1. Not a failure, but no new work routes to it"
+			}
+		},
+		{
+			"agent": "cline",
+			"provider": "bedrock",
+			"model": "us.anthropic.claude-sonnet-5-5",
+			"rejected": {
+				"at": "2026-10-06",
+				"scope": "model",
+				"reason": "not a dev model (user: ~$20 per run, no Sonnet)"
+			}
+		}
+	]
+}

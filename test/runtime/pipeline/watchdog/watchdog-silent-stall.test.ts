@@ -56,7 +56,14 @@ describe("watchdog: silent Cline stalls are only reported", () => {
 			watchdog: { mode: "on" },
 			orchestrator: { wake: { mode: "sidebar" } },
 			pipeline: { recovery: { mode: recoveryMode } },
-			workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" }, ...options.workspace } },
+			workspaces: {
+				foo: {
+					landing: { mode: "qa" },
+					kit: { name: "team" },
+					models: { allowProvisional: true },
+					...options.workspace,
+				},
+			},
 			agents: { cline: { dataDir } },
 		});
 		writeFakeClineSession(join(dataDir, "sessions"), {
@@ -157,7 +164,7 @@ describe("watchdog: a Cline run that never wrote a session file", () => {
 			watchdog: { mode: "on" },
 			orchestrator: { wake: { mode: "sidebar" } },
 			pipeline: { recovery: { mode: recoveryMode } },
-			workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" } } },
+			workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" }, models: { allowProvisional: true } } },
 			agents: { cline: { dataDir } },
 		});
 		if (options.providers !== undefined) {

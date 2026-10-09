@@ -10,7 +10,7 @@ import type { PipelineWorkerMessage } from "../../../src/pipeline/worker-protoco
 import { createPipelineWorkerHarness, createSnapshot } from "../../utilities/pipeline-worker";
 import { createBoard, createCard } from "../../utilities/workspace-state-store";
 
-const QA_WORKSPACE = { landing: { mode: "qa" }, kit: { name: "team" } };
+const QA_WORKSPACE = { landing: { mode: "qa" }, kit: { name: "team" }, models: { allowProvisional: true } };
 
 describe("pipeline worker", () => {
 	const harnesses: Array<{ cleanup: () => void }> = [];

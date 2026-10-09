@@ -126,38 +126,6 @@
 			}
 		]
 	},
-	"dropped": [
-		{
-			"provider": "bedrock",
-			"model": "qwen.qwen3-next-80b-a3b",
-			"at": "2026-10-05",
-			"why": "3 own QA FAILs on f80db and 58f74; broke large TSX files"
-		},
-		{
-			"provider": "bedrock",
-			"model": "openai.gpt-oss-120b-1:0",
-			"at": "2026-10-05",
-			"why": "3 own QA FAILs on de30c (scores ~1/5), context-overflow crashes"
-		},
-		{
-			"provider": "bedrock",
-			"model": "nvidia.nemotron-super-3-120b",
-			"at": "2026-10-05",
-			"why": "3 own QA FAILs on 43360 (Docker/CI); user read its output: cannot perform. Card deleted, work kept as tag preserve/43360-nemotron-r3"
-		},
-		{
-			"provider": "openai-native",
-			"model": "us.openai.gpt-6-luna",
-			"at": "2026-10-06",
-			"why": "lost tier-3 runoff to gpt-6.1-sol (3.67 vs 4.0, ~2h45 vs ~21 min); user: tier 3 = sol 6.1. Not a failure: in-flight luna cards (8e891) finish on luna"
-		},
-		{
-			"provider": "bedrock",
-			"model": "us.anthropic.claude-sonnet-5-5",
-			"at": "2026-10-06",
-			"why": "not a tier-2 candidate (user: ~$20/run, no Sonnet)"
-		}
-	],
 	"tierRules": {
 		"tier3": "< $20 per 62a99-sized run (86M input, 0.19M output) at list price",
 		"tier2": ">= $20 per run"
