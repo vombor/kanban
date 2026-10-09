@@ -11,7 +11,8 @@ export interface TerminalSessionService {
 	attach(taskId: string, listener: TerminalSessionListener): (() => void) | null;
 	getRestoreSnapshot(taskId: string): Promise<TerminalRestoreSnapshot | null>;
 	recoverStaleSession(taskId: string): RuntimeTaskSessionSummary | null;
-	writeInput(taskId: string, data: Buffer): RuntimeTaskSessionSummary | null;
+	/** `fromViewer`: the keys come from the user's terminal (the session manager notes the Enter). */
+	writeInput(taskId: string, data: Buffer, options?: { fromViewer?: boolean }): RuntimeTaskSessionSummary | null;
 	resize(taskId: string, cols: number, rows: number, pixelWidth?: number, pixelHeight?: number): boolean;
 	pauseOutput(taskId: string): boolean;
 	resumeOutput(taskId: string): boolean;

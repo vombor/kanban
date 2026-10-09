@@ -16,6 +16,7 @@ import {
 	Terminal,
 } from "lucide-react";
 import { useState } from "react";
+import { OrchestratorWaitBadge } from "@/components/orchestrator-wait-badge";
 import {
 	getRuntimeShortcutIconComponent,
 	getRuntimeShortcutPickerOption,
@@ -307,6 +308,7 @@ export function TopBar({
 	onCreateFirstShortcut,
 	hideProjectDependentActions = false,
 	showAgentHints = false,
+	orchestratorWaitCount = 0,
 }: {
 	onToggleSidebar?: () => void;
 	onBack?: () => void;
@@ -338,6 +340,11 @@ export function TopBar({
 	hideProjectDependentActions?: boolean;
 	/** Whether the tips popover lists the agent tips (a project with a selected agent). */
 	showAgentHints?: boolean;
+	/**
+	 * Projects whose orchestrator waits for the user: a dot on the button that brings the sidebar back (the mobile
+	 * menu, the detail view's back button), where the sidebar's own badges are hidden.
+	 */
+	orchestratorWaitCount?: number;
 }): React.ReactElement {
 	const isMobile = useIsMobile();
 	const displayWorkspacePath = workspacePath ? formatPathForDisplay(workspacePath) : null;
@@ -399,17 +406,26 @@ export function TopBar({
 				{/* ---- Left side: hamburger/back, path, hints, git ---- */}
 				<div className="flex flex-nowrap items-center h-10 flex-1 min-w-0 overflow-hidden gap-1.5">
 					{isMobile && onToggleSidebar ? (
-						<Button
-							variant="ghost"
-							size="sm"
-							icon={<Menu size={16} />}
-							onClick={onToggleSidebar}
-							aria-label="Toggle sidebar"
-							className={cn("shrink-0", MOBILE_TOUCH_TARGET)}
-						/>
+						<span className="relative shrink-0">
+							<Button
+								variant="ghost"
+								size="sm"
+								icon={<Menu size={16} />}
+								onClick={onToggleSidebar}
+								aria-label="Toggle sidebar"
+								className={cn("shrink-0", MOBILE_TOUCH_TARGET)}
+							/>
+							{orchestratorWaitCount > 0 ? (
+								<OrchestratorWaitBadge
+									variant="dot"
+									count={orchestratorWaitCount}
+									className="pointer-events-none absolute top-1 right-1"
+								/>
+							) : null}
+						</span>
 					) : null}
 					{onBack ? (
-						<div className="flex items-center shrink-0 overflow-visible">
+						<div className="relative flex items-center shrink-0 overflow-visible">
 							<Button
 								variant="ghost"
 								size="sm"
@@ -418,6 +434,13 @@ export function TopBar({
 								aria-label="Back to board"
 								className={cn("mr-1 shrink-0", isMobile && MOBILE_TOUCH_TARGET)}
 							/>
+							{orchestratorWaitCount > 0 ? (
+								<OrchestratorWaitBadge
+									variant="dot"
+									count={orchestratorWaitCount}
+									className="pointer-events-none absolute top-0.5 right-1"
+								/>
+							) : null}
 						</div>
 					) : null}
 

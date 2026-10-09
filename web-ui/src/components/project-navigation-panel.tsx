@@ -1,6 +1,7 @@
 import { Plus } from "lucide-react";
 import { type MouseEvent as ReactMouseEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { KanbanAgentHeader } from "@/components/kanban-agent-header";
+import { OrchestratorWaitBadge } from "@/components/orchestrator-wait-badge";
 import { ProjectActionsMenu } from "@/components/project-actions-menu";
 import { ProjectSwitcher } from "@/components/project-switcher";
 import { Button } from "@/components/ui/button";
@@ -40,6 +41,7 @@ export function ProjectNavigationPanel({
 	setExpandedSidebarWidth,
 	isCollapsed,
 	setSidebarCollapsed,
+	flashingProjectIds,
 }: {
 	projects: RuntimeProjectSummary[];
 	isLoadingProjects?: boolean;
@@ -55,6 +57,8 @@ export function ProjectNavigationPanel({
 	setExpandedSidebarWidth: (width: number) => void;
 	isCollapsed: boolean;
 	setSidebarCollapsed: (collapsed: boolean, persist?: boolean) => void;
+	/** Projects whose orchestrator wait is new and flashes (use-orchestrator-wait-alerts.ts). */
+	flashingProjectIds?: ReadonlySet<string>;
 }): React.ReactElement {
 	const sortedProjects = [...projects].sort((a, b) => a.path.localeCompare(b.path));
 	const currentProject = sortedProjects.find((project) => project.id === currentProjectId) ?? null;
@@ -205,7 +209,7 @@ export function ProjectNavigationPanel({
 								onSelectProject(project.id);
 							}}
 							className={cn(
-								"rounded-md text-xs font-semibold shrink-0 border-0 cursor-pointer flex items-center justify-center",
+								"relative rounded-md text-xs font-semibold shrink-0 border-0 cursor-pointer flex items-center justify-center",
 								isMobile ? "w-11 h-11" : "w-8 h-8",
 								isCurrent
 									? "bg-accent text-accent-fg"
@@ -213,6 +217,14 @@ export function ProjectNavigationPanel({
 							)}
 						>
 							{letter}
+							{project.orchestratorWait ? (
+								<OrchestratorWaitBadge
+									variant="dot"
+									kind={project.orchestratorWait.kind}
+									flashing={flashingProjectIds?.has(project.id) ?? false}
+									className="absolute -top-1 -right-1"
+								/>
+							) : null}
 						</button>
 					);
 				})}
@@ -274,6 +286,7 @@ export function ProjectNavigationPanel({
 					currentProjectId={currentProjectId}
 					isLoading={isLoadingProjects}
 					disabled={removingProjectId !== null}
+					flashingProjectIds={flashingProjectIds}
 					onSelectProject={onSelectProject}
 				/>
 				{currentProject ? (
@@ -305,7 +318,11 @@ export function ProjectNavigationPanel({
 					/>
 				) : null}
 			</div>
-			<KanbanAgentHeader agentLabel={agentLabel} />
+			<KanbanAgentHeader
+				agentLabel={agentLabel}
+				wait={currentProject?.orchestratorWait ?? null}
+				waitFlashing={currentProject ? (flashingProjectIds?.has(currentProject.id) ?? false) : false}
+			/>
 			<div className="flex flex-1 min-h-0 overflow-hidden bg-surface-1 p-1.5">
 				{agentSectionContent ?? (
 					<div className="flex w-full items-center justify-center rounded-md border border-border bg-surface-2 px-3 text-center text-sm text-text-secondary">

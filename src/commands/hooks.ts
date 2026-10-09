@@ -173,6 +173,16 @@ function extractToolInput(payload: Record<string, unknown>): Record<string, unkn
 	return outputArgs;
 }
 
+/** The question a tool that asks the user carries: Claude Code's AskUserQuestion `questions[0].question`, Cline's `question`. */
+function readToolQuestion(toolInput: Record<string, unknown> | null): string | null {
+	if (!toolInput) {
+		return null;
+	}
+	const questions = Array.isArray(toolInput.questions) ? toolInput.questions : [];
+	const first = asRecord(questions[0]);
+	return (first ? readStringField(first, "question") : null) ?? readStringField(toolInput, "question");
+}
+
 function describeToolOperation(toolName: string | null, toolInput: Record<string, unknown> | null): string | null {
 	if (!toolName || !toolInput) {
 		return null;
@@ -182,7 +192,8 @@ function describeToolOperation(toolName: string | null, toolInput: Record<string
 		readStringField(toolInput, "command") ??
 		readStringField(toolInput, "cmd") ??
 		readStringField(toolInput, "query") ??
-		readStringField(toolInput, "description");
+		readStringField(toolInput, "description") ??
+		readToolQuestion(toolInput);
 	if (command) {
 		return `${toolName}: ${command}`;
 	}
@@ -243,7 +254,7 @@ function inferActivityText(
 		return error ? `Tool failed: ${error}` : "Tool failed";
 	}
 	if (normalizedHookEvent === "permissionrequest") {
-		return "Waiting for approval";
+		return toolOperation ? `Waiting for approval: ${toolOperation}` : "Waiting for approval";
 	}
 	if (normalizedHookEvent === "userpromptsubmit" || normalizedHookEvent === "beforeagent") {
 		return "Resumed after user input";
@@ -260,7 +271,9 @@ function inferActivityText(
 	}
 
 	if (notificationType === "permission_prompt" || notificationType === "permission.asked") {
-		return "Waiting for approval";
+		// Claude Code's Notification says what it asks ("Claude needs your permission to use Bash").
+		const message = payload ? readStringField(payload, "message") : null;
+		return message ? `Waiting for approval: ${message}` : "Waiting for approval";
 	}
 	if (notificationType === "user_attention") {
 		return null;

@@ -7,12 +7,14 @@
 //                  submit (Claude Code, Codex) fire one within seconds of a normal start, so none after
 //                  `watchdog.stall.promptMin` means the agent never took its prompt: the trust dialog when the folder
 //                  isn't trusted (bc84c/3c292 10/06), else another startup dialog or a hang.
-//   approval:      the newest hook is a permission request and nothing happened since for `promptMin`.
+//   approval:      the newest hook is a permission request (src/terminal/user-input-wait.ts, the one reader of what
+//                  a session waits for the user on) and nothing happened since for `promptMin`.
 //
 // Ported from archive/devteam-kit:lib/prompt-watch.cjs@0782636. Which agents hook their prompt submit and how their
 // folder trust is read are adapter facts (src/terminal/orchestrator-agents.ts), so nothing here names an agent.
 import type { RuntimeAgentId, RuntimeBoardCard, RuntimeBoardColumnId } from "../../core/api-contract";
 import { resolveEffectiveAgent } from "../../core/effective-agent";
+import { isPermissionRequestActivity } from "../../terminal/user-input-wait";
 import type { PipelineSessionView } from "../engine";
 
 export type PromptWaitKind = "trust" | "startup" | "approval";
@@ -36,14 +38,6 @@ export interface PromptWatchInput {
 }
 
 const iso = (ms: number): string => new Date(ms).toISOString().replace(/\.\d+Z$/u, "Z");
-
-function isPermissionRequest(activity: PipelineSessionView["latestHookActivity"]): boolean {
-	return (
-		activity?.notificationType === "permission_prompt" ||
-		activity?.notificationType === "permission.asked" ||
-		/^permissionrequest$/iu.test(activity?.hookEventName ?? "")
-	);
-}
 
 /** Cards whose session agent waits on a startup dialog (trust or other) or a permission answer. */
 export function findPromptWaits(input: PromptWatchInput): PromptWait[] {
@@ -88,7 +82,7 @@ export function findPromptWaits(input: PromptWatchInput): PromptWait[] {
 			continue;
 		}
 		if (
-			isPermissionRequest(session.latestHookActivity) &&
+			isPermissionRequestActivity(session.latestHookActivity) &&
 			lastHookAt > 0 &&
 			input.now - lastHookAt > input.stuckMs &&
 			session.state !== "interrupted" &&

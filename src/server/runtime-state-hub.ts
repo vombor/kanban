@@ -14,6 +14,7 @@ import type {
 	RuntimeStateStreamWorkspaceStateMessage,
 	RuntimeTaskSessionSummary,
 } from "../core/api-contract";
+import { isHomeAgentSessionId } from "../core/home-agent-session";
 import type { TerminalSessionManager } from "../terminal/session-manager";
 import { createWorkspaceMetadataMonitor } from "./workspace-metadata-monitor";
 import type { ResolvedWorkspaceStreamTarget, WorkspaceRegistry } from "./workspace-registry";
@@ -436,11 +437,21 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 			if (terminalSummaryUnsubscribeByWorkspaceId.has(workspaceId)) {
 				return;
 			}
-			const unsubscribe = manager.onSummary((summary) => {
+			const unsubscribeSummary = manager.onSummary((summary) => {
 				notifyActivity({ workspaceId, summary });
 				queueTaskSessionSummaryBroadcast(workspaceId, summary);
 			});
-			terminalSummaryUnsubscribeByWorkspaceId.set(workspaceId, unsubscribe);
+			// The user's Enter in a sidebar session answers its orchestrator's wait (src/server/orchestrator-wait.ts),
+			// which only the project summaries carry.
+			const unsubscribeSubmit = manager.onViewerInputSubmitted((taskId) => {
+				if (isHomeAgentSessionId(taskId)) {
+					void broadcastRuntimeProjectsUpdated(workspaceId);
+				}
+			});
+			terminalSummaryUnsubscribeByWorkspaceId.set(workspaceId, () => {
+				unsubscribeSummary();
+				unsubscribeSubmit();
+			});
 		},
 		handleUpgrade: (request, socket, head, context) => {
 			runtimeStateWebSocketServer.handleUpgrade(request, socket, head, (ws) => {

@@ -1,6 +1,10 @@
 import { TRPCClientError } from "@trpc/client";
 import { createWorkspaceTrpcClient, readTrpcConflictRevision } from "@/runtime/trpc-client";
-import type { RuntimeWorkspaceStateResponse, RuntimeWorkspaceStateSaveRequest } from "@/runtime/types";
+import type {
+	RuntimeOrchestratorWaitDetail,
+	RuntimeWorkspaceStateResponse,
+	RuntimeWorkspaceStateSaveRequest,
+} from "@/runtime/types";
 
 export class WorkspaceStateConflictError extends Error {
 	readonly currentRevision: number;
@@ -15,6 +19,12 @@ export class WorkspaceStateConflictError extends Error {
 export async function fetchWorkspaceState(workspaceId: string): Promise<RuntimeWorkspaceStateResponse> {
 	const trpcClient = createWorkspaceTrpcClient(workspaceId);
 	return await trpcClient.workspace.getState.query();
+}
+
+/** What the project's orchestrator asks the user, or null when it waits for nothing. */
+export async function fetchOrchestratorWait(workspaceId: string): Promise<RuntimeOrchestratorWaitDetail | null> {
+	const trpcClient = createWorkspaceTrpcClient(workspaceId);
+	return (await trpcClient.workspace.getOrchestratorWait.query()).wait;
 }
 
 export async function saveWorkspaceState(

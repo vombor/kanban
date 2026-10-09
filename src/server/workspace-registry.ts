@@ -2,6 +2,7 @@ import { type RuntimeConfigState, toGlobalRuntimeConfigState } from "../config/r
 import type {
 	RuntimeBoardColumnId,
 	RuntimeBoardData,
+	RuntimeOrchestratorWait,
 	RuntimeProjectSummary,
 	RuntimeProjectTaskCounts,
 	RuntimeWorkspaceStateResponse,
@@ -19,6 +20,7 @@ import { ensureClaudeWorkspaceTrusted } from "../terminal/claude-workspace-trust
 import { ensureCodexWorkspaceTrusted } from "../terminal/codex-workspace-trust";
 import { TerminalSessionManager } from "../terminal/session-manager";
 import type { BrokenGitRepository } from "../workspace/repo-health";
+import { findOrchestratorWait } from "./orchestrator-wait";
 
 export interface WorkspaceRegistryScope {
 	workspaceId: string;
@@ -191,6 +193,7 @@ function toProjectSummary(project: {
 	workspaceId: string;
 	repoPath: string;
 	taskCounts: RuntimeProjectTaskCounts;
+	orchestratorWait?: RuntimeOrchestratorWait | null;
 }): RuntimeProjectSummary {
 	const normalized = project.repoPath.replaceAll("\\", "/").replace(/\/+$/g, "");
 	const segments = normalized.split("/").filter((segment) => segment.length > 0);
@@ -200,6 +203,7 @@ function toProjectSummary(project: {
 		path: project.repoPath,
 		name,
 		taskCounts: project.taskCounts,
+		...(project.orchestratorWait !== undefined ? { orchestratorWait: project.orchestratorWait } : {}),
 	};
 }
 
@@ -381,10 +385,12 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 		const projectSummaries = await Promise.all(
 			projects.map(async (project) => {
 				const taskCounts = await summarizeProjectTaskCounts(project.workspaceId, project.repoPath);
+				const wait = findOrchestratorWait(getTerminalManagerForWorkspace(project.workspaceId), project.workspaceId);
 				return toProjectSummary({
 					workspaceId: project.workspaceId,
 					repoPath: project.repoPath,
 					taskCounts,
+					orchestratorWait: wait ? { kind: wait.kind, since: wait.since } : null,
 				});
 			}),
 		);

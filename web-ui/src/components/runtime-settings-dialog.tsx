@@ -40,6 +40,10 @@ import { openFileOnHost } from "@/runtime/runtime-config-query";
 import type { RuntimeAgentId, RuntimeConfigResponse, RuntimeProjectShortcut } from "@/runtime/types";
 import { useRuntimeConfig } from "@/runtime/use-runtime-config";
 import {
+	getOrchestratorWaitNotificationsEnabled,
+	setOrchestratorWaitNotificationsEnabled,
+} from "@/stores/orchestrator-wait-notifications-store";
+import {
 	type BrowserNotificationPermission,
 	getBrowserNotificationPermission,
 	requestBrowserNotificationPermission,
@@ -350,6 +354,13 @@ export function RuntimeSettingsDialog({
 	const [readyForReviewNotificationsEnabled, setReadyForReviewNotificationsEnabled] = useState(true);
 	const [initialThemeId, setInitialThemeId] = useState<ThemeId>(readStoredThemeId);
 	const [draftThemeId, setDraftThemeId] = useState<ThemeId>(readStoredThemeId);
+	// This browser's opt-in (local storage, like the theme), saved with the dialog.
+	const [initialOrchestratorWaitNotificationsEnabled, setInitialOrchestratorWaitNotificationsEnabled] = useState(
+		getOrchestratorWaitNotificationsEnabled,
+	);
+	const [orchestratorWaitNotificationsEnabled, setOrchestratorWaitNotificationsEnabledDraft] = useState(
+		getOrchestratorWaitNotificationsEnabled,
+	);
 	const [notificationPermission, setNotificationPermission] = useState<BrowserNotificationPermission>("unsupported");
 	const [shortcuts, setShortcuts] = useState<RuntimeProjectShortcut[]>([]);
 	const [commitPromptTemplate, setCommitPromptTemplate] = useState("");
@@ -437,6 +448,9 @@ export function RuntimeSettingsDialog({
 		if (draftThemeId !== initialThemeId) {
 			return true;
 		}
+		if (orchestratorWaitNotificationsEnabled !== initialOrchestratorWaitNotificationsEnabled) {
+			return true;
+		}
 		if (!areRuntimeProjectShortcutsEqual(shortcuts, initialShortcuts)) {
 			return true;
 		}
@@ -462,7 +476,9 @@ export function RuntimeSettingsDialog({
 		initialSelectedAgentId,
 		initialShortcuts,
 		initialThemeId,
+		initialOrchestratorWaitNotificationsEnabled,
 		openPrPromptTemplate,
+		orchestratorWaitNotificationsEnabled,
 		readyForReviewNotificationsEnabled,
 		selectedAgentId,
 		shortcuts,
@@ -497,6 +513,9 @@ export function RuntimeSettingsDialog({
 		const persistedThemeId = readStoredThemeId();
 		setInitialThemeId(persistedThemeId);
 		setDraftThemeId(persistedThemeId);
+		const persistedOrchestratorWaitNotifications = getOrchestratorWaitNotificationsEnabled();
+		setInitialOrchestratorWaitNotificationsEnabled(persistedOrchestratorWaitNotifications);
+		setOrchestratorWaitNotificationsEnabledDraft(persistedOrchestratorWaitNotifications);
 	}, [open]);
 
 	useEffect(() => {
@@ -623,10 +642,10 @@ export function RuntimeSettingsDialog({
 			setSaveError("Selected agent is not installed. Install it first or choose an installed agent.");
 			return;
 		}
-		const shouldRequestNotificationPermission =
-			!initialReadyForReviewNotificationsEnabled &&
-			readyForReviewNotificationsEnabled &&
-			notificationPermission === "default";
+		const turnedOnNotifications =
+			(!initialReadyForReviewNotificationsEnabled && readyForReviewNotificationsEnabled) ||
+			(!initialOrchestratorWaitNotificationsEnabled && orchestratorWaitNotificationsEnabled);
+		const shouldRequestNotificationPermission = turnedOnNotifications && notificationPermission === "default";
 		if (shouldRequestNotificationPermission) {
 			const nextPermission = await requestBrowserNotificationPermission();
 			setNotificationPermission(nextPermission);
@@ -646,6 +665,10 @@ export function RuntimeSettingsDialog({
 		if (draftThemeId !== initialThemeId) {
 			saveThemeId(draftThemeId);
 			setInitialThemeId(draftThemeId);
+		}
+		if (orchestratorWaitNotificationsEnabled !== initialOrchestratorWaitNotificationsEnabled) {
+			setOrchestratorWaitNotificationsEnabled(orchestratorWaitNotificationsEnabled);
+			setInitialOrchestratorWaitNotificationsEnabled(orchestratorWaitNotificationsEnabled);
 		}
 		onSaved?.();
 		handleDialogOpenChange(false);
@@ -824,6 +847,24 @@ export function RuntimeSettingsDialog({
 							</RadixSwitch.Root>
 							<span className="text-[13px] text-text-primary">Notify when a task is ready for review</span>
 						</div>
+						<div className="flex items-center gap-2 mt-2">
+							<RadixSwitch.Root
+								checked={orchestratorWaitNotificationsEnabled}
+								disabled={controlsDisabled}
+								onCheckedChange={setOrchestratorWaitNotificationsEnabledDraft}
+								aria-label="Notify when a project's Kanban Agent waits for you"
+								className="relative h-5 w-9 rounded-full bg-surface-4 data-[state=checked]:bg-accent cursor-pointer disabled:opacity-40"
+							>
+								<RadixSwitch.Thumb className="block h-4 w-4 rounded-full bg-white shadow-sm transition-transform translate-x-0.5 data-[state=checked]:translate-x-[18px]" />
+							</RadixSwitch.Root>
+							<span className="text-[13px] text-text-primary">
+								Notify when a project's Kanban Agent waits for you (this browser)
+							</span>
+						</div>
+						<p className="text-text-tertiary text-[12px] mt-1 mb-0">
+							A question or an approval in any project's sidebar agent. The badge on the project shows either
+							way.
+						</p>
 						<div className="flex items-center gap-2 mt-2">
 							<p className="text-text-secondary text-[13px] m-0">
 								Browser permission: {formatNotificationPermissionStatus(notificationPermission)}

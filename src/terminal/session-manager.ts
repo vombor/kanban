@@ -68,6 +68,11 @@ interface ActiveProcessState {
 	 * type into it and press Enter (orchestrator message notices, src/isolation/message-notices.ts).
 	 */
 	typedSinceEnter: boolean;
+	/**
+	 * When the user last pressed Enter in the session's terminal (writeInput `fromViewer`): an answer to whatever the
+	 * agent asked, for agents that report no hook on it (src/terminal/user-input-wait.ts).
+	 */
+	viewerSubmittedAt: number | null;
 	autoConfirmedWorkspaceTrust: boolean;
 	workspaceTrustNavigationKeys: number;
 	workspaceTrustConfirmTimer: NodeJS.Timeout | null;
@@ -235,6 +240,7 @@ function hasCodexStartupUiRendered(text: string): boolean {
 export class TerminalSessionManager implements TerminalSessionService {
 	private readonly entries = new Map<string, SessionEntry>();
 	private readonly summaryListeners = new Set<(summary: RuntimeTaskSessionSummary) => void>();
+	private readonly viewerSubmitListeners = new Set<(taskId: string) => void>();
 
 	private trySendDeferredCodexStartupInput(taskId: string): boolean {
 		const entry = this.entries.get(taskId);
@@ -299,6 +305,14 @@ export class TerminalSessionManager implements TerminalSessionService {
 		this.summaryListeners.add(listener);
 		return () => {
 			this.summaryListeners.delete(listener);
+		};
+	}
+
+	/** The user pressed Enter in a session's terminal (no summary changes, so onSummary doesn't tell). */
+	onViewerInputSubmitted(listener: (taskId: string) => void): () => void {
+		this.viewerSubmitListeners.add(listener);
+		return () => {
+			this.viewerSubmitListeners.delete(listener);
 		};
 	}
 
@@ -368,6 +382,11 @@ export class TerminalSessionManager implements TerminalSessionService {
 	willReuseLiveSession(taskId: string): boolean {
 		const entry = this.entries.get(taskId);
 		return Boolean(entry?.active && isActiveState(entry.summary.state));
+	}
+
+	/** When the user last pressed Enter in the session's terminal, or null (none since its process started). */
+	getViewerInputSubmittedAt(taskId: string): number | null {
+		return this.entries.get(taskId)?.active?.viewerSubmittedAt ?? null;
 	}
 
 	/** Whether text was typed into the session since its last Enter (the input box may hold a draft). */
@@ -647,6 +666,7 @@ export class TerminalSessionManager implements TerminalSessionService {
 			shouldInspectOutputForTransition: launch.shouldInspectOutputForTransition ?? null,
 			awaitingCodexPromptAfterEnter: false,
 			typedSinceEnter: false,
+			viewerSubmittedAt: null,
 			autoConfirmedWorkspaceTrust: false,
 			workspaceTrustNavigationKeys: 0,
 			workspaceTrustConfirmTimer: null,
@@ -816,6 +836,7 @@ export class TerminalSessionManager implements TerminalSessionService {
 			shouldInspectOutputForTransition: null,
 			awaitingCodexPromptAfterEnter: false,
 			typedSinceEnter: false,
+			viewerSubmittedAt: null,
 			autoConfirmedWorkspaceTrust: false,
 			workspaceTrustNavigationKeys: 0,
 			workspaceTrustConfirmTimer: null,
@@ -876,7 +897,8 @@ export class TerminalSessionManager implements TerminalSessionService {
 		return cloneSummary(summary);
 	}
 
-	writeInput(taskId: string, data: Buffer): RuntimeTaskSessionSummary | null {
+	/** `fromViewer`: the keys come from the user's terminal, not from Kanban delivering text (deliver-task-input.ts). */
+	writeInput(taskId: string, data: Buffer, options: { fromViewer?: boolean } = {}): RuntimeTaskSessionSummary | null {
 		const entry = this.entries.get(taskId);
 		if (!entry?.active) {
 			return null;
@@ -894,12 +916,19 @@ export class TerminalSessionManager implements TerminalSessionService {
 		// Escape sequences alone (focus-in, arrows) don't change whether the input box holds a draft.
 		// biome-ignore lint/suspicious/noControlCharactersInRegex: strips terminal escape sequences from typed input.
 		const text = data.toString("utf8").replace(/\u001b\[[0-9;?]*[A-Za-z~]|\u001b./gu, "");
-		if (/[\r\n]/u.test(text)) {
+		const submitted = /[\r\n]/u.test(text);
+		if (submitted) {
 			entry.active.typedSinceEnter = !/[\r\n]\s*$/u.test(text);
 		} else if (text.length > 0) {
 			entry.active.typedSinceEnter = true;
 		}
 		entry.active.session.write(data);
+		if (submitted && options.fromViewer) {
+			entry.active.viewerSubmittedAt = now();
+			for (const listener of this.viewerSubmitListeners) {
+				listener(taskId);
+			}
+		}
 		return cloneSummary(entry.summary);
 	}
 

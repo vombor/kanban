@@ -15,6 +15,7 @@ export enum LocalStorageKey {
 	GitDiffFileTreePanelRatio = "kanban.git-diff-file-tree-panel-ratio",
 	OnboardingDialogShown = "kanban.onboarding.dialog.shown",
 	NotificationPermissionPrompted = "kanban.notifications.permission-prompted",
+	OrchestratorWaitNotifications = "kanban.notifications.orchestrator-wait",
 	NotificationBadgeClearEvent = "kanban.notification-badge-clear.v1",
 	TabVisibilityPresence = "kanban.tab-visibility-presence.v1",
 	Theme = "kanban.theme",

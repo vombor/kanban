@@ -25,9 +25,15 @@ interface UseReviewReadyNotificationsOptions {
 	taskSessions: Record<string, RuntimeTaskSessionSummary>;
 	readyForReviewNotificationsEnabled: boolean;
 	workspacePath: string | null;
+	/** Projects whose orchestrator waits for the user (use-orchestrator-wait-alerts.ts), counted in the tab title too. */
+	orchestratorWaitCount?: number;
 }
 
 export const APP_TITLE = "Kanban";
+
+export function formatAppDocumentTitle(pendingCount: number): string {
+	return pendingCount > 0 ? `(${pendingCount}) ${APP_TITLE}` : APP_TITLE;
+}
 const MAX_HANDLED_READY_EVENT_KEYS = 200;
 const TAB_VISIBILITY_HEARTBEAT_INTERVAL_MS = 5000;
 
@@ -80,6 +86,7 @@ export function useReviewReadyNotifications({
 	taskSessions,
 	readyForReviewNotificationsEnabled,
 	workspacePath,
+	orchestratorWaitCount = 0,
 }: UseReviewReadyNotificationsOptions): void {
 	const notificationPresenceTabIdRef = useRef<string>(createTabPresenceId());
 	const notificationBadgeSyncSourceIdRef = useRef<string>(createNotificationBadgeSyncSourceId());
@@ -232,8 +239,8 @@ export function useReviewReadyNotifications({
 		setPendingReviewReadyNotificationCount(0);
 	}, [activeWorkspaceId]);
 
-	// The tab is always "Kanban" (the project shows in the sidebar); only the review-ready count is added.
-	const documentTitle =
-		pendingReviewReadyNotificationCount > 0 ? `(${pendingReviewReadyNotificationCount}) ${APP_TITLE}` : APP_TITLE;
-	useDocumentTitle(documentTitle);
+	// The tab is always "Kanban" (the project shows in the sidebar); only the count of what waits for the user is
+	// added: review-ready tasks and orchestrators waiting for an answer. The orchestrator count clears only when the
+	// waits do, not when the tab is looked at.
+	useDocumentTitle(formatAppDocumentTitle(pendingReviewReadyNotificationCount + orchestratorWaitCount));
 }

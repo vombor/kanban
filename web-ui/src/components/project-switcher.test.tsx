@@ -111,6 +111,41 @@ describe("ProjectSwitcher", () => {
 		});
 	}
 
+	it("badges each project whose orchestrator waits, and counts the other projects on the trigger", async () => {
+		const projects = PROJECTS.map((project) =>
+			project.id === "alpha"
+				? { ...project, orchestratorWait: { kind: "question" as const, since: 1 } }
+				: project.id === "beta"
+					? { ...project, orchestratorWait: { kind: "approval" as const, since: 2 } }
+					: project,
+		);
+		act(() => {
+			root.render(
+				<ProjectSwitcher
+					projects={projects}
+					currentProjectId="alpha"
+					isLoading={false}
+					flashingProjectIds={new Set(["beta"])}
+					onSelectProject={() => {}}
+				/>,
+			);
+		});
+		// The current project's own wait shows in the Kanban Agent header, so the trigger counts only beta.
+		const triggerBadge = getTrigger().querySelector('[data-testid="orchestrator-wait-badge"]');
+		expect(triggerBadge?.getAttribute("aria-label")).toBe("1 project's Kanban Agent waiting for you");
+		expect(triggerBadge?.getAttribute("data-flashing")).toBe("true");
+
+		pressKey(getTrigger(), "Enter");
+		await flushTimers();
+		expect(
+			getOption("alpha-api").querySelector('[data-testid="orchestrator-wait-badge"]')?.getAttribute("aria-label"),
+		).toBe("Kanban Agent has a question for you");
+		expect(
+			getOption("beta-web").querySelector('[data-testid="orchestrator-wait-badge"]')?.getAttribute("aria-label"),
+		).toBe("Kanban Agent needs your approval");
+		expect(getOption("gamma-docs").querySelector('[data-testid="orchestrator-wait-badge"]')).toBeNull();
+	});
+
 	it("shows the selected project's name on the trigger", () => {
 		renderSwitcher();
 		expect(getTrigger().textContent).toContain("alpha-api");

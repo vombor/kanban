@@ -295,3 +295,40 @@ describe("TerminalSessionManager", () => {
 		expect(getSnapshotSpy).toHaveBeenCalledTimes(1);
 	});
 });
+
+describe("TerminalSessionManager viewer Enter (orchestrator waits, issue #10)", () => {
+	function withActiveSession(manager: TerminalSessionManager, taskId: string): { write: ReturnType<typeof vi.fn> } {
+		manager.hydrateFromRecord({ [taskId]: createSummary({ taskId }) });
+		const session = { write: vi.fn() };
+		const entries = (manager as unknown as { entries: Map<string, { active: unknown }> }).entries;
+		const entry = entries.get(taskId);
+		if (!entry) {
+			throw new Error("no entry");
+		}
+		entry.active = { session, typedSinceEnter: false, viewerSubmittedAt: null, awaitingCodexPromptAfterEnter: false };
+		return session;
+	}
+
+	it("records the viewer's Enter and tells listeners; Kanban's own deliveries and plain keys don't count", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(50_000);
+		try {
+			const manager = new TerminalSessionManager();
+			const session = withActiveSession(manager, "__home_agent__:alpha:claude");
+			const submitted = vi.fn();
+			manager.onViewerInputSubmitted(submitted);
+
+			manager.writeInput("__home_agent__:alpha:claude", Buffer.from("yes"), { fromViewer: true });
+			manager.writeInput("__home_agent__:alpha:claude", Buffer.from("notice\r"));
+			expect(manager.getViewerInputSubmittedAt("__home_agent__:alpha:claude")).toBe(null);
+			expect(submitted).not.toHaveBeenCalled();
+
+			manager.writeInput("__home_agent__:alpha:claude", Buffer.from("\r"), { fromViewer: true });
+			expect(manager.getViewerInputSubmittedAt("__home_agent__:alpha:claude")).toBe(50_000);
+			expect(submitted).toHaveBeenCalledWith("__home_agent__:alpha:claude");
+			expect(session.write).toHaveBeenCalledTimes(3);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});

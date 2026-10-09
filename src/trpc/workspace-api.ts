@@ -25,6 +25,7 @@ import { getDetailTerminalTaskId } from "../core/detail-terminal-session";
 import type { RuntimeCaller } from "../isolation/session-identity";
 import { recordBrowserDevAssignments } from "../kits/browser-dev-assignment-log";
 import { resolveDevAssignment } from "../kits/dev-assignment";
+import { findOrchestratorWait } from "../server/orchestrator-wait";
 import type { PreparedWorktreeReap } from "../server/process-reaper";
 import { appendTaskHistory, readTaskHistory, startTaskHistoryCallerLookup } from "../state/task-history-log";
 import { saveWorkspaceStateReportingAddedCards, WorkspaceStateConflictError } from "../state/workspace-state";
@@ -431,6 +432,13 @@ export function createWorkspaceApi(deps: CreateWorkspaceApiDependencies): Runtim
 		},
 		loadState: async (workspaceScope) => {
 			return await deps.buildWorkspaceStateSnapshot(workspaceScope.workspaceId, workspaceScope.workspacePath);
+		},
+		loadOrchestratorWait: async (workspaceScope) => {
+			const terminalManager = await deps.ensureTerminalManagerForWorkspace(
+				workspaceScope.workspaceId,
+				workspaceScope.workspacePath,
+			);
+			return { wait: findOrchestratorWait(terminalManager, workspaceScope.workspaceId) };
 		},
 		notifyStateUpdated: async (workspaceScope) => {
 			void deps.broadcastRuntimeWorkspaceStateUpdated(workspaceScope.workspaceId, workspaceScope.workspacePath);

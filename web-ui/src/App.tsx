@@ -41,8 +41,10 @@ import { useBoardInteractions } from "@/hooks/use-board-interactions";
 import { useDebugTools } from "@/hooks/use-debug-tools";
 import { useDetailTaskNavigation } from "@/hooks/use-detail-task-navigation";
 import { useDocumentVisibility } from "@/hooks/use-document-visibility";
+import { useFaviconBadge } from "@/hooks/use-favicon-badge";
 import { useGitActions } from "@/hooks/use-git-actions";
 import { useHomeSidebarAgentPanel } from "@/hooks/use-home-sidebar-agent-panel";
+import { useOrchestratorWaitAlerts } from "@/hooks/use-orchestrator-wait-alerts";
 import { parseRemovedProjectPathFromStreamError, useProjectNavigation } from "@/hooks/use-project-navigation";
 import { useProjectUiState } from "@/hooks/use-project-ui-state";
 import { useReviewReadyNotifications } from "@/hooks/use-review-ready-notifications";
@@ -67,6 +69,7 @@ import { findCardSelection } from "@/state/board-state";
 import { setCurrentWorkspaceId } from "@/stores/current-workspace-store";
 import { setKanbanPaths } from "@/stores/kanban-paths-store";
 import { setLandingMode } from "@/stores/landing-mode-store";
+import { useOrchestratorWaitNotificationsEnabled } from "@/stores/orchestrator-wait-notifications-store";
 import {
 	getTaskWorkspaceInfo,
 	getTaskWorkspaceSnapshot,
@@ -172,6 +175,7 @@ export default function App(): ReactElement {
 		prepareWaitForConnection: prepareWaitForTerminalConnectionReady,
 	} = useTerminalConnectionReady();
 	const readyForReviewNotificationsEnabled = runtimeProjectConfig?.readyForReviewNotificationsEnabled ?? true;
+	const orchestratorWaitNotificationsEnabled = useOrchestratorWaitNotificationsEnabled();
 	// Defaults to the runtime's default until the config arrives, so the board never moves cards the runtime also moves.
 	const sessionSyncEnabled = runtimeProjectConfig?.sessionSyncEnabled ?? true;
 	const qaLandingAvailable = runtimeProjectConfig?.landingMode === "qa";
@@ -261,16 +265,6 @@ export default function App(): ReactElement {
 		isAwaitingWorkspaceSnapshot,
 		isWorkspaceMetadataPending,
 		hasReceivedSnapshot,
-	});
-
-	useReviewReadyNotifications({
-		activeWorkspaceId: activeNotificationWorkspaceId,
-		board,
-		isDocumentVisible,
-		latestTaskReadyForReview,
-		taskSessions: sessions,
-		readyForReviewNotificationsEnabled,
-		workspacePath,
 	});
 
 	const { createTaskBranchOptions, defaultTaskBranchRef } = useTaskBranchOptions({ workspaceGit });
@@ -695,6 +689,36 @@ export default function App(): ReactElement {
 		sidebarLayout.setSidebarCollapsed(!sidebarLayout.isCollapsed);
 	}, [sidebarLayout]);
 
+	// A notification's click: the project's sidebar, where its orchestrator waits for the user.
+	const handleOpenProjectSidebar = useCallback(
+		(projectId: string) => {
+			setSelectedTaskId(null);
+			sidebarLayout.setSidebarCollapsed(false);
+			if (projectId !== navigationCurrentProjectId) {
+				void handleSelectProject(projectId);
+			}
+		},
+		[handleSelectProject, navigationCurrentProjectId, setSelectedTaskId, sidebarLayout],
+	);
+	const orchestratorWaitAlerts = useOrchestratorWaitAlerts({
+		projects,
+		hasReceivedSnapshot,
+		notificationsEnabled: orchestratorWaitNotificationsEnabled,
+		onOpenProjectSidebar: handleOpenProjectSidebar,
+	});
+	useFaviconBadge(orchestratorWaitAlerts.waitingCount > 0);
+
+	useReviewReadyNotifications({
+		activeWorkspaceId: activeNotificationWorkspaceId,
+		board,
+		isDocumentVisible,
+		latestTaskReadyForReview,
+		taskSessions: sessions,
+		readyForReviewNotificationsEnabled,
+		workspacePath,
+		orchestratorWaitCount: orchestratorWaitAlerts.waitingCount,
+	});
+
 	const navbarWorkspacePath = hasNoProjects ? undefined : activeWorkspacePath;
 	const navbarWorkspaceHint = hasNoProjects ? undefined : activeWorkspaceHint;
 	const navbarRuntimeHint = hasNoProjects ? undefined : runtimeHint;
@@ -766,12 +790,14 @@ export default function App(): ReactElement {
 							setExpandedSidebarWidth={sidebarLayout.setExpandedSidebarWidth}
 							isCollapsed={sidebarLayout.isCollapsed}
 							setSidebarCollapsed={sidebarLayout.setSidebarCollapsed}
+							flashingProjectIds={orchestratorWaitAlerts.flashingProjectIds}
 						/>
 					) : null}
 					<div className="flex flex-col flex-1 min-w-0 overflow-hidden">
 						<TopBar
 							onToggleSidebar={!selectedCard ? handleToggleSidebar : undefined}
 							onBack={selectedCard ? handleBack : undefined}
+							orchestratorWaitCount={orchestratorWaitAlerts.waitingCount}
 							workspacePath={navbarWorkspacePath}
 							isWorkspacePathLoading={shouldShowProjectLoadingState}
 							workspaceHint={navbarWorkspaceHint}

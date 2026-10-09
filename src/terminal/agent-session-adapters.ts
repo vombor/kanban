@@ -2257,17 +2257,22 @@ const copilotAdapter: AgentSessionAdapter = {
 		// Pre-trust the worktree so Copilot doesn't show a folder trust dialog on launch.
 		const trustPromise = addCopilotTrustedFolder(input.cwd);
 		if (hooks && hooksFilePath) {
+			// Each hook names its event: the summary keeps a hook field the newest hook didn't send, so without it a
+			// permissionRequest would still read as the latest hook after the tool ran (src/terminal/user-input-wait.ts).
+			const copilotHook = (event: RuntimeHookEvent, hookEventName: string) => [
+				buildCopilotHookEntry(event, { source: "copilot", hookEventName }),
+			];
 			const hooksConfig = {
 				version: 1,
 				hooks: {
-					agentStop: [buildCopilotHookEntry("to_review", { source: "copilot" })],
-					subagentStop: [buildCopilotHookEntry("activity", { source: "copilot" })],
-					preToolUse: [buildCopilotHookEntry("activity", { source: "copilot" })],
-					permissionRequest: [buildCopilotHookEntry("activity", { source: "copilot" })],
-					postToolUse: [buildCopilotHookEntry("activity", { source: "copilot" })],
-					postToolUseFailure: [buildCopilotHookEntry("activity", { source: "copilot" })],
-					userPromptSubmitted: [buildCopilotHookEntry("to_in_progress", { source: "copilot" })],
-					notification: [buildCopilotHookEntry("activity", { source: "copilot" })],
+					agentStop: copilotHook("to_review", "agentStop"),
+					subagentStop: copilotHook("activity", "subagentStop"),
+					preToolUse: copilotHook("activity", "preToolUse"),
+					permissionRequest: copilotHook("activity", "permissionRequest"),
+					postToolUse: copilotHook("activity", "postToolUse"),
+					postToolUseFailure: copilotHook("activity", "postToolUseFailure"),
+					userPromptSubmitted: copilotHook("to_in_progress", "userPromptSubmitted"),
+					notification: copilotHook("activity", "notification"),
 				},
 			};
 			const [, trustWarning] = await Promise.all([

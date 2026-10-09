@@ -118,3 +118,8 @@ export function useUnmount(fn: () => void): void {
 export function useMedia(query: string, defaultState?: boolean): boolean {
 	return useReactUseMedia(query, defaultState);
 }
+
+/** A ref that always holds the latest value (for callbacks and effects that must not re-run on it). */
+export function useLatest<T>(value: T): { readonly current: T } {
+	return useReactUseLatest(value);
+}

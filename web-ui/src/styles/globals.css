@@ -1050,6 +1050,28 @@ body.kb-dependency-link-mode {
 	}
 }
 
+/* A new orchestrator wait's badge (orchestrator-wait-badge.tsx): three short pulses, then it stays still. */
+@keyframes kb-attention-flash {
+	0%, 100% {
+		transform: scale(1);
+		box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-status-gold) 70%, transparent);
+	}
+	50% {
+		transform: scale(1.25);
+		box-shadow: 0 0 0 6px color-mix(in srgb, var(--color-status-gold) 0%, transparent);
+	}
+}
+
+.kb-attention-flash {
+	animation: kb-attention-flash 0.8s ease-in-out 3;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.kb-attention-flash {
+		animation: none;
+	}
+}
+
 @keyframes kb-skeleton {
 	0%, 100% { opacity: 0.4; }
 	50% { opacity: 0.7; }

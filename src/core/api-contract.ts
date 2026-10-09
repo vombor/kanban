@@ -396,11 +396,39 @@ export const runtimeProjectTaskCountsSchema = z.object({
 });
 export type RuntimeProjectTaskCounts = z.infer<typeof runtimeProjectTaskCountsSchema>;
 
+/** What an agent session waits for the user on (src/terminal/user-input-wait.ts). */
+export const runtimeUserInputWaitKindSchema = z.enum(["approval", "question"]);
+export type RuntimeUserInputWaitKind = z.infer<typeof runtimeUserInputWaitKindSchema>;
+
+/**
+ * A project's orchestrator (sidebar session) waits for the user. The project list reaches every client of the state
+ * stream, agent sessions included, so it carries no text: the question is `workspace.getOrchestratorWait`'s.
+ */
+export const runtimeOrchestratorWaitSchema = z.object({
+	kind: runtimeUserInputWaitKindSchema,
+	/** When the wait began; a new wait of the same session has a new `since`. */
+	since: z.number(),
+});
+export type RuntimeOrchestratorWait = z.infer<typeof runtimeOrchestratorWaitSchema>;
+
+export const runtimeOrchestratorWaitDetailSchema = runtimeOrchestratorWaitSchema.extend({
+	taskId: z.string(),
+	agentId: runtimeAgentIdSchema.nullable(),
+	text: z.string(),
+});
+export type RuntimeOrchestratorWaitDetail = z.infer<typeof runtimeOrchestratorWaitDetailSchema>;
+
+export const runtimeOrchestratorWaitResponseSchema = z.object({
+	wait: runtimeOrchestratorWaitDetailSchema.nullable(),
+});
+export type RuntimeOrchestratorWaitResponse = z.infer<typeof runtimeOrchestratorWaitResponseSchema>;
+
 export const runtimeProjectSummarySchema = z.object({
 	id: z.string(),
 	path: z.string(),
 	name: z.string(),
 	taskCounts: runtimeProjectTaskCountsSchema,
+	orchestratorWait: runtimeOrchestratorWaitSchema.nullable().optional(),
 });
 export type RuntimeProjectSummary = z.infer<typeof runtimeProjectSummarySchema>;
 

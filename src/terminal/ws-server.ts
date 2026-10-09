@@ -819,7 +819,7 @@ export function createTerminalWebSocketBridge({
 				// server) is dropped, not answered with a close: the viewer stays attached, so the session
 				// that starts next (the sidebar's or recovery's) streams into it. Closing here made every
 				// key typed into the black terminal after a restart force a full reconnect.
-				terminalManager.writeInput(taskId, rawDataToBuffer(rawMessage));
+				terminalManager.writeInput(taskId, rawDataToBuffer(rawMessage), { fromViewer: true });
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				ws.close(1011, message);

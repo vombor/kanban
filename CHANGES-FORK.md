@@ -798,3 +798,28 @@ of this repository is the complete record of changes.
   A Cline card whose run has written no session file of its own for `stallNudgeMin` is a new silent-stall kind,
   `no_session`, whose reason names the sign-in gap when providers.json shows one: recovery escalates a dev card at once
   (no nudge: the sign-in screen takes typed text as input), and the watchdog reports it for QA cards too.
+- `src/terminal/user-input-wait.ts` (new), `src/server/orchestrator-wait.ts` (new), `src/core/api-contract.ts`,
+  `src/server/workspace-registry.ts`, `src/server/runtime-state-hub.ts`, `src/trpc/app-router.ts`,
+  `src/trpc/workspace-api.ts`, `src/terminal/session-manager.ts`, `src/terminal/terminal-session-service.ts`,
+  `src/terminal/ws-server.ts`, `src/commands/hooks.ts`, `src/terminal/agent-session-adapters.ts`,
+  `src/pipeline/watchdog/prompt-watch.ts`, `web-ui/src/hooks/use-orchestrator-wait-alerts.ts` (new),
+  `web-ui/src/hooks/use-favicon-badge.ts` (new), `web-ui/src/components/orchestrator-wait-badge.tsx` (new),
+  `web-ui/src/stores/orchestrator-wait-notifications-store.ts` (new), `web-ui/src/utils/orchestrator-wait-alerts.ts`
+  (new), `web-ui/src/runtime/workspace-state-query.ts`, `web-ui/src/App.tsx`, `web-ui/src/components/project-switcher.tsx`,
+  `web-ui/src/components/project-navigation-panel.tsx`, `web-ui/src/components/kanban-agent-header.tsx`,
+  `web-ui/src/components/top-bar.tsx`, `web-ui/src/components/runtime-settings-dialog.tsx`,
+  `web-ui/src/hooks/use-review-ready-notifications.ts`, `web-ui/src/storage/local-storage-store.ts`,
+  `web-ui/src/utils/react-use.ts`, `web-ui/src/styles/globals.css`, `AGENTS.md`, tests (issue #10): the browser shows
+  when any project's orchestrator (its sidebar agent) waits for the user. One reader, `describeUserInputWait()`, decides
+  from the session summary's hook activity: a permission request (Claude Code/Codex PermissionRequest, a permission
+  Notification, Copilot's permissionRequest) is an approval; AskUserQuestion, Cline's ask tools, or a turn that ended on
+  a question are a question. The watchdog's prompt watch reads approvals through it too. Every project summary of the
+  state stream gets `orchestratorWait` (kind and start only, since the project list reaches agent sessions too); the
+  question's text comes from the workspace-scoped `workspace.getOrchestratorWait`. A wait clears when the hooks say the
+  agent moved on, the session ends, or the user presses Enter in that sidebar's terminal (the session manager records
+  the viewer's Enter, Kanban's own deliveries don't count). The browser badges the project in the switcher, the
+  collapsed sidebar and the Kanban Agent header, flashes a new wait once, adds it to the `(n) Kanban` tab title and puts
+  a dot on the favicon; an opt-in setting (this browser, off by default, permission asked when turned on) shows a
+  desktop notification for a new wait while the tab is in the background, whose click opens that project's sidebar.
+  Hook ingest now puts the asked question into AskUserQuestion's activity text and the tool or message into a
+  permission request's; Copilot's hooks name their event.

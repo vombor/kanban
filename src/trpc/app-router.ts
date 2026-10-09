@@ -28,6 +28,7 @@ import type {
 	RuntimeHookIngestResponse,
 	RuntimeOpenFileRequest,
 	RuntimeOpenFileResponse,
+	RuntimeOrchestratorWaitResponse,
 	RuntimeProcessSweepResponse,
 	RuntimeProjectAddRequest,
 	RuntimeProjectAddResponse,
@@ -93,6 +94,7 @@ import {
 	runtimeHookIngestResponseSchema,
 	runtimeOpenFileRequestSchema,
 	runtimeOpenFileResponseSchema,
+	runtimeOrchestratorWaitResponseSchema,
 	runtimeProcessSweepResponseSchema,
 	runtimeProjectAddRequestSchema,
 	runtimeProjectAddResponseSchema,
@@ -279,6 +281,7 @@ export interface RuntimeTrpcContext {
 			input: RuntimeWorkspaceFileSearchRequest,
 		) => Promise<RuntimeWorkspaceFileSearchResponse>;
 		loadState: (scope: RuntimeTrpcWorkspaceScope) => Promise<RuntimeWorkspaceStateResponse>;
+		loadOrchestratorWait: (scope: RuntimeTrpcWorkspaceScope) => Promise<RuntimeOrchestratorWaitResponse>;
 		notifyStateUpdated: (scope: RuntimeTrpcWorkspaceScope) => Promise<RuntimeWorkspaceStateNotifyResponse>;
 		saveState: (
 			scope: RuntimeTrpcWorkspaceScope,
@@ -585,6 +588,10 @@ export const runtimeAppRouter = t.router({
 			}),
 		getState: workspaceProcedure.output(runtimeWorkspaceStateResponseSchema).query(async ({ ctx }) => {
 			return await ctx.workspaceApi.loadState(ctx.workspaceScope);
+		}),
+		// What the project's orchestrator asks the user (the project summaries say only that it waits).
+		getOrchestratorWait: workspaceProcedure.output(runtimeOrchestratorWaitResponseSchema).query(async ({ ctx }) => {
+			return await ctx.workspaceApi.loadOrchestratorWait(ctx.workspaceScope);
 		}),
 		notifyStateUpdated: workspaceProcedure
 			.output(runtimeWorkspaceStateNotifyResponseSchema)
