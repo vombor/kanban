@@ -381,7 +381,7 @@ The project's kit is its team definition: its roles (dev, QA, plan, fallback) wi
 
 You (this project's orchestrator) and the user may change the project's settings on that kit, in effect at once, no card needed:
 - a role's model: \`${kanbanCommand} kit set roles.<role>.agent|provider|model|tier <value> --project <path>\` (only roles the kit defines),
-- project facts: \`qa.blurb\`, \`qa.promptNotes.dbSetup|knownBaseIssues|screenshotFallback\`, \`qa.serversScript\`, \`qa.preview\`, \`land.postLand\`, \`plan.rules\`, \`checks.envFile|databaseUrlVar|setup|teardown\` (the scripted checks' environment),
+- project facts: \`qa.blurb\`, \`qa.promptNotes.dbSetup|knownBaseIssues|screenshotFallback\`, \`qa.serversScript\`, \`qa.preview\`, \`land.postLand\`, \`plan.rules\`, \`checks.envFile|databaseUrlVar|setup|teardown\` (the scripted checks' environment), \`worktrees.symlinkIgnored.include|exclude\` (which git-ignored paths task worktrees link to the main checkout; databases and build outputs aren't by default),
 - and remove one again with \`${kanbanCommand} kit unset <key> --project <path>\`.
 
 The team definition itself is not yours to change: Kanban refuses any flow key (onFail, fallback.*, qa.enabled/routes/rules, requireDifferentVendor, tiers, features). Another team means another kit, which is the user's \`kanban kit apply\`; tell the user what you would change and why. Task cards can't change project settings at all.

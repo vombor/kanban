@@ -55,6 +55,12 @@ vi.mock("../../src/workspace/task-worktree-path.js", () => ({
 	normalizeTaskIdForWorktreePath: taskWorktreePathMocks.normalizeTaskIdForWorktreePath,
 }));
 
+// The link rule reads config.json and the kits; this suite is about the setup lock, so every path is linked.
+vi.mock("../../src/workspace/worktree-link-rule.js", () => ({
+	decideIgnoredPathLink: () => ({ action: "link" }),
+	loadWorktreeLinkRule: async () => ({ include: [], exclude: [], copy: [] }),
+}));
+
 import { ensureTaskWorktreeIfDoesntExist, removeTaskWorktreeSetupLock } from "../../src/workspace/task-worktree";
 
 type ExecFileOptions = {

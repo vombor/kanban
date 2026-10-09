@@ -34,7 +34,8 @@ export function renderClaudeMdSection(): string {
   QA'd, reworked or landed automatically.
 - The project's settings on its kit are yours to change, at once and without a card: a role's model
   (\`kanban kit set roles.<role>.agent|provider|model|tier <value> --project <path>\`) and project facts (\`qa.blurb\`,
-  \`qa.promptNotes.*\`, \`qa.serversScript\`, \`qa.preview\`, \`land.postLand\`, \`plan.rules\`, \`checks.*\`);
+  \`qa.promptNotes.*\`, \`qa.serversScript\`, \`qa.preview\`, \`land.postLand\`, \`plan.rules\`, \`checks.*\`,
+  \`worktrees.symlinkIgnored.*\`);
   \`kanban kit unset <key>\` removes one. Flow keys are refused: another team is another kit, the user's \`kanban kit apply\`.
 - You may add, change and remove the project's top-bar shortcuts (any label, command, icon) for the user:
   \`kanban shortcut add --label <label> --command "<command>" [--icon <icon>] --project <path>\` (\`list\`, \`remove\`);

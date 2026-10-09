@@ -177,6 +177,7 @@ user kit file), never a silent no-op. A missing key means "no answer", so the `d
 | `fallback.requireApproval` | boolean | the fallback sibling waits in Backlog for the orchestrator or the user | `false` | `false` |
 | `land.postLand[]` | `{ paths, run, stopUnder? }` | commands the core runs after a land that touched a file matching `paths` (regex) | `[]` | `[]` (foo overrides it) |
 | `checks.envFile`, `checks.databaseUrlVar`, `checks.setup`, `checks.teardown` | path, variable name, shell commands | the scripted checks' environment ([Project settings](#the-scripted-checks-environment-checks)) | unset | unset |
+| `worktrees.symlinkIgnored.include`, `worktrees.symlinkIgnored.exclude` | glob lists | which git-ignored paths of the main checkout task worktrees link ([below](#task-worktrees-ignored-paths-worktreessymlinkignored)) | unset (the default excludes) | unset |
 | `features[]` | `scoreboard`, `bench`, `runoffs`, `calibration`, `tiers` | built-in team features that run for the project | `[]` | all five |
 | `tiers.<name>[]` | `{ provider?, model, default?, note? }` | `roles.<role>.tier`, `kanban bench tiers`, `bench runoff create --tier` | | `tier3`, `tier2`, `tier1`, `qa` |
 | `dropped[]` | `{ provider?, model, at?, why? }` | a user kit's own models no tier lookup returns, on any provider; the built-in kits' are rejected in the vetted model registry (`rejected.scope: "model"`) | | none (in the registry) |
@@ -219,7 +220,8 @@ A project's settings are what it sets on its kit: `workspaces.<id>.kit.overrides
   `plan`, `fallback`; an unknown role, or one the kit doesn't define, is an error);
 - **project facts**: `qa.blurb`, `qa.promptNotes.{dbSetup,knownBaseIssues,screenshotFallback}`, `qa.serversScript`,
   `qa.preview`, `land.postLand`, `plan.rules`, `checks.{envFile,databaseUrlVar,setup,teardown}` (the scripted
-  checks' environment, [below](#the-scripted-checks-environment-checks)) (`PROJECT_FACT_KEYS` in
+  checks' environment, [below](#the-scripted-checks-environment-checks)), `worktrees.symlinkIgnored.{include,exclude}`
+  ([task worktrees' ignored paths](#task-worktrees-ignored-paths-worktreessymlinkignored)) (`PROJECT_FACT_KEYS` in
   `src/kits/project-settings.ts`).
 
 Everything else is the team definition and is refused with a message: `onFail.*`, `fallback.*` (the triggers and
@@ -295,6 +297,61 @@ kanban kit set checks.envFile .env --project /projects/notes
 kanban kit set checks.databaseUrlVar DATABASE_URL --project /projects/notes
 kanban kit set checks.setup 'echo "DROP DATABASE IF EXISTS \"$CHECKS_DB\"" | npx prisma db execute --url "$CHECKS_SOURCE_DATABASE_URL" --stdin && echo "CREATE DATABASE \"$CHECKS_DB\"" | npx prisma db execute --url "$CHECKS_SOURCE_DATABASE_URL" --stdin && npx prisma db push --skip-generate' --project /projects/notes
 kanban kit set checks.teardown 'echo "DROP DATABASE IF EXISTS \"$CHECKS_DB\"" | npx prisma db execute --url "$CHECKS_SOURCE_DATABASE_URL" --stdin' --project /projects/notes
+```
+
+### Task worktrees' ignored paths (`worktrees.symlinkIgnored`)
+
+A new task worktree has none of the main checkout's git-ignored files, so Kanban links them in: each ignored path
+(a top-level one, as `git ls-files --others --ignored --directory` lists it) becomes a symlink to the checkout's
+copy. A link is shared by the checkout and every card, so only what cards *read* is safe to link. Until issue #19
+(2026-10-09) every ignored path was linked, and foo's parallel cards shared `prisma/dev.db`, `prisma/test.db`,
+`.next` and `server/dist`: one card's tests or build wrote everybody's.
+
+Now every ignored path is linked **unless** it matches the default exclude list or the project's `exclude`:
+
+| Default exclude | Why |
+|---|---|
+| `*.db`, `*.db3`, `*.sqlite*`, `*-journal`, `*-wal`, `*-shm` | databases (SQLite and its journal files): cards would share one dev/test database |
+| `.next`, `next-env.d.ts`, `.nuxt`, `.output`, `.svelte-kit`, `dist`, `build`, `out`, `target`, `*.tsbuildinfo`, `.preview` | build output: a card's build would overwrite the main checkout's and every other card's |
+| `.turbo`, `.cache`, `.parcel-cache`, `.vite`, `.eslintcache`, `__pycache__`, `.pytest_cache` | caches the tools write while a card works |
+| `coverage`, `.nyc_output`, `test-results`, `playwright-report` | test output |
+| `*.log`, `logs`, `tmp`, `.tmp` | logs and scratch files |
+
+Still linked by default, because cards read them and an install or setup per card would be needed otherwise:
+`node_modules` (Kanban has no per-worktree install step; a project whose cards run their own install excludes it),
+`.env*` files and other local config (`.cline` is made per card before a Cline launch, `ensureCardOwnedClineDir`).
+Kanban's own rules hold whatever the project says: `.git`, `.DS_Store` and the like are never linked, and a
+Next/Turbopack package's `node_modules` isn't either (Turbopack refuses a symlinked `node_modules` outside the
+project root).
+
+| Key | Value | Means |
+|---|---|---|
+| `worktrees.symlinkIgnored.exclude` | glob list | not linked either (on top of the defaults) |
+| `worktrees.symlinkIgnored.include` | glob list | linked even though a default excludes it; `exclude` wins over `include` |
+
+A glob without `/` matches any segment of the path (`dist` matches `server/dist`), one with `/` the path from the
+project root (`prisma/*.db`); `*` and `?` stay within a segment, `**` crosses them. A path also matches when one of
+its parent directories does. A wholly ignored directory is one path: `data/` is linked or not as a whole, so a
+database inside it needs `exclude: ["data"]`.
+
+**`checks.envFile` is copied, not linked.** The scripted checks copy that file from the card's worktree and refuse
+a symlink out of it, and a per-card database (`checks.databaseUrlVar`) means the card edits its own copy. So a new
+worktree gets a copy of the main checkout's file (when the worktree has none), and an ignored directory holding it is
+not linked.
+
+**Worktrees made before the rule.** New worktrees follow the rule. A live worktree keeps the links it has, because a
+running card may be using them; the managed `info/exclude` block keeps listing them, so they never show up in a
+snapshot. `kanban doctor` warns, per project, about every link in a live task worktree that the rule would not create
+(with its path and why). The user replaces them with `kanban project unlink-ignored <project>`: a linked file
+becomes a copy (a database keeps its data, now the card's own), a directory an empty one (a build output or cache is
+rebuilt), a dangling link goes. A worktree with any process in it (the card's agent, a dev server, a test run) is
+skipped; `--dry-run` lists what would change. Code: `src/workspace/worktree-link-rule.ts`,
+`src/workspace/worktree-link-audit.ts`.
+
+```sh
+kanban kit set worktrees.symlinkIgnored.exclude '["node_modules", "uploads"]' --project /projects/foo
+kanban kit set worktrees.symlinkIgnored.include '[".cache"]' --project /projects/foo
+kanban project unlink-ignored /projects/foo --dry-run
 ```
 
 **Overrides from before the split.** Legacy keys and team keys stored as overrides keep applying. `kanban doctor`

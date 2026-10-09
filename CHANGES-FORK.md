@@ -862,3 +862,11 @@ of this repository is the complete record of changes.
   an attribution line naming the project and role (`github.attribution`). Without an app it falls back to the PAT
   with a warning. The land commenter uses the same writer; cards' guardrails deny `gh issue` and `gh api` issue
   writes; doctor checks the app, its file mode and which projects' repositories it covers.
+- `src/workspace/task-worktree.ts`, `src/workspace/worktree-link-rule.ts` (new), `src/workspace/worktree-link-audit.ts`
+  (new), `src/projects/project-unlink-ignored.ts` (new), `src/doctor/worktree-link-checks.ts` (new),
+  `src/kits/kit-schema.ts`, `src/kits/project-settings.ts`: task worktrees no longer symlink every git-ignored path of
+  the main checkout (issue #19: foo's cards shared `prisma/*.db`, `.next` and `server/dist`). Databases, build and
+  cache outputs, test output and logs are not linked by default; the kit project fact
+  `worktrees.symlinkIgnored.{include,exclude}` adjusts the list per project, and the `checks.envFile` file is copied
+  into each worktree instead of linked. Links already in live worktrees stay; `kanban doctor` lists them and the
+  user-run `kanban project unlink-ignored` replaces them (copies files, empties directories) where nothing runs.

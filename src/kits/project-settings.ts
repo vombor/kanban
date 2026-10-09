@@ -3,7 +3,7 @@
 //   - the model of any role its kit defines: `roles.<role>.agent|provider|model|tier` (an unknown role, or one the kit
 //     doesn't define, is an error), and
 //   - project facts: PROJECT_FACT_KEYS (the QA blurb, QA prompt notes, the QA servers script and preview, post-land
-//     commands, plan prompt rules, the scripted checks' environment).
+//     commands, plan prompt rules, the scripted checks' environment, the ignored paths task worktrees link).
 // Every other key (onFail, fallback triggers and approval, qa.enabled/routes/rules, requireDifferentVendor, tiers,
 // features, ...) is the team: a project changes it only by using another kit (`kanban kit apply`, the user's).
 //
@@ -47,6 +47,7 @@ export const PROJECT_FACT_KEYS = [
 	"land.postLand",
 	"plan.rules",
 	"checks",
+	"worktrees.symlinkIgnored",
 ] as const;
 
 export type KitSettingKeyClass =

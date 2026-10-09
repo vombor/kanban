@@ -48,6 +48,7 @@ import { checkKitLemonadeModels, checkKitProjectSettings, checkKitRecommendedSet
 import { checkOneOwner } from "./one-owner-checks";
 import { checkProjectShortcuts, type ProjectShortcutCheckDeps } from "./project-shortcut-checks";
 import { checkRoutingVetting } from "./routing-vetting-checks";
+import { checkWorktreeLinks } from "./worktree-link-checks";
 
 export interface DoctorOptions {
 	/** `kanban doctor <path>`: a project that should be registered. */
@@ -123,6 +124,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
 	findings.push(...(await checkSections({ ...projectContext, entries: liveEntries })));
 	findings.push(...(await checkWorktreePushHooks(liveEntries)));
 	findings.push(...(await checkProjectShortcuts(liveEntries, options.shortcutDeps)));
+	findings.push(...(await checkWorktreeLinks({ config, catalog, entries: liveEntries })));
 
 	findings.push(
 		...checkSetup(

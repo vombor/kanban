@@ -1,4 +1,5 @@
-import { access, lstat, mkdir, readdir, readFile, rm, symlink } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { access, copyFile, lstat, mkdir, readdir, readFile, rm, stat, symlink } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
 
 import type {
@@ -13,6 +14,7 @@ import { getGitCommandErrorMessage, getGitStdout, readGitHeadInfo, runGit } from
 import { removeTaskLaunchFiles } from "./task-launch-files";
 import { getWorkspaceFolderLabelForWorktreePath, normalizeTaskIdForWorktreePath } from "./task-worktree-path";
 import { listTurbopackNodeModulesSymlinkSkipPaths } from "./task-worktree-turbopack";
+import { decideIgnoredPathLink, loadWorktreeLinkRule, type WorktreeLinkRule } from "./worktree-link-rule";
 
 const KANBAN_MANAGED_EXCLUDE_BLOCK_START = "# kanban-managed-symlinked-ignored-paths:start";
 const KANBAN_MANAGED_EXCLUDE_BLOCK_END = "# kanban-managed-symlinked-ignored-paths:end";
@@ -356,8 +358,10 @@ function stripManagedExcludeBlock(content: string): string {
 }
 
 /**
- * The ignored paths Kanban symlinked into a repo's task worktrees (for example `node_modules`), relative to the
- * worktree, from the managed block of the repo's info/exclude. Empty when there is none or git can't say.
+ * The ignored paths Kanban may have symlinked into a repo's task worktrees (for example `node_modules`), relative to
+ * the worktree, from the managed block of the repo's info/exclude. The block lists every mirror candidate, also those
+ * the worktree link rule no longer links, so check that the path is a symlink. Empty when there is none or git can't
+ * say.
  */
 export async function readSymlinkedIgnoredPaths(worktreePath: string): Promise<string[]> {
 	const excludePathOutput = await getGitStdout(["rev-parse", "--git-path", "info/exclude"], worktreePath).catch(
@@ -412,16 +416,41 @@ async function syncManagedIgnoredPathExcludes(repoPath: string, relativePaths: s
 	await lockedFileSystem.writeTextFileAtomic(excludePath, normalizedNextContent);
 }
 
-async function syncIgnoredPathsIntoWorktree(repoPath: string, worktreePath: string): Promise<void> {
+/**
+ * The main checkout's ignored paths Kanban may mirror into its worktrees (the blacklist and the Turbopack
+ * `node_modules` rule applied), relative to the project; the worktree link rule then decides each one.
+ */
+export async function listMirrorCandidateIgnoredPaths(repoPath: string): Promise<string[]> {
 	const ignoredPaths = getUniquePaths(await listIgnoredPaths(repoPath)).filter(
 		(relativePath) => !shouldSkipSymlink(relativePath),
 	);
 	const turbopackNodeModulesSkipPaths = new Set(await listTurbopackNodeModulesSymlinkSkipPaths(repoPath));
-	const mirroredIgnoredPaths = ignoredPaths.filter((relativePath) => !turbopackNodeModulesSkipPaths.has(relativePath));
+	return ignoredPaths.filter((relativePath) => !turbopackNodeModulesSkipPaths.has(relativePath));
+}
 
-	await syncManagedIgnoredPathExcludes(repoPath, mirroredIgnoredPaths);
-	for (const relativePath of mirroredIgnoredPaths) {
-		if (shouldSkipSymlink(relativePath)) {
+/** Copies a main-checkout file the card gets as its own (`checks.envFile`), unless the worktree already has one. */
+async function copyIgnoredFileIntoWorktree(sourcePath: string, targetPath: string): Promise<void> {
+	const sourceStat = await stat(sourcePath).catch(() => null);
+	if (!sourceStat?.isFile() || (await lstat(targetPath).catch(() => null))) {
+		return;
+	}
+	await mkdir(dirname(targetPath), { recursive: true });
+	await copyFile(sourcePath, targetPath, fsConstants.COPYFILE_EXCL).catch(() => undefined);
+}
+
+async function syncIgnoredPathsIntoWorktree(
+	repoPath: string,
+	worktreePath: string,
+	rule: WorktreeLinkRule,
+): Promise<void> {
+	const candidatePaths = await listMirrorCandidateIgnoredPaths(repoPath);
+
+	// The block lists every candidate, linked or not: a link an older rule made in a live worktree must stay ignored
+	// (a directory-only .gitignore entry doesn't match a symlink), or snapshots and landing (`add -A`) would ship it.
+	await syncManagedIgnoredPathExcludes(repoPath, candidatePaths);
+	for (const relativePath of candidatePaths) {
+		const decision = decideIgnoredPathLink(relativePath, rule);
+		if (decision.action !== "link") {
 			continue;
 		}
 
@@ -443,6 +472,9 @@ async function syncIgnoredPathsIntoWorktree(repoPath: string, worktreePath: stri
 			isDirectory: sourceStat.isDirectory(),
 		});
 	}
+	for (const relativePath of rule.copy) {
+		await copyIgnoredFileIntoWorktree(join(repoPath, relativePath), join(worktreePath, relativePath));
+	}
 }
 
 async function initializeSubmodulesIfNeeded(worktreePath: string): Promise<void> {
@@ -453,10 +485,14 @@ async function initializeSubmodulesIfNeeded(worktreePath: string): Promise<void>
 	await getGitStdout(["submodule", "update", "--init", "--recursive"], worktreePath);
 }
 
-async function prepareNewTaskWorktree(repoPath: string, worktreePath: string): Promise<void> {
+async function prepareNewTaskWorktree(
+	repoPath: string,
+	worktreePath: string,
+	linkRule: WorktreeLinkRule,
+): Promise<void> {
 	try {
 		await initializeSubmodulesIfNeeded(worktreePath);
-		await syncIgnoredPathsIntoWorktree(repoPath, worktreePath);
+		await syncIgnoredPathsIntoWorktree(repoPath, worktreePath, linkRule);
 	} catch (error) {
 		await removeTaskWorktreeInternal(repoPath, worktreePath).catch(() => {});
 		throw error;
@@ -501,12 +537,13 @@ export async function ensureTaskWorktreeIfDoesntExist(options: {
 		const taskId = normalizeTaskIdForWorktreePath(options.taskId);
 		const worktreePath = getTaskWorktreePath(context.repoPath, taskId);
 		const located = await locateTaskWorktree(context.repoPath, taskId);
+		const linkRule = await loadWorktreeLinkRule(context.workspaceId);
 		if (located.path !== worktreePath) {
 			// A live worktree in a legacy root is used as is. A broken one is not repaired there: the
 			// worktree is recreated in the current root below.
 			const legacyHead = await tryRunGit(located.path, ["rev-parse", "HEAD"]);
 			if (legacyHead) {
-				await syncIgnoredPathsIntoWorktree(context.repoPath, located.path);
+				await syncIgnoredPathsIntoWorktree(context.repoPath, located.path, linkRule);
 				return {
 					ok: true,
 					path: located.path,
@@ -521,7 +558,7 @@ export async function ensureTaskWorktreeIfDoesntExist(options: {
 		// worktrees are now treated as authoritative and only missing worktrees are created.
 		const existingResult = await runGit(worktreePath, ["rev-parse", "HEAD"]);
 		if (existingResult.ok && existingResult.stdout) {
-			await syncIgnoredPathsIntoWorktree(context.repoPath, worktreePath);
+			await syncIgnoredPathsIntoWorktree(context.repoPath, worktreePath, linkRule);
 			return {
 				ok: true,
 				path: worktreePath,
@@ -533,7 +570,7 @@ export async function ensureTaskWorktreeIfDoesntExist(options: {
 		return await withTaskWorktreeSetupLock(context.repoPath, async () => {
 			const lockedExistingCommit = await tryRunGit(worktreePath, ["rev-parse", "HEAD"]);
 			if (lockedExistingCommit) {
-				await syncIgnoredPathsIntoWorktree(context.repoPath, worktreePath);
+				await syncIgnoredPathsIntoWorktree(context.repoPath, worktreePath, linkRule);
 				return {
 					ok: true,
 					path: worktreePath,
@@ -603,7 +640,7 @@ export async function ensureTaskWorktreeIfDoesntExist(options: {
 					"Could not restore the saved task patch onto its original commit. Started from the task base ref instead.";
 				await getGitStdout(["worktree", "add", "--detach", worktreePath, baseCommit], context.repoPath);
 			}
-			await prepareNewTaskWorktree(context.repoPath, worktreePath);
+			await prepareNewTaskWorktree(context.repoPath, worktreePath, linkRule);
 
 			if (storedPatch && baseCommit === storedPatch.commit) {
 				try {

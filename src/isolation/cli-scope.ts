@@ -60,6 +60,8 @@ export const USER_ONLY_COMMANDS = [
 	"project create",
 	// Also refuses while a server runs, so it can't wait for the console code (the server prints it).
 	"project rename-id",
+	// Changes card worktrees: the user decides when a card's shared links go.
+	"project unlink-ignored",
 	"isolation grant",
 	"isolation revoke",
 	"isolation approve",

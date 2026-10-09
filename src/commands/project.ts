@@ -7,6 +7,9 @@ import { type CreateProjectResult, createProject, DEFAULT_INITIAL_BRANCH } from 
 import { resolveProjectInputPath } from "../projects/project-path";
 import { type ProjectRenameIdResult, runProjectIdRename } from "../projects/project-rename-id";
 import { syncProjectSections } from "../projects/project-sections";
+import { formatUnlinkIgnoredResults, runProjectUnlinkIgnored } from "../projects/project-unlink-ignored";
+import { createProcProcessTableReader, isProcessTableSupported } from "../server/process-table";
+import { loadWorktreeLinkRule } from "../workspace/worktree-link-rule";
 import { parseLandingMode } from "./kit";
 import { resolveWorkspaceTarget } from "./workspace-target";
 
@@ -276,6 +279,39 @@ export function registerProjectCommand(program: Command): void {
 				);
 			} catch (error) {
 				process.stderr.write(`Project sync failed: ${toErrorMessage(error)}\n`);
+				process.exitCode = 1;
+			}
+		});
+
+	project
+		.command("unlink-ignored")
+		.description(
+			"Replace the links to the main checkout an older worktree link rule left in the project's task worktrees (a shared database, build output or cache; kanban doctor lists them): a file becomes a copy, a directory an empty one. Worktrees with a running process are skipped. The user's command.",
+		)
+		.argument("[path]", "Project path or workspace id (default: the project containing the current directory).")
+		.option("--dry-run", "List the links and what each would become; change nothing.")
+		.option("--json", "Print the result as JSON.")
+		.action(async (path: string | undefined, options: { dryRun?: boolean; json?: boolean }) => {
+			try {
+				const target = await resolveWorkspaceTarget(path, { allowUnregistered: false });
+				if (!target.repoPath) {
+					throw new Error(`${target.workspaceId} is not a registered project.`);
+				}
+				const reader = isProcessTableSupported() ? createProcProcessTableReader() : null;
+				const results = await runProjectUnlinkIgnored({
+					repoPath: target.repoPath,
+					rule: await loadWorktreeLinkRule(target.workspaceId),
+					dryRun: options.dryRun === true,
+					listProcesses: reader ? async () => await reader.list() : null,
+					selfPid: process.pid,
+				});
+				process.stdout.write(
+					options.json
+						? `${JSON.stringify({ ok: true, workspaceId: target.workspaceId, results }, null, 2)}\n`
+						: `${formatUnlinkIgnoredResults(results).join("\n")}\n`,
+				);
+			} catch (error) {
+				process.stderr.write(`Project unlink-ignored failed: ${toErrorMessage(error)}\n`);
 				process.exitCode = 1;
 			}
 		});

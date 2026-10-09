@@ -143,10 +143,10 @@ describe.sequential("task-worktree integration", () => {
 				runGit(repoPath, ["config", "user.email", "kanban-test@example.com"]);
 
 				writeFileSync(join(repoPath, "README.md"), "hello\n", "utf8");
-				writeFileSync(join(repoPath, ".gitignore"), "/.next/\n/node_modules/\n", "utf8");
-				mkdirSync(join(repoPath, ".next"), { recursive: true });
+				writeFileSync(join(repoPath, ".gitignore"), "/.local-config/\n/node_modules/\n", "utf8");
+				mkdirSync(join(repoPath, ".local-config"), { recursive: true });
 				mkdirSync(join(repoPath, "node_modules"), { recursive: true });
-				writeFileSync(join(repoPath, ".next", "BUILD_ID"), "build\n", "utf8");
+				writeFileSync(join(repoPath, ".local-config", "settings.json"), "{}\n", "utf8");
 				writeFileSync(join(repoPath, "node_modules", "package.json"), '{\n  "name": "fixture"\n}\n', "utf8");
 
 				runGit(repoPath, ["add", "README.md", ".gitignore"]);
@@ -162,14 +162,14 @@ describe.sequential("task-worktree integration", () => {
 					throw new Error("Task worktree was not created");
 				}
 
-				const nextPath = join(ensured.path, ".next");
+				const localConfigPath = join(ensured.path, ".local-config");
 				const nodeModulesPath = join(ensured.path, "node_modules");
-				expectMirroredPathBehavior(nextPath);
+				expectMirroredPathBehavior(localConfigPath);
 				expectMirroredPathBehavior(nodeModulesPath);
-				expect(runGit(ensured.path, ["status", "--porcelain", "--", ".next"])).toBe("");
+				expect(runGit(ensured.path, ["status", "--porcelain", "--", ".local-config"])).toBe("");
 				expect(runGit(ensured.path, ["status", "--porcelain", "--", "node_modules"])).toBe("");
-				if (existsSync(nextPath)) {
-					expect(runGit(ensured.path, ["check-ignore", "-v", ".next"])).toContain("info/exclude");
+				if (existsSync(localConfigPath)) {
+					expect(runGit(ensured.path, ["check-ignore", "-v", ".local-config"])).toContain("info/exclude");
 				}
 				if (existsSync(nodeModulesPath)) {
 					expect(runGit(ensured.path, ["check-ignore", "-v", "node_modules"])).toContain("info/exclude");
@@ -218,7 +218,8 @@ describe.sequential("task-worktree integration", () => {
 
 				const nextPath = join(ensured.path, ".next");
 				const nodeModulesPath = join(ensured.path, "node_modules");
-				expectMirroredPathBehavior(nextPath);
+				// A build output: not linked by default (issue #19).
+				expect(existsSync(nextPath)).toBe(false);
 				expect(existsSync(nodeModulesPath)).toBe(false);
 				expect(runGit(ensured.path, ["status", "--porcelain", "--", ".next"])).toBe("");
 				expect(runGit(ensured.path, ["status", "--porcelain", "--", "node_modules"])).toBe("");

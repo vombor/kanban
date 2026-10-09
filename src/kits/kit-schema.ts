@@ -147,6 +147,21 @@ export const kitChecksSchema = z
 export type KitChecks = z.infer<typeof kitChecksSchema>;
 
 /**
+ * Which git-ignored paths of the main checkout a task worktree gets as symlinks (src/workspace/worktree-link-rule.ts,
+ * docs/team/KITS.md "Task worktrees' ignored paths"): every ignored path is linked unless it matches the default
+ * exclude list (databases, build and cache outputs, logs) or `exclude`; `include` links a default-excluded path
+ * again, and `exclude` wins over `include`. Globs: `*`, `?`, `**`; a glob without `/` matches any path segment. A
+ * project fact.
+ */
+export const kitWorktreeSymlinkIgnoredSchema = z
+	.object({
+		include: z.array(z.string().min(1)).optional(),
+		exclude: z.array(z.string().min(1)).optional(),
+	})
+	.strict();
+export type KitWorktreeSymlinkIgnored = z.infer<typeof kitWorktreeSymlinkIgnoredSchema>;
+
+/**
  * An agent and model a plan card could run on. `plan.agent`/`plan.model` are the one in use; `plan.candidates` lists
  * the others a later runoff or calibration compares (Claude, Codex, Copilot), so that needs no schema change.
  */
@@ -355,6 +370,7 @@ export const kitDocumentObjectSchema = z
 			.strict()
 			.optional(),
 		checks: kitChecksSchema.optional(),
+		worktrees: z.object({ symlinkIgnored: kitWorktreeSymlinkIgnoredSchema.optional() }).strict().optional(),
 		features: z.array(kitFeatureSchema).optional(),
 		tiers: z.record(z.string(), z.array(kitTierEntrySchema)).optional(),
 		/** A user kit's own dropped models; the built-in kits' are in the vetted model registry (rejected, scope model). */
