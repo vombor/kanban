@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -448,5 +448,206 @@ describe("exportSnapshotToDir", () => {
 		await expect(exportSnapshotToDir(root, "ae949cde00000000", outDir())).rejects.toThrow(
 			/^exporting ae949cde failed: git archive was killed by SIGKILL; tar exited with 2: tar: cannot write/,
 		);
+	});
+});
+
+describe("checks runner: the project's environment (kit checks.*)", () => {
+	const temps: Array<{ cleanup: () => void }> = [];
+	afterEach(() => {
+		for (const temp of temps.splice(0)) {
+			temp.cleanup();
+		}
+	});
+
+	const CARD_URL = "postgresql://notes:s3cret-pw@127.0.0.1:5432/local_notes_f423d?schema=public";
+	const ENV_FILE = [
+		"# the card's own database",
+		`DATABASE_URL="${CARD_URL}"`,
+		"SESSION_SECRET=very-long-session-secret",
+		"PORT=3000",
+		"KANBAN_HOME=/live/home",
+		"GH_TOKEN=project-token-value",
+		"",
+	].join("\n");
+
+	function createHarness(
+		options: { project?: ChecksRequest["project"]; envText?: string | null; failing?: string[] } = {},
+	) {
+		const temp = createTempDir("kanban-checks-env-");
+		temps.push(temp);
+		const worktree = join(temp.path, "worktree");
+		mkdirSync(worktree, { recursive: true });
+		if (options.envText !== null) {
+			writeFileSync(join(worktree, ".env"), options.envText ?? ENV_FILE);
+		}
+		const settings: ChecksSettings = {
+			...parsePipelineConfig({}).config.pipeline.checks,
+			scratchRoot: join(temp.path, "scratch"),
+		};
+		const steps: Array<RunCheckStepInput & { envFileAtStep: string | null }> = [];
+		const results: ChecksResult[] = [];
+		const runner = createChecksRunner({
+			readSettings: async () => settings,
+			onResult: async (result) => {
+				results.push(result);
+			},
+			log: () => {},
+			exportSnapshot: async (_repoPath, _snapshot, dir) => {
+				mkdirSync(join(dir, "node_modules"), { recursive: true });
+				writeFileSync(join(dir, "package-lock.json"), "{}");
+				writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { test: "vitest run" } }));
+			},
+			runStep: async (input) => {
+				const envPath = join(input.cwd, ".env");
+				steps.push({ ...input, envFileAtStep: existsSync(envPath) ? readFileSync(envPath, "utf8") : null });
+				// A test that prints its connection string and secrets.
+				const text = `connecting to ${input.env.DATABASE_URL ?? "nothing"} with ${input.env.SESSION_SECRET ?? "-"}\nTests  1 passed`;
+				writeFileSync(input.logFile, text);
+				const failed = options.failing?.some((name) => input.command.includes(name)) ?? false;
+				return { ok: !failed, ms: 10, timedOut: false, text };
+			},
+		});
+		const dir = join(settings.scratchRoot, "notes", "f423d");
+		const run = async () => {
+			runner.enqueue(
+				request({
+					workspaceId: "notes",
+					taskId: "f423d",
+					scripts: ["test"],
+					worktreePath: worktree,
+					project: options.project,
+				}),
+			);
+			await runner.idle();
+			return results[0] as ChecksResult;
+		};
+		return { run, steps, dir, worktree };
+	}
+
+	const NOTES = {
+		envFile: ".env",
+		databaseUrlVar: "DATABASE_URL",
+		setup: "npx prisma migrate deploy",
+		teardown: "./scripts/drop-checks-db.sh",
+	};
+
+	it("copies the env file, gives the run its own database, runs setup before the scripts and teardown last", async () => {
+		const harness = createHarness({ project: NOTES });
+		const result = await harness.run();
+
+		expect(result.verdict).toBe("PASS");
+		expect(harness.steps.map((step) => step.command)).toEqual([
+			"npm ci --no-audit --no-fund",
+			"npx prisma migrate deploy",
+			"npm run -s test",
+			"./scripts/drop-checks-db.sh",
+		]);
+		const checksUrl = "postgresql://notes:s3cret-pw@127.0.0.1:5432/checks_notes_f423d?schema=public";
+		for (const step of harness.steps) {
+			expect(step.env).toMatchObject({
+				DATABASE_URL: checksUrl,
+				SESSION_SECRET: "very-long-session-secret",
+				PORT: "3000",
+				CHECKS_DB: "checks_notes_f423d",
+				CHECKS_SOURCE_DATABASE_URL: CARD_URL,
+				// The checker's own variables still win.
+				CI: "1",
+			});
+			// Kanban and secret token variables from the file are never loaded.
+			expect(step.env.KANBAN_HOME).toBeUndefined();
+			expect(step.env.GH_TOKEN).toBeUndefined();
+			// The export's copy points at the run's database too (Prisma and dotenv read the file).
+			expect(step.envFileAtStep).toContain(`DATABASE_URL=${JSON.stringify(checksUrl)}`);
+			expect(step.envFileAtStep).not.toContain("local_notes_f423d");
+		}
+		// The card's own file is untouched, and the copy is gone once the run ends.
+		expect(readFileSync(join(harness.worktree, ".env"), "utf8")).toBe(ENV_FILE);
+		expect(existsSync(join(harness.dir, ".env"))).toBe(false);
+	});
+
+	it("never lets a value reach a log, the stored result or the QA report", async () => {
+		const harness = createHarness({ project: NOTES, failing: ["npm run -s test"] });
+		const result = await harness.run();
+
+		const secrets = ["s3cret-pw", CARD_URL, "checks_notes_f423d?schema", "very-long-session-secret"];
+		const texts = [
+			...result.steps.map((step) => step.text ?? ""),
+			...readdirSync(join(harness.dir, ".checks")).map((name) =>
+				readFileSync(join(harness.dir, ".checks", name), "utf8"),
+			),
+			formatChecksReport(result),
+			JSON.stringify(toStoredChecksResult(result)),
+		];
+		for (const text of texts) {
+			for (const secret of secrets) {
+				expect(text).not.toContain(secret);
+			}
+		}
+		expect(result.steps.find((step) => step.name === "test")?.text).toContain(
+			"connecting to [redacted] with [redacted]",
+		);
+	});
+
+	it("a failed setup skips the scripts as a harness problem, and teardown still runs", async () => {
+		const harness = createHarness({ project: NOTES, failing: ["migrate"] });
+		const result = await harness.run();
+		expect(result.steps.map((step) => [step.name, step.ok, step.skipped ?? null])).toEqual([
+			["install", true, null],
+			["setup", false, null],
+			["test", false, true],
+			["teardown", true, null],
+		]);
+		expect(result).toMatchObject({ verdict: "FAIL", harness: true });
+	});
+
+	it("a failed teardown is reported but never fails the verdict", async () => {
+		const harness = createHarness({ project: NOTES, failing: ["drop-checks-db"] });
+		const result = await harness.run();
+		expect(result.verdict).toBe("PASS");
+		expect(formatChecksReport(result)).toContain("teardown ❌");
+	});
+
+	it("is a checker ERROR, naming no value, when the env file is missing, outside the worktree or lacks the URL", async () => {
+		const missing = createHarness({ project: NOTES, envText: null });
+		expect(await missing.run()).toMatchObject({
+			verdict: "ERROR",
+			harness: true,
+			error: "checks.envFile .env is not in the card's worktree",
+		});
+
+		const outside = createHarness({ project: NOTES, envText: null });
+		writeFileSync(join(outside.worktree, "..", "elsewhere.env"), ENV_FILE);
+		symlinkSync(join(outside.worktree, "..", "elsewhere.env"), join(outside.worktree, ".env"));
+		expect((await outside.run()).error).toBe("checks.envFile .env points outside the card's worktree");
+
+		const noUrl = createHarness({ project: NOTES, envText: "PORT=3000\n" });
+		expect((await noUrl.run()).error).toBe("checks.databaseUrlVar DATABASE_URL is not set in checks.envFile .env");
+
+		const notUrl = createHarness({ project: NOTES, envText: 'DATABASE_URL="file:./dev.db"\n' });
+		const notUrlResult = await notUrl.run();
+		expect(notUrlResult.error).toBe(
+			"checks.databaseUrlVar DATABASE_URL is not a URL with a host and a database name",
+		);
+		expect(notUrl.steps).toEqual([]);
+	});
+
+	it("an env file without a database variable reuses its values as they are", async () => {
+		const harness = createHarness({ project: { envFile: ".env" } });
+		await harness.run();
+		expect(harness.steps[0]?.env.DATABASE_URL).toBe(CARD_URL);
+		expect(harness.steps[0]?.env.CHECKS_DB).toBeUndefined();
+		expect(harness.steps[0]?.envFileAtStep).toBe(ENV_FILE);
+	});
+
+	it("a project without checks facts runs as before: no env file, no setup or teardown, no extra variables", async () => {
+		const harness = createHarness();
+		const result = await harness.run();
+		expect(result.verdict).toBe("PASS");
+		expect(harness.steps.map((step) => step.command)).toEqual(["npm ci --no-audit --no-fund", "npm run -s test"]);
+		for (const step of harness.steps) {
+			expect(step.envFileAtStep).toBeNull();
+			expect(step.env.DATABASE_URL).toBeUndefined();
+			expect(step.env.CHECKS_DB).toBeUndefined();
+		}
 	});
 });

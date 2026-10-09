@@ -176,6 +176,7 @@ user kit file), never a silent no-op. A missing key means "no answer", so the `d
 | `fallback.outageAfterMin` | number | minutes of outage hold before the outage trigger fires | `pipeline.recovery.outage.maxMin` | (default) |
 | `fallback.requireApproval` | boolean | the fallback sibling waits in Backlog for the orchestrator or the user | `false` | `false` |
 | `land.postLand[]` | `{ paths, run, stopUnder? }` | commands the core runs after a land that touched a file matching `paths` (regex) | `[]` | `[]` (foo overrides it) |
+| `checks.envFile`, `checks.databaseUrlVar`, `checks.setup`, `checks.teardown` | path, variable name, shell commands | the scripted checks' environment ([Project settings](#the-scripted-checks-environment-checks)) | unset | unset |
 | `features[]` | `scoreboard`, `bench`, `runoffs`, `calibration`, `tiers` | built-in team features that run for the project | `[]` | all five |
 | `tiers.<name>[]` | `{ provider?, model, default?, note? }` | `roles.<role>.tier`, `kanban bench tiers`, `bench runoff create --tier` | | `tier3`, `tier2`, `tier1`, `qa` |
 | `dropped[]` | `{ provider?, model, at?, why? }` | a user kit's own models no tier lookup returns, on any provider; the built-in kits' are rejected in the vetted model registry (`rejected.scope: "model"`) | | none (in the registry) |
@@ -217,7 +218,9 @@ A project's settings are what it sets on its kit: `workspaces.<id>.kit.overrides
 - **role models**: `roles.<role>.agent|provider|model|tier`, for a role the project's kit defines (`dev`, `qa`,
   `plan`, `fallback`; an unknown role, or one the kit doesn't define, is an error);
 - **project facts**: `qa.blurb`, `qa.promptNotes.{dbSetup,knownBaseIssues,screenshotFallback}`, `qa.serversScript`,
-  `qa.preview`, `land.postLand`, `plan.rules` (`PROJECT_FACT_KEYS` in `src/kits/project-settings.ts`).
+  `qa.preview`, `land.postLand`, `plan.rules`, `checks.{envFile,databaseUrlVar,setup,teardown}` (the scripted
+  checks' environment, [below](#the-scripted-checks-environment-checks)) (`PROJECT_FACT_KEYS` in
+  `src/kits/project-settings.ts`).
 
 Everything else is the team definition and is refused with a message: `onFail.*`, `fallback.*` (the triggers and
 the approval rule), `qa.enabled`, `qa.requireDifferentVendor`, `qa.skip`, `qa.routes`, `qa.rules`, `tiers`,
@@ -259,6 +262,40 @@ atomically under the config lock, and moved with the rest of `workspaces.<id>` b
 Every change is appended to `data/<ws>/kit-settings-history.jsonl` (one JSON line: `at`, `kitName`, `key`, `from`,
 `to`, `by` = user / orchestrator with its session id / a user-run command, `via` = `kit set`, `kit unset`,
 `kit apply` or `kit migrate-overrides`). `kanban kit show --project` prints its path and the last change.
+
+### The scripted checks' environment (`checks.*`)
+
+The scripted checks run on a clean export of the snapshot (WORKFLOW.md "Scripted checks"), which has none of the
+card's git-ignored files. A project whose tests need its `.env` (a database URL, a session secret) says so with
+these facts; without them the checks run exactly as before (issue #16: notes' tests failed there on every run with
+"Environment variable not found: DATABASE_URL").
+
+| Key | Value | What the checks do |
+|---|---|---|
+| `checks.envFile` | path relative to the project (no `..`) | copy that file from the **card's worktree** into the export (same path, mode 600) and load its variables into every step (install, setup, scripts, teardown). `KANBAN_*` and the secret token names (`SECRET_ENV_NAMES`) in it are not loaded, and the checker's own variables (`CI`, the worker caps, the npmrc) win. A file that is missing, a symlink out of the worktree, or unparseable makes the run a checker ERROR. |
+| `checks.databaseUrlVar` | a variable of the env file (`DATABASE_URL`) | give the run **its own database**: the URL's database name is replaced by `CHECKS_DB` = `checks_<workspace>_<card>` (lower case, `[a-z0-9_]`, at most 63 characters), in the step env and in the copied file, so the checks never touch the card's working database. `CHECKS_SOURCE_DATABASE_URL` is the card's URL, for a setup or teardown that must connect somewhere else to create or drop the run's database. Needs `checks.envFile` and a URL with a host and a database name. |
+| `checks.setup` | shell command | run in the export after the install and `prisma generate`, before the scripts. A failure is a harness problem: the scripts are skipped and the snapshot is checked again on the next submission. |
+| `checks.teardown` | shell command | run in the export after the scripts whenever the install succeeded, whatever happened then (a failed setup, a run stopped for a newer snapshot). Shown in the report; never part of the verdict. |
+
+Kanban speaks no database protocol: the setup creates the run's database and its schema (the project's own way, as in
+`qa.promptNotes.dbSetup`), the teardown drops it. One statement per `prisma db execute`: Postgres refuses
+`CREATE DATABASE` inside a multi-statement script.
+The name is the card's, not the snapshot's: checks run one at a time, so a database a crashed run left behind is the
+same card's next one, and a setup that drops it first (`DROP DATABASE IF EXISTS`) starts clean.
+
+The env file's values are secrets. Every step's output is redacted before it is written to its log
+(`.checks/<step>.log`), stored in pipeline-state, the QA log or the QA prompt (values of 8 characters or more that
+aren't a number or a boolean, and any URL password); the copied file is deleted when the run ends, so neither QA
+nor a person reading the export finds it. Keep secrets out of the commands themselves: they are kit facts, shown by
+`kanban kit show` and logged in `kit-settings-history.jsonl`. Code: `src/pipeline/checks-project-env.ts`.
+
+```sh
+# notes: Prisma on the pod's Postgres, one database per card in the worktree's .env
+kanban kit set checks.envFile .env --project /projects/notes
+kanban kit set checks.databaseUrlVar DATABASE_URL --project /projects/notes
+kanban kit set checks.setup 'echo "DROP DATABASE IF EXISTS \"$CHECKS_DB\"" | npx prisma db execute --url "$CHECKS_SOURCE_DATABASE_URL" --stdin && echo "CREATE DATABASE \"$CHECKS_DB\"" | npx prisma db execute --url "$CHECKS_SOURCE_DATABASE_URL" --stdin && npx prisma db push --skip-generate' --project /projects/notes
+kanban kit set checks.teardown 'echo "DROP DATABASE IF EXISTS \"$CHECKS_DB\"" | npx prisma db execute --url "$CHECKS_SOURCE_DATABASE_URL" --stdin' --project /projects/notes
+```
 
 **Overrides from before the split.** Legacy keys and team keys stored as overrides keep applying. `kanban doctor`
 warns about each project that has them and points at `kanban kit migrate-overrides --project <ws> --dry-run`, the

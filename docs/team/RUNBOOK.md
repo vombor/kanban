@@ -18,7 +18,7 @@ doctor` prints it): `KANBAN_HOME` if set, else `~/.kanban` of the user running K
 | Logs | the server's own output (the pipeline worker logs there too); `<home>/logs/` for orchestrator runs, `calibrate.log`, `price-sync.log` |
 | Locks, markers | `<home>/run/`: `server-start.json`, `orchestrator-<ws>.lock`, `pid-pressure`, `pid-brownout`, `restart-recover.now`, `qa-preview-<ws>.pid` |
 | Task worktrees | `<home>/worktrees/<id>/<repo>`; after a home move also the roots config.json lists in `legacyWorktreeRoots` (read-only, until their cards finish; doctor warns while an entry exists) |
-| Scratch (throwaway) | `/tmp/kanban-qa/<dev>` (QA copies), `/tmp/kanban-qa-out/<qa>` (QA outboxes), `/tmp/kanban-checks/<dev>` (scripted checks) |
+| Scratch (throwaway) | `/tmp/kanban-qa/<dev>` (QA copies), `/tmp/kanban-qa-out/<qa>` (QA outboxes), `/tmp/kanban-checks/<ws>/<dev>` (scripted checks; a project's `checks.envFile` copy is deleted after each run, step logs are redacted) |
 
 ## At a glance
 

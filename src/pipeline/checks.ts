@@ -4,6 +4,11 @@
 // decision log. The QA gate waits for the result of the card's current snapshot (or `pipeline.qa.checksWaitMin`)
 // before it creates the QA card, and puts it in the QA prompt (qa-checks-report.ts).
 //
+// The export has no git-ignored files, so a project gives the run its environment with the kit project facts
+// `checks.*` (checks-project-env.ts): the card worktree's env file (values redacted in every step's output), a
+// database of the run's own, and a `setup` (after the install, before the scripts; its failure skips the scripts)
+// and `teardown` (after them, always; reported, never part of the verdict).
+//
 // A full install + test suite per Review card once pegged the shared pod, so checks are fenced in:
 //
 // - Per project: off unless `workspaces.<id>.checks.enabled` is true, or it is unset and the workspace has landing
@@ -25,8 +30,10 @@ import { dirname, join, relative } from "node:path";
 
 import type { PipelineConfig, WorkspacePipelineSettings } from "../config/pipeline-config";
 import { createGitProcessEnv } from "../core/git-process-env";
+import type { KitChecks } from "../kits/kit-schema";
 import { DEFAULT_KIT_NAME } from "../kits/resolve-kit";
 import { runGit } from "../workspace/git-utils";
+import { type ChecksProjectEnv, prepareChecksProjectEnv } from "./checks-project-env";
 
 /** Bump when the checker changes so that old results are stale. 2 = the legacy kit's checker. */
 export const CHECKS_VERSION = 2;
@@ -71,6 +78,10 @@ export interface ChecksRequest {
 	baseRef: string;
 	snapshot: string;
 	scripts: string[];
+	/** The card's worktree, where `checks.envFile` is read; absent or null when it is gone. */
+	worktreePath?: string | null;
+	/** The project's checks environment (kit project facts `checks.*`); absent: none. */
+	project?: KitChecks;
 }
 
 export interface CheckStepResult {
@@ -85,6 +96,8 @@ export interface CheckStepResult {
 	ms?: number;
 	timedOut?: boolean;
 	text?: string;
+	/** Reported but never fails the verdict (the project's `checks.teardown`). */
+	advisory?: true;
 }
 
 export interface ChecksResult {
@@ -144,8 +157,16 @@ const ANSI = /\x1b\[[0-9;]*m/g;
 // Bedrock key.
 const SECRET_ENV_NAMES = ["GH_TOKEN", "GITHUB_TOKEN", "COPILOT_GITHUB_TOKEN", "AWS_BEARER_TOKEN_BEDROCK"];
 
-/** Environment for every check step: no Kanban, git repository or secret token variables leak into the project's scripts. */
-export function createCheckStepEnv(settings: ChecksSettings, npmrcPath: string): NodeJS.ProcessEnv {
+/**
+ * Environment for every check step: no Kanban, git repository or secret token variables leak into the project's
+ * scripts. `projectEnv` (the project's `checks.envFile`, checks-project-env.ts) goes on top, below the checker's own
+ * variables.
+ */
+export function createCheckStepEnv(
+	settings: ChecksSettings,
+	npmrcPath: string,
+	projectEnv: Record<string, string> = {},
+): NodeJS.ProcessEnv {
 	const env = createGitProcessEnv();
 	for (const key of Object.keys(env)) {
 		// A project's own tests must never find the server's Kanban home or runtime port (Kanban's own suite would
@@ -163,6 +184,7 @@ export function createCheckStepEnv(settings: ChecksSettings, npmrcPath: string):
 	const workers = String(settings.maxWorkers);
 	return {
 		...env,
+		...projectEnv,
 		CI: "1",
 		npm_config_userconfig: npmrcPath,
 		// Vitest 3+ reads VITEST_MAX_WORKERS; older majors read the threads/forks variants.
@@ -404,23 +426,42 @@ export function createChecksRunner(options: CreateChecksRunnerOptions): ChecksRu
 		});
 		const npmrcPath = join(settings.scratchRoot, ".npmrc-checks");
 		let installDirs: string[] = [];
+		let projectEnv: ChecksProjectEnv | null = null;
 		try {
 			await exportSnapshot(request.repoPath, request.snapshot, dir);
 			await mkdir(logsDir, { recursive: true });
 			await writeChecksNpmrc(npmrcPath, settings.allowScripts);
-			const env = createCheckStepEnv(settings, npmrcPath);
-			const step = async (name: string, command: string, cwd: string, logFile: string) =>
-				await runStep({
+			projectEnv = await prepareChecksProjectEnv({
+				facts: request.project,
+				worktreePath: request.worktreePath ?? null,
+				exportDir: dir,
+				workspaceId: request.workspaceId,
+				taskId: request.taskId,
+				excludedNames: SECRET_ENV_NAMES,
+			});
+			const { redact } = projectEnv;
+			const env = createCheckStepEnv(settings, npmrcPath, projectEnv.env);
+			const step = async (name: string, command: string, cwd: string, logFile: string) => {
+				const logPath = join(logsDir, logFile);
+				const stepResult = await runStep({
 					command,
 					cwd,
-					logFile: join(logsDir, logFile),
+					logFile: logPath,
 					env,
 					timeoutMs: settings.timeoutMin * 60_000,
 					niceness: settings.niceness,
 					onSpawn: (child) => {
 						currentChild = child;
 					},
-				}).then((stepResult) => ({ name, command, ...stepResult }));
+				});
+				// The project's env values never reach a log, the stored result, the QA log or the QA prompt.
+				const text = stepResult.text === undefined ? undefined : redact(stepResult.text);
+				if (text !== stepResult.text) {
+					await writeFile(logPath, text ?? "");
+				}
+				return { name, command, ...stepResult, text };
+			};
+			const project = request.project;
 
 			installDirs = findInstallDirs(dir);
 			for (const installDir of installDirs) {
@@ -462,21 +503,37 @@ export function createChecksRunner(options: CreateChecksRunnerOptions): ChecksRu
 					steps.push({ ...stepResult, harness: !stepResult.ok });
 				}
 			}
-			const scripts = await readScripts(dir);
-			for (const name of request.scripts) {
-				if (!scripts[name] || stopping()) {
-					continue;
+			// The project's setup (a database for the run, migrations): its failure is the environment's, and the
+			// scripts would only fail on it.
+			let ready = installed;
+			try {
+				if (installed && project?.setup && !stopping()) {
+					const stepResult = await step("setup", project.setup, dir, "setup.log");
+					steps.push({ ...stepResult, harness: !stepResult.ok });
+					ready = stepResult.ok;
 				}
-				if (!installed) {
-					steps.push({ name, command: `npm run -s ${name}`, ok: false, skipped: true });
-					continue;
+				const scripts = await readScripts(dir);
+				for (const name of request.scripts) {
+					if (!scripts[name] || stopping()) {
+						continue;
+					}
+					if (!ready) {
+						steps.push({ name, command: `npm run -s ${name}`, ok: false, skipped: true });
+						continue;
+					}
+					const stepResult = await step(name, `npm run -s ${name}`, dir, `${logName(name)}.log`);
+					// `next lint` is gone from newer Next.js; it parses "lint" as a project directory instead.
+					const lintHarness = !stepResult.ok && name === "lint" && HARNESS_LINT.test(stepResult.text ?? "");
+					steps.push(lintHarness ? { ...stepResult, skipped: "harness" } : stepResult);
 				}
-				const stepResult = await step(name, `npm run -s ${name}`, dir, `${logName(name)}.log`);
-				// `next lint` is gone from newer Next.js; it parses "lint" as a project directory instead.
-				const lintHarness = !stepResult.ok && name === "lint" && HARNESS_LINT.test(stepResult.text ?? "");
-				steps.push(lintHarness ? { ...stepResult, skipped: "harness" } : stepResult);
+			} finally {
+				// Whatever happened (a failed setup may have half-made its database, a newer snapshot stopped the run).
+				if (installed && project?.teardown) {
+					const stepResult = await step("teardown", project.teardown, dir, "teardown.log");
+					steps.push({ ...stepResult, advisory: true });
+				}
 			}
-			const failed = steps.filter((entry) => !entry.ok && !entry.skipped);
+			const failed = steps.filter((entry) => !entry.ok && !entry.skipped && !entry.advisory);
 			return result(
 				failed.length === 0 ? "PASS" : "FAIL",
 				steps.some((entry) => entry.harness === true),
@@ -486,6 +543,8 @@ export function createChecksRunner(options: CreateChecksRunnerOptions): ChecksRu
 			return result("ERROR", true, error instanceof Error ? error.message : String(error));
 		} finally {
 			currentChild = null;
+			// The copied env file holds the project's secrets; QA and people read the export.
+			await projectEnv?.cleanup().catch(() => {});
 			// The exported source and the logs stay for people to read; node_modules is most of the disk.
 			for (const installDir of installDirs) {
 				await rm(join(dir, installDir, "node_modules"), { recursive: true, force: true }).catch(() => {});

@@ -95,7 +95,11 @@ dev card stops ─▶ Review (settled) ─▶ snapshot refs/kanban/snapshots/<id
   likely never ran.
 - **Scripted checks** (`typecheck`, `lint`, `test`, `build` when the project has them) run on a clean export of the
   snapshot: one run at a time machine-wide, niced, test runners capped, no `KANBAN_*` variables. They are input for
-  QA, not a gate, because the base itself may be red.
+  QA, not a gate, because the base itself may be red. The export has no git-ignored files, so a project whose tests
+  need its `.env` sets the kit facts `checks.envFile` (copied from the card's worktree, loaded into every step, values
+  redacted in all output, deleted after the run), `checks.databaseUrlVar` (the run gets its own database
+  `checks_<workspace>_<card>`, never the card's) and `checks.setup`/`checks.teardown` (KITS.md "The scripted checks'
+  environment"). Why: notes' tests failed in every checks run on a missing `DATABASE_URL` (issue #16).
 - **QA waits for the checks.** The QA card is created only once the checks of the card's current snapshot have
   finished (PASS, FAIL or ERROR), and its prompt ends with their report: per step the result, the command, the
   duration and the last 60 lines of a failed step's output. An ERROR (the checker itself failed) says the checks did

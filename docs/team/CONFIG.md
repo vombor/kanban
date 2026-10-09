@@ -76,6 +76,10 @@ Nothing is inherited from another workspace.
 | `issues.planLabel` | `needs-plan` | an issue with this label becomes a plan card when the kit has the plan role |
 | `issues.commentOnLand` | `false` | comment on the issue when its card is landed or discarded (landing `qa`; needs a token with write access) |
 
+The checks run's environment (env file, own database, setup, teardown) is not here but a kit project fact the
+orchestrator sets: `kanban kit set checks.envFile|databaseUrlVar|setup|teardown` (KITS.md "The scripted checks'
+environment").
+
 **Why the issue filter is strict by default.** An issue's text becomes an agent prompt, and anyone can open an issue
 or comment on a public repository. So only the repository's own people (OWNER, MEMBER, COLLABORATOR) are trusted,
 and an outsider's issue gets in only when someone with triage rights labels it `kanban`. The same

@@ -592,6 +592,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 								workspacePath: snapshot.workspacePath,
 								settings,
 								kitName: resolution.kitName,
+								projectChecks: resolution.kit.checks,
 								state: gateState,
 							},
 							input,

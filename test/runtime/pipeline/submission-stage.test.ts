@@ -86,7 +86,8 @@ describe("submission stage", () => {
 	}
 
 	it("snapshots a dev card with work and queues checks on the snapshot", async () => {
-		const { repo, enqueued, inspect } = setup();
+		const { repo, enqueued, inspect, context } = setup();
+		context.projectChecks = { envFile: ".env", setup: "npx prisma migrate deploy" };
 		writeFileSync(join(repo.worktreePath, "work.txt"), "work\n");
 
 		const inspection = await inspect(createCard({ id: "dev-1", title: "Add work" }));
@@ -107,6 +108,9 @@ describe("submission stage", () => {
 				baseRef: "main",
 				snapshot,
 				scripts: ["typecheck", "lint", "test", "build"],
+				// The project's checks environment, read from the card's own worktree.
+				worktreePath: repo.worktreePath,
+				project: { envFile: ".env", setup: "npx prisma migrate deploy" },
 			},
 		]);
 	});

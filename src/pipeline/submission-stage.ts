@@ -16,6 +16,7 @@
 // (issue #14); a later submission with changes removes the record.
 import type { WorkspacePipelineSettings } from "../config/pipeline-config";
 import type { RuntimeBoardCard } from "../core/api-contract";
+import type { KitChecks } from "../kits/kit-schema";
 import type { EffectiveCard } from "../kits/policy";
 import { getTaskWorkspacePathInfo } from "../workspace/task-worktree";
 import { CHECKS_VERSION, type ChecksQueue, resolveChecksEnabled } from "./checks";
@@ -44,6 +45,8 @@ export interface SubmissionContext {
 	workspacePath: string;
 	settings: WorkspacePipelineSettings;
 	kitName: string;
+	/** The project's checks environment (the resolved kit's `checks`, project facts). */
+	projectChecks?: KitChecks;
 	state: PipelineWorkspaceState;
 }
 
@@ -189,6 +192,8 @@ export function createSubmissionStage(options: CreateSubmissionStageOptions): Su
 					baseRef: card.baseRef,
 					snapshot: snapshot.commit,
 					scripts: context.settings.checks.scripts,
+					worktreePath: worktree,
+					project: context.projectChecks,
 				});
 				records.push({
 					stage: "checks",

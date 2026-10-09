@@ -55,6 +55,11 @@ describe("project settings: which keys a project may set", () => {
 			"qa.preview",
 			"land.postLand",
 			"plan.rules.style",
+			"checks",
+			"checks.envFile",
+			"checks.databaseUrlVar",
+			"checks.setup",
+			"checks.teardown",
 		]) {
 			expect(classifyKitSettingKey(key, team()).kind, key).toBe("fact");
 		}
@@ -148,6 +153,34 @@ describe("project settings: which keys a project may set", () => {
 });
 
 describe("project settings: set and unset", () => {
+	it("sets the scripted checks' environment and refuses an env file outside the project", async () => {
+		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
+			writeConfig(globalConfigPath, {
+				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" }, models: { allowProvisional: true } } },
+			});
+			const set = async (key: string, value: unknown) =>
+				await setProjectKitSetting({ workspaceId: "foo", key, value, by: { kind: "user" } });
+			await set("checks.envFile", ".env");
+			await set("checks.databaseUrlVar", "DATABASE_URL");
+			await set("checks.setup", "npx prisma migrate deploy");
+			await expect(set("checks.envFile", "../other/.env")).rejects.toThrow("relative to the project");
+			await expect(set("checks.envFile", "/root/.env")).rejects.toThrow("relative to the project");
+			await expect(set("checks.databaseUrlVar", "DATABASE URL")).rejects.toThrow("environment variable name");
+			await expect(set("checks.envFiles", ".env")).rejects.toThrow();
+
+			const resolved = resolveWorkspaceKit(
+				parsePipelineConfig(JSON.parse(readFileSync(globalConfigPath, "utf8"))).config,
+				"foo",
+				await loadKitCatalog(),
+			);
+			expect(resolved.kit.checks).toEqual({
+				envFile: ".env",
+				databaseUrlVar: "DATABASE_URL",
+				setup: "npx prisma migrate deploy",
+			});
+		});
+	});
+
 	it("sets a role's model at once (kit < project), logs who changed it, and unset brings the kit's value back", async () => {
 		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
 			writeConfig(globalConfigPath, {

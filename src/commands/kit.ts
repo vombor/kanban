@@ -404,7 +404,7 @@ export function registerKitCommand(program: Command): void {
 
 	kit.command("set")
 		.description(
-			"Set a project setting on the project's kit, in effect at once: a role's model (roles.<role>.agent|provider|model|tier, for a role the kit defines) or a project fact (qa.blurb, qa.promptNotes.*, qa.serversScript, qa.preview, land.postLand, plan.rules). Only the user and the project's own orchestrator; never a card. The team definition (flow, triggers, QA routes, tiers, ...) is the kit's: pick another kit with kanban kit apply.",
+			"Set a project setting on the project's kit, in effect at once: a role's model (roles.<role>.agent|provider|model|tier, for a role the kit defines) or a project fact (qa.blurb, qa.promptNotes.*, qa.serversScript, qa.preview, land.postLand, plan.rules, checks.envFile|databaseUrlVar|setup|teardown). Only the user and the project's own orchestrator; never a card. The team definition (flow, triggers, QA routes, tiers, ...) is the kit's: pick another kit with kanban kit apply.",
 		)
 		.argument("<key>", "Dotted kit key, e.g. roles.fallback.model.")
 		.argument("<value>", 'JSON (true, 3, null, [..], {..}, "text") or plain text.')

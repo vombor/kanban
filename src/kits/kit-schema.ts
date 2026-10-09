@@ -117,6 +117,35 @@ export const kitQaPreviewSchema = z
 	.strict();
 export type KitQaPreview = z.infer<typeof kitQaPreviewSchema>;
 
+/** A path relative to the project, inside it (no absolute path, no `..` segment). */
+const projectRelativePathSchema = z
+	.string()
+	.min(1)
+	.refine(
+		(path) => !path.startsWith("/") && !path.split(/[\\/]/u).includes(".."),
+		"a path relative to the project, without ..",
+	);
+
+/**
+ * The project's environment for the scripted checks (src/pipeline/checks-project-env.ts, docs/team/WORKFLOW.md
+ * "Scripted checks"): the card worktree's `envFile` is copied into the checks export and loaded into every step;
+ * `databaseUrlVar` gives the run its own database (the URL in that variable with its database name replaced by the
+ * run's `CHECKS_DB`); `setup` runs (`sh -c`, in the export) after the install and before the scripts, `teardown`
+ * after them, whatever happened. All of it is a project fact.
+ */
+export const kitChecksSchema = z
+	.object({
+		envFile: projectRelativePathSchema.optional(),
+		databaseUrlVar: z
+			.string()
+			.regex(/^[A-Za-z_][A-Za-z0-9_]*$/u, "an environment variable name")
+			.optional(),
+		setup: z.string().min(1).nullable().optional(),
+		teardown: z.string().min(1).nullable().optional(),
+	})
+	.strict();
+export type KitChecks = z.infer<typeof kitChecksSchema>;
+
 /**
  * An agent and model a plan card could run on. `plan.agent`/`plan.model` are the one in use; `plan.candidates` lists
  * the others a later runoff or calibration compares (Claude, Codex, Copilot), so that needs no schema change.
@@ -325,6 +354,7 @@ export const kitDocumentObjectSchema = z
 			.object({ postLand: z.array(postLandStepSchema).optional() })
 			.strict()
 			.optional(),
+		checks: kitChecksSchema.optional(),
 		features: z.array(kitFeatureSchema).optional(),
 		tiers: z.record(z.string(), z.array(kitTierEntrySchema)).optional(),
 		/** A user kit's own dropped models; the built-in kits' are in the vetted model registry (rejected, scope model). */
