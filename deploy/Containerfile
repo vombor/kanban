@@ -1,5 +1,6 @@
 # Dev container with the vombor/kanban fork. Built by .github/workflows/image.yml and published to GHCR.
-# Same toolset as the hand-built image, plus the standalone cline CLI (the fork's cline-cli agent, #643) and gh.
+# Same toolset as the hand-built image, plus the standalone cline CLI (the fork's cline-cli agent, #643), Factory's droid
+# CLI (npm @factory/cli, the droid agent) and gh.
 # Kanban is installed from the fork's npm pack tarball (deploy/kanban.tgz, made in CI) instead of
 # `npx kanban`, which fetched upstream at every start.
 # AGENT_CLIS is resolved in CI to exact versions (pkg@x.y.z ...), so a new npm release of any of them
@@ -31,7 +32,7 @@ RUN mkdir -p -m 755 /etc/apt/keyrings && \
     apt-get install -y --no-install-recommends gh && \
     rm -rf /var/lib/apt/lists/*
 
-ARG AGENT_CLIS="npm @anthropic-ai/claude-code @github/copilot @openai/codex cline"
+ARG AGENT_CLIS="npm @anthropic-ai/claude-code @github/copilot @openai/codex cline @factory/cli"
 RUN npm install -g --no-fund $AGENT_CLIS
 
 # cline 3.x (verified on 3.0.68) puts its Bedrock prompt-cache checkpoint on the last *user* message; in agent
@@ -53,6 +54,8 @@ RUN npm install -g --no-fund /tmp/kanban.tgz && rm /tmp/kanban.tgz
 #   (with GH_TOKEN set it can read the registry).
 #  CLINE_NO_AUTO_UPDATE: cline 3.x background updates restart its hub daemon under live sessions.
 #  DISABLE_AUTOUPDATER: Claude Code.
+# droid (@factory/cli) keeps its own updater: not seen breaking a session yet, so it stays on (its switch would be
+# FACTORY_DROID_AUTO_UPDATE_ENABLED=false, read from its binary, untested).
 ENV KANBAN_NO_AUTO_UPDATE=1 \
     CLINE_NO_AUTO_UPDATE=1 \
     DISABLE_AUTOUPDATER=1

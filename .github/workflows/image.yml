@@ -61,7 +61,7 @@ jobs:
         id: clis
         run: |
           list=""
-          for p in npm @anthropic-ai/claude-code @github/copilot @openai/codex cline; do
+          for p in npm @anthropic-ai/claude-code @github/copilot @openai/codex cline @factory/cli; do
             list="$list $p@$(npm view "$p" version)"
           done
           echo "list=${list# }" >> "$GITHUB_OUTPUT"
