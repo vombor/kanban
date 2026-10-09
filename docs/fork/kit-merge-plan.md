@@ -585,7 +585,7 @@ where it looked.
   for roots config.json lists (`kanban home migrate` writes the old home's). Live worktrees are never moved; they
   drain as their cards finish (§8.3), then the entry is removed. `kanban doctor` warns while an entry exists and
   about any Kanban home, board, state file or task worktree under `~/.cline`.
-- Project-local `<repo>/.cline/kanban/config.json` (shortcuts) stays, since it is in the project.
+- Project-local `<repo>/.cline/kanban/config.json` (shortcuts) stayed at first; since 2026-10-09 the shortcuts are in the per-workspace shortcut store `<home>/data/<ws>/shortcuts.json` (docs/fork/shortcuts.md), and the repo file is only imported once.
 - Cline's own `~/.cline/data` stays: it belongs to Cline, not Kanban.
 - The 10 hard-coded sites that change: `workspace-state.ts:23-25,161-167`, `runtime-config.ts:50-55,115-117,206`
   (a private duplicate of the home path), `task-worktree-path.ts:3-6` (also used by web-ui), `runtime-api.ts:70-72`

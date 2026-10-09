@@ -1,8 +1,44 @@
 # Project shortcuts (the script runner)
 
 A project's shortcuts are the top bar's run buttons: a label, one shell command line and an icon. A click types the
-command into a terminal. They are stored in the project at `<project>/.kanban/config.json`, as the settings dialog
-always kept them.
+command into a terminal. They are stored in Kanban's home, at `<home>/data/<workspace>/shortcuts.json` (the shortcut
+store, `src/projects/project-shortcut-store.ts`), outside every repo.
+
+## Where shortcuts are stored, and who changes them
+
+They used to be in the project, at `<project>/.cline/kanban/config.json`. A card could edit that file in its worktree
+and land it with its work, or (a non-Cline card whose `.cline` is a symlink to the main checkout's) write the main
+checkout's copy directly. Since the user runs a shortcut's command with a click, that would let a card plant a command
+the user runs unseen. So:
+
+- The store's only writer is the shortcut route (`shortcuts.add|remove|replace`, `src/trpc/shortcuts-api.ts`). It
+  allows the user and the project's own orchestrator, and refuses everyone else (see below). The settings dialog
+  saves its list through `shortcuts.replace` and the top bar's "add shortcut" through `shortcuts.add`; the user's
+  browser counts as the user. `runtime.saveConfig` (the other settings) drops any shortcuts it is sent.
+- The browser, the settings dialog and `kanban shortcut list` read the store. The dialog's "Project" line shows the
+  store's path.
+- The store moves with the project's data dir, so `kanban project rename-id` keeps it.
+- A store Kanban can't parse is never overwritten: the board shows no shortcuts, a change through the route is
+  refused with the reason, and doctor fails the row until you fix or remove the file.
+
+### The one-time import
+
+The first time Kanban reads a project's shortcuts and finds no store, it imports the repo file once:
+
+1. the copy committed on the base branch (the workspace's `defaultBaseRef`, else origin's HEAD, else the main
+   checkout's branch; read with `git show`, so no uncommitted edit counts);
+2. if the base branch has no such file (a project that git-ignores `.cline/`), the main checkout's working-tree copy,
+   which the old code read. Never a card's linked worktree, and never a file that is a symlink out of the checkout.
+
+It writes the store even when there was nothing to import, so the repo file is ignored from then on. Each imported
+shortcut gets a line in the history with `via: "import"`, its label, command and source.
+
+Because a card could have written the main checkout's copy before the import, `kanban doctor` lists the imported
+shortcuts (label and command) once, as a WARN, so you can check each is yours, and then records that it did
+(`imported.listedAt` in the store). Remove one with `kanban shortcut remove --label <label>`.
+
+Doctor also reports a repo file that still has shortcuts: as ignored once the store exists, or as "the next read
+imports them" before. Kanban never edits the project's files; removing the old file is your commit.
 
 ## Where a shortcut runs
 
@@ -31,10 +67,9 @@ They go through the running server (`shortcuts.add|remove`, `src/trpc/shortcuts-
 strictly in every isolation mode. The user and the project's own orchestrator may change shortcuts. A card, another
 project's orchestrator and an unidentified caller are refused, and the refusal goes to the isolation log. The CLI
 refuses `shortcut add|remove` inside a card session itself too. Each change is appended to
-`<home>/data/<ws>/shortcut-history.jsonl` (who, from, to). Open boards get a `project_shortcuts_updated` stream
+`<home>/data/<ws>/shortcut-history.jsonl`, one line per shortcut that changed (who, `via`: `shortcut add`,
+`shortcut remove`, `settings dialog` or `import`, from, to). Open boards get a `project_shortcuts_updated` stream
 message and reload the shortcuts at once.
-
-The file is in the project repository, so a card can still edit it in its worktree and land it with its work.
 
 ## Ports: `{port}` and `{url}`
 

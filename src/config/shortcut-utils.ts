@@ -59,3 +59,24 @@ export function expandShortcutCommand(command: string, values: { port: number; u
 		.replaceAll(SHORTCUT_PORT_PLACEHOLDER, String(values.port))
 		.replaceAll(SHORTCUT_URL_PLACEHOLDER, values.url);
 }
+
+/** Drops entries without a label or command and trims the rest (how a stored or imported list is read). */
+export function normalizeRuntimeProjectShortcuts(shortcuts: unknown): RuntimeProjectShortcut[] {
+	if (!Array.isArray(shortcuts)) {
+		return [];
+	}
+	const normalized: RuntimeProjectShortcut[] = [];
+	for (const shortcut of shortcuts) {
+		if (!shortcut || typeof shortcut !== "object") {
+			continue;
+		}
+		const { label, command, icon } = shortcut as Record<string, unknown>;
+		const trimmedLabel = typeof label === "string" ? label.trim() : "";
+		const trimmedCommand = typeof command === "string" ? command.trim() : "";
+		const trimmedIcon = typeof icon === "string" ? icon.trim() : "";
+		if (trimmedLabel && trimmedCommand) {
+			normalized.push({ label: trimmedLabel, command: trimmedCommand, icon: trimmedIcon || undefined });
+		}
+	}
+	return normalized;
+}

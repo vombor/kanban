@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useShortcutActions } from "@/hooks/use-shortcut-actions";
 
 const saveRuntimeConfigMock = vi.hoisted(() => vi.fn());
+const addProjectShortcutMock = vi.hoisted(() => vi.fn());
 const showAppToastMock = vi.hoisted(() => vi.fn());
 const waitForTerminalLikelyPromptMock = vi.hoisted(() => vi.fn());
 const prepareRunMock = vi.hoisted(() => vi.fn());
@@ -15,6 +16,7 @@ vi.mock("@/runtime/trpc-client", () => ({
 
 vi.mock("@/runtime/runtime-config-query", () => ({
 	saveRuntimeConfig: saveRuntimeConfigMock,
+	addProjectShortcut: addProjectShortcutMock,
 }));
 
 vi.mock("@/components/app-toaster", () => ({
@@ -79,6 +81,7 @@ describe("useShortcutActions", () => {
 
 	beforeEach(() => {
 		saveRuntimeConfigMock.mockReset();
+		addProjectShortcutMock.mockReset();
 		showAppToastMock.mockReset();
 		waitForTerminalLikelyPromptMock.mockReset();
 		waitForTerminalLikelyPromptMock.mockResolvedValue(true);
@@ -207,10 +210,13 @@ describe("useShortcutActions", () => {
 			});
 		});
 
-		expect(saveRuntimeConfigMock).toHaveBeenCalledWith("project-1", {
-			shortcuts: [{ label: "Run", command: "npm run dev", icon: "play" }],
-			selectedShortcutLabel: "Run",
+		// The shortcut goes through the shortcut route; only the selection is a settings save.
+		expect(addProjectShortcutMock).toHaveBeenCalledWith("project-1", {
+			label: "Run",
+			command: "npm run dev",
+			icon: "play",
 		});
+		expect(saveRuntimeConfigMock).toHaveBeenCalledWith("project-1", { selectedShortcutLabel: "Run" });
 		expect(showAppToastMock).not.toHaveBeenCalled();
 	});
 

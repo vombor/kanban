@@ -3,7 +3,7 @@ import { shortcutNeedsPort } from "@runtime-shortcuts";
 import { useCallback, useState } from "react";
 
 import { showAppToast } from "@/components/app-toaster";
-import { saveRuntimeConfig } from "@/runtime/runtime-config-query";
+import { addProjectShortcut, saveRuntimeConfig } from "@/runtime/runtime-config-query";
 import { getRuntimeTrpcClient } from "@/runtime/trpc-client";
 import { waitForTerminalLikelyPrompt } from "@/terminal/terminal-controller-registry";
 import type { SendTerminalInputOptions } from "@/terminal/terminal-input";
@@ -202,17 +202,12 @@ export function useShortcutActions({
 			const baseLabel = shortcut.label.trim().length > 0 ? shortcut.label.trim() : "Run";
 			const nextLabel = getNextShortcutLabel(baseLabel);
 			try {
-				await saveRuntimeConfig(currentProjectId, {
-					shortcuts: [
-						...shortcuts,
-						{
-							label: nextLabel,
-							command: normalizedCommand,
-							icon: shortcut.icon,
-						},
-					],
-					selectedShortcutLabel: nextLabel,
+				await addProjectShortcut(currentProjectId, {
+					label: nextLabel,
+					command: normalizedCommand,
+					icon: shortcut.icon,
 				});
+				await saveRuntimeConfig(currentProjectId, { selectedShortcutLabel: nextLabel });
 				refreshRuntimeProjectConfig();
 				return { ok: true };
 			} catch (error) {
@@ -229,7 +224,7 @@ export function useShortcutActions({
 				return { ok: false, message: `Could not save shortcut: ${message}` };
 			}
 		},
-		[currentProjectId, getNextShortcutLabel, refreshRuntimeProjectConfig, shortcuts],
+		[currentProjectId, getNextShortcutLabel, refreshRuntimeProjectConfig],
 	);
 
 	return {

@@ -1,19 +1,13 @@
-// Persists Kanban-owned runtime preferences on disk.
-// This module should store Kanban settings such as selected agents,
-// shortcuts, and prompt templates, not SDK-owned Cline secrets or OAuth data.
-import { readFile, rm } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, resolve } from "node:path";
+// Persists Kanban-owned runtime preferences on disk (the global config.json in the Kanban home).
+// This module should store Kanban settings such as selected agents and prompt templates, not SDK-owned Cline
+// secrets or OAuth data. A project's shortcuts are not here: they are in the shortcut store
+// (src/projects/project-shortcut-store.ts), which only the shortcut route writes.
+import { readFile } from "node:fs/promises";
 import { getRuntimeAgentCatalogEntry, isRuntimeAgentLaunchSupported } from "../core/agent-catalog";
-import type { RuntimeAgentId, RuntimeProjectShortcut } from "../core/api-contract";
+import type { RuntimeAgentId } from "../core/api-contract";
 import { type LockRequest, lockedFileSystem } from "../fs/locked-file-system";
-import {
-	getKanbanGlobalConfigPath,
-	getProjectKanbanConfigPath,
-	KANBAN_HOME_MARKER_VERSION,
-} from "../state/kanban-home";
+import { getKanbanGlobalConfigPath, KANBAN_HOME_MARKER_VERSION } from "../state/kanban-home";
 import { detectInstalledCommands } from "../terminal/agent-registry";
-import { areRuntimeProjectShortcutsEqual } from "./shortcut-utils";
 
 interface RuntimeGlobalConfigFileShape {
 	/** Initialized-home marker, see kanban-home.ts. */
@@ -26,18 +20,12 @@ interface RuntimeGlobalConfigFileShape {
 	openPrPromptTemplate?: string;
 }
 
-interface RuntimeProjectConfigFileShape {
-	shortcuts?: RuntimeProjectShortcut[];
-}
-
 export interface RuntimeConfigState {
 	globalConfigPath: string;
-	projectConfigPath: string | null;
 	selectedAgentId: RuntimeAgentId;
 	selectedShortcutLabel: string | null;
 	agentAutonomousModeEnabled: boolean;
 	readyForReviewNotificationsEnabled: boolean;
-	shortcuts: RuntimeProjectShortcut[];
 	commitPromptTemplate: string;
 	openPrPromptTemplate: string;
 	commitPromptTemplateDefault: string;
@@ -49,7 +37,6 @@ export interface RuntimeConfigUpdateInput {
 	selectedShortcutLabel?: string | null;
 	agentAutonomousModeEnabled?: boolean;
 	readyForReviewNotificationsEnabled?: boolean;
-	shortcuts?: RuntimeProjectShortcut[];
 	commitPromptTemplate?: string;
 	openPrPromptTemplate?: string;
 }
@@ -145,40 +132,6 @@ function pickBestInstalledAgentId(): RuntimeAgentId | null {
 	return pickBestInstalledAgentIdFromDetected(detectInstalledCommands());
 }
 
-function normalizeShortcut(shortcut: RuntimeProjectShortcut): RuntimeProjectShortcut | null {
-	if (!shortcut || typeof shortcut !== "object") {
-		return null;
-	}
-
-	const label = typeof shortcut.label === "string" ? shortcut.label.trim() : "";
-	const command = typeof shortcut.command === "string" ? shortcut.command.trim() : "";
-	const icon = typeof shortcut.icon === "string" ? shortcut.icon.trim() : "";
-
-	if (!label || !command) {
-		return null;
-	}
-
-	return {
-		label,
-		command,
-		icon: icon || undefined,
-	};
-}
-
-function normalizeShortcuts(shortcuts: RuntimeProjectShortcut[] | null | undefined): RuntimeProjectShortcut[] {
-	if (!Array.isArray(shortcuts)) {
-		return [];
-	}
-	const normalized: RuntimeProjectShortcut[] = [];
-	for (const shortcut of shortcuts) {
-		const parsed = normalizeShortcut(shortcut);
-		if (parsed) {
-			normalized.push(parsed);
-		}
-	}
-	return normalized;
-}
-
 function normalizePromptTemplate(value: unknown, fallback: string): string {
 	if (typeof value !== "string") {
 		return fallback;
@@ -213,75 +166,15 @@ export function getRuntimeGlobalConfigPath(): string {
 	return getKanbanGlobalConfigPath();
 }
 
-export function getRuntimeProjectConfigPath(cwd: string): string {
-	return getProjectKanbanConfigPath(cwd);
-}
-
-interface RuntimeConfigPaths {
-	globalConfigPath: string;
-	projectConfigPath: string | null;
-}
-
-function normalizePathForComparison(path: string): string {
-	const normalized = resolve(path).replaceAll("\\", "/");
-	return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-}
-
-function resolveRuntimeConfigPaths(cwd: string | null): RuntimeConfigPaths {
-	const globalConfigPath = getRuntimeGlobalConfigPath();
-	if (cwd === null) {
-		return {
-			globalConfigPath,
-			projectConfigPath: null,
-		};
-	}
-
-	const normalizedCwd = normalizePathForComparison(cwd);
-	const normalizedHome = normalizePathForComparison(homedir());
-	if (normalizedCwd === normalizedHome) {
-		return {
-			globalConfigPath,
-			projectConfigPath: null,
-		};
-	}
-
-	return {
-		globalConfigPath,
-		projectConfigPath: getRuntimeProjectConfigPath(cwd),
-	};
-}
-
-function getRuntimeConfigLockRequests(cwd: string | null): LockRequest[] {
-	const paths = resolveRuntimeConfigPaths(cwd);
-	const requests: LockRequest[] = [
-		{
-			path: paths.globalConfigPath,
-			type: "file",
-		},
-	];
-	if (paths.projectConfigPath) {
-		requests.push({
-			path: paths.projectConfigPath,
-			type: "file",
-		});
-	}
-	return requests;
-}
-
 function toRuntimeConfigState({
 	globalConfigPath,
-	projectConfigPath,
 	globalConfig,
-	projectConfig,
 }: {
 	globalConfigPath: string;
-	projectConfigPath: string | null;
 	globalConfig: RuntimeGlobalConfigFileShape | null;
-	projectConfig: RuntimeProjectConfigFileShape | null;
 }): RuntimeConfigState {
 	return {
 		globalConfigPath,
-		projectConfigPath,
 		selectedAgentId: normalizeAgentId(globalConfig?.selectedAgentId),
 		selectedShortcutLabel: normalizeShortcutLabel(globalConfig?.selectedShortcutLabel),
 		agentAutonomousModeEnabled: normalizeBoolean(
@@ -292,7 +185,6 @@ function toRuntimeConfigState({
 			globalConfig?.readyForReviewNotificationsEnabled,
 			DEFAULT_READY_FOR_REVIEW_NOTIFICATIONS_ENABLED,
 		),
-		shortcuts: normalizeShortcuts(projectConfig?.shortcuts),
 		commitPromptTemplate: normalizePromptTemplate(globalConfig?.commitPromptTemplate, DEFAULT_COMMIT_PROMPT_TEMPLATE),
 		openPrPromptTemplate: normalizePromptTemplate(
 			globalConfig?.openPrPromptTemplate,
@@ -395,86 +287,37 @@ async function writeRuntimeGlobalConfigFile(
 	});
 }
 
-async function writeRuntimeProjectConfigFile(
-	configPath: string | null,
-	config: { shortcuts: RuntimeProjectShortcut[] },
-): Promise<void> {
-	const normalizedShortcuts = normalizeShortcuts(config.shortcuts);
-	if (!configPath) {
-		if (normalizedShortcuts.length > 0) {
-			throw new Error("Cannot save project shortcuts without a selected project.");
-		}
-		return;
-	}
-	if (normalizedShortcuts.length === 0) {
-		await rm(configPath, { force: true });
-		try {
-			await rm(dirname(configPath));
-		} catch {
-			// Ignore missing or non-empty project config directories.
-		}
-		return;
-	}
-	await lockedFileSystem.writeJsonFileAtomic(
-		configPath,
-		{
-			shortcuts: normalizedShortcuts,
-		} satisfies RuntimeProjectConfigFileShape,
-		{
-			lock: null,
-		},
-	);
+function getRuntimeConfigLockRequests(globalConfigPath: string): LockRequest[] {
+	return [{ path: globalConfigPath, type: "file" }];
 }
 
-interface RuntimeConfigFiles {
-	globalConfigPath: string;
-	projectConfigPath: string | null;
-	globalConfig: RuntimeGlobalConfigFileShape | null;
-	projectConfig: RuntimeProjectConfigFileShape | null;
-}
-
-async function readRuntimeConfigFiles(cwd: string | null): Promise<RuntimeConfigFiles> {
-	const { globalConfigPath, projectConfigPath } = resolveRuntimeConfigPaths(cwd);
-	return {
-		globalConfigPath,
-		projectConfigPath,
-		globalConfig: await readRuntimeConfigFile<RuntimeGlobalConfigFileShape>(globalConfigPath),
-		projectConfig: projectConfigPath
-			? await readRuntimeConfigFile<RuntimeProjectConfigFileShape>(projectConfigPath)
-			: null,
-	};
-}
-
-async function loadRuntimeConfigLocked(cwd: string | null): Promise<RuntimeConfigState> {
-	const configFiles = await readRuntimeConfigFiles(cwd);
-	if (configFiles.globalConfig === null) {
+async function loadRuntimeConfigLocked(globalConfigPath: string): Promise<RuntimeConfigState> {
+	let globalConfig = await readRuntimeConfigFile<RuntimeGlobalConfigFileShape>(globalConfigPath);
+	if (globalConfig === null) {
 		const autoSelectedAgentId = pickBestInstalledAgentId();
 		if (autoSelectedAgentId) {
-			await writeRuntimeGlobalConfigFile(configFiles.globalConfigPath, {
+			await writeRuntimeGlobalConfigFile(globalConfigPath, {
 				selectedAgentId: autoSelectedAgentId,
 			});
-			configFiles.globalConfig = {
+			globalConfig = {
 				selectedAgentId: autoSelectedAgentId,
 			};
 		}
 	}
-	return toRuntimeConfigState(configFiles);
+	return toRuntimeConfigState({ globalConfigPath, globalConfig });
 }
 
 function createRuntimeConfigStateFromValues(input: {
 	globalConfigPath: string;
-	projectConfigPath: string | null;
 	selectedAgentId: RuntimeAgentId;
 	selectedShortcutLabel: string | null;
 	agentAutonomousModeEnabled: boolean;
 	readyForReviewNotificationsEnabled: boolean;
-	shortcuts: RuntimeProjectShortcut[];
 	commitPromptTemplate: string;
 	openPrPromptTemplate: string;
 }): RuntimeConfigState {
 	return {
 		globalConfigPath: input.globalConfigPath,
-		projectConfigPath: input.projectConfigPath,
 		selectedAgentId: normalizeAgentId(input.selectedAgentId),
 		selectedShortcutLabel: normalizeShortcutLabel(input.selectedShortcutLabel),
 		agentAutonomousModeEnabled: normalizeBoolean(
@@ -485,7 +328,6 @@ function createRuntimeConfigStateFromValues(input: {
 			input.readyForReviewNotificationsEnabled,
 			DEFAULT_READY_FOR_REVIEW_NOTIFICATIONS_ENABLED,
 		),
-		shortcuts: normalizeShortcuts(input.shortcuts),
 		commitPromptTemplate: normalizePromptTemplate(input.commitPromptTemplate, DEFAULT_COMMIT_PROMPT_TEMPLATE),
 		openPrPromptTemplate: normalizePromptTemplate(input.openPrPromptTemplate, DEFAULT_OPEN_PR_PROMPT_TEMPLATE),
 		commitPromptTemplateDefault: DEFAULT_COMMIT_PROMPT_TEMPLATE,
@@ -493,227 +335,91 @@ function createRuntimeConfigStateFromValues(input: {
 	};
 }
 
-export function toGlobalRuntimeConfigState(current: RuntimeConfigState): RuntimeConfigState {
-	return createRuntimeConfigStateFromValues({
-		globalConfigPath: current.globalConfigPath,
-		projectConfigPath: null,
-		selectedAgentId: current.selectedAgentId,
-		selectedShortcutLabel: current.selectedShortcutLabel,
-		agentAutonomousModeEnabled: current.agentAutonomousModeEnabled,
-		readyForReviewNotificationsEnabled: current.readyForReviewNotificationsEnabled,
-		shortcuts: [],
-		commitPromptTemplate: current.commitPromptTemplate,
-		openPrPromptTemplate: current.openPrPromptTemplate,
-	});
-}
-
-export async function loadRuntimeConfig(cwd: string): Promise<RuntimeConfigState> {
-	const configFiles = await readRuntimeConfigFiles(cwd);
-	if (configFiles.globalConfig !== null) {
-		return toRuntimeConfigState(configFiles);
-	}
-	return await lockedFileSystem.withLocks(
-		getRuntimeConfigLockRequests(cwd),
-		async () => await loadRuntimeConfigLocked(cwd),
-	);
-}
-
 export async function loadGlobalRuntimeConfig(): Promise<RuntimeConfigState> {
-	const configFiles = await readRuntimeConfigFiles(null);
-	if (configFiles.globalConfig !== null) {
-		return toRuntimeConfigState(configFiles);
+	const globalConfigPath = getRuntimeGlobalConfigPath();
+	const globalConfig = await readRuntimeConfigFile<RuntimeGlobalConfigFileShape>(globalConfigPath);
+	if (globalConfig !== null) {
+		return toRuntimeConfigState({ globalConfigPath, globalConfig });
 	}
 	return await lockedFileSystem.withLocks(
-		getRuntimeConfigLockRequests(null),
-		async () => await loadRuntimeConfigLocked(null),
+		getRuntimeConfigLockRequests(globalConfigPath),
+		async () => await loadRuntimeConfigLocked(globalConfigPath),
 	);
 }
 
-export async function saveRuntimeConfig(
-	cwd: string,
-	config: {
-		selectedAgentId: RuntimeAgentId;
-		selectedShortcutLabel: string | null;
-		agentAutonomousModeEnabled: boolean;
-		readyForReviewNotificationsEnabled: boolean;
-		shortcuts: RuntimeProjectShortcut[];
-		commitPromptTemplate: string;
-		openPrPromptTemplate: string;
-	},
+/**
+ * The runtime config a project's board sees. Today that is the global config: the one per-project setting, the
+ * shortcuts, is in the shortcut store (src/projects/project-shortcut-store.ts), never in the project's repo.
+ */
+export async function loadRuntimeConfig(_projectPath: string): Promise<RuntimeConfigState> {
+	return await loadGlobalRuntimeConfig();
+}
+
+export async function saveRuntimeConfig(config: {
+	selectedAgentId: RuntimeAgentId;
+	selectedShortcutLabel: string | null;
+	agentAutonomousModeEnabled: boolean;
+	readyForReviewNotificationsEnabled: boolean;
+	commitPromptTemplate: string;
+	openPrPromptTemplate: string;
+}): Promise<RuntimeConfigState> {
+	const globalConfigPath = getRuntimeGlobalConfigPath();
+	return await lockedFileSystem.withLocks(getRuntimeConfigLockRequests(globalConfigPath), async () => {
+		await writeRuntimeGlobalConfigFile(globalConfigPath, config);
+		return createRuntimeConfigStateFromValues({ globalConfigPath, ...config });
+	});
+}
+
+function applyRuntimeConfigUpdates(current: RuntimeConfigState, updates: RuntimeConfigUpdateInput) {
+	return {
+		selectedAgentId: updates.selectedAgentId ?? current.selectedAgentId,
+		selectedShortcutLabel:
+			updates.selectedShortcutLabel === undefined ? current.selectedShortcutLabel : updates.selectedShortcutLabel,
+		agentAutonomousModeEnabled: updates.agentAutonomousModeEnabled ?? current.agentAutonomousModeEnabled,
+		readyForReviewNotificationsEnabled:
+			updates.readyForReviewNotificationsEnabled ?? current.readyForReviewNotificationsEnabled,
+		commitPromptTemplate: updates.commitPromptTemplate ?? current.commitPromptTemplate,
+		openPrPromptTemplate: updates.openPrPromptTemplate ?? current.openPrPromptTemplate,
+	};
+}
+
+async function writeRuntimeConfigUpdates(
+	globalConfigPath: string,
+	current: RuntimeConfigState,
+	updates: RuntimeConfigUpdateInput,
 ): Promise<RuntimeConfigState> {
-	const { globalConfigPath, projectConfigPath } = resolveRuntimeConfigPaths(cwd);
-	return await lockedFileSystem.withLocks(getRuntimeConfigLockRequests(cwd), async () => {
-		await writeRuntimeGlobalConfigFile(globalConfigPath, {
-			selectedAgentId: config.selectedAgentId,
-			selectedShortcutLabel: config.selectedShortcutLabel,
-			agentAutonomousModeEnabled: config.agentAutonomousModeEnabled,
-			readyForReviewNotificationsEnabled: config.readyForReviewNotificationsEnabled,
-			commitPromptTemplate: config.commitPromptTemplate,
-			openPrPromptTemplate: config.openPrPromptTemplate,
-		});
-		await writeRuntimeProjectConfigFile(projectConfigPath, { shortcuts: config.shortcuts });
-		return createRuntimeConfigStateFromValues({
-			globalConfigPath,
-			projectConfigPath,
-			selectedAgentId: config.selectedAgentId,
-			selectedShortcutLabel: config.selectedShortcutLabel,
-			agentAutonomousModeEnabled: config.agentAutonomousModeEnabled,
-			readyForReviewNotificationsEnabled: config.readyForReviewNotificationsEnabled,
-			shortcuts: config.shortcuts,
-			commitPromptTemplate: config.commitPromptTemplate,
-			openPrPromptTemplate: config.openPrPromptTemplate,
-		});
+	const nextConfig = applyRuntimeConfigUpdates(current, updates);
+	const hasChanges =
+		nextConfig.selectedAgentId !== current.selectedAgentId ||
+		nextConfig.selectedShortcutLabel !== current.selectedShortcutLabel ||
+		nextConfig.agentAutonomousModeEnabled !== current.agentAutonomousModeEnabled ||
+		nextConfig.readyForReviewNotificationsEnabled !== current.readyForReviewNotificationsEnabled ||
+		nextConfig.commitPromptTemplate !== current.commitPromptTemplate ||
+		nextConfig.openPrPromptTemplate !== current.openPrPromptTemplate;
+	if (!hasChanges) {
+		return current;
+	}
+	await writeRuntimeGlobalConfigFile(globalConfigPath, nextConfig);
+	return createRuntimeConfigStateFromValues({ globalConfigPath, ...nextConfig });
+}
+
+/** Applies a settings save to the config on disk (read under the lock, so concurrent saves keep each other's keys). */
+export async function updateRuntimeConfig(updates: RuntimeConfigUpdateInput): Promise<RuntimeConfigState> {
+	const globalConfigPath = getRuntimeGlobalConfigPath();
+	return await lockedFileSystem.withLocks(getRuntimeConfigLockRequests(globalConfigPath), async () => {
+		const current = await loadRuntimeConfigLocked(globalConfigPath);
+		return await writeRuntimeConfigUpdates(globalConfigPath, current, updates);
 	});
 }
 
-export async function updateRuntimeConfig(cwd: string, updates: RuntimeConfigUpdateInput): Promise<RuntimeConfigState> {
-	const { globalConfigPath, projectConfigPath } = resolveRuntimeConfigPaths(cwd);
-	return await lockedFileSystem.withLocks(getRuntimeConfigLockRequests(cwd), async () => {
-		const current = await loadRuntimeConfigLocked(cwd);
-		if (projectConfigPath === null && normalizeShortcuts(updates.shortcuts).length > 0) {
-			throw new Error("Cannot save project shortcuts without a selected project.");
-		}
-		const nextConfig = {
-			selectedAgentId: updates.selectedAgentId ?? current.selectedAgentId,
-			selectedShortcutLabel:
-				updates.selectedShortcutLabel === undefined ? current.selectedShortcutLabel : updates.selectedShortcutLabel,
-			agentAutonomousModeEnabled: updates.agentAutonomousModeEnabled ?? current.agentAutonomousModeEnabled,
-			readyForReviewNotificationsEnabled:
-				updates.readyForReviewNotificationsEnabled ?? current.readyForReviewNotificationsEnabled,
-			shortcuts: projectConfigPath ? (updates.shortcuts ?? current.shortcuts) : current.shortcuts,
-			commitPromptTemplate: updates.commitPromptTemplate ?? current.commitPromptTemplate,
-			openPrPromptTemplate: updates.openPrPromptTemplate ?? current.openPrPromptTemplate,
-		};
-
-		const hasChanges =
-			nextConfig.selectedAgentId !== current.selectedAgentId ||
-			nextConfig.selectedShortcutLabel !== current.selectedShortcutLabel ||
-			nextConfig.agentAutonomousModeEnabled !== current.agentAutonomousModeEnabled ||
-			nextConfig.readyForReviewNotificationsEnabled !== current.readyForReviewNotificationsEnabled ||
-			nextConfig.commitPromptTemplate !== current.commitPromptTemplate ||
-			nextConfig.openPrPromptTemplate !== current.openPrPromptTemplate ||
-			!areRuntimeProjectShortcutsEqual(nextConfig.shortcuts, current.shortcuts);
-
-		if (!hasChanges) {
-			return current;
-		}
-
-		await writeRuntimeGlobalConfigFile(globalConfigPath, {
-			selectedAgentId: nextConfig.selectedAgentId,
-			selectedShortcutLabel: nextConfig.selectedShortcutLabel,
-			agentAutonomousModeEnabled: nextConfig.agentAutonomousModeEnabled,
-			readyForReviewNotificationsEnabled: nextConfig.readyForReviewNotificationsEnabled,
-			commitPromptTemplate: nextConfig.commitPromptTemplate,
-			openPrPromptTemplate: nextConfig.openPrPromptTemplate,
-		});
-		await writeRuntimeProjectConfigFile(projectConfigPath, {
-			shortcuts: nextConfig.shortcuts,
-		});
-		return createRuntimeConfigStateFromValues({
-			globalConfigPath,
-			projectConfigPath,
-			selectedAgentId: nextConfig.selectedAgentId,
-			selectedShortcutLabel: nextConfig.selectedShortcutLabel,
-			agentAutonomousModeEnabled: nextConfig.agentAutonomousModeEnabled,
-			readyForReviewNotificationsEnabled: nextConfig.readyForReviewNotificationsEnabled,
-			shortcuts: nextConfig.shortcuts,
-			commitPromptTemplate: nextConfig.commitPromptTemplate,
-			openPrPromptTemplate: nextConfig.openPrPromptTemplate,
-		});
-	});
-}
-
+/** Applies a settings save on top of `current` (the server's cached config). */
 export async function updateGlobalRuntimeConfig(
 	current: RuntimeConfigState,
 	updates: RuntimeConfigUpdateInput,
 ): Promise<RuntimeConfigState> {
 	const globalConfigPath = getRuntimeGlobalConfigPath();
 	return await lockedFileSystem.withLocks(
-		[
-			{
-				path: globalConfigPath,
-				type: "file",
-			},
-		],
-		async () => {
-			const nextConfig = {
-				selectedAgentId: updates.selectedAgentId ?? current.selectedAgentId,
-				selectedShortcutLabel:
-					updates.selectedShortcutLabel === undefined
-						? current.selectedShortcutLabel
-						: updates.selectedShortcutLabel,
-				agentAutonomousModeEnabled: updates.agentAutonomousModeEnabled ?? current.agentAutonomousModeEnabled,
-				readyForReviewNotificationsEnabled:
-					updates.readyForReviewNotificationsEnabled ?? current.readyForReviewNotificationsEnabled,
-				shortcuts: current.shortcuts,
-				commitPromptTemplate: updates.commitPromptTemplate ?? current.commitPromptTemplate,
-				openPrPromptTemplate: updates.openPrPromptTemplate ?? current.openPrPromptTemplate,
-			};
-
-			const hasChanges =
-				nextConfig.selectedAgentId !== current.selectedAgentId ||
-				nextConfig.selectedShortcutLabel !== current.selectedShortcutLabel ||
-				nextConfig.agentAutonomousModeEnabled !== current.agentAutonomousModeEnabled ||
-				nextConfig.readyForReviewNotificationsEnabled !== current.readyForReviewNotificationsEnabled ||
-				nextConfig.commitPromptTemplate !== current.commitPromptTemplate ||
-				nextConfig.openPrPromptTemplate !== current.openPrPromptTemplate;
-
-			if (!hasChanges) {
-				return current;
-			}
-
-			await writeRuntimeGlobalConfigFile(globalConfigPath, {
-				selectedAgentId: nextConfig.selectedAgentId,
-				selectedShortcutLabel: nextConfig.selectedShortcutLabel,
-				agentAutonomousModeEnabled: nextConfig.agentAutonomousModeEnabled,
-				readyForReviewNotificationsEnabled: nextConfig.readyForReviewNotificationsEnabled,
-				commitPromptTemplate: nextConfig.commitPromptTemplate,
-				openPrPromptTemplate: nextConfig.openPrPromptTemplate,
-			});
-
-			return createRuntimeConfigStateFromValues({
-				globalConfigPath,
-				projectConfigPath: current.projectConfigPath,
-				selectedAgentId: nextConfig.selectedAgentId,
-				selectedShortcutLabel: nextConfig.selectedShortcutLabel,
-				agentAutonomousModeEnabled: nextConfig.agentAutonomousModeEnabled,
-				readyForReviewNotificationsEnabled: nextConfig.readyForReviewNotificationsEnabled,
-				shortcuts: nextConfig.shortcuts,
-				commitPromptTemplate: nextConfig.commitPromptTemplate,
-				openPrPromptTemplate: nextConfig.openPrPromptTemplate,
-			});
-		},
+		getRuntimeConfigLockRequests(globalConfigPath),
+		async () => await writeRuntimeConfigUpdates(globalConfigPath, current, updates),
 	);
-}
-
-export async function loadProjectShortcuts(projectPath: string): Promise<RuntimeProjectShortcut[]> {
-	const { projectConfigPath } = resolveRuntimeConfigPaths(projectPath);
-	return projectConfigPath
-		? normalizeShortcuts((await readRuntimeConfigFile<RuntimeProjectConfigFileShape>(projectConfigPath))?.shortcuts)
-		: [];
-}
-
-/**
- * Changes a project's shortcuts alone, under the project config's lock (the one saveRuntimeConfig takes too), for
- * `kanban shortcut` (src/projects/project-shortcuts.ts). `plan` gets the stored shortcuts; nothing is written when
- * its answer is the same.
- */
-export async function updateProjectShortcuts(
-	projectPath: string,
-	plan: (current: RuntimeProjectShortcut[]) => RuntimeProjectShortcut[],
-): Promise<{ before: RuntimeProjectShortcut[]; after: RuntimeProjectShortcut[] }> {
-	const { projectConfigPath } = resolveRuntimeConfigPaths(projectPath);
-	if (!projectConfigPath) {
-		throw new Error(`${projectPath} has no project config (it is the home directory)`);
-	}
-	return await lockedFileSystem.withLocks([{ path: projectConfigPath, type: "file" }], async () => {
-		const before = normalizeShortcuts(
-			(await readRuntimeConfigFile<RuntimeProjectConfigFileShape>(projectConfigPath))?.shortcuts,
-		);
-		const after = normalizeShortcuts(plan(before));
-		if (!areRuntimeProjectShortcutsEqual(before, after)) {
-			await writeRuntimeProjectConfigFile(projectConfigPath, { shortcuts: after });
-		}
-		return { before, after };
-	});
 }

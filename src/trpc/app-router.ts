@@ -193,6 +193,8 @@ import {
 	shortcutPrepareRunRequestSchema,
 	shortcutPrepareRunResponseSchema,
 	shortcutRemoveRequestSchema,
+	shortcutReplaceRequestSchema,
+	shortcutsUnavailableResponse,
 } from "./shortcuts-api";
 
 export interface RuntimeTrpcWorkspaceScope {
@@ -916,21 +918,24 @@ export const runtimeAppRouter = t.router({
 				});
 			}),
 	}),
-	// A project's shortcuts (src/trpc/shortcuts-api.ts): changed by the user and that project's orchestrator; a run's
-	// port ({port} / {url}) for the user's click.
+	// A project's shortcuts (src/trpc/shortcuts-api.ts, the shortcut store's only writer): changed by the user (the
+	// settings dialog included) and that project's orchestrator; a run's port ({port} / {url}) for the user's click.
 	shortcuts: t.router({
 		list: workspaceProcedure.output(shortcutListResponseSchema).query(async ({ ctx }) => {
 			if (!ctx.shortcutsApi) {
 				return { shortcuts: [] };
 			}
-			return await ctx.shortcutsApi.list(ctx.workspaceScope.workspacePath);
+			return await ctx.shortcutsApi.list({
+				workspaceId: ctx.workspaceScope.workspaceId,
+				repoPath: ctx.workspaceScope.workspacePath,
+			});
 		}),
 		add: workspaceProcedure
 			.input(shortcutAddRequestSchema)
 			.output(shortcutChangeResponseSchema)
 			.mutation(async ({ ctx, input }) => {
 				if (!ctx.shortcutsApi) {
-					return { ok: false, shortcuts: [], change: null, error: "Shortcuts are not available here." };
+					return shortcutsUnavailableResponse();
 				}
 				// In every isolation mode: a session without its credential is traced to its process tree.
 				return await ctx.shortcutsApi.add({
@@ -945,9 +950,23 @@ export const runtimeAppRouter = t.router({
 			.output(shortcutChangeResponseSchema)
 			.mutation(async ({ ctx, input }) => {
 				if (!ctx.shortcutsApi) {
-					return { ok: false, shortcuts: [], change: null, error: "Shortcuts are not available here." };
+					return shortcutsUnavailableResponse();
 				}
 				return await ctx.shortcutsApi.remove({
+					caller: await readStrictCaller(ctx),
+					workspaceId: ctx.workspaceScope.workspaceId,
+					repoPath: ctx.workspaceScope.workspacePath,
+					request: input,
+				});
+			}),
+		replace: workspaceProcedure
+			.input(shortcutReplaceRequestSchema)
+			.output(shortcutChangeResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.shortcutsApi) {
+					return shortcutsUnavailableResponse();
+				}
+				return await ctx.shortcutsApi.replace({
 					caller: await readStrictCaller(ctx),
 					workspaceId: ctx.workspaceScope.workspaceId,
 					repoPath: ctx.workspaceScope.workspacePath,

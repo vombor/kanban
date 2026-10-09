@@ -25,6 +25,7 @@ import {
 	getPipelineDecisionLogPath,
 	getPipelineStatePath,
 	getProjectRenameJournalPath,
+	getProjectShortcutsPath,
 	getRestartRecoverRequestPath,
 	getWatchdogWorkspacePaths,
 } from "../../../src/state/kanban-home";
@@ -74,6 +75,11 @@ function seedHome(): void {
 	});
 	const board = { columns: [{ id: "in_progress", cards: [{ id: "abc12", title: "card" }] }], dependencies: [] };
 	writeJson(join(getKanbanWorkspaceStatePath("kanban-2uge", home), "board.json"), board);
+	writeJson(getProjectShortcutsPath("kanban-2uge", home), {
+		version: 1,
+		shortcuts: [{ label: "Run", command: "npm run dogfood", icon: "play" }],
+		imported: { at: "2026-10-07T10:00:00.000Z", source: null },
+	});
 	writeJson(join(getKanbanWorkspaceStatePath("kanban-2uge", home), "sessions.json"), {
 		abc12: summary("abc12"),
 		"__home_agent__:kanban-2uge:claude": summary("__home_agent__:kanban-2uge:claude"),
@@ -160,6 +166,11 @@ function expectRenamed(): void {
 		"2026-10-07T11:00:00.000Z kanban\n2026-10-07T11:00:01.000Z foo\n",
 	);
 	expect(existsSync(getProjectRenameJournalPath(home))).toBe(false);
+	// The shortcut store moves with the data dir, so the renamed project keeps its shortcuts.
+	expect(readJson(getProjectShortcutsPath("kanban", home))).toMatchObject({
+		shortcuts: [{ label: "Run", command: "npm run dogfood", icon: "play" }],
+	});
+	expect(existsSync(getProjectShortcutsPath("kanban-2uge", home))).toBe(false);
 }
 
 function snapshotTree(root: string): Record<string, string> {

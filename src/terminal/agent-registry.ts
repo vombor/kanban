@@ -5,7 +5,12 @@ import {
 	isRuntimeAgentLaunchSupported,
 	RUNTIME_AGENT_CATALOG,
 } from "../core/agent-catalog";
-import type { RuntimeAgentDefinition, RuntimeAgentId, RuntimeConfigResponse } from "../core/api-contract";
+import type {
+	RuntimeAgentDefinition,
+	RuntimeAgentId,
+	RuntimeConfigResponse,
+	RuntimeProjectShortcut,
+} from "../core/api-contract";
 import { getKanbanPathsSummary } from "../state/kanban-home";
 import { isBinaryAvailableOnPath } from "./command-discovery";
 
@@ -131,9 +136,16 @@ export interface RuntimeConfigResponseServerSettings {
 	sessionSyncEnabled: boolean;
 }
 
+/** The scoped project's own part of the response: its shortcuts and where they are stored. */
+export interface RuntimeConfigResponseProject {
+	shortcuts: RuntimeProjectShortcut[];
+	shortcutsPath: string;
+}
+
 export function buildRuntimeConfigResponse(
 	runtimeConfig: RuntimeConfigState,
 	serverSettings: RuntimeConfigResponseServerSettings,
+	project: RuntimeConfigResponseProject | null = null,
 ): RuntimeConfigResponse {
 	const detectedCommands = detectInstalledCommands();
 	const agents = getCuratedDefinitions(runtimeConfig, detectedCommands);
@@ -147,13 +159,13 @@ export function buildRuntimeConfigResponse(
 		debugModeEnabled: isRuntimeDebugModeEnabled(),
 		effectiveCommand,
 		globalConfigPath: runtimeConfig.globalConfigPath,
-		projectConfigPath: runtimeConfig.projectConfigPath,
+		projectConfigPath: project?.shortcutsPath ?? null,
 		kanbanPaths: getKanbanPathsSummary(),
 		readyForReviewNotificationsEnabled: runtimeConfig.readyForReviewNotificationsEnabled,
 		sessionSyncEnabled: serverSettings.sessionSyncEnabled,
 		detectedCommands,
 		agents,
-		shortcuts: runtimeConfig.shortcuts,
+		shortcuts: project?.shortcuts ?? [],
 		commitPromptTemplate: runtimeConfig.commitPromptTemplate,
 		openPrPromptTemplate: runtimeConfig.openPrPromptTemplate,
 		commitPromptTemplateDefault: runtimeConfig.commitPromptTemplateDefault,

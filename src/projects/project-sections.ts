@@ -5,27 +5,13 @@ import { basename, join } from "node:path";
 
 import { getWorkspacePipelineSettings, type PipelineConfig } from "../config/pipeline-config";
 import { type ManagedSectionStatus, readManagedSectionStatus, writeManagedSection } from "../setup/managed-section";
-import { runGit } from "../workspace/git-utils";
+import { detectProjectBaseBranch } from "../workspace/git-utils";
 import {
 	AGENTS_FILE_NAME,
 	AGENTS_QA_SECTION,
 	type AgentsQaSectionVars,
 	renderAgentsQaSection,
 } from "./agents-qa-section";
-
-/** The branch a project lands on: its configured base, else origin's HEAD, else the checked-out branch. */
-async function detectBaseBranch(repoPath: string): Promise<string | null> {
-	for (const args of [
-		["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
-		["symbolic-ref", "--quiet", "--short", "HEAD"],
-	]) {
-		const result = await runGit(repoPath, args);
-		if (result.ok && result.stdout) {
-			return result.stdout.replace(/^origin\//u, "");
-		}
-	}
-	return null;
-}
 
 export async function resolveAgentsQaSectionVars(
 	config: PipelineConfig,
@@ -35,7 +21,7 @@ export async function resolveAgentsQaSectionVars(
 	const settings = getWorkspacePipelineSettings(config, workspaceId);
 	return {
 		name: settings.name ?? basename(repoPath),
-		baseBranch: settings.defaultBaseRef ?? (await detectBaseBranch(repoPath)) ?? "the base branch",
+		baseBranch: settings.defaultBaseRef ?? (await detectProjectBaseBranch(repoPath)) ?? "the base branch",
 	};
 }
 

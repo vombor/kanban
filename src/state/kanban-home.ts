@@ -527,7 +527,15 @@ export function getKitSettingsHistoryPath(workspaceId: string, homePath = getKan
 	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), "kit-settings-history.jsonl");
 }
 
-/** Every shortcut change through `kanban shortcut` (src/projects/project-shortcuts.ts); in the data dir like the above. */
+/**
+ * A project's shortcuts (`<home>/data/<workspaceId>/shortcuts.json`, src/projects/project-shortcut-store.ts), outside
+ * every repo so a card can't change them by landing a file. In the data dir, so `getWorkspaceIdKeyedPaths` moves it.
+ */
+export function getProjectShortcutsPath(workspaceId: string, homePath = getKanbanHomePath()): string {
+	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), "shortcuts.json");
+}
+
+/** Every shortcut change and the one-time import (src/projects/project-shortcut-store.ts); in the data dir too. */
 export function getShortcutHistoryPath(workspaceId: string, homePath = getKanbanHomePath()): string {
 	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), "shortcut-history.jsonl");
 }
@@ -771,10 +779,17 @@ export function getTaskWorktreeSearchRootPaths(): string[] {
 	return [resolution.worktreesRootPath, ...resolution.legacyWorktreeRootPaths];
 }
 
-/** Project-local Kanban config (shortcuts). It lives in the project, not in the home. */
+/**
+ * The project's own Kanban config file. It used to hold the project's shortcuts; Kanban now reads it once (the
+ * base-branch copy, else the main checkout's) to import them into the shortcut store (getProjectShortcutsPath), and
+ * doctor reports one that still has shortcuts.
+ */
 export function getProjectKanbanConfigPath(projectPath: string): string {
 	return join(resolve(projectPath), PROJECT_CONFIG_PARENT_DIR, PROJECT_CONFIG_DIR, CONFIG_FILENAME);
 }
+
+/** That file relative to the project root, as git names it (the shortcut import reads its base-branch copy). */
+export const PROJECT_KANBAN_CONFIG_RELATIVE_PATH = `${PROJECT_CONFIG_PARENT_DIR}/${PROJECT_CONFIG_DIR}/${CONFIG_FILENAME}`;
 
 /** Display template for the project config path when no project is selected. */
 export const PROJECT_KANBAN_CONFIG_DISPLAY_PATH = `<project>/${PROJECT_CONFIG_PARENT_DIR}/${PROJECT_CONFIG_DIR}/${CONFIG_FILENAME}`;

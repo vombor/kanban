@@ -1063,6 +1063,7 @@ export const runtimeConfigResponseSchema = z.object({
 	debugModeEnabled: z.boolean().optional(),
 	effectiveCommand: z.string().nullable(),
 	globalConfigPath: z.string(),
+	/** The project's shortcut store (`<home>/data/<workspace>/shortcuts.json`); null without a workspace. */
 	projectConfigPath: z.string().nullable(),
 	kanbanPaths: runtimeKanbanPathsSchema,
 	readyForReviewNotificationsEnabled: z.boolean(),
@@ -1084,7 +1085,8 @@ export const runtimeConfigSaveRequestSchema = z.object({
 	selectedAgentId: runtimeAgentIdSchema.optional(),
 	selectedShortcutLabel: z.string().nullable().optional(),
 	agentAutonomousModeEnabled: z.boolean().optional(),
-	shortcuts: z.array(runtimeProjectShortcutSchema).optional(),
+	// No shortcuts: they change only through the shortcut route (`shortcuts.replace`), which checks who asks; a save
+	// that carries them has them stripped.
 	readyForReviewNotificationsEnabled: z.boolean().optional(),
 	commitPromptTemplate: z.string().optional(),
 	openPrPromptTemplate: z.string().optional(),

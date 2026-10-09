@@ -36,7 +36,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { TASK_GIT_BASE_REF_PROMPT_VARIABLE, type TaskGitAction } from "@/git-actions/build-task-git-action-prompt";
 import { previewThemeId, readStoredThemeId, saveThemeId, THEME_GROUPS, THEMES, type ThemeId } from "@/hooks/use-theme";
 import { useLayoutCustomizations } from "@/resize/layout-customizations";
-import { openFileOnHost } from "@/runtime/runtime-config-query";
+import { openFileOnHost, replaceProjectShortcuts } from "@/runtime/runtime-config-query";
 import type { RuntimeAgentId, RuntimeConfigResponse, RuntimeProjectShortcut } from "@/runtime/types";
 import { useRuntimeConfig } from "@/runtime/use-runtime-config";
 import {
@@ -650,11 +650,23 @@ export function RuntimeSettingsDialog({
 			const nextPermission = await requestBrowserNotificationPermission();
 			setNotificationPermission(nextPermission);
 		}
+		// Shortcuts go through the shortcut route (it checks who asks), not the settings save.
+		if (!areRuntimeProjectShortcutsEqual(shortcuts, initialShortcuts)) {
+			if (!workspaceId) {
+				setSaveError("Select a project to save its shortcuts.");
+				return;
+			}
+			try {
+				await replaceProjectShortcuts(workspaceId, shortcuts);
+			} catch (error) {
+				setSaveError(`Could not save shortcuts: ${error instanceof Error ? error.message : String(error)}`);
+				return;
+			}
+		}
 		const saved = await save({
 			selectedAgentId,
 			agentAutonomousModeEnabled,
 			readyForReviewNotificationsEnabled,
-			shortcuts,
 			commitPromptTemplate,
 			openPrPromptTemplate,
 		});

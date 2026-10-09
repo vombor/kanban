@@ -114,13 +114,15 @@ describe("kanban shortcut", () => {
 		const shortcut = { label: "A", command: "ls" };
 		expect(
 			formatShortcutChange(
-				{ ok: true, shortcuts: [], change: { label: "A", from: shortcut, to: shortcut } },
+				{ ok: true, shortcuts: [], change: { label: "A", from: shortcut, to: shortcut }, changes: [] },
 				"w",
 			)[0],
 		).toContain("updated");
 		expect(
-			formatShortcutChange({ ok: true, shortcuts: [], change: { label: "A", from: shortcut } }, "w")[0],
+			formatShortcutChange({ ok: true, shortcuts: [], change: { label: "A", from: shortcut }, changes: [] }, "w")[0],
 		).toContain("removed");
-		expect(formatShortcutChange({ ok: true, shortcuts: [], change: null }, "w")[0]).toContain("no change");
+		expect(formatShortcutChange({ ok: true, shortcuts: [], change: null, changes: [] }, "w")[0]).toContain(
+			"no change",
+		);
 	});
 });

@@ -75,6 +75,8 @@ vi.mock("@radix-ui/react-select", () => ({
 }));
 
 const resetLayoutCustomizationsMock = vi.hoisted(() => vi.fn());
+const saveConfigMock = vi.hoisted(() => vi.fn(async (_config: Record<string, unknown>) => true));
+const replaceProjectShortcutsMock = vi.hoisted(() => vi.fn(async () => []));
 vi.mock("@runtime-agent-catalog", () => ({
 	getRuntimeAgentCatalogEntry: vi.fn((agentId: string) => ({
 		id: agentId,
@@ -88,7 +90,9 @@ vi.mock("@runtime-agent-catalog", () => ({
 }));
 
 vi.mock("@runtime-shortcuts", () => ({
-	areRuntimeProjectShortcutsEqual: vi.fn(() => true),
+	areRuntimeProjectShortcutsEqual: vi.fn(
+		(left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right),
+	),
 }));
 
 vi.mock("@/resize/layout-customizations", () => ({
@@ -104,12 +108,13 @@ vi.mock("@/runtime/use-runtime-config", () => ({
 		isLoading: false,
 		isSaving: false,
 		refresh: vi.fn(),
-		save: vi.fn(async () => true),
+		save: saveConfigMock,
 	}),
 }));
 
 vi.mock("@/runtime/runtime-config-query", () => ({
 	openFileOnHost: vi.fn(async () => undefined),
+	replaceProjectShortcuts: replaceProjectShortcutsMock,
 }));
 
 vi.mock("@/utils/notification-permission", () => ({
@@ -340,5 +345,30 @@ describe("RuntimeSettingsDialog", () => {
 		expect(handleOpenChange).toHaveBeenCalledWith(false);
 		expect(window.localStorage.getItem("kanban.theme")).toBe("graphite");
 		expect(document.documentElement.getAttribute("data-theme")).toBe("graphite");
+	});
+
+	it("saves shortcut edits through the shortcut route, not the settings save", async () => {
+		saveConfigMock.mockClear();
+		replaceProjectShortcutsMock.mockClear();
+		await act(async () => {
+			root.render(
+				<RuntimeSettingsDialog
+					open={true}
+					workspaceId={"workspace-1"}
+					initialConfig={{ ...savedConfig, shortcuts: [{ label: "Run", command: "npm run dev", icon: "play" }] }}
+					onOpenChange={vi.fn()}
+				/>,
+			);
+		});
+		await act(async () => {
+			findButtonByAriaLabel(document.body, "Remove shortcut Run")?.click();
+		});
+		await act(async () => {
+			findButtonByText(document.body, "Save")?.click();
+		});
+
+		expect(replaceProjectShortcutsMock).toHaveBeenCalledWith("workspace-1", []);
+		expect(saveConfigMock).toHaveBeenCalledTimes(1);
+		expect(saveConfigMock.mock.calls[0]?.[0]).not.toHaveProperty("shortcuts");
 	});
 });

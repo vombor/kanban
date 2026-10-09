@@ -1,4 +1,4 @@
-import { type RuntimeConfigState, toGlobalRuntimeConfigState } from "../config/runtime-config";
+import type { RuntimeConfigState } from "../config/runtime-config";
 import type {
 	RuntimeBoardColumnId,
 	RuntimeBoardData,
@@ -303,7 +303,7 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 		rememberWorkspace(workspaceId, repoPath);
 		await ensureTerminalManagerForWorkspace(workspaceId, repoPath);
 		activeRuntimeConfig = await deps.loadRuntimeConfig(repoPath);
-		globalRuntimeConfig = toGlobalRuntimeConfigState(activeRuntimeConfig);
+		globalRuntimeConfig = activeRuntimeConfig;
 	};
 
 	const clearActiveWorkspace = (): void => {
@@ -520,7 +520,7 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 		rememberWorkspace,
 		getActiveRuntimeConfig: () => activeRuntimeConfig,
 		setActiveRuntimeConfig: (config: RuntimeConfigState) => {
-			globalRuntimeConfig = toGlobalRuntimeConfigState(config);
+			globalRuntimeConfig = config;
 			activeRuntimeConfig = activeWorkspaceId ? config : globalRuntimeConfig;
 		},
 		loadScopedRuntimeConfig: async (scope: WorkspaceRegistryScope) => {

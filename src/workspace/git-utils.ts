@@ -117,3 +117,17 @@ export function getGitCommandErrorMessage(error: unknown): string {
 	}
 	return error instanceof Error ? error.message : String(error);
 }
+
+/** The branch a project lands on when its settings name none: origin's HEAD, else the checked-out branch. */
+export async function detectProjectBaseBranch(repoPath: string): Promise<string | null> {
+	for (const args of [
+		["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+		["symbolic-ref", "--quiet", "--short", "HEAD"],
+	]) {
+		const result = await runGit(repoPath, args);
+		if (result.ok && result.stdout) {
+			return result.stdout.replace(/^origin\//u, "");
+		}
+	}
+	return null;
+}

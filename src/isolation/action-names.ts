@@ -18,6 +18,7 @@ const ACTION_NAMES: Record<string, string> = {
 	"projects.add": "open the already registered project",
 	"shortcuts.add": "add or change a shortcut",
 	"shortcuts.remove": "remove a shortcut",
+	"shortcuts.replace": "save the shortcut list",
 	"shortcuts.prepareRun": "get a port for a shortcut run",
 	websocket: "watch the board or a terminal",
 	"cli task create": "create a task",

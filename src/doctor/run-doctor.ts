@@ -46,6 +46,7 @@ import { checkIsolation } from "./isolation-checks";
 import { checkIssueImport, createIssueCheckDeps, type IssueCheckDeps } from "./issue-checks";
 import { checkKitLemonadeModels, checkKitProjectSettings, checkKitRecommendedSettings } from "./kit-settings-checks";
 import { checkOneOwner } from "./one-owner-checks";
+import { checkProjectShortcuts, type ProjectShortcutCheckDeps } from "./project-shortcut-checks";
 import { checkRoutingVetting } from "./routing-vetting-checks";
 
 export interface DoctorOptions {
@@ -65,6 +66,8 @@ export interface DoctorOptions {
 	fetch?: typeof fetch;
 	/** Test hook: the issue import rows' remotes, state and auth source. */
 	issueDeps?: IssueCheckDeps;
+	/** Test hook: the project shortcut rows' home and base branch. */
+	shortcutDeps?: ProjectShortcutCheckDeps;
 }
 
 export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
@@ -119,6 +122,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
 	);
 	findings.push(...(await checkSections({ ...projectContext, entries: liveEntries })));
 	findings.push(...(await checkWorktreePushHooks(liveEntries)));
+	findings.push(...(await checkProjectShortcuts(liveEntries, options.shortcutDeps)));
 
 	findings.push(
 		...checkSetup(

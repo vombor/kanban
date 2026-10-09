@@ -1,48 +1,39 @@
 // A project's shortcuts (the top bar's script runner: a label, a command typed into a terminal, an icon) changed
-// without the settings dialog: `kanban shortcut add|remove` through the runtime route src/trpc/shortcuts-api.ts,
-// which decides who may (the user and that project's own orchestrator). Shortcuts stay where the dialog keeps them
-// (getProjectKanbanConfigPath); every change made here is appended to getShortcutHistoryPath(workspaceId).
+// through the runtime route src/trpc/shortcuts-api.ts, which decides who may (the user and that project's own
+// orchestrator): `kanban shortcut add|remove` and the settings dialog's save. They are kept in the shortcut store
+// (src/projects/project-shortcut-store.ts), outside the repo; every change is appended to the shortcut history.
 // Any label, command and icon: a shortcut that needs a port uses the `{port}` / `{url}` placeholders
 // (shortcut-utils.ts), which Kanban fills in for each run.
-import { appendFile, mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
-
-import { updateProjectShortcuts } from "../config/runtime-config";
 import { isRuntimeShortcutIconId, RUNTIME_SHORTCUT_ICON_IDS } from "../config/shortcut-utils";
 import type { RuntimeProjectShortcut } from "../core/api-contract";
 import type { KitSettingsActor } from "../kits/project-settings";
-import { getShortcutHistoryPath } from "../state/kanban-home";
+import {
+	appendShortcutHistory,
+	type ProjectShortcutStoreInput,
+	type ShortcutChangeHistoryEntry,
+	type ShortcutChangeVia,
+	updateStoredProjectShortcuts,
+} from "./project-shortcut-store";
 
 /** Thrown for a change that doesn't validate (not for I/O failures). */
 export class ShortcutRefusedError extends Error {}
 
-export interface ShortcutHistoryEntry {
-	at: string;
-	workspaceId: string;
-	label: string;
-	/** Absent: the shortcut is new. */
-	from?: RuntimeProjectShortcut;
-	/** Absent: the shortcut is removed. */
-	to?: RuntimeProjectShortcut;
-	by: KitSettingsActor;
-	via: "shortcut add" | "shortcut remove";
-}
-
 export interface ShortcutChangeResult {
 	shortcuts: RuntimeProjectShortcut[];
-	change: ShortcutHistoryEntry | null;
+	/** One per label that changed (none: nothing did). */
+	changes: ShortcutChangeHistoryEntry[];
 }
 
-export interface ShortcutChangeInput {
-	workspaceId: string;
-	repoPath: string;
+export interface ShortcutChangeInput extends ProjectShortcutStoreInput {
 	by: KitSettingsActor;
-	historyPath?: string;
-	now?: () => Date;
 }
 
 function sameLabel(left: string, right: string): boolean {
 	return left.trim().toLowerCase() === right.trim().toLowerCase();
+}
+
+function sameShortcut(left: RuntimeProjectShortcut, right: RuntimeProjectShortcut): boolean {
+	return left.label === right.label && left.command === right.command && (left.icon ?? "") === (right.icon ?? "");
 }
 
 export function normalizeShortcutInput(input: {
@@ -70,44 +61,50 @@ export function normalizeShortcutInput(input: {
 	return { label, command, ...(icon ? { icon } : {}) };
 }
 
-async function appendHistory(entry: ShortcutHistoryEntry, path: string): Promise<void> {
-	await mkdir(dirname(path), { recursive: true });
-	await appendFile(path, `${JSON.stringify(entry)}\n`, "utf8");
+/** What changed between two lists, by label (case-insensitive): one entry per added, changed or removed shortcut. */
+function diffShortcuts(
+	before: RuntimeProjectShortcut[],
+	after: RuntimeProjectShortcut[],
+): Array<{ label: string; from?: RuntimeProjectShortcut; to?: RuntimeProjectShortcut }> {
+	const changes: Array<{ label: string; from?: RuntimeProjectShortcut; to?: RuntimeProjectShortcut }> = [];
+	for (const to of after) {
+		const from = before.find((item) => sameLabel(item.label, to.label));
+		if (!from) {
+			changes.push({ label: to.label, to });
+		} else if (!sameShortcut(from, to)) {
+			changes.push({ label: to.label, from, to });
+		}
+	}
+	for (const from of before) {
+		if (!after.some((item) => sameLabel(item.label, from.label))) {
+			changes.push({ label: from.label, from });
+		}
+	}
+	return changes;
 }
 
 async function change(
 	input: ShortcutChangeInput,
-	via: ShortcutHistoryEntry["via"],
-	label: string,
-	plan: (current: RuntimeProjectShortcut[]) => {
-		next: RuntimeProjectShortcut[];
-		from?: RuntimeProjectShortcut;
-		to?: RuntimeProjectShortcut;
-	},
+	via: ShortcutChangeVia,
+	plan: (current: RuntimeProjectShortcut[]) => RuntimeProjectShortcut[],
 ): Promise<ShortcutChangeResult> {
-	let from: RuntimeProjectShortcut | undefined;
-	let to: RuntimeProjectShortcut | undefined;
-	const { before, after } = await updateProjectShortcuts(input.repoPath, (current) => {
-		const planned = plan(current);
-		from = planned.from;
-		to = planned.to;
-		return planned.next;
-	});
-	if (JSON.stringify(before) === JSON.stringify(after)) {
-		return { shortcuts: after, change: null };
+	const { before, after } = await updateStoredProjectShortcuts(input, plan);
+	const at = (input.now?.() ?? new Date()).toISOString();
+	const changes = diffShortcuts(before, after).map(
+		(item): ShortcutChangeHistoryEntry => ({
+			at,
+			workspaceId: input.workspaceId,
+			label: item.label,
+			...(item.from ? { from: item.from } : {}),
+			...(item.to ? { to: item.to } : {}),
+			by: input.by,
+			via,
+		}),
+	);
+	for (const entry of changes) {
+		await appendShortcutHistory(entry, { homePath: input.homePath });
 	}
-	const entry: ShortcutHistoryEntry = {
-		at: (input.now?.() ?? new Date()).toISOString(),
-		workspaceId: input.workspaceId,
-		// The stored label (a remove may name it in another case).
-		label: (to ?? from)?.label ?? label,
-		...(from ? { from } : {}),
-		...(to ? { to } : {}),
-		by: input.by,
-		via,
-	};
-	await appendHistory(entry, input.historyPath ?? getShortcutHistoryPath(input.workspaceId));
-	return { shortcuts: after, change: entry };
+	return { shortcuts: after, changes };
 }
 
 /** Adds a shortcut, or replaces the one with the same label (case-insensitive) in its place. */
@@ -115,27 +112,44 @@ export async function upsertProjectShortcut(
 	input: ShortcutChangeInput & { shortcut: { label: string; command: string; icon?: string | null } },
 ): Promise<ShortcutChangeResult> {
 	const shortcut = normalizeShortcutInput(input.shortcut);
-	return await change(input, "shortcut add", shortcut.label, (current) => {
+	return await change(input, "shortcut add", (current) => {
 		const index = current.findIndex((item) => sameLabel(item.label, shortcut.label));
 		if (index < 0) {
-			return { next: [...current, shortcut], to: shortcut };
+			return [...current, shortcut];
 		}
 		const next = [...current];
 		next[index] = shortcut;
-		return { next, from: current[index], to: shortcut };
+		return next;
 	});
 }
 
 export async function removeProjectShortcut(
 	input: ShortcutChangeInput & { label: string },
 ): Promise<ShortcutChangeResult> {
-	return await change(input, "shortcut remove", input.label.trim(), (current) => {
+	return await change(input, "shortcut remove", (current) => {
 		const existing = current.find((item) => sameLabel(item.label, input.label));
 		if (!existing) {
 			throw new ShortcutRefusedError(
 				`${input.workspaceId} has no shortcut "${input.label}" (shortcuts: ${current.map((item) => item.label).join(", ") || "none"})`,
 			);
 		}
-		return { next: current.filter((item) => item !== existing), from: existing };
+		return current.filter((item) => item !== existing);
 	});
+}
+
+/**
+ * The settings dialog's save: the whole list, in its order. Rows without a label or command are dropped, as the
+ * dialog always did; the rest validate like `shortcut add`, and labels must differ (case-insensitive).
+ */
+export async function replaceProjectShortcuts(
+	input: ShortcutChangeInput & { shortcuts: Array<{ label: string; command: string; icon?: string | null }> },
+): Promise<ShortcutChangeResult> {
+	const next = input.shortcuts
+		.filter((item) => item.label.trim() && item.command.trim())
+		.map((item) => normalizeShortcutInput(item));
+	const duplicate = next.find((item, index) => next.findIndex((other) => sameLabel(other.label, item.label)) < index);
+	if (duplicate) {
+		throw new ShortcutRefusedError(`two shortcuts are labelled "${duplicate.label}"; give each its own label`);
+	}
+	return await change(input, "settings dialog", () => next);
 }

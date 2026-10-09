@@ -1,19 +1,22 @@
-// The runtime side of `kanban shortcut` (src/projects/project-shortcuts.ts) and of a shortcut run that asks for a
-// port (`{port}` / `{url}`, src/config/shortcut-utils.ts). Who may change a project's shortcuts is decided here with
+// The runtime side of a project's shortcuts (src/projects/project-shortcuts.ts, kept in the shortcut store
+// src/projects/project-shortcut-store.ts) and of a shortcut run that asks for a port (`{port}` / `{url}`,
+// src/config/shortcut-utils.ts). It is the only writer of the store: `kanban shortcut add|remove` and the board's
+// settings dialog (`shortcuts.replace`) both come here. Who may change a project's shortcuts is decided here with
 // the strict caller lookup (a session without its credential is traced to its process tree), in every isolation
-// mode, off included, by the kit settings' rule: the user and that workspace's own orchestrator; a card, another
-// workspace's orchestrator and an unidentified caller are refused. The board's settings dialog keeps saving
-// shortcuts its own way (runtime.saveConfig). A change is pushed to the browser (`project_shortcuts_updated`), which
-// reloads the project config. A run's port is the user's click on the board: only the user gets one.
+// mode, off included, by the kit settings' rule: the user (the user's browser included) and that workspace's own
+// orchestrator; a card, another workspace's orchestrator and an unidentified caller are refused. A change is pushed
+// to the browser (`project_shortcuts_updated`), which reloads the project config. A run's port is the user's click
+// on the board: only the user gets one.
 import { z } from "zod";
-import { loadProjectShortcuts } from "../config/runtime-config";
 import { expandShortcutCommand, shortcutNeedsPort } from "../config/shortcut-utils";
 import { runtimeProjectShortcutSchema } from "../core/api-contract";
 import type { IsolationService } from "../isolation/isolation-service";
 import { describeCaller, type RuntimeCaller } from "../isolation/session-identity";
 import type { KitSettingsActor } from "../kits/project-settings";
+import { readProjectShortcuts } from "../projects/project-shortcut-store";
 import {
 	removeProjectShortcut,
+	replaceProjectShortcuts,
 	type ShortcutChangeResult,
 	ShortcutRefusedError,
 	upsertProjectShortcut,
@@ -26,19 +29,25 @@ export const shortcutAddRequestSchema = z.object({
 	icon: z.string().min(1).nullable().optional(),
 });
 export const shortcutRemoveRequestSchema = z.object({ label: z.string().min(1) });
+/** The settings dialog's save: the whole list in its order (rows without a label or command are dropped). */
+export const shortcutReplaceRequestSchema = z.object({
+	shortcuts: z.array(z.object({ label: z.string(), command: z.string(), icon: z.string().nullable().optional() })),
+});
 export const shortcutListResponseSchema = z.object({ shortcuts: z.array(runtimeProjectShortcutSchema) });
+
+const shortcutChangeSchema = z.object({
+	label: z.string(),
+	from: runtimeProjectShortcutSchema.optional(),
+	to: runtimeProjectShortcutSchema.optional(),
+});
 
 export const shortcutChangeResponseSchema = z.object({
 	ok: z.boolean(),
 	shortcuts: z.array(runtimeProjectShortcutSchema),
-	/** What changed: null when nothing did (the same shortcut again). */
-	change: z
-		.object({
-			label: z.string(),
-			from: runtimeProjectShortcutSchema.optional(),
-			to: runtimeProjectShortcutSchema.optional(),
-		})
-		.nullable(),
+	/** What changed: null when nothing did (the same shortcut again); a replace's first change. */
+	change: shortcutChangeSchema.nullable(),
+	/** Every shortcut that changed, one per label. */
+	changes: z.array(shortcutChangeSchema),
 	error: z.string().optional(),
 });
 export type ShortcutChangeResponse = z.infer<typeof shortcutChangeResponseSchema>;
@@ -90,9 +99,10 @@ export interface ShortcutCallInput<Request> {
 }
 
 export interface RuntimeShortcutsApi {
-	list: (repoPath: string) => Promise<z.infer<typeof shortcutListResponseSchema>>;
+	list: (input: { workspaceId: string; repoPath: string }) => Promise<z.infer<typeof shortcutListResponseSchema>>;
 	add: (input: ShortcutCallInput<z.infer<typeof shortcutAddRequestSchema>>) => Promise<ShortcutChangeResponse>;
 	remove: (input: ShortcutCallInput<z.infer<typeof shortcutRemoveRequestSchema>>) => Promise<ShortcutChangeResponse>;
+	replace: (input: ShortcutCallInput<z.infer<typeof shortcutReplaceRequestSchema>>) => Promise<ShortcutChangeResponse>;
 	prepareRun: (
 		input: ShortcutCallInput<z.infer<typeof shortcutPrepareRunRequestSchema>>,
 	) => Promise<ShortcutPrepareRunResponse>;
@@ -103,12 +113,18 @@ export interface CreateShortcutsApiDependencies {
 	ports: ShortcutPortRegistry;
 	/** Tells the workspace's browsers to reload the project config. */
 	onChanged?: (workspaceId: string) => void;
-	/** Tests: where the history goes. */
-	historyPath?: string;
+	/** Tests: the Kanban home the shortcut store and its history are in. */
+	homePath?: string;
+	/** Tests: the base branch the one-time import reads. */
+	resolveBaseBranch?: () => Promise<string | null>;
+}
+
+export function shortcutsUnavailableResponse(): ShortcutChangeResponse {
+	return failure("Shortcuts are not available here.");
 }
 
 function failure(error: string): ShortcutChangeResponse {
-	return { ok: false, shortcuts: [], change: null, error };
+	return { ok: false, shortcuts: [], change: null, changes: [], error };
 }
 
 function toErrorMessage(error: unknown): string {
@@ -127,9 +143,17 @@ export function createShortcutsApi(deps: CreateShortcutsApiDependencies): Runtim
 		});
 	};
 
-	const run = async (
-		action: "shortcuts.add" | "shortcuts.remove",
-		input: ShortcutCallInput<{ label: string }>,
+	const store = (input: { workspaceId: string; repoPath: string }) => ({
+		workspaceId: input.workspaceId,
+		repoPath: input.repoPath,
+		homePath: deps.homePath,
+		resolveBaseBranch: deps.resolveBaseBranch,
+	});
+
+	const run = async <Request>(
+		action: "shortcuts.add" | "shortcuts.remove" | "shortcuts.replace",
+		input: ShortcutCallInput<Request>,
+		what: string,
 		changeShortcuts: (by: KitSettingsActor) => Promise<ShortcutChangeResult>,
 	): Promise<ShortcutChangeResponse> => {
 		const decision = decideShortcutsCaller(input.caller, input.workspaceId);
@@ -138,54 +162,44 @@ export function createShortcutsApi(deps: CreateShortcutsApiDependencies): Runtim
 				action,
 				input.caller,
 				input.workspaceId,
-				`shortcut "${input.request.label}": the user's and the project orchestrator's`,
+				`${what}: the user's and the project orchestrator's`,
 			);
 			return failure(decision.message);
 		}
 		try {
 			const result = await changeShortcuts(decision.actor);
-			if (result.change) {
+			if (result.changes.length > 0) {
 				deps.onChanged?.(input.workspaceId);
 			}
-			return {
-				ok: true,
-				shortcuts: result.shortcuts,
-				change: result.change
-					? { label: result.change.label, from: result.change.from, to: result.change.to }
-					: null,
-			};
+			const changes = result.changes.map((entry) => ({ label: entry.label, from: entry.from, to: entry.to }));
+			return { ok: true, shortcuts: result.shortcuts, change: changes[0] ?? null, changes };
 		} catch (error) {
 			return failure(error instanceof ShortcutRefusedError ? error.message : toErrorMessage(error));
 		}
 	};
 
 	return {
-		list: async (repoPath) => ({ shortcuts: await loadProjectShortcuts(repoPath) }),
+		list: async (input) => ({ shortcuts: await readProjectShortcuts(store(input)) }),
 		add: async (input) =>
 			await run(
 				"shortcuts.add",
 				input,
-				async (by) =>
-					await upsertProjectShortcut({
-						workspaceId: input.workspaceId,
-						repoPath: input.repoPath,
-						by,
-						shortcut: input.request,
-						historyPath: deps.historyPath,
-					}),
+				`shortcut "${input.request.label}"`,
+				async (by) => await upsertProjectShortcut({ ...store(input), by, shortcut: input.request }),
 			),
 		remove: async (input) =>
 			await run(
 				"shortcuts.remove",
 				input,
-				async (by) =>
-					await removeProjectShortcut({
-						workspaceId: input.workspaceId,
-						repoPath: input.repoPath,
-						by,
-						label: input.request.label,
-						historyPath: deps.historyPath,
-					}),
+				`shortcut "${input.request.label}"`,
+				async (by) => await removeProjectShortcut({ ...store(input), by, label: input.request.label }),
+			),
+		replace: async (input) =>
+			await run(
+				"shortcuts.replace",
+				input,
+				"the shortcut list",
+				async (by) => await replaceProjectShortcuts({ ...store(input), by, shortcuts: input.request.shortcuts }),
 			),
 		prepareRun: async ({ caller, workspaceId, repoPath, request }) => {
 			const refused = (error: string): ShortcutPrepareRunResponse => ({
@@ -206,7 +220,9 @@ export function createShortcutsApi(deps: CreateShortcutsApiDependencies): Runtim
 					`A shortcut's port is handed out for the user's click on the board, not to ${describeCaller(caller)}.`,
 				);
 			}
-			const shortcut = (await loadProjectShortcuts(repoPath)).find((item) => item.label === request.label);
+			const shortcut = (await readProjectShortcuts(store({ workspaceId, repoPath }))).find(
+				(item) => item.label === request.label,
+			);
 			if (!shortcut) {
 				return refused(`${workspaceId} has no shortcut "${request.label}"`);
 			}

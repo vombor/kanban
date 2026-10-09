@@ -33,8 +33,9 @@ import {
 	KANBAN_SESSION_CREDENTIAL_ENV,
 	KANBAN_SESSION_WORKSPACE_ENV,
 } from "../isolation/session-identity";
+import { readProjectShortcuts } from "../projects/project-shortcut-store";
 import { openInBrowser } from "../server/browser";
-import { getDebugResetTargetPaths } from "../state/kanban-home";
+import { getDebugResetTargetPaths, getProjectShortcutsPath } from "../state/kanban-home";
 import { listWorkspaceIndexEntries, loadWorkspaceBoardById } from "../state/workspace-state";
 import { buildRuntimeConfigResponse, resolveAgentCommand } from "../terminal/agent-registry";
 import { deliverTaskInput } from "../terminal/deliver-task-input";
@@ -97,10 +98,21 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 		runtimeConfig: RuntimeConfigState,
 		workspaceScope: RuntimeTrpcWorkspaceScope | null,
 	): Promise<RuntimeConfigResponse> => {
-		const response = buildRuntimeConfigResponse(runtimeConfig, { sessionSyncEnabled: deps.sessionSyncEnabled });
 		if (!workspaceScope) {
-			return response;
+			return buildRuntimeConfigResponse(runtimeConfig, { sessionSyncEnabled: deps.sessionSyncEnabled });
 		}
+		// Read from the shortcut store on every load (not the cached config), so a change through the shortcut
+		// route shows at once. A store Kanban can't read shows no shortcuts (doctor reports it; it is never rewritten),
+		// so the rest of the settings still load.
+		const shortcuts = await readProjectShortcuts({
+			workspaceId: workspaceScope.workspaceId,
+			repoPath: workspaceScope.workspacePath,
+		}).catch(() => []);
+		const response = buildRuntimeConfigResponse(
+			runtimeConfig,
+			{ sessionSyncEnabled: deps.sessionSyncEnabled },
+			{ shortcuts, shortcutsPath: getProjectShortcutsPath(workspaceScope.workspaceId) },
+		);
 		// The UI offers "qa" cards only on a workspace with landing mode qa. A config.json it can't read means `off`.
 		const landingMode = await readPipelineConfig()
 			.then(({ config }) => getWorkspacePipelineSettings(config, workspaceScope.workspaceId).landing.mode)
@@ -128,7 +140,7 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 			const parsed = parseRuntimeConfigSaveRequest(input);
 			let nextRuntimeConfig: RuntimeConfigState;
 			if (workspaceScope) {
-				nextRuntimeConfig = await updateRuntimeConfig(workspaceScope.workspacePath, parsed);
+				nextRuntimeConfig = await updateRuntimeConfig(parsed);
 			} else {
 				const activeRuntimeConfig = deps.getActiveRuntimeConfig?.();
 				if (!activeRuntimeConfig) {

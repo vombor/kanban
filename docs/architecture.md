@@ -220,7 +220,7 @@ The integration layer exists so the rest of Kanban does not need to understand t
 
 `src/workspace/` owns worktree creation, lookup, cleanup, and turn checkpoints.
 
-`src/config/runtime-config.ts` owns Kanban preferences such as selected agents, shortcuts, and prompt templates. It should not become a second source of truth for Cline secrets, OAuth tokens, or SDK provider state.
+`src/config/runtime-config.ts` owns Kanban preferences such as selected agents and prompt templates (a project's shortcuts are in the shortcut store, `src/projects/project-shortcut-store.ts`). It should not become a second source of truth for Cline secrets, OAuth tokens, or SDK provider state.
 
 ### State streaming
 
@@ -303,7 +303,8 @@ Different state lives in different places on purpose.
 
 | State | Where it lives | Why |
 | --- | --- | --- |
-| selected agent, shortcuts, Kanban prompt templates | Kanban runtime config | these are Kanban preferences |
+| selected agent, Kanban prompt templates | Kanban runtime config | these are Kanban preferences |
+| project shortcuts | the shortcut store (`<home>/data/<ws>/shortcuts.json`) | outside the repo, so a card cannot plant one |
 | per-project UI or workflow state | workspace state or project config | this is workspace-scoped product state |
 | Cline provider settings, API keys, OAuth tokens | SDK-backed provider store | the SDK already owns auth and provider persistence |
 | Cline session history | SDK persisted session artifacts | this allows recovery without rebuilding another persistence layer |

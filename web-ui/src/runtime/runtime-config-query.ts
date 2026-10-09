@@ -23,7 +23,6 @@ export async function saveRuntimeConfig(
 		selectedAgentId?: RuntimeAgentId;
 		selectedShortcutLabel?: string | null;
 		agentAutonomousModeEnabled?: boolean;
-		shortcuts?: RuntimeProjectShortcut[];
 		readyForReviewNotificationsEnabled?: boolean;
 		commitPromptTemplate?: string;
 		openPrPromptTemplate?: string;
@@ -31,6 +30,36 @@ export async function saveRuntimeConfig(
 ): Promise<RuntimeConfigResponse> {
 	const trpcClient = getRuntimeTrpcClient(workspaceId);
 	return await trpcClient.runtime.saveConfig.mutate(nextConfig);
+}
+
+/**
+ * A project's shortcuts change only through the shortcut route, which checks who asks (src/trpc/shortcuts-api.ts):
+ * the settings dialog saves its whole list, the top bar's "add shortcut" adds one. Throws the route's refusal.
+ */
+export async function replaceProjectShortcuts(
+	workspaceId: string,
+	shortcuts: RuntimeProjectShortcut[],
+): Promise<RuntimeProjectShortcut[]> {
+	const response = await getRuntimeTrpcClient(workspaceId).shortcuts.replace.mutate({ shortcuts });
+	if (!response.ok) {
+		throw new Error(response.error ?? "the shortcuts were not saved");
+	}
+	return response.shortcuts;
+}
+
+export async function addProjectShortcut(
+	workspaceId: string,
+	shortcut: RuntimeProjectShortcut,
+): Promise<RuntimeProjectShortcut[]> {
+	const response = await getRuntimeTrpcClient(workspaceId).shortcuts.add.mutate({
+		label: shortcut.label,
+		command: shortcut.command,
+		icon: shortcut.icon ?? null,
+	});
+	if (!response.ok) {
+		throw new Error(response.error ?? "the shortcut was not saved");
+	}
+	return response.shortcuts;
 }
 
 export async function resetRuntimeDebugState(workspaceId: string | null): Promise<RuntimeDebugResetAllStateResponse> {
