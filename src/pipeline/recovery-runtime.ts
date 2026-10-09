@@ -11,7 +11,12 @@ import { getClineDataDirPath, getPipelineStatePath } from "../state/kanban-home"
 import { getAgentTurnEndSource } from "../terminal/agent-session-adapters";
 import { createClineSessionFileReader, getClineSessionsPath } from "../terminal/cline-session-files";
 import { readClineTuiSignInGap } from "../terminal/cline-tui-sign-in";
-import { isClineSessionOfRun } from "../terminal/cline-turn-check";
+import {
+	evaluateClineSilentStall,
+	getSessionProgressAt,
+	isClineSessionOfRun,
+	isClineShellToolPending,
+} from "../terminal/cline-turn-check";
 import { runGit } from "../workspace/git-utils";
 import { getTaskWorkspacePathInfo } from "../workspace/task-worktree";
 import type { PipelineDecisionLog } from "./decision-log";
@@ -107,6 +112,33 @@ export function createQaRunErrorReader(): NonNullable<QaGateDependencies["readRu
 		const worktree = session?.workspacePath ?? (await locateTaskWorktree(workspacePath, card));
 		const detail = worktree ? await reader.readLatestSessionDetail(await readClineSessionsPath(), worktree) : null;
 		return detail && isClineSessionOfRun(detail, session?.startedAt ?? null) ? detectRunError(detail) : null;
+	};
+}
+
+/**
+ * The QA gate's `readSilentStall`: evaluateClineSilentStall on the running QA card's own Cline session (newest in its
+ * worktree, of this run), with the command a pending shell tool still runs (findAgentToolProcess, as recovery asks).
+ * Agents without readable session files, and a run with no session file of its own, answer null.
+ */
+export function createQaSilentStallReader(): NonNullable<QaGateDependencies["readSilentStall"]> {
+	const reader = createClineSessionFileReader();
+	const findRunningTool = createAgentToolProcessFinder();
+	return async ({ workspacePath, card, session, agentId, now }) => {
+		const parsed = runtimeAgentIdSchema.safeParse(agentId);
+		if (!parsed.success || getAgentTurnEndSource(parsed.data) !== "cline-session-files") {
+			return null;
+		}
+		const worktree = session.workspacePath ?? (await locateTaskWorktree(workspacePath, card));
+		const detail = worktree ? await reader.readLatestSessionDetail(await readClineSessionsPath(), worktree) : null;
+		if (!worktree || !detail || !isClineSessionOfRun(detail, session.startedAt ?? null)) {
+			return null;
+		}
+		const stall = evaluateClineSilentStall({ detail, kanbanProgressAt: getSessionProgressAt(session), now });
+		if (!stall) {
+			return null;
+		}
+		const runningTool = isClineShellToolPending(detail) ? await findRunningTool(worktree, session.pid ?? null) : null;
+		return { stall, runningTool };
 	};
 }
 

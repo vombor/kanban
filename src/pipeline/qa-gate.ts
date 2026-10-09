@@ -26,6 +26,10 @@
 // - no QA while the dev card's session is still running (dc6e70d/9091f4b: QA of a half-done card);
 // - QA slots machine-wide, oldest first (ddbc9ae); a queued QA card waits while its dev card is In Progress again
 //   instead of starting on the old snapshot (afea137, bfb20); a QA card running past `timeoutMin` frees its slot;
+// New since the legacy kit (issue #18, foo 2026-10-09): a queued QA card that finds every slot taken is recorded once
+// per change (other projects counted, never named), a slot freed in one workspace re-evaluates the others waiting
+// for one (takeSlotWakes), and a running QA card whose Cline session is silent for recovery's `hungMin` is replaced
+// like one that ended on its own error (replaceSilentQaCards), since recovery never touches QA cards.
 // - wait `verdictGraceSec` for verdict.json before nudging (8495ed2: c1e30 reached Review 0.55 s before its
 //   verdict); nudges quote why the file is unusable (b9dd99b); `maxNudges`, then STALLED;
 // - a PASS with visual QA blocked is STALLED (QA v4); scratch servers stopped after ingest (66797d9);
@@ -62,6 +66,7 @@ import { createUniqueTaskId } from "../core/task-id";
 import type { KitDocument } from "../kits/kit-schema";
 import type { EffectiveCard, KitVerdict, OnPassAnswer, QaPolicyAnswer, RoutingPolicy } from "../kits/policy";
 import { getKanbanHomeDisplayPath, getPipelineQaLogPath, getQaArtifactsPath } from "../state/kanban-home";
+import { type ClineSilentStall, describeClineSilentStall, isClineShellTool } from "../terminal/cline-turn-check";
 import { isReviewSettled } from "../terminal/review-settle";
 import type { PipelineActions } from "./actions";
 import { readSnapshotCheckScripts, resolveChecksEnabled } from "./checks";
@@ -197,9 +202,21 @@ export interface QaGateContext {
 	 * models (Lemonade loads one model at a time). None = no limit.
 	 */
 	providerCapacity?: Readonly<Record<string, { maxLoadedModels: number }>>;
+	/**
+	 * Recovery's `hungMin` in ms: a running QA card whose Cline session shows no progress this long is replaced
+	 * (replaceSilentQaCards). None = not checked.
+	 */
+	hungMs?: number;
 	now: number;
 	/** Asks for another evaluation of the workspace at `at` (a QA card waiting for checks times out then). */
 	requestWake?: (at: number) => void;
+}
+
+/** A running QA card's silent Cline stall (evaluateClineSilentStall) and the shell command its pending tool still runs. */
+export interface QaSilentStallRead {
+	stall: ClineSilentStall;
+	/** findAgentToolProcess's answer for a pending shell tool; null when none runs (or none is pending). */
+	runningTool: string | null;
 }
 
 export interface QaGateSubmitInput {
@@ -241,6 +258,17 @@ export interface QaGateDependencies {
 		session: PipelineSessionView | null;
 		agentId: string;
 	}) => Promise<AgentRunError | null>;
+	/**
+	 * The running QA card's silent stall in this run's Cline session (recovery's reader), or null. Default: none read,
+	 * so no QA card is replaced for a stall.
+	 */
+	readSilentStall?: (input: {
+		workspacePath: string;
+		card: RuntimeBoardCard;
+		session: PipelineSessionView;
+		agentId: string;
+		now: number;
+	}) => Promise<QaSilentStallRead | null>;
 	stopScratchProcesses: (dirs: string[]) => Promise<number>;
 	copyArtifacts?: (from: string, to: string) => Promise<void>;
 	/** For reading the QA log (rounds, earlier sections). */
@@ -259,6 +287,11 @@ export interface QaGate {
 	tick: (context: QaGateContext) => Promise<PipelineDecisionRecord[]>;
 	/** The workspace stopped running the pipeline: its QA cards no longer hold slots. */
 	forget: (workspaceId: string) => void;
+	/**
+	 * Workspaces whose queued QA cards wait for a machine-wide slot that another workspace's tick (or forget) has just
+	 * freed: the worker evaluates them again, since nothing on their own boards changes.
+	 */
+	takeSlotWakes?: () => string[];
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -389,6 +422,23 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 	const capacityHolds = new Set<string>();
 	/** workspaceId → the dead QA cards retired since the last tick (submit and the sweep), for one summary line. */
 	const retiredByWorkspace = new Map<string, string[]>();
+	/** workspaceId → the note of its queued QA cards' wait for a machine-wide slot (recorded once per change). */
+	const slotWaits = new Map<string, string>();
+	/** Workspaces to evaluate again: a slot they wait for was freed elsewhere (takeSlotWakes). */
+	const slotWakes = new Set<string>();
+
+	/** A workspace's QA cards hold fewer slots now: every other workspace waiting for one gets another evaluation. */
+	const releaseSlots = (workspaceId: string, before: number, after: number, slots: number): void => {
+		const total = [...runningByWorkspace.values()].reduce((sum, count) => sum + count, 0);
+		if (after >= before || total >= slots) {
+			return;
+		}
+		for (const waiting of slotWaits.keys()) {
+			if (waiting !== workspaceId) {
+				slotWakes.add(waiting);
+			}
+		}
+	};
 
 	const record = (
 		context: QaGateContext,
@@ -1139,6 +1189,78 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		return records;
 	};
 
+	/**
+	 * A running QA card whose Cline session has made no progress for recovery's `hungMin` (evaluateClineSilentStall:
+	 * foo 7ab30, 2026-10-09, sat 18 min on a "Command was aborted" tool result, holding its QA slot) can't be nudged
+	 * into its dead turn and recovery doesn't touch QA cards: a verdict it wrote first is recorded, otherwise it is
+	 * replaced like a QA card that ended on its own error (replaceAfterAgentError: a fresh QA card for the same
+	 * snapshot, then a STALLED for the orchestrator). A shell tool whose command still runs is no stall, and a run that
+	 * never took its prompt (`no_session`, a sign-in screen) stays the watchdog's report: a new card opens the same screen.
+	 */
+	const replaceSilentQaCards = async (
+		context: QaGateContext,
+		sessions: Map<string, PipelineSessionView>,
+	): Promise<PipelineDecisionRecord[]> => {
+		const hungMs = context.hungMs;
+		if (!deps.readSilentStall || hungMs === undefined) {
+			return [];
+		}
+		const state = await deps.store.load(context.snapshot.workspaceId);
+		const inProgress = context.snapshot.board.columns.find((column) => column.id === "in_progress")?.cards ?? [];
+		const records: PipelineDecisionRecord[] = [];
+		for (const card of inProgress) {
+			const entry = readQaGateEntry(state.cards[card.id]);
+			const session = sessions.get(card.id);
+			if (
+				!entry ||
+				entry.status !== "running" ||
+				entry.timedOutAt !== null ||
+				!session?.live ||
+				session.state !== "running"
+			) {
+				continue;
+			}
+			const read = await deps
+				.readSilentStall({
+					workspacePath: context.snapshot.workspacePath,
+					card,
+					session,
+					agentId: session.agentId ?? entry.agentId,
+					now: context.now,
+				})
+				.catch(() => null);
+			const stall = read?.stall;
+			if (!stall || stall.kind === "no_session" || stall.idleMs < hungMs) {
+				continue;
+			}
+			if (stall.kind === "interrupted_tool" && stall.tools.some(isClineShellTool) && read.runningTool) {
+				continue;
+			}
+			const what = describeClineSilentStall(stall);
+			const verdict = await deps.readVerdict(entry.outboxDir);
+			if (verdict.kind === "ok") {
+				const recorded = await recordVerdict(
+					context,
+					card.id,
+					entry,
+					verdict.verdict,
+					`its session went silent (${what})`,
+				);
+				records.push(record(context, card.id, "qa_ingest", `${recorded}; ${await trashQaCard(context, card.id)}`));
+				continue;
+			}
+			records.push(
+				record(
+					context,
+					card.id,
+					"qa_ingest",
+					await replaceAfterAgentError(context, card.id, entry, { kind: "silent_stall", text: what }),
+				),
+			);
+		}
+		return records;
+	};
+
 	const tick: QaGate["tick"] = async (context) => {
 		const { snapshot, qa } = context;
 		const workspaceId = snapshot.workspaceId;
@@ -1169,6 +1291,9 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			}
 		}
 
+		// A running QA card whose session went silent can't give a verdict: replaced, so it frees its slot.
+		records.push(...(await replaceSilentQaCards(context, sessions)));
+
 		// PASS: the kit's onPass (decideOnPass records a hold), then land through the Done workflow.
 		records.push(...(await actOnPasses(context, sessions)));
 
@@ -1178,6 +1303,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			const entry = readQaGateEntry(raw);
 			return entry ? [{ qaTaskId, entry }] : [];
 		});
+		const runningBefore = runningByWorkspace.get(workspaceId) ?? 0;
 		let running = 0;
 		for (const { qaTaskId, entry } of entries) {
 			if (entry.status !== "running" || entry.timedOutAt !== null) {
@@ -1234,17 +1360,20 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 					agentDefaultModels: context.agentDefaultModels,
 				}).effective.model,
 			}));
+		// Queued QA cards that may start now but find every machine-wide slot taken.
+		const slotWaiting: string[] = [];
 		for (const { qaTaskId, entry } of pressureHeld ? [] : queued) {
-			const totalRunning = [...runningByWorkspace.values()].reduce((sum, count) => sum + count, 0);
-			if (totalRunning >= qa.slots) {
-				break;
-			}
 			const column = findColumn(snapshot, qaTaskId);
 			if (column !== "backlog") {
 				// Not created on the board yet (the snapshot predates it), or moved by hand: leave it alone.
 				continue;
 			}
 			if (findColumn(snapshot, entry.reviewsTaskId) === "in_progress") {
+				continue;
+			}
+			const totalRunning = [...runningByWorkspace.values()].reduce((sum, count) => sum + count, 0);
+			if (totalRunning >= qa.slots) {
+				slotWaiting.push(qaTaskId);
 				continue;
 			}
 			// One GPU box: starting a QA model while dev cards run on another model of the same provider makes it swap
@@ -1295,6 +1424,20 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			);
 		}
 
+		// After the pump: a slot this workspace freed and didn't take again goes to the workspaces waiting for one.
+		releaseSlots(workspaceId, runningBefore, running, qa.slots);
+		// The wait is recorded once per change. Other projects' slots are counted, never named: their cards are theirs.
+		if (slotWaiting.length === 0) {
+			slotWaits.delete(workspaceId);
+		} else {
+			const total = [...runningByWorkspace.values()].reduce((sum, count) => sum + count, 0);
+			const note = `waiting for a QA slot: ${total}/${qa.slots} machine-wide slot(s) taken (${running} by this project, ${total - running} by other projects); queued: ${slotWaiting.join(", ")}`;
+			if (slotWaits.get(workspaceId) !== note) {
+				records.push({ ...record(context, null, "qa_start", note), outcome: "none" });
+			}
+			slotWaits.set(workspaceId, note);
+		}
+
 		const qaActive = entries.some(
 			({ qaTaskId, entry }) =>
 				(entry.status === "queued" && findColumn(snapshot, qaTaskId) === "backlog") ||
@@ -1314,9 +1457,19 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		submit,
 		tick,
 		forget: (workspaceId) => {
+			const before = runningByWorkspace.get(workspaceId) ?? 0;
 			runningByWorkspace.delete(workspaceId);
 			pressureHolds.delete(workspaceId);
 			retiredByWorkspace.delete(workspaceId);
+			slotWaits.delete(workspaceId);
+			slotWakes.delete(workspaceId);
+			// Without a config to read the slot count from, every other waiting workspace is evaluated again.
+			releaseSlots(workspaceId, before, 0, Number.POSITIVE_INFINITY);
+		},
+		takeSlotWakes: () => {
+			const wakes = [...slotWakes];
+			slotWakes.clear();
+			return wakes;
 		},
 	};
 }

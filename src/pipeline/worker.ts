@@ -68,7 +68,7 @@ import { createQaGate, type QaGate } from "./qa-gate";
 import { type AppendQaLog, createQaLogAppender } from "./qa-log";
 import { createQaPreviewController } from "./qa-preview";
 import { readQaVerdictFile } from "./qa-verdict";
-import { createQaRunErrorReader, createWorkerRecoveryStage } from "./recovery-runtime";
+import { createQaRunErrorReader, createQaSilentStallReader, createWorkerRecoveryStage } from "./recovery-runtime";
 import type { RecoveryStage, RecoveryStageDependencies } from "./recovery-stage";
 import { createReworkStage, type ReworkStage } from "./rework";
 import { stopScratchProcesses } from "./scratch-processes";
@@ -354,6 +354,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			preview: createQaPreviewController({ log }),
 			readVerdict: readQaVerdictFile,
 			readRunError: createQaRunErrorReader(),
+			readSilentStall: createQaSilentStallReader(),
 			stopScratchProcesses: async (dirs) => await stopScratchProcesses(dirs, log),
 			log,
 		});
@@ -471,6 +472,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 		submissionStage.forgetWorkspace(workspaceId);
 		workspacePaths.delete(workspaceId);
 		qaGate.forget(workspaceId);
+		wakeSlotWaiters();
 		recovery.forget(workspaceId);
 		if (lastWatchKeys.delete(workspaceId)) {
 			log(`pipeline ${workspaceId}: not watched any more`);
@@ -570,6 +572,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			featureOnPass: async (input: PipelineFeaturePassInput) => await features.answerOnPass(workspaceId, input),
 			agentDefaultModels,
 			providerCapacity: parsed.config.models.providerCapacity,
+			hungMs: parsed.config.pipeline.recovery.hungMin * 60_000,
 			now: now(),
 		};
 		// A workspace watched only for recovery (landing off/commit/pr) gets no QA-gate decisions.
@@ -621,6 +624,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 		// on nothing.
 		if (!shadow && pipelineOn) {
 			records.push(...(await qaGate.tick({ ...gateContext, now: now() })));
+			wakeSlotWaiters();
 			records.push(
 				...(await reworkStage.tick({
 					snapshot,
@@ -642,6 +646,13 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 		}
 		deps.send({ type: "evaluated", workspaceId, decisions: decisions.length, logged: records.length });
 	};
+
+	/** Workspaces whose queued QA cards wait for a machine-wide slot that was just freed elsewhere: evaluated again. */
+	function wakeSlotWaiters(): void {
+		for (const workspaceId of qaGate.takeSlotWakes?.() ?? []) {
+			reevaluate(workspaceId);
+		}
+	}
 
 	/** Evaluates the workspace again with its newest snapshot, if it is still watched. */
 	function reevaluate(workspaceId: string): void {
@@ -729,7 +740,10 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 		finishTask,
 		releaseHold: actions.releaseHold,
 		idle: async () => {
-			await Promise.all([...queues.values()].map(async (queue) => await queue.running));
+			// An evaluation may start another workspace's (a QA slot it freed): wait until none runs.
+			while ([...queues.values()].some((queue) => queue.running)) {
+				await Promise.all([...queues.values()].map(async (queue) => await queue.running));
+			}
 			await watchdogRunning;
 			await recovery.idle();
 		},

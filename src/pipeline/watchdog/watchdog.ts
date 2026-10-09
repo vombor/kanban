@@ -83,6 +83,7 @@ import {
 } from "../engine";
 import type { PipelineFeatureJob, PipelineFeatureRegistry } from "../features";
 import type { PipelineStateStore } from "../pipeline-state";
+import { readQaGateEntry } from "../qa-gate";
 import type { WatchdogActions } from "./actions";
 import {
 	isHandedOver,
@@ -572,10 +573,12 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 			}
 			const recoveryActs = getRecoveryScope(config, settings).act;
 			const stallNudgeMs = config.pipeline.recovery.stallNudgeMin * MIN;
+			const hungMs = config.pipeline.recovery.hungMin * MIN;
 			const clineDataDir = getClineDataDirPath(config.agents.cline.dataDir);
 			for (const { column, card } of cards) {
 				const session = sessions.get(card.id);
-				// QA cards only for a run that never took its prompt (`no_session`): their other stalls are the QA gate's.
+				// QA cards too: a run that never took its prompt (`no_session`) is only reported; any other stall of a QA card
+				// the QA gate runs is the gate's (it replaces the card after recovery's hungMin), reported if it hasn't.
 				const role = roles.get(card.id)?.role;
 				if (
 					column !== "in_progress" ||
@@ -604,7 +607,7 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 					dataDir: clineDataDir,
 					now: context.now,
 				});
-				if (!stall || stall.idleMs < stallNudgeMs || (role === "qa" && stall.kind !== "no_session")) {
+				if (!stall || stall.idleMs < stallNudgeMs) {
 					continue;
 				}
 				// A long test run or build: its shell tool writes nothing to the session until it returns.
@@ -613,6 +616,27 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 					stall.tools.some(isClineShellTool) &&
 					(await findRunningTool(session.workspacePath, session.pid ?? null))
 				) {
+					continue;
+				}
+				if (role === "qa" && stall.kind !== "no_session") {
+					const gateOwns =
+						!settings.pipeline.shadow && readQaGateEntry(pipelineState.cards[card.id])?.status === "running";
+					const silent = `qa card is running but its Cline session is silent: ${describeClineSilentStall(stall)}`;
+					if (gateOwns && stall.idleMs < 2 * hungMs) {
+						record(records, context, {
+							workspaceId,
+							taskId: card.id,
+							kind: "stall",
+							outcome: "skipped",
+							note: `${silent}; the QA gate replaces it after ${config.pipeline.recovery.hungMin} min`,
+						});
+					} else {
+						queueIssue(
+							`${card.id}:qa-silent-stall`,
+							card.id,
+							`${silent}; ${gateOwns ? "the QA gate hasn't replaced it" : "nothing replaces it (not a QA card the QA gate runs)"}`,
+						);
+					}
 					continue;
 				}
 				const issue =

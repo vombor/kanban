@@ -21,7 +21,7 @@ import {
 } from "../../src/pipeline/events";
 import type { PipelineFeatureRegistry } from "../../src/pipeline/features";
 import { createPipelineStateStore } from "../../src/pipeline/pipeline-state";
-import { createQaGate } from "../../src/pipeline/qa-gate";
+import { createQaGate, type QaSilentStallRead } from "../../src/pipeline/qa-gate";
 import { type AppendQaLog, createQaLogAppender } from "../../src/pipeline/qa-log";
 import type { QaPreviewController } from "../../src/pipeline/qa-preview";
 import type { QaVerdictRead } from "../../src/pipeline/qa-verdict";
@@ -97,6 +97,7 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 	const previewCalls: Array<{ call: "ensure" | "stopIfIdle"; workspaceId: string; qaActive?: boolean }> = [];
 	const verdicts = new Map<string, QaVerdictRead>();
 	const runErrors = new Map<string, AgentRunError>();
+	const silentStalls = new Map<string, QaSilentStallRead>();
 	const stoppedScratch: string[][] = [];
 	let uuidCount = 0;
 	let siblingCount = 0;
@@ -150,6 +151,7 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 		readCheckScripts: async (_repoPath, snapshot) => options.checkScripts?.(snapshot) ?? [],
 		readVerdict: async (outboxDir) => verdicts.get(outboxDir) ?? { kind: "missing" },
 		readRunError: async ({ card }) => runErrors.get(card.id) ?? null,
+		readSilentStall: async ({ card }) => silentStalls.get(card.id) ?? null,
 		stopScratchProcesses: async (dirs) => {
 			stoppedScratch.push(dirs);
 			return 0;
@@ -259,6 +261,14 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 				runErrors.set(taskId, error);
 			} else {
 				runErrors.delete(taskId);
+			}
+		},
+		/** The running QA card's silent Cline stall (the QA gate's readSilentStall); null clears it. */
+		setSilentStall: (taskId: string, read: QaSilentStallRead | null) => {
+			if (read) {
+				silentStalls.set(taskId, read);
+			} else {
+				silentStalls.delete(taskId);
 			}
 		},
 		setNow: (next: number) => {

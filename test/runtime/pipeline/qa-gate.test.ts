@@ -4,8 +4,9 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { RuntimeBoardCard, RuntimeBoardColumnId } from "../../../src/core/api-contract";
 import { handBackTask } from "../../../src/pipeline/handback";
-import { readQaGateEntry, readQaVerdictRecords } from "../../../src/pipeline/qa-gate";
+import { type QaSilentStallRead, readQaGateEntry, readQaVerdictRecords } from "../../../src/pipeline/qa-gate";
 import type { QaVerdict } from "../../../src/pipeline/qa-verdict";
+import type { ClineSilentStall } from "../../../src/terminal/cline-turn-check";
 import { createPipelineWorkerHarness, createSnapshot, type QaGateHarnessAction } from "../../utilities/pipeline-worker";
 import { createBoard, createCard } from "../../utilities/workspace-state-store";
 
@@ -353,6 +354,154 @@ describe("QA gate", () => {
 		expect(
 			harness.readCardDecisions("foo", "qa_start").some((record) => record.note.includes("its QA slot is freed")),
 		).toBe(true);
+	});
+
+	describe("QA slots and silent QA cards (issue #18)", () => {
+		const qaOf = (id: string, devId: string) => createCard({ id, role: "qa", reviewsTaskId: devId });
+		const silent = (idleMin: number, overrides: Partial<ClineSilentStall> = {}): QaSilentStallRead => ({
+			stall: {
+				kind: "untouched",
+				sessionId: "1791525011380_9i4n5",
+				status: "idle",
+				lastProgressAt: T0,
+				idleMs: idleMin * 60_000,
+				tools: [],
+				...overrides,
+			},
+			runningTool: null,
+		});
+		const running = (taskId: string) => ({
+			taskId,
+			agentId: "cline" as const,
+			state: "running" as const,
+			live: true,
+		});
+		const slotWaits = (harness: ReturnType<typeof createHarness>, workspaceId: string) =>
+			harness
+				.readDecisions(workspaceId)
+				.filter((record) => record.stage === "qa_start" && record.taskId === null)
+				.map((record) => [record.outcome, record.note]);
+
+		// foo 2026-10-09: notes' QA card took the slot foo's ef876 freed at 06:01:53, foo's 7ab30 hung on an aborted
+		// tool call while holding the other, and foo's queued e232d and 242bc waited with nothing in the log.
+		it("replays foo's 06:01-06:25Z: a wait is recorded, a freed slot wakes the other project, a silent QA card is replaced", async () => {
+			const harness = createHarness({
+				config: { pipeline: { qa: { slots: 2 } }, workspaces: { foo: QA_WORKSPACE, bar: QA_WORKSPACE } },
+			});
+			const d1 = createCard({ id: "d1111" });
+			const d2 = createCard({ id: "d2222" });
+			const d3 = createCard({ id: "d3333" });
+			const b1 = createCard({ id: "b1111" });
+			await send(harness, { review: [d1, d2] });
+			await send(harness, { backlog: [qaOf("qa001", "d1111"), qaOf("qa002", "d2222")], review: [d1, d2] });
+			expect(kinds(harness.actions)).toEqual([
+				"createTask:qa001",
+				"createTask:qa002",
+				"startTask:qa001",
+				"startTask:qa002",
+			]);
+
+			// The other project's QA card finds both slots taken: one record, not one per evaluation.
+			harness.actions.length = 0;
+			await send(harness, { review: [b1] }, { workspaceId: "bar" });
+			const barBoard = { backlog: [qaOf("qa003", "b1111")], review: [b1] };
+			await send(harness, barBoard, { workspaceId: "bar" });
+			await send(harness, barBoard, { workspaceId: "bar" });
+			expect(kinds(harness.actions)).toEqual(["createTask:qa003"]);
+			expect(slotWaits(harness, "bar")).toEqual([
+				[
+					"none",
+					"waiting for a QA slot: 2/2 machine-wide slot(s) taken (0 by this project, 2 by other projects); queued: qa003",
+				],
+			]);
+
+			// foo's qa001 gives its verdict: the freed slot starts bar's QA card, with no new snapshot of bar's.
+			harness.actions.length = 0;
+			harness.setVerdict("/tmp/kanban-qa-out/qa001", {
+				kind: "ok",
+				verdict: createVerdict({ verdict: "FAIL", blocking: ["broken"] }),
+			});
+			await send(harness, { in_progress: [qaOf("qa002", "d2222")], review: [d1, d2, qaOf("qa001", "d1111")] });
+			expect(kinds(harness.actions)).toEqual(["finishTask:qa001", "startTask:qa003"]);
+			expect(harness.actions.find((action) => action.kind === "startTask")).toMatchObject({ workspaceId: "bar" });
+			expect(readQaGateEntry((await harness.store.load("bar")).cards.qa003)).toMatchObject({ status: "running" });
+
+			// foo's next QA card waits: one slot is foo's (qa002), one the other project's (named only by count).
+			harness.actions.length = 0;
+			const fooBoard = (columns: Columns = {}) => ({
+				in_progress: [qaOf("qa002", "d2222")],
+				review: [d1, d2, d3],
+				...columns,
+			});
+			await send(harness, fooBoard());
+			await send(harness, fooBoard({ backlog: [qaOf("qa004", "d3333")] }));
+			expect(kinds(harness.actions)).toEqual(["createTask:qa004"]);
+			expect(slotWaits(harness, "foo").at(-1)).toEqual([
+				"none",
+				"waiting for a QA slot: 2/2 machine-wide slot(s) taken (1 by this project, 1 by other projects); queued: qa004",
+			]);
+
+			// qa002's last message is the "Command was aborted" tool result, silent for 14 min: still within hungMin.
+			harness.setSilentStall("qa002", silent(14));
+			await send(harness, fooBoard({ backlog: [qaOf("qa004", "d3333")] }), { sessions: [running("qa002")] });
+			expect(kinds(harness.actions)).toEqual(["createTask:qa004"]);
+
+			// Past hungMin (15): replaced like a QA card that ended on its own error, which frees its slot for qa004.
+			harness.setSilentStall("qa002", silent(16));
+			await send(harness, fooBoard({ backlog: [qaOf("qa004", "d3333")] }), { sessions: [running("qa002")] });
+			expect(kinds(harness.actions)).toEqual(["createTask:qa004", "finishTask:qa002", "startTask:qa004"]);
+			expect(harness.actions.some((action) => action.kind === "deliverInput" && action.taskId === "qa002")).toBe(
+				false,
+			);
+			const state = await harness.store.load("foo");
+			expect(readQaGateEntry(state.cards.qa002)).toMatchObject({ status: "superseded", trashed: true });
+			expect(state.cards.d2222?.qaCreated).toBeUndefined();
+			expect(state.cards.d2222?.qaAgentErrors).toMatchObject([
+				{ qaTaskId: "qa002", kind: "silent_stall", text: expect.stringContaining("no reply to the last message") },
+			]);
+			expect(harness.readCardDecisions("foo", "qa_ingest").at(-1)?.note).toContain(
+				"the QA agent's own run failed (silent stall: no reply to the last message",
+			);
+			expect(slotWaits(harness, "foo").at(-1)?.[1]).toContain("queued: qa004");
+
+			// d2222's next Review gets a fresh QA card for the same snapshot, with the note about the replaced one.
+			harness.actions.length = 0;
+			await send(harness, {
+				in_progress: [qaOf("qa004", "d3333")],
+				review: [d1, d2, d3],
+				trash: [qaOf("qa002", "d2222")],
+			});
+			const [replacement] = createdTasks(harness.actions);
+			expect(replacement).toMatchObject({ taskId: "qa005", reviewsTaskId: "d2222" });
+			expect(replacement?.prompt).toMatch(
+				/NOTE \(Kanban\): an earlier QA card for this snapshot ended on its own error \(silent stall/u,
+			);
+		});
+
+		it("leaves a silent QA card whose shell command still runs, or one that never took its prompt, and ingests one that wrote its verdict", async () => {
+			const harness = createHarness({ config: { workspaces: { foo: QA_WORKSPACE } } });
+			await startQa(harness);
+			const board = { in_progress: [qaOf("qa001", "d1111")], review: [createCard({ id: "d1111", ...OPENAI_DEV })] };
+			const sessions = [running("qa001")];
+
+			harness.setSilentStall("qa001", {
+				...silent(40, { kind: "interrupted_tool", tools: ["run_commands"] }),
+				runningTool: "pid 9001: npm test",
+			});
+			await send(harness, board, { sessions });
+			harness.setSilentStall("qa001", silent(40, { kind: "no_session", sessionId: null, status: null }));
+			await send(harness, board, { sessions });
+			expect(harness.actions).toEqual([]);
+
+			harness.setSilentStall("qa001", silent(40));
+			harness.setVerdict("/tmp/kanban-qa-out/qa001", { kind: "ok", verdict: createVerdict() });
+			await send(harness, board, { sessions });
+			// Recorded like any verdict, and the PASS lands.
+			expect(kinds(harness.actions)).toEqual(["finishTask:qa001", "finishTask:d1111"]);
+			const state = await harness.store.load("foo");
+			expect(readQaVerdictRecords(state.cards.d1111)).toMatchObject([{ qaTaskId: "qa001", verdict: "PASS" }]);
+			expect(readQaGateEntry(state.cards.qa001)).toMatchObject({ status: "ingested" });
+		});
 	});
 
 	it("starts the kit's preview before a QA card and reports QA idle afterwards", async () => {

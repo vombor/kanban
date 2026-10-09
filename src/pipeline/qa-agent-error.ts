@@ -18,7 +18,8 @@ export interface QaAgentErrorRecord {
 	snapshot: string;
 	round: number;
 	at: number;
-	kind: AgentRunError["kind"] | "agent_error";
+	/** `silent_stall`: its Cline session made no progress for recovery's `hungMin` (the QA gate's replaceSilentQaCards). */
+	kind: AgentRunError["kind"] | "agent_error" | "silent_stall";
 	text: string;
 	/** For `image_rejected`: an image over the size limits rather than a text-only model. */
 	tooLarge?: boolean;

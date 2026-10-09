@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { PipelineSessionView } from "../../../../src/pipeline/engine";
-import { textMessage, toolUse, writeFakeClineSession } from "../../../utilities/fake-cline-sessions";
+import { textMessage, toolResult, toolUse, writeFakeClineSession } from "../../../utilities/fake-cline-sessions";
 import { createWatchdogHarness, WATCHDOG_NOW } from "../../../utilities/watchdog";
 import { createBoard, createCard } from "../../../utilities/workspace-state-store";
 
@@ -245,6 +245,123 @@ describe("watchdog: a Cline run that never wrote a session file", () => {
 			expect.arrayContaining([
 				expect.objectContaining({ taskId: "d0001", note: expect.stringContaining("Cline never took the prompt") }),
 			]),
+		);
+	});
+});
+
+// Issue #18: foo's QA card 7ab30 sat 18 min after a "Command was aborted" tool result, and nothing said so.
+describe("watchdog: a silent QA card", () => {
+	function setup(options: { gateEntry: boolean; silentMin: number }) {
+		const harness = createWatchdogHarness({ findRunningTool: async () => null });
+		harnesses.push(harness);
+		const dataDir = join(harness.home, "cline-data");
+		harness.setConfig({
+			watchdog: { mode: "on" },
+			orchestrator: { wake: { mode: "sidebar" } },
+			pipeline: { recovery: { mode: "on", hungMin: 15 } },
+			workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" }, models: { allowProvisional: true } } },
+			agents: { cline: { dataDir } },
+		});
+		const paths = harness.paths("foo");
+		mkdirSync(paths.dataDir, { recursive: true });
+		const qaGate = {
+			reviewsTaskId: "d0001",
+			round: 1,
+			snapshot: "abcdef0123456789",
+			snapshotRef: "refs/kanban/snapshots/d0001",
+			outboxDir: "/tmp/outbox",
+			scratchDir: "/tmp/scratch",
+			baseRef: "main",
+			agentId: "cline",
+			model: null,
+			devAgentId: "codex",
+			devModel: null,
+			route: null,
+			status: "running",
+			createdAt: WATCHDOG_NOW - 60 * MIN,
+			startedAt: WATCHDOG_NOW - 60 * MIN,
+		};
+		writeFileSync(
+			join(paths.dataDir, "pipeline-state.json"),
+			JSON.stringify({
+				version: 1,
+				since: "2026-10-01T00:00:00.000Z",
+				importedFrom: null,
+				cards: options.gateEntry ? { q0001: { qaGate } } : {},
+			}),
+		);
+		writeFakeClineSession(join(dataDir, "sessions"), {
+			sessionId: "1791525011380_9i4n5",
+			cwd: "/wt/q0001",
+			status: "idle",
+			startedAt: WATCHDOG_NOW - 60 * MIN,
+			messages: [
+				textMessage(
+					"user",
+					"You are the QA reviewer (round 1) for Kanban dev card d0001.",
+					WATCHDOG_NOW - 60 * MIN,
+				),
+				toolUse("run_commands", WATCHDOG_NOW - options.silentMin * MIN - 1000, { commands: ["sleep 29"] }),
+				toolResult(WATCHDOG_NOW - options.silentMin * MIN),
+			],
+		});
+		harness.observe({
+			workspaceId: "foo",
+			board: createBoard({
+				review: [createCard({ id: "d0001", updatedAt: WATCHDOG_NOW - 60 * MIN })],
+				in_progress: [
+					createCard({
+						id: "q0001",
+						role: "qa",
+						reviewsTaskId: "d0001",
+						agentId: "cline",
+						agentSettings: { providerId: "bedrock", modelId: "us.anthropic.claude-haiku-4-5-20251001-v1:0" },
+						updatedAt: WATCHDOG_NOW - 60 * MIN,
+					}),
+				],
+			}),
+			sessions: [{ ...runningCline, taskId: "q0001", workspacePath: "/wt/q0001" }],
+		});
+		return harness;
+	}
+
+	it("is logged as the QA gate's while the gate should still replace it", async () => {
+		const harness = setup({ gateEntry: true, silentMin: 18 });
+		await harness.watchdog.tick();
+		expect(harness.requests.filter((request) => request.kind === "deliverInput")).toEqual([]);
+		expect(readDecisions(harness.paths("foo").decisions)).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					kind: "stall",
+					taskId: "q0001",
+					outcome: "skipped",
+					note: expect.stringMatching(
+						/^qa card is running but its Cline session is silent: no reply to the last message.*; the QA gate replaces it after 15 min$/u,
+					),
+				}),
+			]),
+		);
+		const wake = harness.requests.find((request) => request.kind === "startOrchestratorSession");
+		expect(wake && "prompt" in wake ? wake.prompt : "").not.toContain("q0001");
+	});
+
+	it("is reported once the gate has had twice hungMin, without typing into it", async () => {
+		const harness = setup({ gateEntry: true, silentMin: 31 });
+		await harness.watchdog.tick();
+		expect(harness.requests.filter((request) => request.kind === "deliverInput")).toEqual([]);
+		const wake = harness.requests.find((request) => request.kind === "startOrchestratorSession");
+		expect(wake && "prompt" in wake ? wake.prompt : "").toContain("the QA gate hasn't replaced it");
+	});
+
+	it("is reported when it isn't a QA card the gate runs", async () => {
+		const harness = setup({ gateEntry: false, silentMin: 10 });
+		await harness.watchdog.tick();
+		const wake = harness.requests.find((request) => request.kind === "startOrchestratorSession");
+		expect(wake && "prompt" in wake ? wake.prompt : "").toContain(
+			"qa card is running but its Cline session is silent: no reply to the last message",
+		);
+		expect(wake && "prompt" in wake ? wake.prompt : "").toContain(
+			"nothing replaces it (not a QA card the QA gate runs)",
 		);
 	});
 });
