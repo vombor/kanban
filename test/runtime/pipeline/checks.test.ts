@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { getDefaultWorkspacePipelineSettings, parsePipelineConfig } from "../../../src/config/pipeline-config";
 import {
@@ -70,16 +70,17 @@ describe("resolveChecksEnabled", () => {
 
 describe("check step environment", () => {
 	it("caps test-runner workers, drops Kanban, git repo and secret token variables and NODE_ENV", () => {
-		const previous = { ...process.env };
-		process.env.KANBAN_HOME = "/live/home";
-		process.env.KANBAN_RUNTIME_PORT = "3484";
-		process.env.GIT_DIR = "/elsewhere/.git";
-		process.env.NODE_ENV = "production";
-		process.env.GH_TOKEN = "user-pat";
-		process.env.GITHUB_TOKEN = "user-pat";
-		process.env.COPILOT_GITHUB_TOKEN = "copilot-token";
-		process.env.AWS_BEARER_TOKEN_BEDROCK = "bedrock-key";
-		process.env.AWS_REGION = "us-east-1";
+		// stubEnv sets and restores the real environment. `process.env = copy` would leave a plain object whose PATH
+		// spawn() without an env no longer searches (Node 26), so the export tests below ran the real tar and hung.
+		vi.stubEnv("KANBAN_HOME", "/live/home");
+		vi.stubEnv("KANBAN_RUNTIME_PORT", "3484");
+		vi.stubEnv("GIT_DIR", "/elsewhere/.git");
+		vi.stubEnv("NODE_ENV", "production");
+		vi.stubEnv("GH_TOKEN", "user-pat");
+		vi.stubEnv("GITHUB_TOKEN", "user-pat");
+		vi.stubEnv("COPILOT_GITHUB_TOKEN", "copilot-token");
+		vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-key");
+		vi.stubEnv("AWS_REGION", "us-east-1");
 		try {
 			const settings = parsePipelineConfig({ pipeline: { checks: { maxWorkers: 3 } } }).config.pipeline.checks;
 			const env = createCheckStepEnv(settings, "/tmp/checks/.npmrc");
@@ -103,7 +104,7 @@ describe("check step environment", () => {
 				expect(env[key]).toBeUndefined();
 			}
 		} finally {
-			process.env = previous;
+			vi.unstubAllEnvs();
 		}
 	});
 });
