@@ -1,5 +1,5 @@
-// The user's second factor for isolation's escape hatch (docs/fork/project-isolation.md). A grant, a plan
-// approval (in every mode) and, under `enforce`, a project create/add/remove don't happen on request: the server keeps it pending and prints a one-time
+// The user's second factor for isolation's escape hatch (docs/fork/project-isolation.md). A grant and, under
+// `enforce`, a project create/add/remove don't happen on request: the server keeps it pending and prints a one-time
 // code to its own console (stderr: the terminal that started Kanban, or `podman logs` for the container). The code is
 // never written to a file or returned by an API. The change runs once someone gives the code with `kanban isolation
 // approve <id> <code>`. An agent session doesn't see the server's console, so a process that drops its credential and
@@ -7,8 +7,7 @@
 // memory or pipes: like the rest of isolation this guards against an agent's ordinary commands, not a sandbox.
 import { randomBytes, timingSafeEqual } from "node:crypto";
 
-/** `plan.approve`: a plan card's breakdown (src/trpc/plans-api.ts), the user's in every isolation mode. */
-export type ApprovalKind = "grant" | "project.create" | "project.add" | "project.remove" | "plan.approve";
+export type ApprovalKind = "grant" | "project.create" | "project.add" | "project.remove";
 
 export interface PendingApprovalView {
 	id: string;

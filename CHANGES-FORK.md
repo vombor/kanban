@@ -823,3 +823,21 @@ of this repository is the complete record of changes.
   desktop notification for a new wait while the tab is in the background, whose click opens that project's sidebar.
   Hook ingest now puts the asked question into AskUserQuestion's activity text and the tool or message into a
   permission request's; Copilot's hooks name their event.
+- `src/trpc/plans-api.ts`, `src/trpc/app-router.ts`, `src/server/runtime-server.ts`, `src/commands/plan.ts`,
+  `src/plans/plan-target.ts`, `src/isolation/approvals.ts`, `src/trpc/isolation-api.ts`,
+  `src/guardrails/command-patterns.ts`, `src/guardrails/task-guardrails.ts`, `src/doctor/guardrail-checks.ts`,
+  `src/terminal/agent-session-adapters.ts`, `src/prompts/append-system-prompt.ts`, `src/setup/claude-md-section.ts`,
+  `src/kits/plan-prompt.ts`, `web-ui/src/hooks/use-plan-approval.ts`, `web-ui/src/components/plan-approval-button.tsx`,
+  `docs/team/WORKFLOW.md`, `docs/fork/project-isolation.md`, `AGENTS.md`, tests (issue #13, user request 2026-10-09:
+  the console code was hard to find in the podman setup): plan approval no longer needs the one-time console code.
+  `plans.approve` records the approval at once for a caller the strict lookup takes for the user (the board's Approve
+  plan after its confirmation dialog, now showing the breakdown's hash; `kanban plan approve` / `plan expand
+  --approved-by-user` from the user's shell), still pinned to the breakdown's sha256; agent sessions and unknown
+  callers stay refused in every mode, and the CLI still refuses both commands inside a session. The `plan.approve`
+  approval kind and the response's `approvalId` are gone (pending approvals live only in server memory, so no stored
+  state changes); grants and project changes keep the code. Trade-off: a reparented process looks like the user to
+  the strict lookup. New plan-approval rail: every card with guardrails and the orchestrator's isolation guardrails
+  deny `kanban plan approve` and `kanban plan expand --approved-by-user` on top of the configured denyCommands
+  (matcher for Claude Code and Cline, Codex prefix rule for cards, prompt note for Copilot), with its own block
+  message; the orchestrator's system prompt, the managed CLAUDE.md section and the plan prompt say agents never
+  approve a plan.

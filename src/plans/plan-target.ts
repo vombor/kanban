@@ -1,7 +1,7 @@
 // A plan card on its board, with its plan index entry and the breakdown in its worktree: what `kanban plan` and the
 // runtime's plan approval route (src/trpc/plans-api.ts) both read. The approval itself is the user's only: it is
-// recorded here, but only the runtime route calls `recordPlanApproval`, once the console code (or a
-// passcode-authenticated browser) has shown that the user asked for it.
+// recorded here, but only the runtime route calls `recordPlanApproval`, once its strict caller lookup has taken the
+// caller for the user (never an agent session).
 import type { RuntimeBoardCard, RuntimeBoardColumnId, RuntimeWorkspaceStateResponse } from "../core/api-contract";
 import { resolveCardRole } from "../core/card-role";
 import { readPlanSlugFromPrompt } from "../kits/plan-prompt";

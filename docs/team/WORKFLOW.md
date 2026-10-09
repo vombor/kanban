@@ -298,17 +298,21 @@ the code and writes the plan, and the orchestrator turns the approved plan into 
    card, and ends with a STATUS line. Schema: `src/plans/plan-breakdown.ts`.
 3. **Review and approval.** `kanban plan show <id>` prints the spec and the breakdown. Only the **user** approves
    (user decision 2026-10-07), in every isolation mode, `off` included: **Approve plan** on the plan card in Review
-   (a dialog with the spec's title and the card count), `kanban plan approve <id>`, or `kanban plan expand <id>
-   --approved-by-user`. All three ask the running server (`plans.approve`, `src/trpc/plans-api.ts`), never write
-   in-process. It refuses every agent session (orchestrator or card, any project; by credential or traced to its
-   process tree) with "Plan approval is the user's; ask them to run kanban plan approve <id> or use the board", and
-   the CLI refuses `plan approve` and `plan expand --approved-by-user` inside a session. "No credential and no session
-   above it" is not proof of the user (a reparented process looks the same), so the approval then waits for the
-   one-time code the server prints on its console (the terminal that started Kanban, or `podman logs`): the CLI asks
-   for it on the terminal (or waits for `kanban isolation approve <approval id> <code>`), the board's dialog has a
-   code field. A browser signed in with the passcode (remote mode) needs no code. The approval is pinned to the
-   breakdown's sha256: the one the user was shown (a breakdown changed while the code waited is refused), and an
-   edited breakdown needs a new approval. The orchestrator then runs `kanban plan expand <id>` without the flag.
+   (a confirmation dialog with the spec's title, the card count and the breakdown's hash), `kanban plan approve <id>`,
+   or `kanban plan expand <id> --approved-by-user`. All three ask the running server (`plans.approve`,
+   `src/trpc/plans-api.ts`), never write in-process. It refuses every agent session (orchestrator or card, any
+   project; by credential or traced to its process tree) and every unknown caller with "Plan approval is the user's;
+   ask them to run kanban plan approve <id> or use the board", and the CLI refuses `plan approve` and `plan expand
+   --approved-by-user` inside a session. A caller the strict lookup takes for the user is approved at once: there is
+   no console code since 2026-10-09 (issue #13, the user's request; a human check may come back later). The
+   trade-off: "no credential and no session above it" is not proof of the user, since a reparented (detached)
+   process looks the same, and such a process can now approve a plan. Agents are also told and stopped where their
+   CLI allows: card guardrails and the orchestrator's isolation guardrails deny `kanban plan approve` and `kanban plan
+   expand --approved-by-user` (the plan-approval rail, `PLAN_APPROVAL_DENY_COMMANDS`: enforced by the matcher for
+   Claude Code and Cline, a Codex prefix rule for cards, the prompt note for Copilot), and the orchestrator's
+   instructions and the plan prompt say "agents never approve a plan; the user approves it on the board". The
+   approval is pinned to the breakdown's sha256: the one the user was shown, and an edited breakdown needs a new
+   approval. The orchestrator then runs `kanban plan expand <id>` without the flag.
 4. **Expand.** `kanban plan expand <id> [--dry-run]` validates the breakdown, creates the cards in Backlog through
    the normal create path (so the kit's `devAssignment` picks their agent and model), appends each card's acceptance
    criteria to its prompt (before a FINAL STEP, so the QA prompt's requirements include them), links them by

@@ -815,7 +815,6 @@ export const runtimeAppRouter = t.router({
 					return {
 						ok: false,
 						approval: null,
-						approvalId: null,
 						plan: null,
 						error: "Plan approval is not available here.",
 					};
@@ -823,7 +822,6 @@ export const runtimeAppRouter = t.router({
 				// The user's in every isolation mode: a session without its credential is traced to its process tree.
 				return await ctx.plansApi.approve({
 					caller: await readStrictCaller(ctx),
-					trustedBrowser: ctx.trustedBrowser === true,
 					workspaceId: ctx.workspaceScope.workspaceId,
 					repoPath: ctx.workspaceScope.workspacePath,
 					request: input,

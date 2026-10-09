@@ -344,7 +344,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		listEntries: listWorkspaceIndexEntries,
 		notices: messageNotices,
 	});
-	const plansApi = createPlansApi({ approvals: isolation.approvals, log: isolation.log });
+	const plansApi = createPlansApi({ log: isolation.log });
 	const kitSettingsApi = createKitSettingsApi({ log: isolation.log });
 
 	const handleWatchdogRequest = createWatchdogActionHandler({

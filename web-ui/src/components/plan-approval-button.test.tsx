@@ -10,8 +10,6 @@ const trpc = vi.hoisted(() => ({
 	workspaceIds: [] as Array<string | null>,
 	preview: vi.fn(),
 	approve: vi.fn(),
-	isolationApprove: vi.fn(),
-	approvalStatus: vi.fn(),
 }));
 
 vi.mock("@/runtime/trpc-client", () => ({
@@ -19,7 +17,6 @@ vi.mock("@/runtime/trpc-client", () => ({
 		trpc.workspaceIds.push(workspaceId);
 		return {
 			plans: { preview: { query: trpc.preview }, approve: { mutate: trpc.approve } },
-			isolation: { approve: { mutate: trpc.isolationApprove }, approvalStatus: { query: trpc.approvalStatus } },
 		};
 	},
 }));
@@ -48,7 +45,7 @@ describe("PlanApprovalButton", () => {
 		document.body.appendChild(container);
 		root = createRoot(container);
 		trpc.workspaceIds = [];
-		for (const mock of [trpc.preview, trpc.approve, trpc.isolationApprove, trpc.approvalStatus]) {
+		for (const mock of [trpc.preview, trpc.approve]) {
 			mock.mockReset();
 		}
 		vi.mocked(showAppToast).mockReset();
@@ -92,14 +89,6 @@ describe("PlanApprovalButton", () => {
 		});
 	}
 
-	async function type(input: HTMLInputElement, value: string): Promise<void> {
-		await act(async () => {
-			const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-			setter?.call(input, value);
-			input.dispatchEvent(new Event("input", { bubbles: true }));
-		});
-	}
-
 	async function openDialog(): Promise<void> {
 		act(() => {
 			root.render(<PlanApprovalButton taskId="p1" taskTitle="Coupons" />);
@@ -107,50 +96,38 @@ describe("PlanApprovalButton", () => {
 		await click(button("Approve plan"));
 	}
 
-	it("shows the spec title and card count, then approves with the console code", async () => {
-		trpc.approve.mockResolvedValue({ ok: true, approval: null, approvalId: "a-1", plan: PLAN });
-		trpc.isolationApprove.mockResolvedValueOnce({ ok: false, result: null, error: "Wrong code for approval a-1." });
-		trpc.approvalStatus.mockResolvedValue({ approval: { status: "pending" } });
+	it("shows the spec title, card count and breakdown, then approves at once on confirm", async () => {
+		trpc.approve.mockResolvedValue({ ok: true, approval: APPROVAL, plan: PLAN });
 		await openDialog();
 		const dialog = document.body.querySelector('[role="alertdialog"]');
 		expect(dialog?.textContent).toContain("Coupons at checkout: 3 cards");
+		expect(dialog?.textContent).toContain("breakdown abc123");
 		expect(trpc.preview).toHaveBeenCalledWith({ taskId: "p1" });
 		expect(trpc.workspaceIds).toContain("ws-1");
+		// Opening the dialog approves nothing: the user confirms.
+		expect(trpc.approve).not.toHaveBeenCalled();
 
 		await click(dialogButton("Approve plan"));
 		expect(trpc.approve).toHaveBeenCalledWith({ taskId: "p1", via: "approve", breakdownSha256: "abc123" });
-		const input = document.body.querySelector<HTMLInputElement>('[aria-label="Approval code"]');
-		expect(input).not.toBeNull();
-		expect(dialog?.textContent).toContain("a-1");
-
-		await type(input as HTMLInputElement, "WRONG");
-		await click(dialogButton("Approve"));
-		expect(dialog?.textContent).toContain("Wrong code for approval a-1.");
-
-		trpc.isolationApprove.mockResolvedValueOnce({ ok: true, result: "plan p1 approved (3 cards)" });
-		await type(input as HTMLInputElement, " K7QX2M9P ");
-		await click(dialogButton("Approve"));
-		expect(trpc.isolationApprove).toHaveBeenLastCalledWith({ id: "a-1", code: "K7QX2M9P" });
+		expect(document.body.querySelector('[aria-label="Approval code"]')).toBeNull();
 		expect(showAppToast).toHaveBeenCalledWith(expect.objectContaining({ intent: "success" }), "plan-p1");
 		expect(document.body.querySelector('[role="alertdialog"]')).toBeNull();
 	});
 
-	it("a passcode browser is approved at once; a refusal is shown in the dialog", async () => {
+	it("a refusal is shown in the dialog, and Cancel approves nothing", async () => {
 		trpc.approve.mockResolvedValueOnce({
 			ok: false,
 			approval: null,
-			approvalId: null,
 			plan: null,
 			error: "The breakdown of plan p1 changed since it was shown; review it again.",
 		});
 		await openDialog();
 		await click(dialogButton("Approve plan"));
 		expect(document.body.querySelector('[role="alertdialog"]')?.textContent).toContain("changed since it was shown");
-		expect(document.body.querySelector('[aria-label="Approval code"]')).toBeNull();
+		expect(showAppToast).not.toHaveBeenCalled();
 
-		trpc.approve.mockResolvedValueOnce({ ok: true, approval: APPROVAL, approvalId: null, plan: PLAN });
-		await click(dialogButton("Approve plan"));
-		expect(showAppToast).toHaveBeenCalledWith(expect.objectContaining({ intent: "success" }), "plan-p1");
+		await click(dialogButton("Cancel"));
+		expect(trpc.approve).toHaveBeenCalledTimes(1);
 		expect(document.body.querySelector('[role="alertdialog"]')).toBeNull();
 	});
 

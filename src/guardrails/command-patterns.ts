@@ -31,6 +31,17 @@ const SHARED_BRANCH_PLACEHOLDER = "{shared}";
 const SHARED_PUSH_PLACEHOLDER = "{shared-push}";
 const SHARED_DESTINATION_PLACEHOLDER = "{shared-dest}";
 
+/**
+ * Agents never approve a plan: the user approves it on the board (or from their own shell). Every card with guardrails
+ * and the orchestrator's isolation guardrails deny these on top of the configured `denyCommands`, which can't drop
+ * them (src/guardrails/task-guardrails.ts). The runtime's plans.approve route refuses every agent session anyway
+ * (src/trpc/plans-api.ts); this rail stops the attempt where the agent's CLI can.
+ */
+export const PLAN_APPROVAL_DENY_COMMANDS: readonly string[] = [
+	"kanban plan approve",
+	"kanban plan expand --approved-by-user",
+];
+
 /** One denied-command rule: `words[i]` lists the words allowed in slot i. */
 export interface DeniedCommandRule {
 	/** The pattern as configured, `{shared}` included. */
@@ -508,6 +519,9 @@ export function findDeniedCommand(commandLine: string, rules: readonly DeniedCom
 /** What Kanban's guard hooks tell the agent about a blocked command. */
 export function describeDeniedCommand(match: DeniedCommandMatch): string {
 	const blocked = `Blocked by Kanban's task-card guardrails: \`${match.command}\``;
+	if (PLAN_APPROVAL_DENY_COMMANDS.includes(match.rule.pattern)) {
+		return `Blocked by Kanban's guardrails: \`${match.command}\`. Agents never approve a plan; the user approves it on the board (Approve plan). Tell the user the plan is ready for their approval.`;
+	}
 	if (match.rule.sharedPush) {
 		return `${blocked} may update a shared branch (${match.rule.sharedPush.join(", ")}). This card may push only its own branch, named explicitly: \`git push -u origin HEAD:<your-branch>\` or \`git push -u origin <your-branch>\`.`;
 	}

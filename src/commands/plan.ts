@@ -3,14 +3,14 @@
 //   show <task-id>     the spec and the breakdown in the plan card's worktree, with its approval and expansion
 //   check --file <f>   validates a breakdown file offline (the planner's self-check)
 //   approve <task-id>  the user's approval marker, pinned to the breakdown's hash: asked of the running server, which
-//                      refuses agent sessions and waits for the one-time code it prints on its console
+//                      refuses agent sessions and records it for the user at once
 //   expand <task-id>   Backlog dev cards through the normal create path (the kit's devAssignment), linked by the
 //                      breakdown's dependencies; never starts a card. Needs the user's approval.
 //   metrics            per plan: planner, duration, cost, cards, approval, reworks of its cards
 //
 // The decisions are pure in src/plans/; this file reads the board, the worktree and the plan index, and asks. The
 // approval is the user's in every isolation mode, so it is never written in-process: the runtime route
-// (src/trpc/plans-api.ts) records it once the user has entered the console code.
+// (src/trpc/plans-api.ts) records it for the user and refuses every agent session.
 
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -18,7 +18,6 @@ import type { Command } from "commander";
 
 import { readPipelineConfig } from "../config/pipeline-config";
 import { resolveCardRole } from "../core/card-role";
-import { type CompleteApprovalInput, completeIsolationApproval } from "../isolation/cli-approval";
 import { measureCard } from "../kits/team/scoreboard/scoreboard-store";
 import { createPipelineStateStore } from "../pipeline/pipeline-state";
 import { type PlanBreakdown, parsePlanBreakdown } from "../plans/plan-breakdown";
@@ -48,8 +47,8 @@ import { createTask, linkTaskPairs } from "./task";
 
 type JsonRecord = Record<string, unknown>;
 
-/** The runtime calls of an approval: the plan route and the console-code completion. */
-export type PlanApprovalClient = Pick<RuntimeTrpcClient, "plans" | "isolation">;
+/** The runtime calls of an approval: the plan route. */
+export type PlanApprovalClient = Pick<RuntimeTrpcClient, "plans">;
 
 export interface PlanCommandDependencies {
 	index?: PlanIndexStore;
@@ -57,8 +56,6 @@ export interface PlanCommandDependencies {
 	findWorktree?: FindPlanWorktree;
 	/** The running server, scoped to the plan's workspace (default: a CLI runtime client). */
 	createClient?: (workspaceId: string) => PlanApprovalClient;
-	/** How the console code is asked for (default: on the terminal, else wait for `kanban isolation approve`). */
-	approval?: Partial<Omit<CompleteApprovalInput, "client" | "approvalId" | "what">>;
 	/** The plan card's own metrics (card metrics); null when they can't be measured. */
 	measure?: (workspaceId: string, taskId: string) => Promise<PlanCardMetrics | null>;
 	createCard?: typeof createTask;
@@ -148,9 +145,9 @@ export async function showPlan(
 }
 
 /**
- * Asks the running server for the user's approval (src/trpc/plans-api.ts): it refuses an agent session and holds
- * anyone else's approval until the one-time code it printed on its console is entered here (or with `kanban isolation
- * approve`). Returns the recorded approval; throws when it was refused or not completed.
+ * Asks the running server for the user's approval (src/trpc/plans-api.ts): it refuses an agent session and records
+ * the approval of anyone its strict caller lookup takes for the user. Returns the recorded approval; throws when it
+ * was refused.
  */
 export async function requestPlanApproval(
 	input: {
@@ -159,9 +156,8 @@ export async function requestPlanApproval(
 		via: PlanApproval["via"];
 		/** The breakdown this command read; the server refuses another one. */
 		breakdownSha256: string | null;
-		index: PlanIndexStore;
 	},
-	deps: Pick<PlanCommandDependencies, "createClient" | "approval">,
+	deps: Pick<PlanCommandDependencies, "createClient">,
 ): Promise<{ approval: PlanApproval; cards: number }> {
 	const taskId = input.plan.card.id;
 	const client = (deps.createClient ?? createRuntimeTrpcClient)(input.target.workspaceId);
@@ -172,30 +168,10 @@ export async function requestPlanApproval(
 				`Plan approval goes through the running Kanban server, which could not be reached: ${error instanceof Error ? error.message : String(error)}`,
 			);
 		});
-	if (!requested.ok) {
+	if (!requested.ok || !requested.approval) {
 		throw new Error(requested.error ?? `Plan ${taskId} was not approved.`);
 	}
-	const cards = requested.plan?.cards ?? 0;
-	if (requested.approval) {
-		return { approval: requested.approval, cards };
-	}
-	if (!requested.approvalId) {
-		throw new Error(`The server neither approved plan ${taskId} nor asked for the console code.`);
-	}
-	const outcome = await completeIsolationApproval({
-		...deps.approval,
-		client,
-		approvalId: requested.approvalId,
-		what: `The approval of plan ${taskId} (${cards} cards)`,
-	});
-	if (!outcome.ok) {
-		throw new Error(`Plan ${taskId} was not approved: ${outcome.error}`);
-	}
-	const approval = (await input.index.read(input.target.workspaceId)).plans[taskId]?.approval ?? null;
-	if (!approval) {
-		throw new Error(`Plan ${taskId} was approved, but its approval is not in the plan index.`);
-	}
-	return { approval, cards };
+	return { approval: requested.approval, cards: requested.plan?.cards ?? 0 };
 }
 
 export async function approvePlan(
@@ -205,11 +181,8 @@ export async function approvePlan(
 	const index = deps.index ?? createPlanIndexStore();
 	const target = await loadPlanTarget(input.cwd, input.projectPath);
 	const plan = await locatePlan(target, index, input.taskId);
-	// The server checks the plan (Review, a valid breakdown, not expanded) and shows what the code approves.
-	const { approval, cards } = await requestPlanApproval(
-		{ target, plan, via: "approve", breakdownSha256: null, index },
-		deps,
-	);
+	// The server checks the plan (Review, a valid breakdown, not expanded) before it records the approval.
+	const { approval, cards } = await requestPlanApproval({ target, plan, via: "approve", breakdownSha256: null }, deps);
 	return { ok: true, taskId: plan.card.id, slug: plan.slug, cards, approval };
 }
 
@@ -272,8 +245,7 @@ export async function expandPlan(
 	let approval = check.approval;
 	if (check.needsApproval) {
 		// --approved-by-user: the same user-only approval as `kanban plan approve`, for exactly this breakdown.
-		approval = (await requestPlanApproval({ target, plan, via: "expand", breakdownSha256: sha, index }, deps))
-			.approval;
+		approval = (await requestPlanApproval({ target, plan, via: "expand", breakdownSha256: sha }, deps)).approval;
 	}
 
 	const startedAt = now().toISOString();
@@ -433,7 +405,7 @@ export function registerPlanCommand(program: Command): void {
 	plan
 		.command("approve")
 		.description(
-			"The user's approval of a plan card's breakdown (the plan card must be in Review), or use Approve plan on the board. Only the user: the Kanban server refuses agent sessions and asks for the one-time code it prints on its console. It is what lets the orchestrator expand the plan.",
+			"The user's approval of a plan card's breakdown (the plan card must be in Review), or use Approve plan on the board. Only the user: the Kanban server refuses agent sessions. It is what lets the orchestrator expand the plan.",
 		)
 		.argument("<task-id>", "The plan card.")
 		.option("--project-path <path>", "Workspace path. Defaults to current directory workspace.")
@@ -453,7 +425,7 @@ export function registerPlanCommand(program: Command): void {
 		.option("--dry-run", "Validate and print the cards and links; write nothing.")
 		.option(
 			"--approved-by-user",
-			"The user approves it now, as kanban plan approve does (the code from the Kanban server's console; refused for agent sessions).",
+			"The user approves it now, as kanban plan approve does (refused for agent sessions).",
 		)
 		.action(async (taskId: string, options: { projectPath?: string; dryRun?: boolean; approvedByUser?: boolean }) => {
 			await runPlanCommand(

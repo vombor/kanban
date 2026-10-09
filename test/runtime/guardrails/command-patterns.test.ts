@@ -9,6 +9,7 @@ import {
 	hasSharedRefspec,
 	isSharedRefDestination,
 	listShellCommands,
+	PLAN_APPROVAL_DENY_COMMANDS,
 	parseDeniedCommandPatterns,
 	pushMayUpdateSharedBranch,
 	splitShellCommandLine,
@@ -265,5 +266,14 @@ describe("denied-command patterns", () => {
 		expect(listShellCommands("env FOO=1 nohup git -C ../x push")).toEqual([["git", "push"]]);
 		// A comment is not a command.
 		expect(denied("ls # git push")).toBeNull();
+	});
+
+	it("tells an agent that plan approval is the user's on the board", () => {
+		const planRules = parseDeniedCommandPatterns(PLAN_APPROVAL_DENY_COMMANDS, []);
+		const match = findDeniedCommand("cd /repo && kanban plan approve 1a2b3", planRules);
+		expect(match && describeDeniedCommand(match)).toContain(
+			"Agents never approve a plan; the user approves it on the board (Approve plan).",
+		);
+		expect(match && describeDeniedCommand(match)).not.toContain("leave that to the orchestrator");
 	});
 });

@@ -1055,8 +1055,9 @@ const codexAdapter: AgentSessionAdapter = {
 			);
 			await addToWorktreeGitExclude(input.cwd, `/${CODEX_GUARDRAIL_RULES_RELATIVE_PATH}`);
 		} else {
-			// Guardrails off (or the orchestrator, which has no command denies): a rules file an earlier launch wrote
-			// would still forbid commands.
+			// Guardrails off, or the orchestrator: its only command denies (the plan-approval rail) stay with the runtime's
+			// refusal and the managed instructions, since its cwd is the main checkout, whose .codex a card's worktree may
+			// link to. A rules file an earlier launch wrote would still forbid commands.
 			await removeKanbanManagedFile(
 				join(input.cwd, ...CODEX_GUARDRAIL_RULES_RELATIVE_PATH.split("/")),
 				CODEX_GUARDRAIL_RULES_MARKER,

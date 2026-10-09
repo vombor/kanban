@@ -1,12 +1,12 @@
 // The runtime side of a plan card's approval (docs/team/WORKFLOW.md §13): `plans.preview` shows what would be
 // approved, `plans.approve` records the user's approval of exactly that breakdown. Approval is the user's in every
 // isolation mode, off included: an agent session (orchestrator or card, any workspace, by credential or traced to its
-// process tree) is refused, and "no credential and no session above it" is not proof of the user (a reparented
-// process looks the same). So anyone else's approval waits for the one-time code the server prints on its console
-// (src/isolation/approvals.ts, completed through `isolation.approve`), except a passcode-authenticated browser.
+// process tree) and an unidentified caller are refused; a caller the strict lookup takes for the user (the board, or
+// the CLI from the user's own shell) approves at once, with no console code (user request, 2026-10-09). The cost:
+// "no credential and no session above it" is not proof of the user, since a reparented (detached) process looks the
+// same, so such a process can approve a plan.
 import { z } from "zod";
 
-import type { ApprovalStore } from "../isolation/approvals";
 import type { IsolationService } from "../isolation/isolation-service";
 import { describeCaller, type RuntimeCaller } from "../isolation/session-identity";
 import { createPlanIndexStore, type PlanIndexStore, planApprovalSchema } from "../plans/plan-index";
@@ -45,10 +45,8 @@ export const planApproveRequestSchema = z.object({
 });
 export const planApproveResponseSchema = z.object({
 	ok: z.boolean(),
-	/** Recorded now (a passcode-authenticated browser); null while it waits for the console code. */
+	/** The recorded approval; null when refused. */
 	approval: planApprovalSchema.nullable(),
-	/** The pending approval to complete with the code from the server's console (`isolation.approve`). */
-	approvalId: z.string().nullable(),
 	plan: planApprovalPreviewSchema.nullable(),
 	error: z.string().optional(),
 });
@@ -58,8 +56,6 @@ export interface RuntimePlansApi {
 	preview: (repoPath: string, input: z.infer<typeof planPreviewRequestSchema>) => Promise<PlanPreviewResponse>;
 	approve: (input: {
 		caller: RuntimeCaller;
-		/** A passcode-authenticated browser session (remote mode): the user, no console code needed. */
-		trustedBrowser: boolean;
 		workspaceId: string;
 		repoPath: string;
 		request: z.infer<typeof planApproveRequestSchema>;
@@ -67,7 +63,6 @@ export interface RuntimePlansApi {
 }
 
 export interface CreatePlansApiDependencies {
-	approvals: ApprovalStore;
 	log: IsolationService["log"];
 	index?: PlanIndexStore;
 	findWorktree?: FindPlanWorktree;
@@ -95,7 +90,7 @@ export function createPlansApi(deps: CreatePlansApiDependencies): RuntimePlansAp
 				return { ok: false, plan: null, error: toErrorMessage(error) };
 			}
 		},
-		approve: async ({ caller, trustedBrowser, workspaceId, repoPath, request }) => {
+		approve: async ({ caller, workspaceId, repoPath, request }) => {
 			const { taskId, via } = request;
 			if (caller.kind !== "user") {
 				await deps.log([workspaceId, caller.kind === "session" ? caller.session.workspaceId : null], {
@@ -109,7 +104,6 @@ export function createPlansApi(deps: CreatePlansApiDependencies): RuntimePlansAp
 				return {
 					ok: false,
 					approval: null,
-					approvalId: null,
 					plan: null,
 					error: planApprovalRefusal(taskId, caller),
 				};
@@ -118,19 +112,18 @@ export function createPlansApi(deps: CreatePlansApiDependencies): RuntimePlansAp
 			try {
 				shown = await preview(repoPath, taskId);
 			} catch (error) {
-				return { ok: false, approval: null, approvalId: null, plan: null, error: toErrorMessage(error) };
+				return { ok: false, approval: null, plan: null, error: toErrorMessage(error) };
 			}
 			const expectedSha256 = request.breakdownSha256 ?? shown.breakdownSha256;
 			if (expectedSha256 !== shown.breakdownSha256) {
 				return {
 					ok: false,
 					approval: null,
-					approvalId: null,
 					plan: shown,
 					error: `The breakdown of plan ${taskId} changed since it was shown; review it again.`,
 				};
 			}
-			const apply = async () => {
+			try {
 				const recorded = await record({ repoPath, taskId, via, expectedSha256 });
 				await deps.log([workspaceId], {
 					kind: "approval",
@@ -138,27 +131,12 @@ export function createPlansApi(deps: CreatePlansApiDependencies): RuntimePlansAp
 					from: null,
 					to: workspaceId,
 					action: "plans.approve",
-					detail: `plan ${taskId} approved by the user${trustedBrowser ? " (passcode browser)" : " with the console code"}, breakdown ${recorded.approval.breakdownSha256}`,
+					detail: `plan ${taskId} approved by the user, breakdown ${recorded.approval.breakdownSha256}`,
 				});
-				return recorded;
-			};
-			if (trustedBrowser) {
-				try {
-					const recorded = await apply();
-					return { ok: true, approval: recorded.approval, approvalId: null, plan: recorded.preview };
-				} catch (error) {
-					return { ok: false, approval: null, approvalId: null, plan: shown, error: toErrorMessage(error) };
-				}
+				return { ok: true, approval: recorded.approval, plan: recorded.preview };
+			} catch (error) {
+				return { ok: false, approval: null, plan: shown, error: toErrorMessage(error) };
 			}
-			const pending = deps.approvals.request({
-				kind: "plan.approve",
-				summary: `plan ${taskId} "${shown.specTitle ?? shown.title}" in ${workspaceId}: ${shown.cards} cards, breakdown ${shown.breakdownSha256.slice(0, 12)}`,
-				run: async () => {
-					await apply();
-					return `plan ${taskId} approved (${shown.cards} cards)`;
-				},
-			});
-			return { ok: true, approval: null, approvalId: pending.id, plan: shown };
 		},
 	};
 }

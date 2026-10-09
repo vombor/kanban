@@ -80,7 +80,7 @@ export const isolationApproveResponseSchema = z.object({
 	result: z.string().nullable(),
 	error: z.string().optional(),
 });
-const approvalKindSchema = z.enum(["grant", "project.create", "project.add", "project.remove", "plan.approve"]);
+const approvalKindSchema = z.enum(["grant", "project.create", "project.add", "project.remove"]);
 export const isolationApprovalStatusResponseSchema = z.object({
 	approval: z
 		.object({

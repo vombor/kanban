@@ -6,10 +6,12 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { parsePipelineConfig } from "../../../src/config/pipeline-config";
+import { findDeniedCommand, PLAN_APPROVAL_DENY_COMMANDS } from "../../../src/guardrails/command-patterns";
 import {
 	buildGuardrailPromptNote,
 	listGuardrailWritableRoots,
 	listMatcherDeniedCommands,
+	resolveOrchestratorGuardrails,
 	resolveTaskGuardrails,
 } from "../../../src/guardrails/task-guardrails";
 import { createGitTestEnv } from "../../utilities/git-env";
@@ -120,6 +122,37 @@ describe("task guardrails", () => {
 		}
 	});
 
+	it("denies every card and the orchestrator's isolation guardrails the plan approval, whatever denyCommands says", async () => {
+		const input = { taskId: "card-1", workspaceId: "ws", worktreePath: worktree, projectPath: repo };
+		// A config that replaces the default denies can't drop the rail.
+		const custom = parsePipelineConfig({ guardrails: { denyCommands: ["npm publish"] } }).config;
+		const card = await resolveTaskGuardrails({ ...input, config: custom });
+		expect(card?.deniedCommands.map((rule) => rule.pattern)).toEqual(["npm publish", ...PLAN_APPROVAL_DENY_COMMANDS]);
+		const rules = card ? listMatcherDeniedCommands(card) : [];
+		expect(findDeniedCommand("kanban plan approve 1a2b3", rules)?.rule.pattern).toBe("kanban plan approve");
+		expect(findDeniedCommand("kanban plan expand 1a2b3 --approved-by-user", rules)?.rule.pattern).toBe(
+			"kanban plan expand --approved-by-user",
+		);
+		// Expanding an approved plan, showing and checking one stay allowed.
+		expect(findDeniedCommand("kanban plan expand 1a2b3", rules)).toBeNull();
+		expect(findDeniedCommand("kanban plan check --file docs/specs/x.cards.json", rules)).toBeNull();
+		expect(buildGuardrailPromptNote(card ?? never(), ["commands"])).toContain(
+			"kanban plan approve; kanban plan expand --approved-by-user",
+		);
+
+		const isolation = {
+			workspaceId: "ws",
+			projectPath: repo,
+			dataDir: join(root, "data", "ws"),
+			deniedDirs: [join(root, "other")],
+			machineConfigPaths: [],
+			claudeProjectDirs: [],
+		};
+		const orchestrator = await resolveOrchestratorGuardrails({ projectPath: repo, isolation });
+		expect(orchestrator?.deniedCommands.map((rule) => rule.pattern)).toEqual([...PLAN_APPROVAL_DENY_COMMANDS]);
+		expect(await resolveOrchestratorGuardrails({ projectPath: repo, isolation: null })).toBeNull();
+	});
+
 	it("is off when the machine or the workspace turns it off; the workspace setting wins", async () => {
 		const input = { taskId: "card-1", workspaceId: "ws", worktreePath: worktree, projectPath: repo };
 		const off = parsePipelineConfig({ guardrails: { enabled: false } }).config;
@@ -133,3 +166,7 @@ describe("task guardrails", () => {
 		expect(await resolveTaskGuardrails({ ...input, config: workspaceOn })).not.toBeNull();
 	});
 });
+
+function never(): never {
+	throw new Error("expected guardrails");
+}

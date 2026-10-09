@@ -36,6 +36,8 @@ export function renderClaudeMdSection(): string {
   (\`kanban kit set roles.<role>.agent|provider|model|tier <value> --project <path>\`) and project facts (\`qa.blurb\`,
   \`qa.promptNotes.*\`, \`qa.serversScript\`, \`qa.preview\`, \`land.postLand\`, \`plan.rules\`); \`kanban kit unset <key>\`
   removes one. Flow keys are refused: another team is another kit, the user's \`kanban kit apply\`.
+- Agents never approve a plan; the user approves it on the board (Approve plan). Don't run \`kanban plan approve\`
+  or \`kanban plan expand --approved-by-user\`: tell the user the plan is ready, and expand it once they approved it.
 
 **If you are a task agent on a Kanban card:** follow your card prompt. Don't run \`kanban doctor --fix\`,
 \`kanban setup\`, \`kanban kit apply\` or \`kanban config import-kit\` unless the prompt says so; \`kanban kit set\` is

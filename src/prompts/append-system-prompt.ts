@@ -397,6 +397,7 @@ ${kanbanCommand} kit unset roles.dev.model --project <path>
 
 - Prefer \`task list\` first when task IDs or dependency IDs are needed.
 - To create multiple linked tasks, create tasks first, then call \`task link\` for each dependency edge.
+- Agents never approve a plan; the user approves it on the board (Approve plan). Never run \`${kanbanCommand} plan approve\` or \`${kanbanCommand} plan expand --approved-by-user\`: tell the user the plan is ready, and run \`${kanbanCommand} plan expand <task_id>\` once they have approved it.
 `;
 }
 

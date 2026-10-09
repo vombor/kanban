@@ -3,8 +3,8 @@
 // launch by the runtime and handed to the agent adapter, which applies what its CLI can enforce
 // (src/terminal/agent-guardrails.ts). The orchestrator gets no card guardrails: the home-agent sidebar session (and
 // the watchdog's start of it) resolves to null in resolveTaskGuardrails. Under project isolation `enforce` it gets
-// resolveOrchestratorGuardrails instead (isolation only: no command denies, writes anywhere in its own project), and
-// cards get the same isolation on top of their own guardrails (src/isolation/isolation-paths.ts).
+// resolveOrchestratorGuardrails instead (isolation plus the plan-approval rail, writes anywhere in its own project),
+// and cards get the same isolation on top of their own guardrails (src/isolation/isolation-paths.ts).
 import { lstat, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
@@ -15,7 +15,12 @@ import { isHomeAgentSessionId } from "../core/home-agent-session";
 import type { SessionIsolation } from "../isolation/isolation-paths";
 import { getGitStdout } from "../workspace/git-utils";
 import { readSymlinkedIgnoredPaths } from "../workspace/task-worktree";
-import { allowOwnBranchPush, type DeniedCommandRule, parseDeniedCommandPatterns } from "./command-patterns";
+import {
+	allowOwnBranchPush,
+	type DeniedCommandRule,
+	PLAN_APPROVAL_DENY_COMMANDS,
+	parseDeniedCommandPatterns,
+} from "./command-patterns";
 
 export interface TaskGuardrails {
 	/** A task card's guardrails, or the orchestrator's (isolation only, resolveOrchestratorGuardrails). */
@@ -50,6 +55,11 @@ export interface TaskGuardrails {
 	ownBranchPush: boolean;
 	/** Project isolation (`enforce`): the other projects and the machine-wide config; null when isolation is off. */
 	isolation: SessionIsolation | null;
+}
+
+/** The configured patterns plus the plan-approval rail. */
+export function withPlanApprovalDenies(patterns: readonly string[]): string[] {
+	return [...new Set([...patterns, ...PLAN_APPROVAL_DENY_COMMANDS])];
 }
 
 export interface ResolveTaskGuardrailsInput {
@@ -143,8 +153,8 @@ async function readGitCommonDir(cwd: string): Promise<string | null> {
 }
 
 /**
- * The orchestrator's guardrails under project isolation: no command denies and writes anywhere in its own project
- * (it reviews, lands and fixes its cards' worktrees), only the isolation denies. Null without isolation.
+ * The orchestrator's guardrails under project isolation: the isolation denies plus the plan-approval rail, writes
+ * anywhere in its own project (it reviews, lands and fixes its cards' worktrees). Null without isolation.
  */
 export async function resolveOrchestratorGuardrails(input: {
 	projectPath: string;
@@ -165,7 +175,7 @@ export async function resolveOrchestratorGuardrails(input: {
 		linkedDirs: [],
 		extraWritableDirs: [],
 		sharedBranches: [],
-		deniedCommands: [],
+		deniedCommands: parseDeniedCommandPatterns(PLAN_APPROVAL_DENY_COMMANDS, []),
 		ownBranchPush: false,
 		isolation: input.isolation,
 	};
@@ -229,7 +239,7 @@ export async function resolveTaskGuardrails(input: ResolveTaskGuardrailsInput): 
 		extraWritableDirs,
 		sharedBranches,
 		deniedCommands: parseDeniedCommandPatterns(
-			[...settings.denyCommands, ...workspace.guardrails.extraDenyCommands],
+			withPlanApprovalDenies([...settings.denyCommands, ...workspace.guardrails.extraDenyCommands]),
 			sharedBranches,
 		),
 		ownBranchPush: input.gitAction === "pr" && settings.prCardPush === "own-branch",
