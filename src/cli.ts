@@ -2,31 +2,17 @@ import { readFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { createServer as createNetServer } from "node:net";
 import { resolve } from "node:path";
-import { Command, Option } from "commander";
+import { Command } from "commander";
 import ora, { type Ora } from "ora";
 import packageJson from "../package.json" with { type: "json" };
-import { registerAgentsCommand } from "./commands/agents";
-import { registerBenchCommand } from "./commands/bench";
-import { registerBoardCommand } from "./commands/board";
-import { registerClineCommand } from "./commands/cline";
-import { registerConfigCommand } from "./commands/config";
-import { registerDoctorCommand } from "./commands/doctor";
-import { registerHomeCommand } from "./commands/home";
-import { registerHooksCommand } from "./commands/hooks";
-import { registerIsolationCommand } from "./commands/isolation";
-import { registerIssuesCommand } from "./commands/issues";
-import { registerKitCommand } from "./commands/kit";
-import { registerMessageCommand } from "./commands/message";
-import { registerModelsCommand } from "./commands/models";
-import { registerOrchestratorCommand } from "./commands/orchestrator";
-import { registerPipelineCommand } from "./commands/pipeline";
-import { registerPlanCommand } from "./commands/plan";
-import { registerProjectCommand } from "./commands/project";
-import { registerQaCommand } from "./commands/qa";
-import { registerRestartCommand } from "./commands/restart";
+import {
+	addRootOptions,
+	type CliPortValue,
+	dropDeprecatedLaunchAgentOption,
+	ROOT_OPTIONS_WITH_VALUES,
+	registerCliCommands,
+} from "./cli-program";
 import { createRuntimeTrpcClient } from "./commands/runtime-trpc-client";
-import { registerSetupCommand } from "./commands/setup";
-import { registerTaskCommand } from "./commands/task";
 import { loadGlobalRuntimeConfig, loadRuntimeConfig } from "./config/runtime-config";
 import {
 	installGracefulShutdownHandlers,
@@ -41,7 +27,6 @@ import {
 	getKanbanRuntimePort,
 	getRuntimeFetch,
 	isKanbanRemoteHost,
-	parseRuntimePort,
 	setKanbanRuntimeHost,
 	setKanbanRuntimePort,
 	setKanbanRuntimeTls,
@@ -74,25 +59,10 @@ interface CliOptions {
 
 const KANBAN_VERSION = typeof packageJson.version === "string" ? packageJson.version : "0.1.0";
 
-function parseCliPortValue(rawValue: string): { mode: "fixed"; value: number } | { mode: "auto" } {
-	const normalized = rawValue.trim().toLowerCase();
-	if (!normalized) {
-		throw new Error("Missing value for --port.");
-	}
-	if (normalized === "auto") {
-		return { mode: "auto" };
-	}
-	try {
-		return { mode: "fixed", value: parseRuntimePort(normalized) };
-	} catch {
-		throw new Error(`Invalid port value: ${rawValue}. Expected an integer from 1-65535 or "auto".`);
-	}
-}
-
 interface RootCommandOptions {
 	home?: string;
 	host?: string;
-	port?: { mode: "fixed"; value: number } | { mode: "auto" };
+	port?: CliPortValue;
 	open?: boolean;
 	skipShutdownCleanup?: boolean;
 	update?: boolean;
@@ -118,7 +88,7 @@ interface ShutdownIndicator {
  */
 function shouldAutoOpenBrowserTabForInvocation(argv: string[]): boolean {
 	const launchFlags = new Set(["--open", "--no-open", "--skip-shutdown-cleanup", "--https", "--no-passcode"]);
-	const launchOptionsWithValues = new Set(["--home", "--host", "--port", "--agent", "--cert", "--key"]);
+	const launchOptionsWithValues = new Set<string>([...ROOT_OPTIONS_WITH_VALUES, "--agent"]);
 
 	for (let index = 0; index < argv.length; index += 1) {
 		const arg = argv[index];
@@ -944,23 +914,10 @@ function createProgram(invocationArgs: string[]): Command {
 		.name("kanban")
 		.description("Local orchestration board for coding agents.")
 		.version(KANBAN_VERSION, "-v, --version", "Output the version number")
-		.option("--home <dir>", "Kanban home directory (board state, config, worktrees). Overrides KANBAN_HOME.")
-		.option("--host <ip>", "Host IP to bind the server to (default: 127.0.0.1).")
-		.option("--port <number|auto>", "Runtime port (1-65535) or auto.", parseCliPortValue)
-		.option("--no-open", "Do not open browser automatically.")
-		.option("--skip-shutdown-cleanup", "Do not move sessions to done or delete task worktrees on shutdown.")
-		.option("--https", "Enable HTTPS. Requires both --cert and --key.")
-		.option("--cert <path>", "Path to a TLS certificate PEM file (implies HTTPS).")
-		.option("--key <path>", "Path to a TLS private key PEM file (implies HTTPS).")
-		.option("--update", "Update Kanban to the latest published version and exit.")
-		.option(
-			"--no-passcode",
-			"Disable auto-generated passcode for remote access (for advanced users behind a reverse proxy).",
-		)
 		.showHelpAfterError()
 		.addHelpText("after", `\nRuntime URL: ${getKanbanRuntimeOrigin()}`);
 
-	program.addOption(new Option("--agent <id>", "Deprecated compatibility flag. Ignored.").hideHelp());
+	addRootOptions(program);
 	// Runs before the root action and every subcommand action, so `kanban --home <dir> task ...` works too.
 	program.hook("preAction", (rootCommand) => {
 		const { home } = rootCommand.opts<RootCommandOptions>();
@@ -990,27 +947,7 @@ function createProgram(invocationArgs: string[]): Command {
 		}
 	});
 
-	registerTaskCommand(program);
-	registerHooksCommand(program);
-	registerAgentsCommand(program);
-	registerHomeCommand(program);
-	registerSetupCommand(program);
-	registerKitCommand(program);
-	registerConfigCommand(program);
-	registerModelsCommand(program);
-	registerClineCommand(program);
-	registerBenchCommand(program);
-	registerPipelineCommand(program);
-	registerPlanCommand(program);
-	registerRestartCommand(program);
-	registerOrchestratorCommand(program);
-	registerBoardCommand(program);
-	registerProjectCommand(program);
-	registerDoctorCommand(program, KANBAN_VERSION);
-	registerQaCommand(program);
-	registerIsolationCommand(program);
-	registerIssuesCommand(program);
-	registerMessageCommand(program);
+	registerCliCommands(program, KANBAN_VERSION);
 
 	program
 		.command("mcp")
@@ -1052,7 +989,7 @@ function createProgram(invocationArgs: string[]): Command {
 async function run(): Promise<void> {
 	const argv = process.argv.slice(2);
 	const program = createProgram(argv);
-	await program.parseAsync(argv, { from: "user" });
+	await program.parseAsync(dropDeprecatedLaunchAgentOption(argv), { from: "user" });
 	if (!shouldAutoOpenBrowserTabForInvocation(argv)) {
 		await Promise.allSettled([flushNodeTelemetry()]);
 		process.exit(process.exitCode ?? 0);
