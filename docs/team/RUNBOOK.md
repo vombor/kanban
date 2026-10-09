@@ -110,6 +110,7 @@ on). There is no `pause` command.
 | Who moved a card to Done, or deleted it | `kanban task history [<id>] [--limit N]`: every Done (also refused or skipped ones) and every delete from `data/<ws>/task-history.jsonl`, with trigger (`cli`, `browser`, `approve`, `auto_review`, `pipeline`, `hold_release`, `watchdog`), caller (user, card or orchestrator session, unknown; `null` for in-process triggers), from-column, landing choice and outcome, sessions stopped, worktree deleted |
 | Type into a card | `kanban task send <id> "<text>"` or `@file` (`--no-enter` to only type) |
 | Restart a dead card | `kanban task resume <id…> [--dry-run]`: WIP tag, a new session with the card prompt (+ a WIP note when the worktree has changes), same agent and model; a Claude card continues its conversation (`--continue`) with a resume note instead |
+| Put Backlog cards on the kit's dev assignment (after `kit apply`) | `kanban task reassign --column backlog \| --task-id <id…> [--dry-run]`: only dev cards that never started; a card's own agent/model pick is kept ([KITS.md](KITS.md#existing-cards-after-a-kit-change)) |
 | Start over, maybe on another model | `kanban task restart-fresh <id> --model <m> --label <suffix> [--provider P] [--hold] [--after <id>] [--note …]` |
 | Queue an orchestrator wake | `kanban orchestrator wake "<issue>" [--when-card-done <id> \| --when-model-up <m>]` |
 | Prune Done | `kanban board prune-done [--workspace W] [--days N] [--dry-run]` (the watchdog does it hourly when on) |

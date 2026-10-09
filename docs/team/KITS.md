@@ -32,7 +32,7 @@ by hand.
 
 | Question | Asked by | When | The `default` kit's answer |
 |---|---|---|---|
-| `devAssignment` | card creation (CLI `task create`, the create dialog via tRPC `workspace.getDevAssignment`) | the creator set no agent and no model | `null`: the card runs on the selected agent with its own model |
+| `devAssignment` | card creation (CLI `task create`, the create dialog via tRPC `workspace.getDevAssignment`), and `kanban task reassign` for Backlog cards that never started | the creator set no agent and no model (reassign: the card names none, or is still on the kit's last logged assignment) | `null`: the card runs on the selected agent with its own model |
 | `qaPolicy` | the QA gate | a dev card is submitted (settled in Review with work) on a landing-`qa` project | `none` |
 | `onFail` | the rework loop | a FAIL or STALLED verdict, a merge conflict at land, or a rework that came back unchanged | `stop` |
 | `onPass` | the QA gate | a PASS for the card's current snapshot | `land` |
@@ -43,6 +43,10 @@ The core keeps these guarantees whatever the kit says:
 
 - **An explicit choice wins.** An agent or model set by the card's creator is never replaced by `devAssignment`.
   The create dialog only preselects the kit's proposal and shows "from kit `team`".
+- **A card keeps what it was created with.** Applying or changing a kit doesn't touch existing cards, and clearing
+  a card's agent (`kanban task update --agent-id default --provider default --model default`, or the editor's
+  first agent option, the selected one) makes it run on the agent selected in Kanban settings, not on the kit's
+  dev role. `kanban task reassign` (below) is the one way to give existing cards the kit's current assignment.
 - **Only dev cards are asked about.** QA, TRIAGE, calibration and plan cards (`role`, or the legacy kit's title and
   prompt markers through `resolveCardRole()`) are never QA'd, reworked or landed.
 - **Nothing lands without a verdict or a human.** With landing `qa` and the answer `none`, the card waits in
@@ -94,6 +98,34 @@ restart.
 
 The landing mode is a core setting ([CONFIG.md](CONFIG.md)), not a kit key. Applying a kit never changes it.
 `kanban kit apply team --project foo --landing qa` sets both in one step on purpose.
+
+### Existing cards after a kit change
+
+A kit's `devAssignment` is stored on a card when it is created, so cards made before `kanban kit apply` (or before
+`roles.dev` changed) keep their old agent. To move the Backlog onto the current kit:
+
+```sh
+kanban task reassign --column backlog --project-path /projects/<name> --dry-run   # what each card would get
+kanban task reassign --column backlog --project-path /projects/<name>
+kanban task reassign --task-id <id> [<id>…]                                       # or only some cards
+```
+
+It asks the kit's current `devAssignment` again, as if each card were created now (`decideDevReassignment()` in
+`src/kits/dev-assignment.ts`), and prints a status per card:
+
+- `reassigned`: the card named no agent and no model, or was still exactly on the kit's last logged `applied`
+  assignment (an older kit's pick), and now has the current proposal. A reasoning effort of its own is kept.
+- `explicit`: the card names another agent or model, the user's pick; it is kept. Clear it first
+  (`task update --agent-id default --provider default --model default`) to hand it to the kit.
+- `unchanged` (already on the proposal), `shadow` (`pipeline.shadow` on: logged, not applied), `no_proposal`
+  (the kit has no dev assignment, e.g. `default`).
+- `not_backlog`, `started` (a Backlog card that has a session, so it ran before), `not_dev`
+  (`resolveCardRole()`): never changed. A started card switches model only through `kanban task restart-fresh`.
+
+The decision runs on the board read under the workspace lock, so a card started meanwhile is never changed. Each
+`reassigned` or `shadow` card gets a `dev-assignment.jsonl` line like a creation, with `source: "reassign"` and
+the card's `previous` agent; `--dry-run` changes and logs nothing. After `task update` cleared a Backlog dev card's
+agent on a kit with a dev assignment, the CLI prints the `reassign` command for it on stderr.
 
 ## Schema
 
@@ -449,6 +481,7 @@ The other local gotchas:
 kanban project create /projects/<name>                    # or: kanban project add /projects/<name>
 kanban kit apply team-local --project /projects/<name> --landing qa --dry-run
 kanban kit apply team-local --project /projects/<name> --landing qa
+kanban task reassign --column backlog --project-path /projects/<name>   # existing Backlog cards onto the kit
 kanban kit show --project /projects/<name>                # routing + "Settings this kit needs"
 kanban doctor /projects/<name>                            # warns about unmet settings and missing models
 ```

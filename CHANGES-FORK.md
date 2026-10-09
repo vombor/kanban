@@ -841,3 +841,7 @@ of this repository is the complete record of changes.
   (matcher for Claude Code and Cline, Codex prefix rule for cards, prompt note for Copilot), with its own block
   message; the orchestrator's system prompt, the managed CLAUDE.md section and the plan prompt say agents never
   approve a plan.
+- `src/commands/task.ts`, `src/kits/dev-assignment.ts`, `src/kits/browser-dev-assignment-log.ts`,
+  `src/pipeline/shadow-diff/shadow-diff.ts`: `kanban task reassign` gives Backlog dev cards that never started the
+  kit's current dev assignment (`decideDevReassignment()`), logged to dev-assignment.jsonl with `source: "reassign"`;
+  `task update --agent-id default` on a kit-routed Backlog card prints the reassign command.

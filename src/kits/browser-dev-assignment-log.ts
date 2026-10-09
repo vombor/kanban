@@ -13,8 +13,6 @@
 //     the selected one), so a later change of the selected agent doesn't rewrite what the card was created on.
 //   - The proposal is a fresh `resolveDevAssignment()`, the same answer the create dialog preselected. With an
 //     `applied` proposal, a card still on it is logged `applied`, a card the user changed `explicit`.
-import { readFile } from "node:fs/promises";
-
 import { loadGlobalRuntimeConfig } from "../config/runtime-config";
 import type { RuntimeAgentId, RuntimeBoardCard } from "../core/api-contract";
 import { resolveCardRole } from "../core/card-role";
@@ -24,7 +22,7 @@ import {
 	type DevAssignmentDecision,
 	type DevAssignmentLogEntry,
 	type DevAssignmentProposal,
-	getDevAssignmentLogPath,
+	readDevAssignmentLog,
 	recordDevAssignment,
 	resolveDevAssignment,
 } from "./dev-assignment";
@@ -41,24 +39,7 @@ export interface BrowserDevAssignmentLogOptions {
 const pendingByWorkspace = new Map<string, Promise<unknown>>();
 
 async function readLoggedTaskIds(workspaceId: string): Promise<Set<string>> {
-	let text: string;
-	try {
-		text = await readFile(getDevAssignmentLogPath(workspaceId), "utf8");
-	} catch {
-		return new Set();
-	}
-	const ids = new Set<string>();
-	for (const line of text.split("\n")) {
-		try {
-			const entry: unknown = line.trim() ? JSON.parse(line) : null;
-			if (entry && typeof entry === "object" && typeof (entry as { taskId?: unknown }).taskId === "string") {
-				ids.add((entry as { taskId: string }).taskId);
-			}
-		} catch {
-			// A torn line is skipped, as the shadow diff's reader does.
-		}
-	}
-	return ids;
+	return new Set((await readDevAssignmentLog(workspaceId)).map((entry) => entry.taskId));
 }
 
 /** True while the card's agent and model are still exactly the kit's proposal (the dialog's preselection). */

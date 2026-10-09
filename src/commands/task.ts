@@ -32,7 +32,16 @@ import {
 	removeTaskDependency,
 	updateTask,
 } from "../core/task-board-mutations";
-import { type DevAssignmentDecision, recordDevAssignment, resolveDevAssignment } from "../kits/dev-assignment";
+import {
+	type DevAssignmentDecision,
+	decideDevReassignment,
+	hasExplicitDevAssignment,
+	latestDevAssignmentByTask,
+	loadDevAssignmentContext,
+	readDevAssignmentLog,
+	recordDevAssignment,
+	resolveDevAssignment,
+} from "../kits/dev-assignment";
 import {
 	describeRunoffLandBar,
 	describeRunoffLoserWayOut,
@@ -734,6 +743,8 @@ async function updateTaskCommand(input: {
 	const workspaceId = workspace.workspaceId;
 	const runtimeClient = createRuntimeTrpcClient(workspaceId);
 	let mergedAgentSettings: RuntimeTaskAgentSettings | null | undefined;
+	// Set by the mutation callback (TypeScript would narrow a plain `let ... = null` to null).
+	let clearedAgent = null as { task: RuntimeBoardCard; columnId: RuntimeBoardColumnId } | null;
 	const updated = await updateRuntimeWorkspaceState(runtimeClient, workspaceRepoPath, (runtimeState) => {
 		const taskRecord = findTaskRecord(runtimeState, input.taskId);
 		if (!taskRecord) {
@@ -759,6 +770,9 @@ async function updateTaskCommand(input: {
 		if (!updatedTask.updated || !updatedTask.task) {
 			throw new Error(`Task "${input.taskId}" could not be updated.`);
 		}
+		if (input.agentId === null) {
+			clearedAgent = { task: updatedTask.task, columnId: taskRecord.columnId };
+		}
 
 		const nextState: RuntimeWorkspaceStateResponse = {
 			...runtimeState,
@@ -774,12 +788,161 @@ async function updateTaskCommand(input: {
 	if (shouldWarnOnExplicitAgentId(input.agentId)) {
 		warnOnAgentSettingsMechanismGaps(input.agentId, mergedAgentSettings ?? undefined);
 	}
+	if (clearedAgent) {
+		await hintKitReassignment(workspaceId, clearedAgent.task, clearedAgent.columnId);
+	}
 
 	return {
 		ok: true,
 		task: updated,
 		workspacePath: workspaceRepoPath,
 	};
+}
+
+type ReassignTarget = { taskIds: string[] } | { column: "backlog" };
+
+function parseReassignColumn(value: string): "backlog" {
+	if (value !== "backlog") {
+		throw new Error(
+			`Invalid column "${value}". Only backlog: a card that has started keeps the agent it runs on (restart-fresh moves one to another model).`,
+		);
+	}
+	return value;
+}
+
+function describeAgentChoice(card: Pick<RuntimeBoardCard, "agentId" | "agentSettings">): JsonRecord {
+	return { agentId: card.agentId ?? null, ...formatTaskAgentSettings(card.agentSettings) };
+}
+
+/**
+ * `kanban task reassign`: gives Backlog dev cards that never started the kit's current dev assignment, as if they
+ * were created now (`decideDevReassignment()` in src/kits/dev-assignment.ts). The decision runs on the board read
+ * under the workspace lock, and each changed card is logged to dev-assignment.jsonl with `source: "reassign"`.
+ */
+export async function reassignTasks(input: {
+	cwd: string;
+	projectPath?: string;
+	target: ReassignTarget;
+	dryRun?: boolean;
+}): Promise<JsonRecord> {
+	const workspace = await resolveRuntimeWorkspace(input.projectPath, input.cwd);
+	const workspaceId = workspace.workspaceId;
+	const context = await loadDevAssignmentContext(workspaceId);
+	for (const issue of context.issues) {
+		process.stderr.write(`Warning: ${issue}\n`);
+	}
+	const lastLogged = latestDevAssignmentByTask(await readDevAssignmentLog(workspaceId));
+	const now = Date.now();
+
+	const mutation = await mutateWorkspaceState(workspace.repoPath, (state) => {
+		const records =
+			"taskIds" in input.target
+				? input.target.taskIds.map((taskId) => {
+						const record = findTaskRecord(state, taskId);
+						if (!record) {
+							throw new Error(`Task "${taskId}" was not found in workspace ${workspace.repoPath}.`);
+						}
+						return record;
+					})
+				: (state.board.columns.find((column) => column.id === "backlog")?.cards ?? []).map((task) => ({
+						task,
+						columnId: "backlog" as const,
+					}));
+		const results = records.map((record) => ({
+			previous: record.task,
+			reassignment: decideDevReassignment({
+				workspaceId,
+				card: record.task,
+				columnId: record.columnId,
+				hasSession: Boolean(state.sessions[record.task.id]),
+				lastLogged: lastLogged.get(record.task.id) ?? null,
+				context,
+			}),
+		}));
+		const changes = new Map(
+			results.flatMap(({ reassignment }) =>
+				reassignment.status === "reassigned" && reassignment.decision
+					? [[reassignment.taskId, reassignment.decision] as const]
+					: [],
+			),
+		);
+		if (input.dryRun || changes.size === 0) {
+			return { board: state.board, value: results, save: false };
+		}
+		const board = {
+			...state.board,
+			columns: state.board.columns.map((column) => ({
+				...column,
+				cards: column.cards.map((card) => {
+					const decision = changes.get(card.id);
+					return decision
+						? {
+								...card,
+								agentId: decision.agentId,
+								agentSettings: cloneRuntimeTaskAgentSettings(decision.agentSettings),
+								updatedAt: now,
+							}
+						: card;
+				}),
+			})),
+		};
+		return { board, value: results, save: true };
+	});
+	if (mutation.saved) {
+		await notifyRuntimeWorkspaceStateUpdated(createRuntimeTrpcClient(workspaceId));
+	}
+
+	if (!input.dryRun) {
+		for (const { previous, reassignment } of mutation.value) {
+			const { decision } = reassignment;
+			if (!decision || (reassignment.status !== "reassigned" && reassignment.status !== "shadow")) {
+				continue;
+			}
+			await recordDevAssignment(decision, previous, { source: "reassign", previous }).catch((error: unknown) => {
+				process.stderr.write(`Warning: could not log the kit's agent proposal: ${toErrorMessage(error)}\n`);
+			});
+		}
+	}
+
+	return {
+		ok: true,
+		workspacePath: workspace.repoPath,
+		kit: context.resolved.kitName,
+		dryRun: input.dryRun === true,
+		tasks: mutation.value.map(({ previous, reassignment }) => ({
+			id: reassignment.taskId,
+			title: previous.title,
+			status: reassignment.status,
+			before: describeAgentChoice(previous),
+			...(reassignment.decision
+				? {
+						proposal: reassignment.decision.proposal,
+						after: describeAgentChoice({
+							agentId: reassignment.decision.agentId,
+							agentSettings: reassignment.decision.agentSettings,
+						}),
+					}
+				: {}),
+		})),
+	};
+}
+
+/**
+ * After `task update` cleared a Backlog dev card's agent: on a kit with a dev assignment, the card now runs on the
+ * selected agent, not on the kit's dev role, so say how to get the kit's.
+ */
+async function hintKitReassignment(workspaceId: string, task: RuntimeBoardCard, columnId: string): Promise<void> {
+	if (columnId !== "backlog" || resolveCardRole(task) !== "dev" || hasExplicitDevAssignment(task)) {
+		return;
+	}
+	const decision = await resolveDevAssignment({ workspaceId, title: task.title, prompt: task.prompt });
+	if (decision.outcome !== "applied" || !decision.proposal) {
+		return;
+	}
+	const model = decision.proposal.agentSettings?.modelId ? ` on ${decision.proposal.agentSettings.modelId}` : "";
+	process.stderr.write(
+		`Card ${task.id} now runs on the selected agent. Kit ${decision.kitName} assigns ${decision.proposal.agentId}${model} to new dev cards: run kanban task reassign --task-id ${task.id} to give it that.\n`,
+	);
 }
 
 async function linkTasks(input: {
@@ -1652,7 +1815,7 @@ export function registerTaskCommand(program: Command): void {
 		)
 		.option(
 			"--agent-id <id>",
-			'Agent override: cline | claude | codex | copilot | droid | gemini | opencode | kiro. Use "default" to clear.',
+			'Agent override: cline | claude | codex | copilot | droid | gemini | opencode | kiro. Use "default" to clear (the card then runs on the selected agent; kanban task reassign gives it the kit\'s dev assignment).',
 		)
 		.option(
 			"--provider <id>",
@@ -1718,6 +1881,30 @@ export function registerTaskCommand(program: Command): void {
 				);
 			},
 		);
+
+	task
+		.command("reassign")
+		.description(
+			"Give Backlog dev cards that never started the project kit's current dev assignment, as if they were created now. A card with no agent and no model, or one still on the kit's earlier assignment, gets it; a card's own agent or model pick is kept.",
+		)
+		.option("--task-id <id...>", "Task ID(s).")
+		.option("--column <column>", "Every card in this column; only backlog.", parseReassignColumn)
+		.option("--project-path <path>", "Workspace path. Defaults to current directory workspace.")
+		.option("--dry-run", "Show what each card would get; change and log nothing.")
+		.action(async (options: { taskId?: string[]; column?: "backlog"; projectPath?: string; dryRun?: boolean }) => {
+			await runTaskCommand(async () => {
+				const taskIds = (options.taskId ?? []).map((taskId) => taskId.trim()).filter(Boolean);
+				if (taskIds.length > 0 === Boolean(options.column)) {
+					throw new Error("task reassign accepts exactly one of --task-id or --column.");
+				}
+				return await reassignTasks({
+					cwd: process.cwd(),
+					projectPath: options.projectPath,
+					target: options.column ? { column: options.column } : { taskIds },
+					dryRun: options.dryRun === true,
+				});
+			});
+		});
 
 	task
 		.command("trash")

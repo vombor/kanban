@@ -745,7 +745,7 @@ function compareDevAssignments(input: ShadowDiffInput): ShadowDiffItem[] {
 				status: same ? "same" : "different",
 				taskId: entry.taskId,
 				at: entry.at,
-				legacy: `created on ${created}${entry.outcome === "explicit" ? " (set by its creator)" : ""}`,
+				legacy: `${entry.source === "reassign" ? "reassigned to" : "created on"} ${created}${entry.outcome === "explicit" ? " (set by its creator)" : ""}`,
 				pipeline: `kit "${entry.kit}" proposes ${proposed}${entry.proposal.tier ? ` (${entry.proposal.tier})` : ""}`,
 				note: null,
 			},
