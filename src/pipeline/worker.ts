@@ -48,6 +48,7 @@ import {
 	toStoredChecksResult,
 } from "./checks";
 import { createPipelineDecisionLog, type PipelineDecisionLog, type PipelineDecisionRecord } from "./decision-log";
+import { EMPTY_DIFF_FIELD } from "./empty-diff";
 import {
 	evaluatePipelineWorkspace,
 	getRecoveryScope,
@@ -275,7 +276,18 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			onResult: recordChecksResult,
 			log,
 		});
-	const submissionStage = createSubmissionStage({ checks });
+	const submissionStage = createSubmissionStage({
+		checks,
+		// The watchdog reports an empty-diff Review from this record (stalls.ts, issue #14).
+		recordEmptyDiff: async (workspaceId, taskId, emptyDiff) => {
+			await store.update(workspaceId, (state) => {
+				const { [EMPTY_DIFF_FIELD]: _previous, ...entry } = state.cards[taskId] ?? {};
+				state.cards[taskId] = emptyDiff ? { ...entry, [EMPTY_DIFF_FIELD]: emptyDiff } : entry;
+				return state;
+			});
+		},
+		now,
+	});
 	const inspectSubmission = deps.inspectSubmission ?? submissionStage.inspect;
 	const requestTimeoutMs = deps.requestTimeoutMs ?? 120_000;
 	let nextServerRequestId = 1;

@@ -4,8 +4,14 @@
 // src/core/card-role.ts) and the kit's QA answer, never the card's literal agent id: the legacy watchdog looked only
 // at Cline-family cards (`isClineFamily(card.agentId)`), the incident pattern of 2026-10-06.
 //
-//   dev card in Review, the kit QA-gates it, no QA card, no verdict acted on since its last move, not escalated,
-//     not on outage hold, not an open user item, no runoff PASS parked for its snapshot, > stall.reviewMin  → item
+//   dev card in Review whose snapshot has no changes against its base (empty-diff.ts, issue #14): the agent ran
+//     → item at once ("Done or restart?"); no turn on record → item after stall.reviewMin unless recovery sent
+//     something since                                                                                       → item
+//   any other dev card in Review with nothing pending (the safety net): the kit QA-gates it (a card it doesn't
+//     waits for the user's Approve & land), no QA card, no recovery hold, no rework waiting to start, no checks
+//     wait, settled (isReviewSettled), not escalated or stopped (listed already), not an open user item, no
+//     runoff PASS parked for its snapshot, and nothing happened to it (a move, its session, a verdict acted on,
+//     recovery's last send, a rework) for > stall.reviewMin                                                  → item
 //   QA/TRIAGE card in progress with its session not running > stall.qaMin                                  → item
 //   dev card in progress whose session is not running > stall.resumeIdleMin: one continue per dead session
 //     (not during a PID brownout), then > stall.idleMin                                                     → item
@@ -21,10 +27,14 @@ import type {
 	RuntimeTaskRole,
 } from "../../core/api-contract";
 import { resolveCardRole } from "../../core/card-role";
+import { isReviewSettled } from "../../terminal/review-settle";
+import { type EmptyDiffRecord, readCurrentEmptyDiff } from "../empty-diff";
 import type { PipelineSessionView } from "../engine";
 import { readPipelineHold } from "../hold";
 import type { PipelineCardState } from "../pipeline-state";
 import { readQaPassEntry } from "../qa-gate";
+import { recoveryHoldReason } from "../recovery";
+import { isReworkAwaitingStart, readOpenRework } from "../rework-state";
 
 const MIN = 60_000;
 // The dev card a legacy QA card reviews, from its prompt (archive/devteam-kit:services/review-watch.mjs@6da71597
@@ -86,6 +96,8 @@ export interface StallInput {
 	pidPressure: boolean;
 	pidBrownout: boolean;
 	settings: StallSettings;
+	/** The snapshot's `reviewSettleMs` (isReviewSettled); absent: the default. */
+	reviewSettleMs?: number;
 	now: number;
 }
 
@@ -144,6 +156,62 @@ export function readStop(entry: PipelineCardState | undefined): EscalationInfo |
 	};
 }
 
+function parseTimes(values: unknown[]): number[] {
+	return values
+		.map((value) => (typeof value === "string" ? Date.parse(value) : Number.NaN))
+		.filter((at) => Number.isFinite(at));
+}
+
+/** When the pipeline last did something to the card: a verdict acted on, recovery's last send, its last rework. */
+function readPipelineActivityTimes(entry: PipelineCardState | undefined): number[] {
+	const qaflow = asRecord(entry?.qaflow);
+	const rework = asRecord(Array.isArray(qaflow.reworks) ? qaflow.reworks.at(-1) : undefined);
+	const verdictAt = readNewestHandledVerdictAt(entry);
+	return [
+		...(verdictAt === null ? [] : [verdictAt]),
+		...parseTimes([qaflow.recoverySentAt, rework.at, rework.startedAt, rework.restartAt]),
+	];
+}
+
+const short = (sha: string | null): string => (sha ? sha.slice(0, 8) : "none");
+
+/**
+ * An empty-diff Review (empty-diff.ts, issue #14). The agent ran and found nothing to change: reported at once, for
+ * the orchestrator to decide (Done starts the card's linked Backlog cards, so nothing does it by itself). No turn on
+ * record: recovery gets `reviewMin` to act on it (a nudge or a resume makes a new submission), then the same report.
+ */
+function describeEmptyDiffStall(
+	card: RuntimeBoardCard,
+	emptyDiff: EmptyDiffRecord,
+	entry: PipelineCardState | undefined,
+	settings: StallSettings,
+	now: number,
+): StallItem | null {
+	const where = `snapshot ${short(emptyDiff.snapshot)} on ${short(emptyDiff.parent)}`;
+	const choice = `Done or restart? (\`kanban task done --task-id ${card.id}\` starts its linked Backlog cards; \`kanban task resume ${card.id}\` starts it over with its card prompt)`;
+	if (emptyDiff.ran) {
+		return {
+			key: `${card.id}:empty-diff`,
+			taskId: card.id,
+			issue: `dev card ran but changed nothing: no changes against ${emptyDiff.baseRef} (${where}; ${emptyDiff.evidence}), so it is not QA'd or landed. ${choice}`,
+		};
+	}
+	const foundAt = Date.parse(emptyDiff.at);
+	const recoverySentAt = parseTimes([asRecord(entry?.qaflow).recoverySentAt])[0];
+	if (
+		!Number.isFinite(foundAt) ||
+		now - foundAt < settings.reviewMin * MIN ||
+		(recoverySentAt !== undefined && recoverySentAt >= foundAt)
+	) {
+		return null;
+	}
+	return {
+		key: `${card.id}:empty-diff`,
+		taskId: card.id,
+		issue: `dev card is in Review but its agent likely never ran: no changes against ${emptyDiff.baseRef} (${where}; ${emptyDiff.evidence}) and nothing restarted it for ${Math.round((now - foundAt) / MIN)} min. ${choice}`,
+	};
+}
+
 function cardsByColumn(board: RuntimeBoardData): Array<{ column: RuntimeBoardColumnId; card: RuntimeBoardCard }> {
 	return board.columns.flatMap((column) => column.cards.map((card) => ({ column: column.id, card })));
 }
@@ -195,20 +263,31 @@ export function detectStalls(input: StallInput): StallResult {
 		if (column === "review") {
 			const entry = input.pipelineCards[card.id];
 			const qaflow = asRecord(entry?.qaflow);
-			if (
-				!input.qaGated(card) ||
-				qaflow.escalated ||
-				qaflow.stopped ||
-				qaflow.outage ||
-				hasQaCard.has(card.id) ||
-				now - since < settings.reviewMin * MIN ||
-				input.userItemIds.has(card.id)
-			) {
+			if (qaflow.escalated || qaflow.stopped || input.userItemIds.has(card.id)) {
+				continue; // listed in ATTENTION.md already, or handed to the user
+			}
+			const emptyDiff = readCurrentEmptyDiff(entry, card);
+			if (emptyDiff) {
+				const item = describeEmptyDiffStall(card, emptyDiff, entry, settings, now);
+				if (item) {
+					items.push(item);
+				}
 				continue;
 			}
-			const verdictAt = readNewestHandledVerdictAt(entry);
-			if (verdictAt !== null && verdictAt > (card.updatedAt ?? 0)) {
-				continue; // the pipeline is acting on a fresh verdict
+			// The safety net: nothing pending for the card (no QA card working on it, no hold, no rework waiting to
+			// start, no checks QA waits for, settled) since its newest activity (a move, its session, a verdict acted on,
+			// recovery's last send, a rework).
+			const quietSince = Math.max(since, ...readPipelineActivityTimes(entry));
+			if (
+				!input.qaGated(card) ||
+				recoveryHoldReason(entry) ||
+				isReworkAwaitingStart(readOpenRework(qaflow), now) ||
+				entry?.qaChecksWait ||
+				hasQaCard.has(card.id) ||
+				!isReviewSettled(session, now, input.reviewSettleMs) ||
+				now - quietSince < settings.reviewMin * MIN
+			) {
+				continue;
 			}
 			const runoffSnapshot = asRecord(qaflow.runoffPass).snapshot;
 			if (runoffSnapshot && runoffSnapshot === entry?.snapshot) {
@@ -224,7 +303,7 @@ export function detectStalls(input: StallInput): StallResult {
 			items.push({
 				key: `${card.id}:review-stall`,
 				taskId: card.id,
-				issue: `dev card has been in Review ${minutes} min with no QA card and no verdict newer than its last move (session ${session?.state ?? "missing"}, reviewReason ${session?.reviewReason ?? "none"}, snapshot ${typeof entry?.snapshot === "string" ? entry.snapshot : "none"})`,
+				issue: `dev card has been in Review ${minutes} min with nothing pending (no QA card, no hold, no rework; nothing happened to it for ${Math.round((now - quietSince) / MIN)} min) (session ${session?.state ?? "missing"}, reviewReason ${session?.reviewReason ?? "none"}, snapshot ${typeof entry?.snapshot === "string" ? entry.snapshot : "none"})`,
 			});
 			continue;
 		}

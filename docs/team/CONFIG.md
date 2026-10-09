@@ -163,7 +163,7 @@ The watchdog runs in the pipeline worker. With `watchdog.mode` not `off`, the wo
 | `watchdog.intervalSec` | 60 | tick |
 | `watchdog.triageCards` | `false` | TRIAGE cards (on the selected agent) instead of orchestrator wakes |
 | `watchdog.triageCooldownMin` | 120 | |
-| `watchdog.stall.reviewMin` | 10 | Review with no QA card |
+| `watchdog.stall.reviewMin` | 10 | a QA-gated dev card in Review with nothing pending and nothing done to it for this long (no QA card, hold, rework or checks wait; settled). Also how long an empty-diff Review with no turn on record waits for recovery before it is reported (one whose agent ran is reported at once) |
 | `watchdog.stall.qaMin` | 45 | QA card running too long (not calibration cards) |
 | `watchdog.stall.idleMin` | 30 | In Progress with a dead session |
 | `watchdog.stall.resumeIdleMin` | 5 | … gets one LLM-free continue after this, before a wake |

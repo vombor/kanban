@@ -88,16 +88,130 @@ describe("detectStalls", () => {
 		expect(result.items.filter((item) => item.taskId === "d0001")).toEqual([]);
 	});
 
-	it("skips a card whose newest handled verdict is newer than its last move, and a parked runoff PASS", () => {
+	it("skips a card whose newest handled verdict is fresh, and a parked runoff PASS", () => {
 		const verdictAfterMove: PipelineCardState = {
-			qaflow: { handled: [`r1|FAIL|${new Date(NOW - 30 * MIN).toISOString()}`] },
+			qaflow: { handled: [`r1|FAIL|${new Date(NOW - 5 * MIN).toISOString()}`] },
 		};
 		const runoff: PipelineCardState = { snapshot: "abc", qaflow: { runoffPass: { snapshot: "abc" } } };
 		const board = createBoard({ review: [old("d0001"), old("d0002")] });
 		expect(detectStalls(input(board, { pipelineCards: { d0001: verdictAfterMove, d0002: runoff } })).items).toEqual(
 			[],
 		);
-		expect(readNewestHandledVerdictAt(verdictAfterMove)).toBe(NOW - 30 * MIN);
+		expect(readNewestHandledVerdictAt(verdictAfterMove)).toBe(NOW - 5 * MIN);
+	});
+
+	it("safety net: a card still in Review reviewMin after the verdict acted on is reported (the verdict went nowhere)", () => {
+		const verdict: PipelineCardState = {
+			qaflow: { handled: [`r1|PASS|${new Date(NOW - 30 * MIN).toISOString()}`] },
+		};
+		const result = detectStalls(
+			input(createBoard({ review: [old("d0001")] }), { pipelineCards: { d0001: verdict } }),
+		);
+		expect(result.items).toEqual([
+			expect.objectContaining({
+				key: "d0001:review-stall",
+				issue: expect.stringContaining("nothing happened to it for 30 min"),
+			}),
+		]);
+	});
+
+	it("safety net: nothing is reported while something is pending", () => {
+		const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * MIN).toISOString();
+		const pipelineCards: Record<string, PipelineCardState> = {
+			hold1: { qaflow: { retryAt: iso(-5) } },
+			orph1: { qaflow: { orphan: { at: iso(30) } } },
+			rewo1: { qaflow: { reworks: [{ at: iso(1) }] } },
+			chec1: { qaChecksWait: { snapshot: "abc", since: iso(20) } },
+			sent1: { qaflow: { recoverySentAt: iso(2) } },
+		};
+		const board = createBoard({ review: Object.keys(pipelineCards).map((id) => old(id)) });
+		expect(detectStalls(input(board, { pipelineCards })).items).toEqual([]);
+		// A Review that hasn't settled yet (a hook just now) is not idle either.
+		const unsettled = new Map([
+			[
+				"d0001",
+				session("d0001", { state: "awaiting_review", stateChangedAt: NOW - 60 * MIN, lastHookAt: NOW - 1000 }),
+			],
+		]);
+		const fresh = createBoard({ review: [old("d0001")] });
+		expect(detectStalls(input(fresh, { sessions: unsettled, reviewSettleMs: 12_000 })).items).toEqual([]);
+		// A card the kit doesn't QA-gate waits for the user's Approve & land.
+		expect(detectStalls(input(fresh, { qaGated: () => false })).items).toEqual([]);
+	});
+
+	it("an empty diff whose agent ran is reported at once, instead of the generic Review stall", () => {
+		const card = createCard({ id: "b2d5b", updatedAt: NOW - 1 * MIN });
+		const emptyDiff = {
+			at: new Date(NOW - 30_000).toISOString(),
+			cardUpdatedAt: card.updatedAt,
+			snapshot: "9a631654aaaa",
+			parent: "302326a2bbbb",
+			baseRef: "main",
+			ran: true,
+			evidence: "its turn ended through the agent's hook",
+		};
+		const result = detectStalls(
+			input(createBoard({ review: [card] }), {
+				pipelineCards: { b2d5b: { emptyDiff } },
+				sessions: new Map([["b2d5b", session("b2d5b", { state: "awaiting_review", reviewReason: "hook" })]]),
+			}),
+		);
+		expect(result.items).toEqual([
+			{
+				key: "b2d5b:empty-diff",
+				taskId: "b2d5b",
+				issue: expect.stringMatching(
+					/^dev card ran but changed nothing: no changes against main \(snapshot 9a631654 on 302326a2; its turn ended through the agent's hook\).*Done or restart\? \(`kanban task done --task-id b2d5b`/u,
+				),
+			},
+		]);
+		// Not for a card the kit doesn't QA-gate either way: an empty card has nothing to approve.
+		expect(
+			detectStalls(
+				input(createBoard({ review: [card] }), { pipelineCards: { b2d5b: { emptyDiff } }, qaGated: () => false }),
+			).items,
+		).toHaveLength(1);
+		// A record of an older submission (the card moved since) is not this card's state: the generic rules apply.
+		const moved = { ...card, updatedAt: NOW - 2 * MIN };
+		expect(
+			detectStalls(input(createBoard({ review: [moved] }), { pipelineCards: { b2d5b: { emptyDiff } } })).items,
+		).toEqual([]);
+		// An open user item or an escalation is listed already.
+		expect(
+			detectStalls(
+				input(createBoard({ review: [card] }), {
+					pipelineCards: { b2d5b: { emptyDiff } },
+					userItemIds: new Set(["b2d5b"]),
+				}),
+			).items,
+		).toEqual([]);
+	});
+
+	it("an empty diff with no turn on record waits reviewMin for recovery, then is reported", () => {
+		const card = createCard({ id: "e0001", updatedAt: NOW - 30 * MIN });
+		const emptyDiff = (minutesAgo: number) => ({
+			at: new Date(NOW - minutesAgo * MIN).toISOString(),
+			cardUpdatedAt: card.updatedAt,
+			snapshot: "abc",
+			parent: "def",
+			baseRef: "main",
+			ran: false,
+			evidence: "no hook or final message from this run (session awaiting_review, reviewReason exit)",
+		});
+		const board = createBoard({ review: [card] });
+		expect(detectStalls(input(board, { pipelineCards: { e0001: { emptyDiff: emptyDiff(5) } } })).items).toEqual([]);
+		expect(detectStalls(input(board, { pipelineCards: { e0001: { emptyDiff: emptyDiff(15) } } })).items).toEqual([
+			expect.objectContaining({
+				key: "e0001:empty-diff",
+				issue: expect.stringContaining("its agent likely never ran: no changes against main"),
+			}),
+		]);
+		// Recovery sent something after the empty snapshot: the next submission decides again.
+		const nudged = {
+			emptyDiff: emptyDiff(15),
+			qaflow: { recoverySentAt: new Date(NOW - 12 * MIN).toISOString() },
+		};
+		expect(detectStalls(input(board, { pipelineCards: { e0001: nudged } })).items).toEqual([]);
 	});
 
 	it("skips a PASS held for an open runoff for the current snapshot; not an older one, nor one of a decided runoff", () => {

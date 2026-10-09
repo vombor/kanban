@@ -272,9 +272,107 @@ describe("watchdog on", () => {
 		expect(prompt).toContain(
 			"6f756: dev card is in Review and the automatic QA replacement didn't happen: its QA card q6f75",
 		);
-		expect(prompt).not.toContain("no QA card and no verdict newer than its last move");
+		expect(prompt).not.toContain("with nothing pending");
 		const decisions = readDecisions(paths.decisions).filter((decision) => decision.kind === "stall");
 		expect(decisions.map((decision) => decision.taskId)).toEqual(["6f756"]);
+	});
+
+	it("an empty-diff Review whose agent ran wakes its orchestrator with 'Done or restart?' (issue #14)", async () => {
+		const harness = harnessWith({
+			watchdog: { mode: "on" },
+			orchestrator: { wake: { mode: "sidebar" } },
+			workspaces: QA_FOO,
+		});
+		const paths = harness.paths("foo");
+		mkdirSync(paths.dataDir, { recursive: true });
+		const updatedAt = WATCHDOG_NOW - 2 * MIN;
+		writeFileSync(
+			`${paths.dataDir}/pipeline-state.json`,
+			JSON.stringify({
+				version: 1,
+				since: "2026-10-01T00:00:00.000Z",
+				importedFrom: null,
+				cards: {
+					b2d5b: {
+						emptyDiff: {
+							at: new Date(WATCHDOG_NOW - MIN).toISOString(),
+							cardUpdatedAt: updatedAt,
+							snapshot: "9a631654aaaaaaaa",
+							parent: "302326a2bbbbbbbb",
+							baseRef: "main",
+							ran: true,
+							evidence: "its turn ended through the agent's hook",
+						},
+					},
+				},
+			}),
+		);
+		harness.observe({
+			workspaceId: "foo",
+			board: createBoard({ review: [createCard({ id: "b2d5b", updatedAt })] }),
+			sessions: [
+				{
+					taskId: "b2d5b",
+					agentId: "cline",
+					modelId: null,
+					state: "awaiting_review",
+					reviewReason: "hook",
+					updatedAt,
+					pid: 3,
+				},
+			],
+		});
+		await harness.watchdog.tick();
+
+		const wakes = harness.requests.filter((request) => request.kind === "startOrchestratorSession");
+		expect(wakes).toEqual([expect.objectContaining({ workspaceId: "foo", fromWorkspaceId: "foo" })]);
+		const prompt = wakes[0] && "prompt" in wakes[0] ? wakes[0].prompt : "";
+		expect(prompt).toContain("b2d5b: dev card ran but changed nothing: no changes against main");
+		expect(prompt).toContain("Done or restart?");
+		// Reported, never moved: nothing asks the server to finish the card.
+		expect(harness.requests.map((request) => request.kind)).not.toContain("finishTask");
+	});
+
+	it("a Review card waiting for a permission answer is reported as that, not also as a Review stall", async () => {
+		const harness = harnessWith({
+			watchdog: { mode: "on" },
+			orchestrator: { wake: { mode: "sidebar" } },
+			workspaces: QA_FOO,
+		});
+		const paths = harness.paths("foo");
+		harness.observe({
+			workspaceId: "foo",
+			board: createBoard({ review: [createCard({ id: "c0001", updatedAt: WATCHDOG_NOW - 60 * MIN })] }),
+			sessions: [
+				{
+					taskId: "c0001",
+					agentId: "claude",
+					modelId: null,
+					state: "awaiting_review",
+					reviewReason: "attention",
+					startedAt: WATCHDOG_NOW - 70 * MIN,
+					updatedAt: WATCHDOG_NOW - 20 * MIN,
+					lastHookAt: WATCHDOG_NOW - 20 * MIN,
+					latestHookActivity: {
+						activityText: "Bash: npm publish",
+						toolName: "Bash",
+						toolInputSummary: null,
+						finalMessage: null,
+						hookEventName: "PermissionRequest",
+						notificationType: null,
+						source: "claude",
+					},
+					pid: 4,
+				},
+			],
+		});
+		await harness.watchdog.tick();
+
+		expect(readFileSync(paths.attention, "utf8")).toContain(
+			"- **c0001** (prompt): claude card is waiting for a permission answer",
+		);
+		const stalls = readDecisions(paths.decisions).filter((decision) => decision.kind === "stall");
+		expect(stalls).toEqual([]);
 	});
 
 	it("PID pressure: flags, a process sweep, the ATTENTION line, no wake for it; brownout pauses running agents once", async () => {

@@ -212,8 +212,15 @@ The watchdog (`src/pipeline/watchdog/`, in the pipeline worker) is LLM-free and 
   that didn't happen within `stall.restartGraceMin` (1 min): its dead QA card not superseded, or superseded with no
   new one. A replacement waiting for a QA slot or PID pressure is only logged. A card still held for the restart (an
   orphan mark nobody resumed) is reported after the same grace plus its place in the resume queue.
-- **Stalls:** Review with no QA (10 min), a QA card stuck (45 min, not calibration cards), In Progress with a dead
-  session. That one gets a single LLM-free continue after 5 min before anyone is woken.
+- **Stalls:** a QA-gated Review card with nothing pending (no QA card, no recovery hold, no rework waiting to start,
+  no checks wait, settled) and nothing done to it (a move, its session, a verdict acted on, recovery's last send, a
+  rework) for 10 min; a QA card stuck (45 min, not calibration cards); In Progress with a dead session. That one gets
+  a single LLM-free continue after 5 min before anyone is woken. A card the kit doesn't QA-gate waits for the user's
+  Approve & land and is not reported; nor is one already listed (escalated, stopped, an open user item, a prompt).
+- **Empty diff** (issue #14): a Review card whose snapshot has no changes against its base is never QA'd or landed.
+  If the agent ran (a hook of this run, a turn end through a hook, a final message; never PTY output), the
+  orchestrator is told at once: "no changes against <base>: Done or restart?". Nothing moves it to Done, since Done
+  starts its linked Backlog cards. With no turn on record (it likely never ran) recovery gets 10 min first.
 - **Prompts:** a Claude Code or Codex card stuck on a trust, startup or permission dialog (3 min), on every
   workspace. It is flagged, never answered: the trust dialog defaults to "No, exit". Every workspace's main repo
   root is pre-trusted to prevent it.

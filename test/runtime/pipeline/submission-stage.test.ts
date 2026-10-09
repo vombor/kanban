@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { parsePipelineConfig } from "../../../src/config/pipeline-config";
 import type { RuntimeBoardCard } from "../../../src/core/api-contract";
 import { CHECKS_VERSION, type ChecksRequest } from "../../../src/pipeline/checks";
+import type { EmptyDiffRecord } from "../../../src/pipeline/empty-diff";
 import type { PipelineSessionView } from "../../../src/pipeline/engine";
 import type { PipelineWorkspaceState } from "../../../src/pipeline/pipeline-state";
 import { readTaskSnapshot } from "../../../src/pipeline/snapshots";
@@ -23,6 +24,12 @@ function settingsFor(entry: unknown) {
 		throw new Error("no settings");
 	}
 	return settings;
+}
+
+const NOW = Date.parse("2026-10-09T04:44:58.000Z");
+
+function session(overrides: Partial<PipelineSessionView>): PipelineSessionView {
+	return { taskId: "t", agentId: "cline", modelId: null, state: "awaiting_review", ...overrides };
 }
 
 function emptyState(cards: PipelineWorkspaceState["cards"] = {}): PipelineWorkspaceState {
@@ -42,6 +49,7 @@ describe("submission stage", () => {
 		repos.push(repo);
 		const enqueued: ChecksRequest[] = [];
 		const probeHasWork = vi.fn(async () => true);
+		const emptyDiffs: Array<{ workspaceId: string; taskId: string; record: EmptyDiffRecord | null }> = [];
 		const stage = createSubmissionStage({
 			checks: {
 				enqueue: (request) => {
@@ -51,6 +59,10 @@ describe("submission stage", () => {
 			},
 			resolveWorktree: async () => repo.worktreePath,
 			probeHasWork,
+			recordEmptyDiff: async (workspaceId, taskId, record) => {
+				emptyDiffs.push({ workspaceId, taskId, record });
+			},
+			now: () => NOW,
 		});
 		const settings = settingsFor(options.workspace ?? TEAM_QA);
 		const context: SubmissionContext = {
@@ -70,7 +82,7 @@ describe("submission stage", () => {
 				effective: { ...createEffectiveCard({ agentId: "cline", role }), card },
 				session,
 			});
-		return { repo, stage, enqueued, probeHasWork, context, inspect };
+		return { repo, stage, enqueued, probeHasWork, context, inspect, emptyDiffs };
 	}
 
 	it("snapshots a dev card with work and queues checks on the snapshot", async () => {
@@ -105,6 +117,51 @@ describe("submission stage", () => {
 		expect(inspection.hasWork).toBe(false);
 		expect(inspection.records[0]?.note).toContain("no changes against main");
 		expect(enqueued).toEqual([]);
+	});
+
+	it("records an empty diff with whether the agent ran, from its hooks (issue #14)", async () => {
+		const { inspect, emptyDiffs } = setup();
+		const ran = session({ state: "awaiting_review", reviewReason: "hook" });
+		const card = createCard({ id: "b2d5b", updatedAt: 7 });
+		const inspection = await inspect(card, "dev", ran);
+		expect(inspection.records[0]?.note).toMatch(
+			/no changes against main; not submitted \(the agent ran but changed nothing: its turn ended through the agent's hook\)$/u,
+		);
+		expect(emptyDiffs).toEqual([
+			{
+				workspaceId: "foo",
+				taskId: "b2d5b",
+				record: {
+					at: new Date(NOW).toISOString(),
+					cardUpdatedAt: 7,
+					snapshot: expect.any(String),
+					parent: expect.any(String),
+					baseRef: "main",
+					ran: true,
+					evidence: "its turn ended through the agent's hook",
+				},
+			},
+		]);
+
+		// No hook from this run: never ran.
+		const never = await inspect(
+			createCard({ id: "e0001" }),
+			"dev",
+			session({ state: "awaiting_review", reviewReason: "exit", startedAt: 100, lastHookAt: 50 }),
+		);
+		expect(never.records[0]?.note).toContain("(the agent likely never ran: no hook or final message from this run");
+		expect(emptyDiffs[1]?.record).toMatchObject({ ran: false });
+	});
+
+	it("a submission with changes removes an earlier empty-diff record; shadow records nothing", async () => {
+		const { repo, inspect, emptyDiffs } = setup({ state: emptyState({ "dev-1": { emptyDiff: { at: "x" } } }) });
+		writeFileSync(join(repo.worktreePath, "work.txt"), "work\n");
+		await inspect(createCard({ id: "dev-1" }));
+		expect(emptyDiffs).toEqual([{ workspaceId: "foo", taskId: "dev-1", record: null }]);
+
+		const shadow = setup({ workspace: { ...TEAM_QA, pipeline: { shadow: true } } });
+		await shadow.inspect(createCard({ id: "dev-2" }));
+		expect(shadow.emptyDiffs).toEqual([]);
 	});
 
 	it("snapshots once per submission: the same card state is not snapshotted or checked again", async () => {

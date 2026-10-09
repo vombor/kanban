@@ -453,6 +453,29 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 			record(records, context, { workspaceId, taskId, kind: "stall", outcome: outcomeOf(context), note: issue });
 		};
 
+		const trust = new Map<string, boolean | null>();
+		for (const { card } of cards) {
+			const session = sessions.get(card.id);
+			if (session?.workspacePath && session.agentId) {
+				const key = `${session.agentId}\u0000${session.workspacePath}`;
+				if (!trust.has(key)) {
+					trust.set(key, await isTrusted(session.agentId, session.workspacePath));
+				}
+			}
+		}
+		// A card stuck on a prompt (a permission answer, a startup dialog) is reported as that, not as a Review stall.
+		const promptWaits = findPromptWaits({
+			cards,
+			sessions,
+			selectedAgentId: snapshot.selectedAgentId,
+			now: context.now,
+			stuckMs: config.watchdog.stall.promptMin * MIN,
+			hooksOnPromptSubmit,
+			trusted: (agentId, path) => trust.get(`${agentId}\u0000${path}`) ?? null,
+			agentLabel: getAgentLabel,
+		});
+		const promptWaitIds = new Set(promptWaits.map((wait) => wait.taskId));
+
 		if (full) {
 			const pipelineState = await deps.store.load(workspaceId);
 			const { policy } = await resolvePolicy(context.parsed, workspaceId);
@@ -482,6 +505,7 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 				pidPressure: context.pidLevel !== "none",
 				pidBrownout: context.pidLevel === "brownout",
 				settings: config.watchdog.stall,
+				reviewSettleMs: snapshot.reviewSettleMs,
 				now: context.now,
 			});
 			// What a restart left behind and its automatic fix didn't handle (a dead QA card the gate didn't replace, an
@@ -512,7 +536,11 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 			const restartFlagged = new Set(restart.items.map((item) => item.taskId));
 			for (const item of [
 				...restart.items,
-				...stalls.items.filter((item) => !restartFlagged.has(item.taskId) || !item.key.endsWith(":review-stall")),
+				...stalls.items.filter(
+					(item) =>
+						!item.key.endsWith(":review-stall") ||
+						(!restartFlagged.has(item.taskId) && !promptWaitIds.has(item.taskId)),
+				),
 			]) {
 				queueIssue(item.key, item.taskId, item.issue);
 			}
@@ -638,26 +666,7 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 			}
 		}
 
-		const trust = new Map<string, boolean | null>();
-		for (const { card } of cards) {
-			const session = sessions.get(card.id);
-			if (session?.workspacePath && session.agentId) {
-				const key = `${session.agentId}\u0000${session.workspacePath}`;
-				if (!trust.has(key)) {
-					trust.set(key, await isTrusted(session.agentId, session.workspacePath));
-				}
-			}
-		}
-		for (const wait of findPromptWaits({
-			cards,
-			sessions,
-			selectedAgentId: snapshot.selectedAgentId,
-			now: context.now,
-			stuckMs: config.watchdog.stall.promptMin * MIN,
-			hooksOnPromptSubmit,
-			trusted: (agentId, path) => trust.get(`${agentId}\u0000${path}`) ?? null,
-			agentLabel: getAgentLabel,
-		})) {
+		for (const wait of promptWaits) {
 			if (!userItemIds.has(wait.taskId)) {
 				attention.push(`- **${wait.taskId}** (prompt): ${wait.text}`);
 				record(records, context, {

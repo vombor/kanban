@@ -10,12 +10,17 @@
 // A restarted worker re-snapshots the Review cards, as the legacy kit's startup sweep did (their worktree may
 // have changed while it was down). Ported from archive/devteam-kit:services/kanban-autoland.mjs@6da71597
 // (onDevReview, the startup sweep: a running session is not finished work, and is not snapshotted mid-work).
+//
+// A snapshot with no changes against the base is not submitted. Outside shadow it is recorded on the card's
+// pipeline-state entry (`emptyDiff`, empty-diff.ts) with whether the agent ran at all, and the watchdog reports it
+// (issue #14); a later submission with changes removes the record.
 import type { WorkspacePipelineSettings } from "../config/pipeline-config";
 import type { RuntimeBoardCard } from "../core/api-contract";
 import type { EffectiveCard } from "../kits/policy";
 import { getTaskWorkspacePathInfo } from "../workspace/task-worktree";
 import { CHECKS_VERSION, type ChecksQueue, resolveChecksEnabled } from "./checks";
 import type { PipelineDecisionOutcome } from "./decision-log";
+import { describeTurnEvidence, EMPTY_DIFF_FIELD, type EmptyDiffRecord } from "./empty-diff";
 import type { PipelineSessionView } from "./engine";
 import type { PipelineWorkspaceState } from "./pipeline-state";
 import { type TakeTaskSnapshotInput, type TaskSnapshot, takeTaskSnapshot } from "./snapshots";
@@ -64,6 +69,9 @@ export interface CreateSubmissionStageOptions {
 	takeSnapshot?: (input: TakeTaskSnapshotInput) => Promise<TaskSnapshot>;
 	/** Work probe for cards that aren't snapshotted (non-dev roles). */
 	probeHasWork?: (workspacePath: string, card: RuntimeBoardCard) => Promise<boolean>;
+	/** Writes (or, with null, removes) the card's `emptyDiff` record in pipeline-state. Absent: nothing is recorded. */
+	recordEmptyDiff?: (workspaceId: string, taskId: string, record: EmptyDiffRecord | null) => Promise<void>;
+	now?: () => number;
 	log?: (message: string) => void;
 }
 
@@ -90,6 +98,7 @@ export function createSubmissionStage(options: CreateSubmissionStageOptions): Su
 	const resolveWorktree = options.resolveWorktree ?? resolveTaskWorktree;
 	const takeSnapshot = options.takeSnapshot ?? takeTaskSnapshot;
 	const probeHasWork = options.probeHasWork ?? probeTaskHasWork;
+	const now = options.now ?? Date.now;
 	// "<workspaceId>:<taskId>" → the inspection of the card's current submission.
 	const inspections = new Map<string, { key: string; inspection: SubmissionInspection }>();
 
@@ -130,6 +139,18 @@ export function createSubmissionStage(options: CreateSubmissionStageOptions): Su
 				? `would snapshot ${where} (ref left at ${short(snapshot.previous)})`
 				: `snapshot ${where}${snapshot.previous ? ` (was ${short(snapshot.previous)})` : ""}`;
 		if (!snapshot.hasChanges) {
+			const turn = describeTurnEvidence(input.session);
+			if (!shadow && options.recordEmptyDiff) {
+				await options.recordEmptyDiff(context.workspaceId, card.id, {
+					at: new Date(now()).toISOString(),
+					cardUpdatedAt: card.updatedAt,
+					snapshot: snapshot.commit,
+					parent: snapshot.parent,
+					baseRef: card.baseRef,
+					ran: turn.ran,
+					evidence: turn.evidence,
+				});
+			}
 			return {
 				inspection: {
 					hasWork: false,
@@ -137,12 +158,15 @@ export function createSubmissionStage(options: CreateSubmissionStageOptions): Su
 						{
 							stage: "snapshot",
 							outcome: "none",
-							note: `${snapshotNote}: no changes against ${card.baseRef}; not submitted (the agent likely never ran)`,
+							note: `${snapshotNote}: no changes against ${card.baseRef}; not submitted (${turn.ran ? "the agent ran but changed nothing" : "the agent likely never ran"}: ${turn.evidence})`,
 						},
 					],
 				},
 				cache: true,
 			};
+		}
+		if (!shadow && options.recordEmptyDiff && context.state.cards[card.id]?.[EMPTY_DIFF_FIELD] !== undefined) {
+			await options.recordEmptyDiff(context.workspaceId, card.id, null);
 		}
 		const records: PipelineStageRecord[] = [
 			{ stage: "snapshot", outcome: !snapshot.changed ? "none" : shadow ? "shadow" : "acted", note: snapshotNote },
