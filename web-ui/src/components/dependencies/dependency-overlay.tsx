@@ -674,6 +674,10 @@ export function DependencyOverlay({
 				if (!isTransient && sourceAnchor.columnId !== "backlog" && targetAnchor.columnId !== "backlog") {
 					return null;
 				}
+				// A Backlog card's Done prerequisite is counted on the card ("Waiting on N of M"), not drawn.
+				if (!isTransient && targetAnchor.columnId === "trash") {
+					return null;
+				}
 				if (isTransient && !touchesActiveTask) {
 					return null;
 				}

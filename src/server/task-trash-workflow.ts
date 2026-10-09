@@ -46,7 +46,9 @@ import {
 	getTaskColumnId,
 	moveTaskToTopOfColumn,
 	trashTaskAndGetReadyLinkedTaskIds,
+	updateTaskDependencies,
 } from "../core/task-board-mutations";
+import { arePrerequisitesDone, getTaskPrerequisiteStatus } from "../core/task-prerequisites";
 import type { RuntimeCaller } from "../isolation/session-identity";
 import { startTaskHistoryCallerLookup } from "../state/task-history-log";
 import type {
@@ -197,17 +199,10 @@ function returnTaskToBacklog(board: RuntimeBoardData, claim: LinkedTaskClaim): R
 		const insertAt = Math.min(claim.index, cards.length);
 		return { ...column, cards: [...cards.slice(0, insertAt), claim.card, ...cards.slice(insertAt)] };
 	});
-	const restored: RuntimeBoardData = { ...board, columns };
-	const existingIds = new Set(restored.dependencies.map((dependency) => dependency.id));
-	const isLinkable = (candidateId: string): boolean => {
-		const columnId = getTaskColumnId(restored, candidateId);
-		return columnId !== null && columnId !== "trash";
-	};
-	const missing = claim.dependencies.filter(
-		(dependency) =>
-			!existingIds.has(dependency.id) && isLinkable(dependency.fromTaskId) && isLinkable(dependency.toTaskId),
-	);
-	return missing.length > 0 ? { ...restored, dependencies: [...restored.dependencies, ...missing] } : restored;
+	const existingIds = new Set(board.dependencies.map((dependency) => dependency.id));
+	const missing = claim.dependencies.filter((dependency) => !existingIds.has(dependency.id));
+	// The board's link rules decide which come back, links to its Done prerequisites included.
+	return updateTaskDependencies({ ...board, columns, dependencies: [...board.dependencies, ...missing] });
 }
 
 function toErrorMessage(error: unknown): string {
@@ -378,6 +373,11 @@ export function createTaskTrashWorkflow(deps: CreateTaskTrashWorkflowDependencie
 			const index = backlog?.cards.findIndex((card) => card.id === taskId) ?? -1;
 			const card = backlog?.cards[index];
 			if (!card) {
+				return { board: state.board, value: null, save: false };
+			}
+			// Asked again under this lock: a prerequisite may have left Done since the Done step found the card ready.
+			const prerequisites = getTaskPrerequisiteStatus(state.board, taskId);
+			if (prerequisites && !arePrerequisitesDone(prerequisites)) {
 				return { board: state.board, value: null, save: false };
 			}
 			// Top of In Progress, as the browser's start animation does.

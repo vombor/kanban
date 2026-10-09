@@ -312,6 +312,20 @@ describe("detectPipelineIdle", () => {
 		const busy = createBoard({ backlog: [old("a0001")], review: [old("b0001")] });
 		expect(detectPipelineIdle({ board: busy, roles, now: NOW, newCardGraceMin: 10 })).toBeNull();
 	});
+
+	it("counts a backlog card whose prerequisites are all Done as startable, and one still waiting as not", () => {
+		const board = createBoard({ backlog: [old("a0001"), old("a0002")], trash: [old("d0001"), old("d0002")] }, [
+			{ id: "dep-1", fromTaskId: "a0001", toTaskId: "d0001", createdAt: 0 },
+			{ id: "dep-2", fromTaskId: "a0002", toTaskId: "d0002", createdAt: 0 },
+			{ id: "dep-3", fromTaskId: "a0002", toTaskId: "a0001", createdAt: 0 },
+		]);
+		const roles = new Map(
+			board.columns.flatMap((c) => c.cards).map((card) => [card.id, resolveWatchdogCardRole(card)]),
+		);
+		expect(detectPipelineIdle({ board, roles, now: NOW, newCardGraceMin: 10 })).toBe(
+			"- **pipeline idle**: nothing in progress or review; backlog dev card(s) with no prerequisite waiting to be started: a0001",
+		);
+	});
 });
 
 describe("resolveWatchdogCardRole", () => {

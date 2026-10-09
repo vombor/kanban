@@ -119,7 +119,10 @@ dev card stops ─▶ Review (settled) ─▶ snapshot refs/kanban/snapshots/<id
 - **PASS** → the kit's `onPass` (a runoff may hold it) → the Done workflow's landing step: a `git merge-tree`
   pre-check, then commit-tree + update-ref when the base isn't checked out, or `merge --squash` in the checked-out
   base with the user's edits stashed and restored. Then the kit's `postLand` commands run. The card goes to Done only
-  after the base has the work, and only then do linked Backlog cards start.
+  after the base has the work, and only then do linked Backlog cards start: each one once **all** of its
+  prerequisites are Done (fan-in, issue #17; the board card and `kanban task list` show "waiting on N of M").
+  A prerequisite deleted while Done still counts; one deleted before it was Done (or never on the board) never
+  does, so that card waits for a person to start it or unlink it.
 - **FAIL → rework on the same card with the same model**, like reopening a ticket. A `REWORK round N` section goes
   into the card prompt before its FINAL STEP, the QA write-up and artifacts go into `.qa/r<N>/` in the worktree
   (git-ignored), and the section is typed into the card's own session. If the session is big (past
@@ -139,7 +142,7 @@ dev card stops ─▶ Review (settled) ─▶ snapshot refs/kanban/snapshots/<id
 - **Outage takeover:** with the kit's `fallback.on.outage`, a card held for a provider outage for
   `fallback.outageAfterMin` minutes (default: `pipeline.recovery.outage.maxMin`) is taken over the same way, by the
   fallback role. Without it the hold goes to the orchestrator at `maxMin`.
-- **Siblings are never linked on the board.** A board link starts a Backlog card when the other one goes Done. Once,
+- **Siblings are never linked on the board.** A board link starts a Backlog card when its prerequisites go Done. Once,
   a linked sibling that a human started and landed restarted its BLOCKED original, and both landed. The relation
   lives in pipeline state instead, and the engine and the QA gate never QA or land an escalated card. Only
   `kanban task handback` clears an escalation.
@@ -332,7 +335,7 @@ the code and writes the plan, and the orchestrator turns the approved plan into 
 4. **Expand.** `kanban plan expand <id> [--dry-run]` validates the breakdown, creates the cards in Backlog through
    the normal create path (so the kit's `devAssignment` picks their agent and model), appends each card's acceptance
    criteria to its prompt (before a FINAL STEP, so the QA prompt's requirements include them), links them by
-   `dependsOn`, and records plan → cards in `plans.json`. The task ids are written before the first card, so an
+   `dependsOn` (a card with several starts once all of them are Done), and records plan → cards in `plans.json`. The task ids are written before the first card, so an
    expand that stopped half way resumes with the same ids. It **never starts** a card and never links one to the
    plan card (a link would start the first wave when the plan card goes Done). The orchestrator starts them.
 5. **The spec lands like docs.** The plan card's spec files land the project's normal way: on landing `qa` a

@@ -9,13 +9,13 @@ import {
 	type SnapDragActions,
 } from "@hello-pangea/dnd";
 import type { ReactNode } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { BoardColumn } from "@/components/board-column";
 import { DependencyOverlay } from "@/components/dependencies/dependency-overlay";
 import { useDependencyLinking } from "@/components/dependencies/use-dependency-linking";
 import type { RuntimeTaskSessionSummary } from "@/runtime/types";
-import { canCreateTaskDependency } from "@/state/board-state";
+import { canCreateTaskDependency, getBoardPrerequisiteStatuses } from "@/state/board-state";
 import { findCardColumnId, type ProgrammaticCardMoveInFlight } from "@/state/drag-rules";
 import type { BoardCard, BoardColumnId, BoardData, BoardDependency } from "@/types";
 
@@ -96,6 +96,7 @@ export function KanbanBoard({
 		(fromTaskId: string, toTaskId: string) => canCreateTaskDependency(data, fromTaskId, toTaskId),
 		[data],
 	);
+	const prerequisiteStatuses = useMemo(() => getBoardPrerequisiteStatuses(data), [data]);
 	const dependencyLinking = useDependencyLinking({
 		canLinkTasks,
 		onCreateDependency,
@@ -406,6 +407,7 @@ export function KanbanBoard({
 						editingTaskId={column.id === "backlog" ? editingTaskId : null}
 						inlineTaskEditor={column.id === "backlog" ? inlineTaskEditor : undefined}
 						onEditTask={column.id === "backlog" ? onEditTask : undefined}
+						prerequisiteStatuses={column.id === "backlog" ? prerequisiteStatuses : undefined}
 						onSaveTitle={column.id !== "trash" ? onSaveTaskTitle : undefined}
 						onCommitTask={column.id === "review" ? onCommitTask : undefined}
 						onOpenPrTask={column.id === "review" ? onOpenPrTask : undefined}

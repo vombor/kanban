@@ -23,7 +23,7 @@ function createBoard(): RuntimeBoardData {
 }
 
 describe("deleteTasksFromBoard", () => {
-	it("removes a trashed task and any dependencies that reference it", () => {
+	it("removes a trashed task and keeps its waiting card's link, marked as a Done prerequisite", () => {
 		const createA = addTaskToColumn(
 			createBoard(),
 			"backlog",
@@ -36,12 +36,12 @@ describe("deleteTasksFromBoard", () => {
 			throw new Error("Expected dependency to be created.");
 		}
 		const trashed = trashTaskAndGetReadyLinkedTaskIds(linked.board, "bbbbb");
-		const deleted = deleteTasksFromBoard(trashed.board, ["bbbbb"]);
+		const deleted = deleteTasksFromBoard(trashed.board, ["bbbbb"], 5_000);
 
 		expect(deleted.deleted).toBe(true);
 		expect(deleted.deletedTaskIds).toEqual(["bbbbb"]);
 		expect(deleted.board.columns.find((column) => column.id === "trash")?.cards).toEqual([]);
-		expect(deleted.board.dependencies).toEqual([]);
+		expect(deleted.board.dependencies).toEqual([{ ...linked.dependency, doneTaskDeletedAt: 5_000 }]);
 	});
 
 	it("removes multiple trashed tasks at once", () => {

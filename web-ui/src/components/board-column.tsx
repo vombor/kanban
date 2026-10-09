@@ -1,4 +1,5 @@
 import { Droppable } from "@hello-pangea/dnd";
+import type { TaskPrerequisiteStatus } from "@runtime-task-state";
 import { Play, Plus, Trash2 } from "lucide-react";
 import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { useState } from "react";
@@ -24,6 +25,7 @@ export function BoardColumn({
 	editingTaskId,
 	inlineTaskEditor,
 	onEditTask,
+	prerequisiteStatuses,
 	onSaveTitle,
 	onCommitTask,
 	onOpenPrTask,
@@ -53,6 +55,8 @@ export function BoardColumn({
 	editingTaskId?: string | null;
 	inlineTaskEditor?: ReactNode;
 	onEditTask?: (card: BoardCardModel) => void;
+	/** Backlog cards' prerequisites, keyed by card id. */
+	prerequisiteStatuses?: ReadonlyMap<string, TaskPrerequisiteStatus>;
 	onSaveTitle?: (taskId: string, title: string) => void;
 	onCommitTask?: (taskId: string) => void;
 	onOpenPrTask?: (taskId: string) => void;
@@ -179,6 +183,7 @@ export function BoardColumn({
 											index={draggableIndex}
 											columnId={column.id}
 											sessionSummary={taskSessions[card.id]}
+											prerequisiteStatus={prerequisiteStatuses?.get(card.id)}
 											onStart={onStartTask}
 											onMoveToTrash={onMoveToTrashTask}
 											onRestoreFromTrash={onRestoreFromTrashTask}

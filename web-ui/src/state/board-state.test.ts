@@ -9,9 +9,11 @@ import {
 	applyTaskDetailAgentSettingsSelection,
 	clearColumnTasks,
 	disableTaskAutoReview,
+	getBoardPrerequisiteStatuses,
 	getTaskColumnId,
 	moveTaskToColumn,
 	normalizeBoardData,
+	removeTask,
 	trashTaskAndGetReadyLinkedTaskIds,
 	updateTaskTitle,
 } from "@/state/board-state";
@@ -139,7 +141,7 @@ describe("board dependency state", () => {
 		]);
 	});
 
-	it("only unlocks backlog cards when a review card is trashed", () => {
+	it("unlocks a backlog card only once all of its review prerequisites are trashed", () => {
 		const fixture = createBacklogBoard(["Task A", "Task B", "Task C"]);
 		const taskA = requireTaskId(fixture.taskIdByPrompt["Task A"], "Task A");
 		const taskB = requireTaskId(fixture.taskIdByPrompt["Task B"], "Task B");
@@ -156,10 +158,10 @@ describe("board dependency state", () => {
 
 		const moveATrash = trashTaskAndGetReadyLinkedTaskIds(dependencyB.board, taskA);
 		expect(moveATrash.moved).toBe(true);
-		expect(moveATrash.board.dependencies).toHaveLength(1);
-		expect(moveATrash.readyTaskIds).toEqual([taskC]);
+		expect(moveATrash.board.dependencies).toHaveLength(2);
+		expect(moveATrash.readyTaskIds).toEqual([]);
 
-		const moveBTrash = trashTaskAndGetReadyLinkedTaskIds(dependencyB.board, taskB);
+		const moveBTrash = trashTaskAndGetReadyLinkedTaskIds(moveATrash.board, taskB);
 		expect(moveBTrash.moved).toBe(true);
 		expect(moveBTrash.readyTaskIds).toEqual([taskC]);
 	});
@@ -176,10 +178,11 @@ describe("board dependency state", () => {
 
 		const trashed = trashTaskAndGetReadyLinkedTaskIds(linked.board, taskA);
 		expect(trashed.readyTaskIds).toEqual([]);
-		expect(trashed.board.dependencies).toEqual([]);
+		// B still waits in Backlog, so its link to Done A stays and counts as done.
+		expect(trashed.board.dependencies).toHaveLength(1);
 	});
 
-	it("removes dependency links once both linked cards are in trash", () => {
+	it("keeps a backlog card's link to a trashed prerequisite until both are in trash", () => {
 		const fixture = createBacklogBoard(["Task A", "Task B"]);
 		const taskA = requireTaskId(fixture.taskIdByPrompt["Task A"], "Task A");
 		const taskB = requireTaskId(fixture.taskIdByPrompt["Task B"], "Task B");
@@ -191,7 +194,7 @@ describe("board dependency state", () => {
 		expect(linked.board.dependencies).toHaveLength(1);
 
 		const movedATrash = moveTaskToColumn(linked.board, taskA, "trash");
-		expect(movedATrash.board.dependencies).toHaveLength(0);
+		expect(movedATrash.board.dependencies).toHaveLength(1);
 
 		const movedBTrash = moveTaskToColumn(movedATrash.board, taskB, "trash");
 		expect(movedBTrash.board.dependencies).toHaveLength(0);
@@ -514,7 +517,7 @@ describe("board dependency state", () => {
 		expect(inProgressColumn?.cards.map((card) => card.id)).toEqual([taskC, taskA, taskB]);
 	});
 
-	it("removes dependencies when trash is cleared", () => {
+	it("keeps a waiting card's link, marked done, when its prerequisite is cleared from trash", () => {
 		const fixture = createBacklogBoard(["Task A", "Task B"]);
 		const taskA = requireTaskId(fixture.taskIdByPrompt["Task A"], "Task A");
 		const taskB = requireTaskId(fixture.taskIdByPrompt["Task B"], "Task B");
@@ -529,7 +532,29 @@ describe("board dependency state", () => {
 		expect(moved.moved).toBe(true);
 		const cleared = clearColumnTasks(moved.board, "trash");
 		expect(cleared.clearedTaskIds).toContain(taskA);
-		expect(cleared.board.dependencies).toEqual([]);
+		expect(cleared.board.dependencies).toEqual([
+			{ ...linked.dependency, fromTaskId: taskB, toTaskId: taskA, doneTaskDeletedAt: expect.any(Number) },
+		]);
+		// It survives the browser's own normalization of the saved board.
+		expect(normalizeBoardData(cleared.board)?.dependencies).toEqual(cleared.board.dependencies);
+	});
+
+	it("keeps a waiting card's link to a prerequisite deleted before Done, so the card does not start by itself", () => {
+		const fixture = createBacklogBoard(["Task A", "Task B"]);
+		const taskA = requireTaskId(fixture.taskIdByPrompt["Task A"], "Task A");
+		const taskB = requireTaskId(fixture.taskIdByPrompt["Task B"], "Task B");
+		const linked = addTaskDependency(fixture.board, taskB, taskA);
+		expect(linked.added).toBe(true);
+
+		const removed = removeTask(linked.board, taskA);
+		expect(removed.board.dependencies).toHaveLength(1);
+		expect(removed.board.dependencies[0]?.doneTaskDeletedAt).toBeUndefined();
+		expect(normalizeBoardData(removed.board)?.dependencies).toHaveLength(1);
+		expect(getBoardPrerequisiteStatuses(removed.board).get(taskB)).toMatchObject({
+			total: 1,
+			done: 0,
+			missingTaskIds: [taskA],
+		});
 	});
 
 	it("normalizes boards and keeps valid unique links", () => {

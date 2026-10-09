@@ -34,6 +34,7 @@ import {
 	removeTaskDependency,
 	updateTask,
 } from "../core/task-board-mutations";
+import { getTaskPrerequisiteStatus } from "../core/task-prerequisites";
 import { readSessionCredential } from "../isolation/cli-scope";
 import { type CardRoutingCheck, checkCardRouting, decideCardRouting } from "../kits/card-routing-check";
 import {
@@ -406,6 +407,8 @@ function formatTaskRecord(
 	columnId: RuntimeBoardColumnId,
 ): JsonRecord {
 	const session = state.sessions[task.id] ?? null;
+	// A Backlog card with links starts only once every prerequisite is Done (src/core/task-prerequisites.ts).
+	const prerequisites = getTaskPrerequisiteStatus(state.board, task.id);
 	return {
 		id: task.id,
 		prompt: task.prompt,
@@ -419,6 +422,16 @@ function formatTaskRecord(
 		...formatTaskAgentSettings(task.agentSettings),
 		createdAt: task.createdAt,
 		updatedAt: task.updatedAt,
+		...(prerequisites
+			? {
+					prerequisites: {
+						total: prerequisites.total,
+						done: prerequisites.done,
+						waitingOn: prerequisites.waitingOnTaskIds,
+						deletedBeforeDone: prerequisites.missingTaskIds,
+					},
+				}
+			: {}),
 		session: session
 			? {
 					state: session.state,
@@ -445,6 +458,7 @@ function formatDependencyRecord(
 		linkedTaskId: dependency.toTaskId,
 		linkedTaskColumn: getTaskColumnId(state.board, dependency.toTaskId),
 		createdAt: dependency.createdAt,
+		...(dependency.doneTaskDeletedAt !== undefined ? { doneTaskDeletedAt: dependency.doneTaskDeletedAt } : {}),
 	};
 }
 

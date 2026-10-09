@@ -45,7 +45,8 @@ describe("pending Done moves", () => {
 			throw new Error("Expected a pending move.");
 		}
 		const optimistic = trashTaskAndGetReadyLinkedTaskIds(board, "task-b").board;
-		expect(sortedDependencyIds(optimistic)).toEqual(["dep-2"]);
+		// task-linked still waits in Backlog, so its link to the Done card stays (fan-in).
+		expect(sortedDependencyIds(optimistic)).toEqual(["dep-1", "dep-2"]);
 
 		const restored = withoutPendingDoneMoves(optimistic, [move]);
 

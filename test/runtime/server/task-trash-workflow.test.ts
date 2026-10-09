@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RuntimeBoardData } from "../../../src/core/api-contract";
-import { trashTaskAndGetReadyLinkedTaskIds } from "../../../src/core/task-board-mutations";
+import {
+	getTaskColumnId,
+	moveTaskToColumn,
+	trashTaskAndGetReadyLinkedTaskIds,
+} from "../../../src/core/task-board-mutations";
 import {
 	type CreateTaskTrashWorkflowDependencies,
 	createTaskTrashWorkflow,
@@ -306,7 +310,8 @@ describe("task trash workflow", () => {
 		const board = createBoard(
 			{
 				backlog: [createCard({ id: "task-other" }), createCard({ id: "task-linked" })],
-				review: [createCard({ id: "task-1" }), createCard({ id: "task-2" })],
+				review: [createCard({ id: "task-1" })],
+				trash: [createCard({ id: "task-2" })],
 			},
 			[
 				{ id: "dep-1", fromTaskId: "task-linked", toTaskId: "task-1", createdAt: 0 },
@@ -320,48 +325,72 @@ describe("task trash workflow", () => {
 
 		const backlog = store.stored.board.columns.find((column) => column.id === "backlog");
 		expect(backlog?.cards.map((card) => card.id)).toEqual(["task-other", "task-linked"]);
-		// The link to the card still in Review survives, so finishing it later starts the task.
-		expect(store.stored.board.dependencies.map((dependency) => dependency.id)).toEqual(["dep-2"]);
+		// Both links to its Done prerequisites come back, so the card still counts 2 of 2.
+		expect(store.stored.board.dependencies.map((dependency) => dependency.id)).toEqual(["dep-1", "dep-2"]);
 	});
 
-	it("launches a linked task once when two of its blockers finish while it is still starting", async () => {
-		// Backlog card C is linked to Review cards A and B. A goes to Done, and B
-		// follows while C's worktree is still being set up.
+	it("starts a card with three prerequisites only once the third is Done (fan-in)", async () => {
+		const board = createBoard(
+			{
+				backlog: [createCard({ id: "task-d" })],
+				review: [createCard({ id: "task-a" }), createCard({ id: "task-b" }), createCard({ id: "task-c" })],
+			},
+			[
+				{ id: "dep-a", fromTaskId: "task-d", toTaskId: "task-a", createdAt: 0 },
+				{ id: "dep-b", fromTaskId: "task-d", toTaskId: "task-b", createdAt: 0 },
+				{ id: "dep-c", fromTaskId: "task-d", toTaskId: "task-c", createdAt: 0 },
+			],
+		);
+		const { store, effects, trash } = createHarness(board);
+
+		const first = await trash({ taskId: "task-b" });
+		const second = await trash({ taskId: "task-c" });
+		expect(first.readyTaskIds).toEqual([]);
+		expect(second.readyTaskIds).toEqual([]);
+		expect(findCardInBoard(store.stored.board, "task-d")?.columnId).toBe("backlog");
+		expect(effects.startTaskSession).not.toHaveBeenCalled();
+
+		const third = await trash({ taskId: "task-a" });
+		expect(third.readyTaskIds).toEqual(["task-d"]);
+		expect(third.autoStartedTasks).toEqual([{ taskId: "task-d", ok: true }]);
+		expect(effects.startTaskSession).toHaveBeenCalledTimes(1);
+		expect(findCardInBoard(store.stored.board, "task-d")?.columnId).toBe("in_progress");
+		// Neither card of any of its links is in Backlog any more.
+		expect(store.stored.board.dependencies).toEqual([]);
+	});
+
+	it("does not start a ready card whose prerequisite left Done before the claim", async () => {
 		const board = createBoard(
 			{
 				backlog: [createCard({ id: "task-c" })],
-				review: [createCard({ id: "task-a" }), createCard({ id: "task-b" })],
+				review: [createCard({ id: "task-a" })],
+				trash: [createCard({ id: "task-b" })],
 			},
 			[
 				{ id: "dep-a", fromTaskId: "task-c", toTaskId: "task-a", createdAt: 0 },
 				{ id: "dep-b", fromTaskId: "task-c", toTaskId: "task-b", createdAt: 0 },
 			],
 		);
-		const { store, effects, workflow } = createHarness(board);
-		let finishWorktreeSetup: () => void = () => {};
-		const worktreeSetupStarted = new Promise<void>((resolveStarted) => {
-			effects.ensureTaskWorktree.mockImplementationOnce(async (_scope, input) => {
-				resolveStarted();
-				await new Promise<void>((resolveSetup) => {
-					finishWorktreeSetup = resolveSetup;
-				});
-				return { ok: true, path: `/worktrees/${input.taskId}`, baseRef: input.baseRef, baseCommit: "base-commit" };
-			});
+		const store = createWorkspaceStateStore({ board, sessions: {}, revision: 1 });
+		const effects = createFakeTaskTrashWorkflowDependencies(store);
+		const workflow = createTaskTrashWorkflow({
+			...effects.dependencies,
+			mutateWorkspaceState: (path, mutator) =>
+				store.mutateWorkspaceState(path, (state) => {
+					// Once task-a is Done, someone restores task-b from Done before the claim.
+					if (getTaskColumnId(state.board, "task-a") !== "trash") {
+						return mutator(state);
+					}
+					return mutator({ ...state, board: moveTaskToColumn(state.board, "task-b", "review").board });
+				}),
 		});
 
-		const first = workflow.trashTask({ ...SCOPE, taskId: "task-a", trigger: "browser" });
-		await worktreeSetupStarted;
-		expect(findCardInBoard(store.stored.board, "task-c")?.columnId).toBe("in_progress");
-		const second = await workflow.trashTask({ ...SCOPE, taskId: "task-b", trigger: "browser" });
-		finishWorktreeSetup();
-		const firstResult = await first;
+		const result = await workflow.trashTask({ ...SCOPE, taskId: "task-a", trigger: "browser" });
 
-		expect(second.status).toBe("trashed");
-		expect(second.autoStartedTasks).toEqual([]);
-		expect(firstResult.autoStartedTasks).toEqual([{ taskId: "task-c", ok: true }]);
-		expect(effects.ensureTaskWorktree).toHaveBeenCalledTimes(1);
-		expect(effects.startTaskSession).toHaveBeenCalledTimes(1);
-		expect(findCardInBoard(store.stored.board, "task-c")?.columnId).toBe("in_progress");
+		expect(result.readyTaskIds).toEqual(["task-c"]);
+		expect(result.autoStartedTasks).toEqual([]);
+		expect(effects.startTaskSession).not.toHaveBeenCalled();
+		expect(findCardInBoard(store.stored.board, "task-c")?.columnId).toBe("backlog");
 	});
 
 	it("reports a worktree cleanup failure without failing the move", async () => {

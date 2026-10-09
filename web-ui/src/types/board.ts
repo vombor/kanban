@@ -154,6 +154,8 @@ export interface BoardDependency {
 	fromTaskId: string;
 	toTaskId: string;
 	createdAt: number;
+	/** The prerequisite was deleted while Done: it still counts as Done (src/core/task-prerequisites.ts). */
+	doneTaskDeletedAt?: number;
 }
 
 export interface BoardData {

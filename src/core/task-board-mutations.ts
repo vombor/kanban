@@ -13,7 +13,21 @@ import type {
 } from "./api-contract";
 import { cloneRuntimeTaskAgentSettings } from "./task-agent-settings";
 import { createUniqueTaskId } from "./task-id";
+import {
+	arePrerequisitesDone,
+	getDependenciesAfterTasksDeleted,
+	getTaskPrerequisiteStatus,
+} from "./task-prerequisites";
 import { resolveTaskTitle } from "./task-title";
+
+// The browser reaches the fan-in rules through this module (its @runtime-task-state alias).
+export {
+	arePrerequisitesDone,
+	getBoardPrerequisiteStatuses,
+	getDependenciesAfterTasksDeleted,
+	getTaskPrerequisiteStatus,
+	type TaskPrerequisiteStatus,
+} from "./task-prerequisites";
 
 /**
  * How long a persisted pending git action stays armed before it is treated as
@@ -120,16 +134,6 @@ function collectExistingTaskIds(board: RuntimeBoardData): Set<string> {
 	return existingIds;
 }
 
-function collectTaskIds(board: RuntimeBoardData): Set<string> {
-	const taskIds = new Set<string>();
-	for (const column of board.columns) {
-		for (const card of column.cards) {
-			taskIds.add(card.id);
-		}
-	}
-	return taskIds;
-}
-
 function createDependencyId(): string {
 	return crypto.randomUUID().replaceAll("-", "").slice(0, 8);
 }
@@ -214,6 +218,10 @@ function resolveDependencyEndpoints(
 		: { backlogTaskId: secondTaskId, linkedTaskId: firstTaskId };
 }
 
+/**
+ * The Backlog cards to start now that `taskId` went from Review to Done: those linked to it whose prerequisites
+ * are now all Done (fan-in, src/core/task-prerequisites.ts). `board` is the board with `taskId` in Done.
+ */
 function getLinkedBacklogTaskIdsReadyAfterTaskTrashed(
 	board: RuntimeBoardData,
 	taskId: string,
@@ -224,22 +232,42 @@ function getLinkedBacklogTaskIdsReadyAfterTaskTrashed(
 	}
 	const readyTaskIds = new Set<string>();
 	for (const dependency of board.dependencies) {
-		if (dependency.toTaskId !== taskId) {
+		if (dependency.toTaskId !== taskId || readyTaskIds.has(dependency.fromTaskId)) {
 			continue;
 		}
-		if (getTaskColumnId(board, dependency.fromTaskId) !== "backlog") {
-			continue;
+		const status = getTaskPrerequisiteStatus(board, dependency.fromTaskId);
+		if (status && arePrerequisitesDone(status)) {
+			readyTaskIds.add(dependency.fromTaskId);
 		}
-		readyTaskIds.add(dependency.fromTaskId);
 	}
 	return [...readyTaskIds];
+}
+
+/**
+ * Where a link stands on this board: `fromTaskId` waits on `toTaskId`, or null when the link is to be dropped.
+ * Between cards on the board the usual rules apply (the Backlog card waits; it flips when one of two Backlog cards
+ * leaves; it goes once neither is in Backlog). Fan-in adds two: a Backlog card keeps its link to a prerequisite in
+ * Done, and to one no longer on the board, until the card itself leaves Backlog, so its count of prerequisites
+ * holds (src/core/task-prerequisites.ts).
+ */
+function resolveStoredDependency(
+	board: RuntimeBoardData,
+	fromTaskId: string,
+	toTaskId: string,
+): { backlogTaskId: string; linkedTaskId: string } | null {
+	const fromColumnId = getTaskColumnId(board, fromTaskId);
+	const toColumnId = getTaskColumnId(board, toTaskId);
+	if (fromColumnId === "backlog" && (toColumnId === null || toColumnId === "trash")) {
+		return { backlogTaskId: fromTaskId, linkedTaskId: toTaskId };
+	}
+	const resolved = resolveDependencyEndpoints(board, fromTaskId, toTaskId);
+	return "reason" in resolved ? null : resolved;
 }
 
 export function updateTaskDependencies(board: RuntimeBoardData): RuntimeBoardData {
 	if (board.dependencies.length === 0) {
 		return board;
 	}
-	const taskIds = collectTaskIds(board);
 	const dependencies: RuntimeBoardDependency[] = [];
 	const existingPairs = new Set<string>();
 	for (const dependency of board.dependencies) {
@@ -248,11 +276,8 @@ export function updateTaskDependencies(board: RuntimeBoardData): RuntimeBoardDat
 		if (!firstTaskId || !secondTaskId || firstTaskId === secondTaskId) {
 			continue;
 		}
-		if (!taskIds.has(firstTaskId) || !taskIds.has(secondTaskId)) {
-			continue;
-		}
-		const resolved = resolveDependencyEndpoints(board, firstTaskId, secondTaskId);
-		if ("reason" in resolved) {
+		const resolved = resolveStoredDependency(board, firstTaskId, secondTaskId);
+		if (!resolved) {
 			continue;
 		}
 		const pairKey = createDependencyPairKey(resolved.backlogTaskId, resolved.linkedTaskId);
@@ -260,11 +285,15 @@ export function updateTaskDependencies(board: RuntimeBoardData): RuntimeBoardDat
 			continue;
 		}
 		existingPairs.add(pairKey);
+		// The deletion mark only means something while the prerequisite is off the board.
+		const keepsDeletionMark =
+			dependency.doneTaskDeletedAt !== undefined && getTaskColumnId(board, resolved.linkedTaskId) === null;
 		dependencies.push({
 			id: dependency.id,
 			fromTaskId: resolved.backlogTaskId,
 			toTaskId: resolved.linkedTaskId,
 			createdAt: dependency.createdAt,
+			...(keepsDeletionMark ? { doneTaskDeletedAt: dependency.doneTaskDeletedAt } : {}),
 		});
 	}
 	if (
@@ -276,7 +305,8 @@ export function updateTaskDependencies(board: RuntimeBoardData): RuntimeBoardDat
 				current.id === dependency.id &&
 				current.fromTaskId === dependency.fromTaskId &&
 				current.toTaskId === dependency.toTaskId &&
-				current.createdAt === dependency.createdAt
+				current.createdAt === dependency.createdAt &&
+				current.doneTaskDeletedAt === dependency.doneTaskDeletedAt
 			);
 		})
 	) {
@@ -433,16 +463,20 @@ export function trashTaskAndGetReadyLinkedTaskIds(
 	taskId: string,
 	now: number = Date.now(),
 ): RuntimeTrashTaskResult {
-	const fromColumnId = getTaskColumnId(board, taskId);
-	const readyTaskIds = getLinkedBacklogTaskIdsReadyAfterTaskTrashed(board, taskId, fromColumnId);
 	const movedToTrash = moveTaskToColumn(board, taskId, "trash", now);
 	return {
 		...movedToTrash,
-		readyTaskIds: movedToTrash.moved ? readyTaskIds : [],
+		readyTaskIds: movedToTrash.moved
+			? getLinkedBacklogTaskIdsReadyAfterTaskTrashed(movedToTrash.board, taskId, movedToTrash.fromColumnId)
+			: [],
 	};
 }
 
-export function deleteTasksFromBoard(board: RuntimeBoardData, taskIds: Iterable<string>): RuntimeDeleteTasksResult {
+export function deleteTasksFromBoard(
+	board: RuntimeBoardData,
+	taskIds: Iterable<string>,
+	now: number = Date.now(),
+): RuntimeDeleteTasksResult {
 	const normalizedTaskIds = new Set(
 		Array.from(taskIds, (taskId) => taskId.trim()).filter((taskId) => taskId.length > 0),
 	);
@@ -474,10 +508,7 @@ export function deleteTasksFromBoard(board: RuntimeBoardData, taskIds: Iterable<
 		};
 	}
 
-	const deletedTaskIdSet = new Set(deletedTaskIds);
-	const dependencies = board.dependencies.filter(
-		(dependency) => !deletedTaskIdSet.has(dependency.fromTaskId) && !deletedTaskIdSet.has(dependency.toTaskId),
-	);
+	const dependencies = getDependenciesAfterTasksDeleted(board, new Set(deletedTaskIds), now);
 
 	return {
 		board: {

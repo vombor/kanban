@@ -272,13 +272,15 @@ function normalizeDependency(rawDependency: unknown, taskIds: Set<string>): Boar
 		fromTaskId?: unknown;
 		toTaskId?: unknown;
 		createdAt?: unknown;
+		doneTaskDeletedAt?: unknown;
 	};
 	const fromTaskId = typeof dependency.fromTaskId === "string" ? dependency.fromTaskId.trim() : "";
 	const toTaskId = typeof dependency.toTaskId === "string" ? dependency.toTaskId.trim() : "";
 	if (!fromTaskId || !toTaskId || fromTaskId === toTaskId) {
 		return null;
 	}
-	if (!taskIds.has(fromTaskId) || !taskIds.has(toTaskId)) {
+	// A prerequisite no longer on the board stays linked while its card waits (fan-in); the runtime's rules decide.
+	if (!taskIds.has(fromTaskId)) {
 		return null;
 	}
 
@@ -287,21 +289,22 @@ function normalizeDependency(rawDependency: unknown, taskIds: Set<string>): Boar
 		fromTaskId,
 		toTaskId,
 		createdAt: typeof dependency.createdAt === "number" ? dependency.createdAt : Date.now(),
+		...(typeof dependency.doneTaskDeletedAt === "number" ? { doneTaskDeletedAt: dependency.doneTaskDeletedAt } : {}),
 	};
 }
-function removeDependenciesByTaskIds(board: BoardData, taskIds: Set<string>): BoardData {
-	if (taskIds.size === 0 || board.dependencies.length === 0) {
-		return board;
-	}
-	const dependencies = board.dependencies.filter(
-		(dependency) => !taskIds.has(dependency.fromTaskId) && !taskIds.has(dependency.toTaskId),
-	);
-	if (dependencies.length === board.dependencies.length) {
+/** `boardBeforeDelete`'s links once `taskIds` are gone, by the runtime's rule (a waiting card keeps its prerequisites). */
+function removeDependenciesByTaskIds(
+	boardBeforeDelete: BoardData,
+	columns: BoardColumn[],
+	taskIds: Set<string>,
+): BoardData {
+	const board = withUpdatedColumns(boardBeforeDelete, columns);
+	if (taskIds.size === 0 || boardBeforeDelete.dependencies.length === 0) {
 		return board;
 	}
 	return {
 		...board,
-		dependencies,
+		dependencies: runtimeTaskState.getDependenciesAfterTasksDeleted(boardBeforeDelete, taskIds, Date.now()),
 	};
 }
 export function normalizeBoardData(rawBoard: unknown): BoardData | null {
@@ -417,6 +420,10 @@ export function canCreateTaskDependency(board: BoardData, fromTaskId: string, to
 
 export function removeTaskDependency(board: BoardData, dependencyId: string): { board: BoardData; removed: boolean } {
 	return runtimeTaskState.removeTaskDependency(board, dependencyId);
+}
+
+export function getBoardPrerequisiteStatuses(board: BoardData): Map<string, runtimeTaskState.TaskPrerequisiteStatus> {
+	return runtimeTaskState.getBoardPrerequisiteStatuses(board);
 }
 
 export function getReadyLinkedTaskIdsForTaskInTrash(board: BoardData, taskId: string): string[] {
@@ -725,9 +732,8 @@ export function removeTask(board: BoardData, taskId: string): { board: BoardData
 	if (!removed) {
 		return { board, removed: false };
 	}
-	const boardWithUpdatedColumns = withUpdatedColumns(board, columns);
 	return {
-		board: removeDependenciesByTaskIds(boardWithUpdatedColumns, new Set([taskId])),
+		board: removeDependenciesByTaskIds(board, columns, new Set([taskId])),
 		removed: true,
 	};
 }
@@ -743,10 +749,8 @@ export function clearColumnTasks(
 
 	const clearedTaskIds = targetColumn.cards.map((card) => card.id);
 	const columns = board.columns.map((column) => (column.id === columnId ? { ...column, cards: [] } : column));
-	const boardWithUpdatedColumns = withUpdatedColumns(board, columns);
-
 	return {
-		board: removeDependenciesByTaskIds(boardWithUpdatedColumns, new Set(clearedTaskIds)),
+		board: removeDependenciesByTaskIds(board, columns, new Set(clearedTaskIds)),
 		clearedTaskIds,
 	};
 }

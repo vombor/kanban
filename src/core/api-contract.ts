@@ -238,6 +238,8 @@ export const runtimeBoardDependencySchema = z.object({
 	fromTaskId: z.string(),
 	toTaskId: z.string(),
 	createdAt: z.number(),
+	/** Set when the prerequisite (`toTaskId`) was deleted from the board while Done: it still counts as Done. */
+	doneTaskDeletedAt: z.number().optional(),
 });
 export type RuntimeBoardDependency = z.infer<typeof runtimeBoardDependencySchema>;
 

@@ -27,6 +27,7 @@ import type {
 	RuntimeTaskRole,
 } from "../../core/api-contract";
 import { resolveCardRole } from "../../core/card-role";
+import { arePrerequisitesDone, getBoardPrerequisiteStatuses } from "../../core/task-prerequisites";
 import { isReviewSettled } from "../../terminal/review-settle";
 import { type EmptyDiffRecord, readCurrentEmptyDiff } from "../empty-diff";
 import type { PipelineSessionView } from "../engine";
@@ -344,8 +345,12 @@ export function detectPipelineIdle(input: {
 	if (cards.some(({ column }) => column === "in_progress" || column === "review")) {
 		return null;
 	}
-	// A dependency's fromTaskId waits on its toTaskId.
-	const waiting = new Set(input.board.dependencies.map((dependency) => dependency.fromTaskId));
+	// A card waits while one of its prerequisites is not Done; one whose prerequisites are all Done is a head too.
+	const waiting = new Set(
+		[...getBoardPrerequisiteStatuses(input.board)]
+			.filter(([, status]) => !arePrerequisitesDone(status))
+			.map(([taskId]) => taskId),
+	);
 	const heads = cards.filter(
 		({ column, card }) =>
 			column === "backlog" &&

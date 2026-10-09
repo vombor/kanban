@@ -1,9 +1,10 @@
 import { Draggable } from "@hello-pangea/dnd";
 import { getRuntimeAgentCatalogEntry } from "@runtime-agent-catalog";
 import { isKanbanLandedCard } from "@runtime-card-role";
+import type { TaskPrerequisiteStatus } from "@runtime-task-state";
 import { buildTaskWorktreeDisplayPath } from "@runtime-task-worktree-path";
 import { formatToolCallLabel } from "@runtime-tool-call-display";
-import { AlertCircle, AlertTriangle, Bot, GitBranch, Pencil, Play, RotateCcw, Trash2 } from "lucide-react";
+import { AlertCircle, AlertTriangle, Bot, GitBranch, Link2, Pencil, Play, RotateCcw, Trash2 } from "lucide-react";
 import type { KeyboardEvent, MouseEvent } from "react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -21,6 +22,7 @@ import type { BoardCard as BoardCardModel, BoardColumnId } from "@/types";
 import { getTaskAutoReviewCancelButtonLabel, getTaskRoleBadgeLabel } from "@/types";
 import { formatPathForDisplay } from "@/utils/path-display";
 import { useMeasure } from "@/utils/react-use";
+import { getTaskPrerequisiteLabel } from "@/utils/task-prerequisites-label";
 import {
 	clampTextWithInlineSuffix,
 	getTaskPromptDescription,
@@ -221,6 +223,7 @@ export const BoardCard = memo(function BoardCard({
 	index,
 	columnId,
 	sessionSummary,
+	prerequisiteStatus,
 	selected = false,
 	onClick,
 	onStart,
@@ -244,6 +247,8 @@ export const BoardCard = memo(function BoardCard({
 	index: number;
 	columnId: BoardColumnId;
 	sessionSummary?: RuntimeTaskSessionSummary;
+	/** A Backlog card's prerequisites (src/core/task-prerequisites.ts). */
+	prerequisiteStatus?: TaskPrerequisiteStatus;
 	selected?: boolean;
 	onClick?: (card: BoardCardModel) => void;
 	onStart?: (taskId: string) => void;
@@ -267,6 +272,10 @@ export const BoardCard = memo(function BoardCard({
 	const [isEditingTitle, setIsEditingTitle] = useState(false);
 	const [draftTitle, setDraftTitle] = useState(card.title);
 	const roleBadgeLabel = getTaskRoleBadgeLabel(card.role);
+	const prerequisiteLabel = useMemo(
+		() => (prerequisiteStatus ? getTaskPrerequisiteLabel(prerequisiteStatus) : null),
+		[prerequisiteStatus],
+	);
 	const titleInputRef = useRef<HTMLInputElement | null>(null);
 	const titleEditCancelledRef = useRef(false);
 	const [descriptionContainerRef, descriptionRect] = useMeasure<HTMLDivElement>();
@@ -763,6 +772,23 @@ export const BoardCard = memo(function BoardCard({
 										<Bot size={12} className="shrink-0" />
 										<span className="truncate">{taskAgentSettingsLabel}</span>
 									</span>
+								) : null}
+								{prerequisiteLabel ? (
+									<Tooltip side="bottom" content={prerequisiteLabel.detail}>
+										<span
+											data-testid="board-card-prerequisites"
+											className={cn(
+												"inline-flex min-w-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-xs",
+												prerequisiteLabel.tone === "done" && "border-status-green/30 text-status-green",
+												prerequisiteLabel.tone === "waiting" && "border-border text-text-secondary",
+												prerequisiteLabel.tone === "blocked" &&
+													"border-status-orange/30 text-status-orange",
+											)}
+										>
+											<Link2 size={12} className="shrink-0" />
+											<span className="truncate">{prerequisiteLabel.text}</span>
+										</span>
+									</Tooltip>
 								) : null}
 								<BoardCardTaskId taskId={card.id} />
 							</div>
