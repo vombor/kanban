@@ -103,6 +103,7 @@ export default function App(): ReactElement {
 		workspaceState: streamedWorkspaceState,
 		workspaceMetadata,
 		latestTaskReadyForReview,
+		shortcutsUpdatedAt,
 		streamError,
 		isRuntimeDisconnected,
 		hasReceivedSnapshot,
@@ -140,6 +141,12 @@ export default function App(): ReactElement {
 	useEffect(() => {
 		setCurrentWorkspaceId(currentProjectId);
 	}, [currentProjectId]);
+	// `kanban shortcut add|remove` changed the project's shortcuts: reload them into the top bar.
+	useEffect(() => {
+		if (shortcutsUpdatedAt !== null) {
+			refreshRuntimeProjectConfig();
+		}
+	}, [refreshRuntimeProjectConfig, shortcutsUpdatedAt]);
 	const isTaskAgentReady = isTaskAgentSetupSatisfied(runtimeProjectConfig);
 	const settingsWorkspaceId = navigationCurrentProjectId ?? currentProjectId;
 	const { config: settingsRuntimeProjectConfig, refresh: refreshSettingsRuntimeProjectConfig } =

@@ -6,6 +6,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import type {
 	RuntimeStateStreamErrorMessage,
 	RuntimeStateStreamMessage,
+	RuntimeStateStreamProjectShortcutsMessage,
 	RuntimeStateStreamProjectsMessage,
 	RuntimeStateStreamSnapshotMessage,
 	RuntimeStateStreamTaskReadyForReviewMessage,
@@ -61,6 +62,7 @@ export interface RuntimeStateHub {
 	broadcastRuntimeWorkspaceStateUpdated: (workspaceId: string, workspacePath: string) => Promise<void>;
 	broadcastRuntimeProjectsUpdated: (preferredCurrentProjectId: string | null) => Promise<void>;
 	broadcastTaskReadyForReview: (workspaceId: string, taskId: string) => void;
+	broadcastProjectShortcutsUpdated: (workspaceId: string) => void;
 	close: () => Promise<void>;
 }
 
@@ -277,6 +279,17 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 		}
 	};
 
+	const broadcastProjectShortcutsUpdated = (workspaceId: string) => {
+		const payload: RuntimeStateStreamProjectShortcutsMessage = {
+			type: "project_shortcuts_updated",
+			workspaceId,
+			updatedAt: Date.now(),
+		};
+		for (const client of runtimeStateClientsByWorkspaceId.get(workspaceId) ?? []) {
+			sendRuntimeStateMessage(client, payload);
+		}
+	};
+
 	runtimeStateWebSocketServer.on("connection", async (client: WebSocket, context: unknown) => {
 		client.on("close", () => {
 			cleanupRuntimeStateClient(client);
@@ -462,6 +475,7 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 		broadcastRuntimeWorkspaceStateUpdated,
 		broadcastRuntimeProjectsUpdated,
 		broadcastTaskReadyForReview,
+		broadcastProjectShortcutsUpdated,
 		close: async () => {
 			stopKeepalive();
 			activityListeners.clear();

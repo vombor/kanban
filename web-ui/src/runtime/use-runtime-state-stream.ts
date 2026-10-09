@@ -47,6 +47,8 @@ export interface UseRuntimeStateStreamResult {
 	workspaceState: RuntimeWorkspaceStateResponse | null;
 	workspaceMetadata: RuntimeWorkspaceMetadata | null;
 	latestTaskReadyForReview: RuntimeStateStreamTaskReadyForReviewMessage | null;
+	/** When the current project's shortcuts last changed outside the settings dialog (`kanban shortcut`). */
+	shortcutsUpdatedAt: number | null;
 	streamError: string | null;
 	isRuntimeDisconnected: boolean;
 	hasReceivedSnapshot: boolean;
@@ -58,6 +60,8 @@ interface RuntimeStateStreamStore {
 	workspaceState: RuntimeWorkspaceStateResponse | null;
 	workspaceMetadata: RuntimeWorkspaceMetadata | null;
 	latestTaskReadyForReview: RuntimeStateStreamTaskReadyForReviewMessage | null;
+	/** When the current project's shortcuts last changed outside the settings dialog (`kanban shortcut`). */
+	shortcutsUpdatedAt: number | null;
 	streamError: string | null;
 	isRuntimeDisconnected: boolean;
 	hasReceivedSnapshot: boolean;
@@ -74,6 +78,7 @@ type RuntimeStateStreamAction =
 	  }
 	| { type: "workspace_metadata_updated"; workspaceMetadata: RuntimeWorkspaceMetadata }
 	| { type: "task_ready_for_review"; payload: RuntimeStateStreamTaskReadyForReviewMessage }
+	| { type: "project_shortcuts_updated"; updatedAt: number }
 	| { type: "workspace_state_updated"; workspaceState: RuntimeWorkspaceStateResponse }
 	| { type: "task_sessions_updated"; summaries: RuntimeTaskSessionSummary[] }
 	| { type: "stream_error"; message: string }
@@ -86,6 +91,7 @@ function createInitialRuntimeStateStreamStore(requestedWorkspaceId: string | nul
 		workspaceState: null,
 		workspaceMetadata: null,
 		latestTaskReadyForReview: null,
+		shortcutsUpdatedAt: null,
 		streamError: null,
 		isRuntimeDisconnected: false,
 		hasReceivedSnapshot: false,
@@ -139,6 +145,7 @@ function runtimeStateStreamReducer(
 			workspaceState: nextWorkspaceState,
 			workspaceMetadata: action.payload.workspaceMetadata,
 			latestTaskReadyForReview: state.latestTaskReadyForReview,
+			shortcutsUpdatedAt: state.shortcutsUpdatedAt,
 			streamError: null,
 			isRuntimeDisconnected: false,
 			hasReceivedSnapshot: true,
@@ -166,6 +173,12 @@ function runtimeStateStreamReducer(
 		return {
 			...state,
 			latestTaskReadyForReview: action.payload,
+		};
+	}
+	if (action.type === "project_shortcuts_updated") {
+		return {
+			...state,
+			shortcutsUpdatedAt: action.updatedAt,
 		};
 	}
 	if (action.type === "workspace_state_updated") {
@@ -328,6 +341,13 @@ export function useRuntimeStateStream(requestedWorkspaceId: string | null): UseR
 						});
 						return;
 					}
+					if (payload.type === "project_shortcuts_updated") {
+						if (payload.workspaceId !== activeWorkspaceId) {
+							return;
+						}
+						dispatch({ type: "project_shortcuts_updated", updatedAt: payload.updatedAt });
+						return;
+					}
 					if (payload.type === "task_ready_for_review") {
 						if (payload.workspaceId !== activeWorkspaceId) {
 							return;
@@ -423,6 +443,7 @@ export function useRuntimeStateStream(requestedWorkspaceId: string | null): UseR
 		workspaceState: state.workspaceState,
 		workspaceMetadata: state.workspaceMetadata,
 		latestTaskReadyForReview: state.latestTaskReadyForReview,
+		shortcutsUpdatedAt: state.shortcutsUpdatedAt,
 		streamError: state.streamError,
 		isRuntimeDisconnected: state.isRuntimeDisconnected,
 		hasReceivedSnapshot: state.hasReceivedSnapshot,

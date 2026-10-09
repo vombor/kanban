@@ -6,6 +6,7 @@ import {
 	getKanbanRuntimePort,
 	isKanbanRemoteHost,
 } from "../core/runtime-endpoint";
+import { isShortcutPortProxyPath } from "./shortcut-ports";
 
 export type CorsDecision =
 	| { kind: "allow"; origin: string | null }
@@ -120,6 +121,12 @@ export function handleHttpRequest(req: IncomingMessage, res: ServerResponse): { 
 		return rejectRequest(res, "Host not allowed.");
 	}
 
+	// A page behind the shortcut-port proxy runs sandboxed in an opaque origin (src/server/shortcut-ports.ts), so its
+	// own requests say `Origin: null`: let through to that proxy only, never to Kanban's API, with no CORS headers.
+	// The resolved path decides (dot segments included), the same one the server routes by.
+	if (req.headers.origin === "null" && isShortcutPortProxyPath(new URL(req.url ?? "/", "http://localhost").pathname)) {
+		return { end: false };
+	}
 	const corsDecision = evaluateCors({
 		method: req.method,
 		originHeader: req.headers.origin,

@@ -60,6 +60,7 @@ import { createKitSettingsApi } from "../trpc/kit-settings-api";
 import { createPlansApi } from "../trpc/plans-api";
 import { createProjectsApi } from "../trpc/projects-api";
 import { createRuntimeApi } from "../trpc/runtime-api";
+import { createShortcutsApi } from "../trpc/shortcuts-api";
 import { createWorkspaceApi } from "../trpc/workspace-api";
 import {
 	deleteTaskWorktree,
@@ -75,6 +76,7 @@ import { createProcessReaper, type PreparedWorktreeReap } from "./process-reaper
 import { createProcProcessTableReader, isProcessTableSupported } from "./process-table";
 import { buildCallerRequest, createRequestCallerResolver } from "./request-caller";
 import type { RuntimeStateHub } from "./runtime-state-hub";
+import { createShortcutPortProxyHandler, createShortcutPortRegistry, isShortcutPortProxyPath } from "./shortcut-ports";
 import { createTaskLandingGate } from "./task-landing-gate";
 import { createTaskTrashWorkflow, createTrashTaskRequestHandler, type TaskTrashWorkflow } from "./task-trash-workflow";
 import { createWatchdogActionHandler } from "./watchdog-actions";
@@ -346,6 +348,18 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 	});
 	const plansApi = createPlansApi({ log: isolation.log });
 	const kitSettingsApi = createKitSettingsApi({ log: isolation.log });
+	// Shortcut runs that ask for a port, and the proxy the browser reaches those ports through (shortcut-ports.ts).
+	const shortcutPorts = createShortcutPortRegistry();
+	const handleShortcutPortProxyRequest = createShortcutPortProxyHandler({
+		ports: shortcutPorts,
+		tls: getKanbanRuntimeTls() !== null,
+		log: deps.warn,
+	});
+	const shortcutsApi = createShortcutsApi({
+		log: isolation.log,
+		ports: shortcutPorts,
+		onChanged: (workspaceId) => deps.runtimeStateHub.broadcastProjectShortcutsUpdated(workspaceId),
+	});
 
 	const handleWatchdogRequest = createWatchdogActionHandler({
 		getWorkspacePathById: deps.workspaceRegistry.getWorkspacePathById,
@@ -435,6 +449,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			isolationApi,
 			plansApi,
 			kitSettingsApi,
+			shortcutsApi,
 			runtimeApi,
 			workspaceApi: createWorkspaceApi({
 				ensureTerminalManagerForWorkspace: deps.ensureTerminalManagerForWorkspace,
@@ -625,6 +640,10 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			}
 			// ── End passcode gate ──────────────────────────────────────────────
 
+			if (isShortcutPortProxyPath(pathname)) {
+				await handleShortcutPortProxyRequest(req, res);
+				return;
+			}
 			if (pathname.startsWith("/api/trpc")) {
 				await trpcHttpHandler(req, res);
 				return;

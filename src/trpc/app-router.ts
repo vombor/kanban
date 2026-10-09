@@ -172,6 +172,15 @@ import {
 	planPreviewResponseSchema,
 	type RuntimePlansApi,
 } from "./plans-api";
+import {
+	type RuntimeShortcutsApi,
+	shortcutAddRequestSchema,
+	shortcutChangeResponseSchema,
+	shortcutListResponseSchema,
+	shortcutPrepareRunRequestSchema,
+	shortcutPrepareRunResponseSchema,
+	shortcutRemoveRequestSchema,
+} from "./shortcuts-api";
 
 export interface RuntimeTrpcWorkspaceScope {
 	workspaceId: string;
@@ -203,6 +212,8 @@ export interface RuntimeTrpcContext {
 	plansApi?: RuntimePlansApi;
 	/** A project's settings on its kit (src/trpc/kit-settings-api.ts); absent = not available. */
 	kitSettingsApi?: RuntimeKitSettingsApi;
+	/** A project's shortcuts from the CLI, and a run's port (src/trpc/shortcuts-api.ts); absent = not available. */
+	shortcutsApi?: RuntimeShortcutsApi;
 	runtimeApi: {
 		loadConfig: (scope: RuntimeTrpcWorkspaceScope | null) => Promise<RuntimeConfigResponse>;
 		saveConfig: (
@@ -866,6 +877,59 @@ export const runtimeAppRouter = t.router({
 				return await ctx.kitSettingsApi.unset({
 					caller: await readStrictCaller(ctx),
 					workspaceId: ctx.workspaceScope.workspaceId,
+					request: input,
+				});
+			}),
+	}),
+	// A project's shortcuts (src/trpc/shortcuts-api.ts): changed by the user and that project's orchestrator; a run's
+	// port ({port} / {url}) for the user's click.
+	shortcuts: t.router({
+		list: workspaceProcedure.output(shortcutListResponseSchema).query(async ({ ctx }) => {
+			if (!ctx.shortcutsApi) {
+				return { shortcuts: [] };
+			}
+			return await ctx.shortcutsApi.list(ctx.workspaceScope.workspacePath);
+		}),
+		add: workspaceProcedure
+			.input(shortcutAddRequestSchema)
+			.output(shortcutChangeResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.shortcutsApi) {
+					return { ok: false, shortcuts: [], change: null, error: "Shortcuts are not available here." };
+				}
+				// In every isolation mode: a session without its credential is traced to its process tree.
+				return await ctx.shortcutsApi.add({
+					caller: await readStrictCaller(ctx),
+					workspaceId: ctx.workspaceScope.workspaceId,
+					repoPath: ctx.workspaceScope.workspacePath,
+					request: input,
+				});
+			}),
+		remove: workspaceProcedure
+			.input(shortcutRemoveRequestSchema)
+			.output(shortcutChangeResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.shortcutsApi) {
+					return { ok: false, shortcuts: [], change: null, error: "Shortcuts are not available here." };
+				}
+				return await ctx.shortcutsApi.remove({
+					caller: await readStrictCaller(ctx),
+					workspaceId: ctx.workspaceScope.workspaceId,
+					repoPath: ctx.workspaceScope.workspacePath,
+					request: input,
+				});
+			}),
+		prepareRun: workspaceProcedure
+			.input(shortcutPrepareRunRequestSchema)
+			.output(shortcutPrepareRunResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.shortcutsApi) {
+					return { ok: false, command: null, port: null, url: null, error: "Shortcuts are not available here." };
+				}
+				return await ctx.shortcutsApi.prepareRun({
+					caller: await readStrictCaller(ctx),
+					workspaceId: ctx.workspaceScope.workspaceId,
+					repoPath: ctx.workspaceScope.workspacePath,
 					request: input,
 				});
 			}),

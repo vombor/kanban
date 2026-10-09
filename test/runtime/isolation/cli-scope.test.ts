@@ -170,6 +170,42 @@ describe("applyCliSessionScope", () => {
 		});
 	});
 
+	it("refuses shortcut add/remove from a card session (isolation off included), allows the orchestrator and the user", async () => {
+		await withTemporaryKanbanHome(async () => {
+			const asRole = (role: "card" | "orchestrator") => () => ({
+				isolation: {
+					whoami: {
+						query: vi.fn(async () => ({
+							caller: "session",
+							workspaceId: "a",
+							taskId: role === "card" ? "t1" : null,
+							role,
+							mode: "off",
+							reachable: ["a"],
+						})),
+					},
+					requestApproval: { mutate: vi.fn(down) },
+				},
+			});
+			for (const commandPath of ["shortcut add", "shortcut remove"]) {
+				const run = async (createClient: () => unknown, env: NodeJS.ProcessEnv = SESSION_ENV) =>
+					await applyCliSessionScope({ commandPath, options: {}, createClient: createClient as never, env });
+				expect(await run(asRole("card"))).toContain("changes the project's shortcuts");
+				expect(await run(asRole("orchestrator"))).toBeNull();
+				expect(await run(noServer, {})).toBeNull();
+			}
+			// Reading them is anyone's on the project.
+			expect(
+				await applyCliSessionScope({
+					commandPath: "shortcut list",
+					options: {},
+					createClient: asRole("card") as never,
+					env: SESSION_ENV,
+				}),
+			).toBeNull();
+		});
+	});
+
 	it("refuses issues sync from a card session (isolation off included), allows the orchestrator and the user", async () => {
 		await withTemporaryKanbanHome(async () => {
 			const asRole = (role: "card" | "orchestrator") => () => ({

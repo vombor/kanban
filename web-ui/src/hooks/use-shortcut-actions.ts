@@ -1,12 +1,38 @@
+import { getTaskIdOfDetailTerminal } from "@runtime-detail-terminal-session";
+import { shortcutNeedsPort } from "@runtime-shortcuts";
 import { useCallback, useState } from "react";
 
 import { showAppToast } from "@/components/app-toaster";
 import { saveRuntimeConfig } from "@/runtime/runtime-config-query";
+import { getRuntimeTrpcClient } from "@/runtime/trpc-client";
 import { waitForTerminalLikelyPrompt } from "@/terminal/terminal-controller-registry";
 import type { SendTerminalInputOptions } from "@/terminal/terminal-input";
 
 const TERMINAL_INTERRUPT_SEQUENCE = "\u0003";
 const TERMINAL_PROMPT_WAIT_TIMEOUT_MS = 3000;
+
+/**
+ * The command a shortcut types: as stored, or with `{port}` / `{url}` filled in by the runtime (a free port for this
+ * run, and where the browser opens it through the Kanban server, src/trpc/shortcuts-api.ts).
+ */
+async function resolveShortcutCommand(
+	workspaceId: string,
+	shortcut: RuntimeShortcut,
+	terminalTaskId: string,
+): Promise<string> {
+	if (!shortcutNeedsPort(shortcut.command)) {
+		return shortcut.command;
+	}
+	const prepared = await getRuntimeTrpcClient(workspaceId).shortcuts.prepareRun.mutate({
+		label: shortcut.label,
+		taskId: getTaskIdOfDetailTerminal(terminalTaskId),
+		origin: window.location.origin,
+	});
+	if (!prepared.ok || prepared.command === null) {
+		throw new Error(prepared.error ?? "Could not get a port for the shortcut.");
+	}
+	return prepared.command;
+}
 
 interface RuntimeShortcut {
 	label: string;
@@ -120,6 +146,7 @@ export function useShortcutActions({
 				if (!prepared.ok || !prepared.targetTaskId) {
 					throw new Error(prepared.message ?? "Could not open terminal.");
 				}
+				const command = await resolveShortcutCommand(currentProjectId, shortcut, prepared.targetTaskId);
 				const waitForLikelyPrompt = waitForTerminalLikelyPrompt(
 					prepared.targetTaskId,
 					TERMINAL_PROMPT_WAIT_TIMEOUT_MS,
@@ -133,7 +160,7 @@ export function useShortcutActions({
 					}
 				}
 				await waitForLikelyPrompt;
-				const runResult = await sendTaskSessionInput(prepared.targetTaskId, shortcut.command, {
+				const runResult = await sendTaskSessionInput(prepared.targetTaskId, command, {
 					appendNewline: true,
 				});
 				if (!runResult.ok) {

@@ -19,6 +19,7 @@ import { registerProjectCommand } from "./commands/project";
 import { registerQaCommand } from "./commands/qa";
 import { registerRestartCommand } from "./commands/restart";
 import { registerSetupCommand } from "./commands/setup";
+import { registerShortcutCommand } from "./commands/shortcut";
 import { registerTaskCommand } from "./commands/task";
 import { parseRuntimePort } from "./core/runtime-endpoint";
 
@@ -98,6 +99,7 @@ export function registerCliCommands(program: Command, version: string): void {
 	registerHomeCommand(program);
 	registerSetupCommand(program);
 	registerKitCommand(program);
+	registerShortcutCommand(program);
 	registerConfigCommand(program);
 	registerModelsCommand(program);
 	registerClineCommand(program);

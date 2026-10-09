@@ -525,6 +525,11 @@ export function getKitSettingsHistoryPath(workspaceId: string, homePath = getKan
 	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), "kit-settings-history.jsonl");
 }
 
+/** Every shortcut change through `kanban shortcut` (src/projects/project-shortcuts.ts); in the data dir like the above. */
+export function getShortcutHistoryPath(workspaceId: string, homePath = getKanbanHomePath()): string {
+	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), "shortcut-history.jsonl");
+}
+
 /**
  * Project isolation's files for one workspace (src/isolation/): `isolation.jsonl` logs every refused or reported
  * reach of its sessions, grants and grant uses; `messages.jsonl` is its side of the orchestrator messages.

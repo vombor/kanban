@@ -745,3 +745,52 @@ describe("createRuntimeApi loadConfig landing mode", () => {
 		});
 	});
 });
+
+// Shortcuts type their command into these shells: a card's detail terminal (`workspaceTaskId`) must open in the
+// card's worktree, the board's home terminal in the main checkout (docs/fork/shortcuts.md).
+describe("createRuntimeApi startShellSession", () => {
+	beforeEach(() => {
+		taskWorktreeMocks.resolveTaskCwd.mockReset();
+	});
+
+	const createApi = () => {
+		const terminalManager = { startShellSession: vi.fn(async () => createSummary({ taskId: "shell" })) };
+		const api = createTestRuntimeApi({
+			getActiveWorkspaceId: vi.fn(() => "workspace-1"),
+			loadScopedRuntimeConfig: vi.fn(async () => createRuntimeConfigState()),
+			setActiveRuntimeConfig: vi.fn(),
+			getScopedTerminalManager: vi.fn(async () => terminalManager as never),
+			resolveInteractiveShellCommand: vi.fn(() => ({ binary: "bash", args: [] })),
+		});
+		return { api, terminalManager };
+	};
+
+	it("opens a card's detail terminal in the card's worktree", async () => {
+		taskWorktreeMocks.resolveTaskCwd.mockResolvedValue("/tmp/worktrees/d1111/repo");
+		const { api, terminalManager } = createApi();
+		const response = await api.startShellSession(
+			{ workspaceId: "workspace-1", workspacePath: "/tmp/repo" },
+			{ taskId: "__detail_terminal__:d1111", workspaceTaskId: "d1111", baseRef: "main" },
+		);
+		expect(response.ok).toBe(true);
+		expect(taskWorktreeMocks.resolveTaskCwd).toHaveBeenCalledWith({
+			cwd: "/tmp/repo",
+			taskId: "d1111",
+			baseRef: "main",
+			ensure: true,
+		});
+		expect(terminalManager.startShellSession).toHaveBeenCalledWith(
+			expect.objectContaining({ cwd: "/tmp/worktrees/d1111/repo" }),
+		);
+	});
+
+	it("opens the board's home terminal in the main checkout", async () => {
+		const { api, terminalManager } = createApi();
+		await api.startShellSession(
+			{ workspaceId: "workspace-1", workspacePath: "/tmp/repo" },
+			{ taskId: "__home_terminal__", baseRef: "main" },
+		);
+		expect(taskWorktreeMocks.resolveTaskCwd).not.toHaveBeenCalled();
+		expect(terminalManager.startShellSession).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/tmp/repo" }));
+	});
+});

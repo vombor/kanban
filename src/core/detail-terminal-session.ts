@@ -10,3 +10,8 @@ export function getDetailTerminalTaskId(taskId: string): string {
 export function isDetailTerminalTaskId(sessionId: string): boolean {
 	return sessionId.startsWith(DETAIL_TERMINAL_TASK_PREFIX);
 }
+
+/** The card a detail terminal belongs to, or null for any other session id. */
+export function getTaskIdOfDetailTerminal(sessionId: string): string | null {
+	return isDetailTerminalTaskId(sessionId) ? sessionId.slice(DETAIL_TERMINAL_TASK_PREFIX.length) : null;
+}

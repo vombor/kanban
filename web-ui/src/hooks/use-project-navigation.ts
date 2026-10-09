@@ -31,6 +31,7 @@ export interface UseProjectNavigationResult {
 	workspaceState: ReturnType<typeof useRuntimeStateStream>["workspaceState"];
 	workspaceMetadata: ReturnType<typeof useRuntimeStateStream>["workspaceMetadata"];
 	latestTaskReadyForReview: ReturnType<typeof useRuntimeStateStream>["latestTaskReadyForReview"];
+	shortcutsUpdatedAt: ReturnType<typeof useRuntimeStateStream>["shortcutsUpdatedAt"];
 	streamError: string | null;
 	isRuntimeDisconnected: boolean;
 	hasReceivedSnapshot: boolean;
@@ -64,6 +65,7 @@ export function useProjectNavigation({ onProjectSwitchStart }: UseProjectNavigat
 		workspaceState,
 		workspaceMetadata,
 		latestTaskReadyForReview,
+		shortcutsUpdatedAt,
 		streamError,
 		isRuntimeDisconnected,
 		hasReceivedSnapshot,
@@ -210,6 +212,7 @@ export function useProjectNavigation({ onProjectSwitchStart }: UseProjectNavigat
 		workspaceState,
 		workspaceMetadata,
 		latestTaskReadyForReview,
+		shortcutsUpdatedAt,
 		streamError,
 		isRuntimeDisconnected,
 		hasReceivedSnapshot,

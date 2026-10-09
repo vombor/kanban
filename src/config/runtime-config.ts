@@ -685,3 +685,35 @@ export async function updateGlobalRuntimeConfig(
 		},
 	);
 }
+
+export async function loadProjectShortcuts(projectPath: string): Promise<RuntimeProjectShortcut[]> {
+	const { projectConfigPath } = resolveRuntimeConfigPaths(projectPath);
+	return projectConfigPath
+		? normalizeShortcuts((await readRuntimeConfigFile<RuntimeProjectConfigFileShape>(projectConfigPath))?.shortcuts)
+		: [];
+}
+
+/**
+ * Changes a project's shortcuts alone, under the project config's lock (the one saveRuntimeConfig takes too), for
+ * `kanban shortcut` (src/projects/project-shortcuts.ts). `plan` gets the stored shortcuts; nothing is written when
+ * its answer is the same.
+ */
+export async function updateProjectShortcuts(
+	projectPath: string,
+	plan: (current: RuntimeProjectShortcut[]) => RuntimeProjectShortcut[],
+): Promise<{ before: RuntimeProjectShortcut[]; after: RuntimeProjectShortcut[] }> {
+	const { projectConfigPath } = resolveRuntimeConfigPaths(projectPath);
+	if (!projectConfigPath) {
+		throw new Error(`${projectPath} has no project config (it is the home directory)`);
+	}
+	return await lockedFileSystem.withLocks([{ path: projectConfigPath, type: "file" }], async () => {
+		const before = normalizeShortcuts(
+			(await readRuntimeConfigFile<RuntimeProjectConfigFileShape>(projectConfigPath))?.shortcuts,
+		);
+		const after = normalizeShortcuts(plan(before));
+		if (!areRuntimeProjectShortcutsEqual(before, after)) {
+			await writeRuntimeProjectConfigFile(projectConfigPath, { shortcuts: after });
+		}
+		return { before, after };
+	});
+}

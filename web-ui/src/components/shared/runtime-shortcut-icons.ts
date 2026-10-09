@@ -1,3 +1,4 @@
+import type { RuntimeShortcutIconId as RuntimeContractShortcutIconId } from "@runtime-shortcuts";
 import type { LucideIcon } from "lucide-react";
 import { Bug, Code, Download, Play, Plus, Rocket, Settings, Terminal, Upload, Wrench } from "lucide-react";
 
@@ -12,7 +13,8 @@ const SHORTCUT_ICON_DEFINITIONS = {
 	rocket: { label: "Deploy", component: Rocket },
 	settings: { label: "Settings", component: Settings },
 	plus: { label: "Plus", component: Plus },
-} as const;
+	// The runtime validates `kanban shortcut add --icon` against the same ids (RUNTIME_SHORTCUT_ICON_IDS).
+} as const satisfies Record<RuntimeContractShortcutIconId, { label: string; component: LucideIcon }>;
 
 const SHORTCUT_ICON_ALIASES: Record<string, RuntimeShortcutIconId> = {
 	terminal: "console",

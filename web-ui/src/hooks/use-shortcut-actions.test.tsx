@@ -7,6 +7,11 @@ import { useShortcutActions } from "@/hooks/use-shortcut-actions";
 const saveRuntimeConfigMock = vi.hoisted(() => vi.fn());
 const showAppToastMock = vi.hoisted(() => vi.fn());
 const waitForTerminalLikelyPromptMock = vi.hoisted(() => vi.fn());
+const prepareRunMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/runtime/trpc-client", () => ({
+	getRuntimeTrpcClient: () => ({ shortcuts: { prepareRun: { mutate: prepareRunMock } } }),
+}));
 
 vi.mock("@/runtime/runtime-config-query", () => ({
 	saveRuntimeConfig: saveRuntimeConfigMock,
@@ -77,6 +82,7 @@ describe("useShortcutActions", () => {
 		showAppToastMock.mockReset();
 		waitForTerminalLikelyPromptMock.mockReset();
 		waitForTerminalLikelyPromptMock.mockResolvedValue(true);
+		prepareRunMock.mockReset();
 		previousActEnvironment = (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
 			.IS_REACT_ACT_ENVIRONMENT;
 		(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -206,5 +212,71 @@ describe("useShortcutActions", () => {
 			selectedShortcutLabel: "Run",
 		});
 		expect(showAppToastMock).not.toHaveBeenCalled();
+	});
+
+	it("asks the runtime to fill {port} / {url} for the card whose terminal runs it, and types the filled command", async () => {
+		prepareRunMock.mockResolvedValue({
+			ok: true,
+			command: "PORT=41000 npm run dev",
+			port: 41000,
+			url: "http://localhost:3485/api/shortcut-port/41000/",
+		});
+		const prepareTerminalForShortcut = vi.fn(async () => ({
+			hadExistingOpenTerminal: false,
+			ok: true,
+			targetTaskId: "__detail_terminal__:d1111",
+		}));
+		const sendTaskSessionInput = vi.fn(async () => ({ ok: true }));
+		let latestSnapshot: HookSnapshot | null = null;
+
+		await act(async () => {
+			root.render(
+				<HookHarness
+					prepareTerminalForShortcut={prepareTerminalForShortcut}
+					sendTaskSessionInput={sendTaskSessionInput}
+					shortcuts={[{ label: "Preview", command: "PORT={port} npm run dev" }]}
+					onSnapshot={(snapshot) => {
+						latestSnapshot = snapshot;
+					}}
+				/>,
+			);
+		});
+		await act(async () => {
+			await requireSnapshot(latestSnapshot).handleRunShortcut("Preview");
+		});
+
+		expect(prepareRunMock).toHaveBeenCalledWith({
+			label: "Preview",
+			taskId: "d1111",
+			origin: window.location.origin,
+		});
+		expect(sendTaskSessionInput).toHaveBeenCalledWith("__detail_terminal__:d1111", "PORT=41000 npm run dev", {
+			appendNewline: true,
+		});
+	});
+
+	it("types a command without placeholders as it is, without asking the runtime", async () => {
+		const prepareTerminalForShortcut = vi.fn(async () => ({
+			hadExistingOpenTerminal: false,
+			ok: true,
+			targetTaskId: "__home_terminal__",
+		}));
+		const sendTaskSessionInput = vi.fn(async () => ({ ok: true }));
+		let latestSnapshot: HookSnapshot | null = null;
+		await act(async () => {
+			root.render(
+				<HookHarness
+					prepareTerminalForShortcut={prepareTerminalForShortcut}
+					sendTaskSessionInput={sendTaskSessionInput}
+					onSnapshot={(snapshot) => {
+						latestSnapshot = snapshot;
+					}}
+				/>,
+			);
+		});
+		await act(async () => {
+			await requireSnapshot(latestSnapshot).handleRunShortcut("Ship");
+		});
+		expect(prepareRunMock).not.toHaveBeenCalled();
 	});
 });

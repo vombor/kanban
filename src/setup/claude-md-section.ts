@@ -36,6 +36,9 @@ export function renderClaudeMdSection(): string {
   (\`kanban kit set roles.<role>.agent|provider|model|tier <value> --project <path>\`) and project facts (\`qa.blurb\`,
   \`qa.promptNotes.*\`, \`qa.serversScript\`, \`qa.preview\`, \`land.postLand\`, \`plan.rules\`, \`checks.*\`);
   \`kanban kit unset <key>\` removes one. Flow keys are refused: another team is another kit, the user's \`kanban kit apply\`.
+- You may add, change and remove the project's top-bar shortcuts (any label, command, icon) for the user:
+  \`kanban shortcut add --label <label> --command "<command>" [--icon <icon>] --project <path>\` (\`list\`, \`remove\`);
+  \`{port}\` in a command is a free port per run, \`{url}\` the browser's way to it (docs/fork/shortcuts.md).
 - Agents never approve a plan; the user approves it on the board (Approve plan). Don't run \`kanban plan approve\`
   or \`kanban plan expand --approved-by-user\`: tell the user the plan is ready, and expand it once they approved it.
 - Models come from Kanban's vetted model registry: a role, and a card's own \`--agent-id\`/\`--model\`, can only use

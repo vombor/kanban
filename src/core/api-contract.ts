@@ -505,6 +505,14 @@ export type RuntimeStateStreamTaskReadyForReviewMessage = z.infer<
 	typeof runtimeStateStreamTaskReadyForReviewMessageSchema
 >;
 
+/** A project's shortcuts changed outside the settings dialog (`kanban shortcut`): the browser reloads its config. */
+export const runtimeStateStreamProjectShortcutsMessageSchema = z.object({
+	type: z.literal("project_shortcuts_updated"),
+	workspaceId: z.string(),
+	updatedAt: z.number(),
+});
+export type RuntimeStateStreamProjectShortcutsMessage = z.infer<typeof runtimeStateStreamProjectShortcutsMessageSchema>;
+
 export const runtimeStateStreamErrorMessageSchema = z.object({
 	type: z.literal("error"),
 	message: z.string(),
@@ -518,6 +526,7 @@ export const runtimeStateStreamMessageSchema = z.discriminatedUnion("type", [
 	runtimeStateStreamProjectsMessageSchema,
 	runtimeStateStreamWorkspaceMetadataMessageSchema,
 	runtimeStateStreamTaskReadyForReviewMessageSchema,
+	runtimeStateStreamProjectShortcutsMessageSchema,
 	runtimeStateStreamErrorMessageSchema,
 ]);
 export type RuntimeStateStreamMessage = z.infer<typeof runtimeStateStreamMessageSchema>;
