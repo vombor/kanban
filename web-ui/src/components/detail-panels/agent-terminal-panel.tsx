@@ -46,6 +46,8 @@ export interface AgentTerminalPanelProps {
 	onCancelAutomaticAction?: () => void;
 	cancelAutomaticActionLabel?: string | null;
 	showMoveToTrash?: boolean;
+	/** The Done button's text (default "Move Card To Done"). */
+	moveToTrashLabel?: string;
 	showSessionToolbar?: boolean;
 	onClose?: () => void;
 	autoFocus?: boolean;
@@ -168,6 +170,7 @@ function AgentTerminalPanelLayout({
 	onCancelAutomaticAction,
 	cancelAutomaticActionLabel,
 	showMoveToTrash,
+	moveToTrashLabel = "Move Card To Done",
 	showSessionToolbar = true,
 	onClose,
 	autoFocus: _autoFocus = false,
@@ -386,7 +389,7 @@ function AgentTerminalPanelLayout({
 						</Button>
 					) : null}
 					<Button variant="danger" fill disabled={isMoveToTrashLoading} onClick={onMoveToTrash}>
-						{isMoveToTrashLoading ? <Spinner size={14} /> : "Move Card To Done"}
+						{isMoveToTrashLoading ? <Spinner size={14} /> : moveToTrashLabel}
 					</Button>
 				</div>
 			) : null}

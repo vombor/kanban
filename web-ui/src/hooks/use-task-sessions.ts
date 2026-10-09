@@ -278,8 +278,10 @@ export function useTaskSessions({ currentProjectId, setSessions }: UseTaskSessio
 					trigger: options?.trigger ?? "browser",
 					...(options?.landing ? { landing: options.landing } : {}),
 				});
-				// "Land or discard?" is a question for the user, not an error.
-				if (!payload.ok && payload.landing?.decision !== "required") {
+				// "Land or discard?" (or "discard?") is a question for the user, not an error.
+				const asksUser =
+					payload.landing?.decision === "required" || payload.landing?.decision === "discard_required";
+				if (!payload.ok && !asksUser) {
 					console.error(`[trashTask] ${payload.error ?? `Could not move task ${taskId} to done.`}`);
 				} else if (payload.worktreeDeleteError) {
 					console.error(`[cleanupTaskWorkspace] ${payload.worktreeDeleteError}`);

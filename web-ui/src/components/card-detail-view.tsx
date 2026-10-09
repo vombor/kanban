@@ -1,4 +1,5 @@
 import type { DropResult } from "@hello-pangea/dnd";
+import { isKanbanLandedCard } from "@runtime-card-role";
 import { Files, GitCompareArrows, Maximize2, MessageSquare, Minimize2, X } from "lucide-react";
 import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -16,7 +17,8 @@ import { useCardDetailLayout } from "@/resize/use-card-detail-layout";
 import { useResizeDrag } from "@/resize/use-resize-drag";
 import type { RuntimeTaskSessionSummary, RuntimeWorkspaceChangesMode } from "@/runtime/types";
 import { useRuntimeWorkspaceChanges } from "@/runtime/use-runtime-workspace-changes";
-import { useTaskWorkspaceStateVersionValue } from "@/stores/workspace-metadata-store";
+import { useLandingMode } from "@/stores/landing-mode-store";
+import { useTaskWorkspaceSnapshotValue, useTaskWorkspaceStateVersionValue } from "@/stores/workspace-metadata-store";
 import { useTerminalThemeColors } from "@/terminal/theme-colors";
 import { type BoardCard, type CardSelection, getTaskAutoReviewCancelButtonLabel } from "@/types";
 import { useWindowEvent } from "@/utils/react-use";
@@ -471,6 +473,14 @@ export function CardDetailView({
 	const detailDiffContentPanelPercent = `${((1 - detailDiffFileTreeRatio) * 100).toFixed(1)}%`;
 	const detailDiffFileTreePanelFlex = `0 0 ${detailDiffFileTreePanelPercent}`;
 	const showMoveToTrashActions = selection.column.id === "review" || selection.column.id === "in_progress";
+	// Where Kanban doesn't land the card, Done only deletes the worktree: say so while it has changes, so the button
+	// below Commit / Open PR doesn't read as "approve" (issue #11; the runtime still asks before discarding).
+	const landingMode = useLandingMode();
+	const changedFileCount = useTaskWorkspaceSnapshotValue(selection.card.id)?.changedFiles ?? 0;
+	const moveToTrashLabel =
+		changedFileCount > 0 && !isKanbanLandedCard(selection.card, landingMode)
+			? "Discard Changes & Move To Done"
+			: undefined;
 	const isTaskTerminalEnabled = selection.column.id === "in_progress" || selection.column.id === "review";
 	const availablePaths = useMemo(() => {
 		if (!runtimeFiles || runtimeFiles.length === 0) {
@@ -593,6 +603,7 @@ export function CardDetailView({
 			showSessionToolbar={false}
 			autoFocus
 			showMoveToTrash={showMoveToTrashActions}
+			moveToTrashLabel={moveToTrashLabel}
 			onMoveToTrash={onMoveToTrash}
 			isMoveToTrashLoading={isMoveToTrashLoading}
 			onCancelAutomaticAction={

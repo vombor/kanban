@@ -96,39 +96,182 @@ describe("landing modes", () => {
 		repo = null;
 	});
 
-	it.each(["off", "commit", "pr"] as const)(
-		"landing %s: Done is unchanged and nothing lands, even with land",
-		async (mode) => {
+	describe("landing off/commit/pr: Done never drops work unasked (issue #11)", () => {
+		it.each(["off", "commit", "pr"] as const)(
+			"landing %s: a human's Done on a card with uncommitted work asks for a discard and changes nothing",
+			async (mode) => {
+				const setup = repoWithWork();
+				repo = setup.repo;
+				const before = repo.tip();
+				const harness = createHarness({
+					repo,
+					config: landingConfig(mode),
+					cards: { review: [createCard({ id: "dev01" })] },
+					worktrees: { dev01: setup.worktree },
+				});
+
+				for (const options of [
+					{},
+					{ trigger: "cli" as const },
+					{ landing: "land" as const, trigger: "approve" as const },
+				]) {
+					const result = await harness.done("dev01", options);
+					expect(result).toMatchObject({
+						ok: false,
+						status: "blocked",
+						landing: { decision: "discard_required", baseRef: "main" },
+					});
+					expect(result.error).toContain("kanban task done --task-id dev01 --discard");
+				}
+				expect(harness.columnOf("dev01")).toBe("review");
+				expect(harness.effects.stopTaskSession).not.toHaveBeenCalled();
+				expect(harness.effects.deleteTaskWorktree).not.toHaveBeenCalled();
+				expect(repo.tip()).toBe(before);
+				expect(harness.readDecisions()).toEqual([]);
+			},
+		);
+
+		it("a workspace with no config entry (landing off on the default kit) asks too, and an explicit discard finishes the card", async () => {
 			const setup = repoWithWork();
 			repo = setup.repo;
 			const before = repo.tip();
 			const harness = createHarness({
 				repo,
-				config: landingConfig(mode),
+				config: {},
 				cards: { review: [createCard({ id: "dev01" })] },
 				worktrees: { dev01: setup.worktree },
 			});
 
-			const result = await harness.done("dev01", { landing: "land", trigger: "approve" });
-
-			expect(result).toMatchObject({ ok: true, status: "trashed" });
-			expect(result.landing).toBeUndefined();
+			expect(await harness.done("dev01")).toMatchObject({
+				status: "blocked",
+				landing: { decision: "discard_required" },
+			});
+			expect(await harness.done("dev01", { landing: "discard" })).toMatchObject({
+				ok: true,
+				status: "trashed",
+				landing: { decision: "discarded", baseRef: "main" },
+			});
+			expect(harness.columnOf("dev01")).toBe("trash");
 			expect(repo.tip()).toBe(before);
-			expect(harness.readDecisions()).toEqual([]);
-		},
-	);
-
-	it("a workspace with no config entry (landing off on the default kit) never asks", async () => {
-		const setup = repoWithWork();
-		repo = setup.repo;
-		const harness = createHarness({
-			repo,
-			config: {},
-			cards: { review: [createCard({ id: "dev01" })] },
-			worktrees: { dev01: setup.worktree },
 		});
 
-		expect(await harness.done("dev01")).toMatchObject({ ok: true, status: "trashed" });
+		it("asks for committed work that is not on the base, and lets pushed work through", async () => {
+			repo = createLandRepo();
+			const worktree = repo.addWorktree("dev01");
+			repo.write(worktree, "src/app.ts", "export const value = 3;\n");
+			const head = repo.commitAll(worktree, "the work");
+			const harness = createHarness({
+				repo,
+				config: landingConfig("off"),
+				cards: { review: [createCard({ id: "dev01" })] },
+				worktrees: { dev01: worktree },
+			});
+
+			expect(await harness.done("dev01")).toMatchObject({
+				status: "blocked",
+				landing: { decision: "discard_required" },
+			});
+
+			// An opened PR: the commit is on a remote-tracking branch.
+			repo.git(["update-ref", "refs/remotes/origin/kanban/dev01", head]);
+			expect(await harness.done("dev01")).toMatchObject({ ok: true, status: "trashed" });
+		});
+
+		it("asks for pushed commits plus uncommitted changes on top", async () => {
+			repo = createLandRepo();
+			const worktree = repo.addWorktree("dev01");
+			repo.write(worktree, "src/app.ts", "export const value = 3;\n");
+			repo.git(["update-ref", "refs/remotes/origin/kanban/dev01", repo.commitAll(worktree, "the work")]);
+			repo.write(worktree, "src/more.ts", "export const more = 1;\n");
+			const harness = createHarness({
+				repo,
+				config: landingConfig("off"),
+				cards: { review: [createCard({ id: "dev01" })] },
+				worktrees: { dev01: worktree },
+			});
+
+			expect(await harness.done("dev01")).toMatchObject({
+				status: "blocked",
+				landing: { decision: "discard_required" },
+			});
+		});
+
+		it("passes a card with no worktree or no work beyond its base", async () => {
+			repo = createLandRepo();
+			const clean = repo.addWorktree("clean1");
+			const harness = createHarness({
+				repo,
+				config: landingConfig("off"),
+				cards: { backlog: [createCard({ id: "never1" })], review: [createCard({ id: "clean1" })] },
+				worktrees: { clean1: clean },
+			});
+
+			expect(await harness.done("never1")).toMatchObject({ ok: true, status: "trashed" });
+			const clean1 = await harness.done("clean1");
+			expect(clean1).toMatchObject({ ok: true, status: "trashed" });
+			expect(clean1.landing).toBeUndefined();
+		});
+
+		it("leaves the reconciler's, the pipeline's and the watchdog's Done alone, and QA/TRIAGE/calibration cards", async () => {
+			const setup = repoWithWork("auto1");
+			repo = setup.repo;
+			const worktrees: Record<string, string> = { auto1: setup.worktree };
+			for (const id of ["pipe1", "qa001", "cal01"]) {
+				worktrees[id] = repo.addWorktree(id);
+				repo.write(worktrees[id], "x.txt", "x\n");
+			}
+			const harness = createHarness({
+				repo,
+				config: landingConfig("off"),
+				cards: {
+					review: [
+						createCard({ id: "auto1", autoReviewEnabled: true, autoReviewMode: "commit" }),
+						createCard({ id: "pipe1" }),
+						createCard({ id: "qa001", role: "qa" }),
+						createCard({ id: "cal01", title: "QA-CAL run 3" }),
+					],
+				},
+				worktrees,
+			});
+
+			expect(await harness.done("auto1", { trigger: "auto_review" })).toMatchObject({ ok: true, status: "trashed" });
+			expect(await harness.done("pipe1", { trigger: "pipeline" })).toMatchObject({ ok: true, status: "trashed" });
+			expect(await harness.done("qa001")).toMatchObject({ ok: true, status: "trashed" });
+			expect(await harness.done("cal01", { trigger: "cli" })).toMatchObject({ ok: true, status: "trashed" });
+		});
+
+		it("asks on landing qa for a commit/pr auto-review card Kanban doesn't land", async () => {
+			const setup = repoWithWork();
+			repo = setup.repo;
+			const harness = createHarness({
+				repo,
+				config: landingConfig("qa"),
+				cards: { review: [createCard({ id: "dev01", autoReviewEnabled: true, autoReviewMode: "pr" })] },
+				worktrees: { dev01: setup.worktree },
+			});
+
+			expect(await harness.done("dev01")).toMatchObject({
+				status: "blocked",
+				landing: { decision: "discard_required" },
+			});
+			expect(harness.readDecisions()).toEqual([]);
+		});
+
+		it("refuses with a discard question when the check itself fails, and still takes a discard", async () => {
+			const setup = repoWithWork();
+			repo = setup.repo;
+			const harness = createHarness({
+				repo,
+				config: landingConfig("off"),
+				cards: { review: [createCard({ id: "dev01" })] },
+				worktrees: { dev01: join(repo.root, "missing-worktree") },
+			});
+
+			const result = await harness.done("dev01");
+			expect(result).toMatchObject({ status: "blocked", landing: { decision: "discard_required" } });
+			expect(result.error).toContain("could not check it");
+			expect(await harness.done("dev01", { landing: "discard" })).toMatchObject({ ok: true, status: "trashed" });
+		});
 	});
 
 	it("off arms nothing: the auto-review reconciler leaves a card without auto-review alone", async () => {

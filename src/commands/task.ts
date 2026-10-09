@@ -1167,7 +1167,8 @@ export async function trashTask(input: {
 /**
  * `kanban task approve`: Approve & land. On landing mode qa, Kanban squash-lands the task onto its base (no QA,
  * recorded as HUMAN_APPROVED in the decision log) and moves it to Done; a conflict leaves it where it is. On any
- * other landing mode it is the same as `task done`.
+ * other landing mode it lands nothing, so it is the same as `task done`: refused while the task has work that is not
+ * committed onto its base or pushed.
  */
 export async function approveTask(input: { cwd: string; taskId: string; projectPath?: string }): Promise<JsonRecord> {
 	const workspace = await resolveRuntimeWorkspace(input.projectPath, input.cwd);
@@ -1732,7 +1733,10 @@ export function registerTaskCommand(program: Command): void {
 			"--land",
 			"Landing mode qa: squash-land the work onto its base first (same as task approve). Required, or --discard, when the task has work not on its base.",
 		)
-		.option("--discard", "Landing mode qa: move to done without landing the work (its patch is still saved).")
+		.option(
+			"--discard",
+			"Move to done without landing or committing the work (its patch is still saved). Required for a dev or plan task with uncommitted or unlanded work that isn't pushed, on every landing mode (landing mode qa: or --land).",
+		)
 		.option("--project-path <path>", "Workspace path. Defaults to current directory workspace.")
 		.action(
 			async (options: {

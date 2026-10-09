@@ -153,6 +153,30 @@ export async function checkLand(
 	return tree === baseTree ? { status: "noop", baseSha } : { status: "clean", baseSha, mergedTree: tree };
 }
 
+/**
+ * Whether a worktree snapshot (src/pipeline/snapshots.ts) is just its HEAD, with nothing uncommitted, and that HEAD
+ * is on a remote-tracking branch: the work is pushed (an opened PR), so deleting the worktree loses none of it.
+ */
+export async function isSnapshotPushed(input: {
+	worktreePath: string;
+	commit: string;
+	parent: string;
+}): Promise<boolean> {
+	const trees = await git(input.worktreePath, ["rev-parse", `${input.commit}^{tree}`, `${input.parent}^{tree}`]);
+	const [snapshotTree, headTree] = trees.stdout.split("\n");
+	if (!trees.ok || !snapshotTree || snapshotTree !== headTree) {
+		return false;
+	}
+	const remotes = await git(input.worktreePath, [
+		"for-each-ref",
+		"--count=1",
+		"--format=%(refname)",
+		`--contains=${input.parent}`,
+		"refs/remotes",
+	]);
+	return remotes.ok && remotes.stdout.length > 0;
+}
+
 /** The worktree that has `baseRef` checked out (usually the main repository), or null. */
 export async function findBranchCheckout(repoPath: string, baseRef: string): Promise<string | null> {
 	const list = await runGit(repoPath, ["worktree", "list", "--porcelain"]);

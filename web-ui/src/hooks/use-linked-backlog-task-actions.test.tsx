@@ -295,7 +295,11 @@ describe("useLinkedBacklogTaskActions", () => {
 
 		// Not an error: the card is back in Review and the question is open.
 		expect(notifyErrorMock).not.toHaveBeenCalled();
-		expect(harness.current().landingDecisionRequest).toMatchObject({ task: { id: "task-2" }, baseRef: "main" });
+		expect(harness.current().landingDecisionRequest).toMatchObject({
+			task: { id: "task-2" },
+			baseRef: "main",
+			canLand: true,
+		});
 		expect(findReviewTask(harness.current()).id).toBe("task-2");
 
 		await act(async () => {
@@ -307,6 +311,35 @@ describe("useLinkedBacklogTaskActions", () => {
 		expect(showAppToastMock).toHaveBeenCalledWith(
 			expect.objectContaining({ intent: "success", message: "Landed on main (abcdef12)" }),
 		);
+	});
+
+	it("asks for a discard only where Kanban lands nothing, and retries with the discard", async () => {
+		const trashTask: TrashTaskMock = vi.fn(async (_taskId, options) =>
+			options?.landing === "discard"
+				? createTrashResponse({ landing: { decision: "discarded", baseRef: "main" } })
+				: createTrashResponse({
+						ok: false,
+						status: "blocked",
+						error: "Task task-2 has work that is not on main.",
+						landing: { decision: "discard_required", baseRef: "main" },
+					}),
+		);
+		const harness = await renderHarness({ trashTask });
+
+		await act(async () => {
+			await harness.current().confirmMoveTaskToTrash(findReviewTask(harness.current()), harness.current().board);
+		});
+
+		expect(notifyErrorMock).not.toHaveBeenCalled();
+		expect(harness.current().landingDecisionRequest).toMatchObject({ task: { id: "task-2" }, canLand: false });
+		expect(findReviewTask(harness.current()).id).toBe("task-2");
+
+		await act(async () => {
+			harness.current().resolveLandingDecision("discard");
+		});
+
+		expect(harness.current().landingDecisionRequest).toBeNull();
+		expect(trashTask).toHaveBeenLastCalledWith("task-2", { landing: "discard" });
 	});
 
 	it("cancelling the question leaves the card where it was", async () => {

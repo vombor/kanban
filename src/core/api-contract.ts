@@ -685,9 +685,10 @@ export type RuntimeTaskTrashTrigger = z.infer<typeof runtimeTaskTrashTriggerSche
 export const runtimeTaskTrashRequestTriggerSchema = z.enum(["cli", "browser", "approve"]);
 
 /**
- * What to do with a landing-mode-`qa` card's work on Done: `land` squash-lands it onto the base first, `discard`
- * leaves the base alone (the worktree patch is still saved). Without it, Done on such a card with work is refused
- * with `landing.decision: "required"` ("land or discard?"), so neither happens by accident.
+ * What to do with a card's work on Done: `land` squash-lands a landing-mode-`qa` card's work onto the base first,
+ * `discard` leaves the base alone (the worktree patch is still saved). Without it, a human's Done on a dev or plan
+ * card with work not on its base is refused, so nothing is dropped by accident: with `landing.decision: "required"`
+ * ("land or discard?") where Kanban lands the card, else with `"discard_required"` (commit it first, or discard).
  */
 export const runtimeTaskLandingChoiceSchema = z.enum(["land", "discard"]);
 export type RuntimeTaskLandingChoice = z.infer<typeof runtimeTaskLandingChoiceSchema>;
@@ -718,9 +719,23 @@ export const runtimeTaskTrashAutoStartSchema = z.object({
 });
 export type RuntimeTaskTrashAutoStart = z.infer<typeof runtimeTaskTrashAutoStartSchema>;
 
-/** What the `qa` landing step did (src/server/task-landing-gate.ts). Absent when the card is not landed by Kanban. */
+/**
+ * What the Done gate did (src/server/task-landing-gate.ts). `discard_required` (and `discarded`) also on workspaces
+ * where Kanban lands nothing; absent when the gate let the Done through without a choice to report.
+ */
 export const runtimeTaskLandingOutcomeSchema = z.object({
-	decision: z.enum(["required", "landed", "noop", "discarded", "conflict", "error", "held", "refused", "shadow"]),
+	decision: z.enum([
+		"required",
+		"discard_required",
+		"landed",
+		"noop",
+		"discarded",
+		"conflict",
+		"error",
+		"held",
+		"refused",
+		"shadow",
+	]),
 	baseRef: z.string().optional(),
 	/** The commit on the base (`landed`). */
 	commit: z.string().optional(),

@@ -5,9 +5,14 @@
 // A plan card's spec files land the same way (src/core/card-role.ts), only ever on a human's land: the pipeline never
 // QAs a plan card, so no PASS lands one.
 //
-// Every other workspace (landing `off`, `commit`, `pr`, or no config entry) and every card that is not a pipeline
-// dev or plan card (QA/TRIAGE/calibration roles, legacy kit QA cards by their markers, `commit`/`pr` auto-review cards)
-// passes straight through, exactly as before this gate existed.
+// Every other card lands nothing here. A human's Done (`cli`, `browser`, `approve`) on a dev or plan card that Kanban
+// doesn't land (landing `off`, `commit`, `pr`, no config entry, or a `commit`/`pr` auto-review card) still never
+// drops work unasked (issue #11: on landing off, "Move Card To Done" read as "approve" and would have deleted a
+// worktree of uncommitted changes): when the worktree has work that is not on its base, by the same snapshot and
+// merge check as a land, and that work isn't pushed to a remote branch (an opened PR), the Done is refused with
+// `landing.decision: "discard_required"` until the request says `discard`; the browser asks "commit it first, or
+// discard?". The reconciler, the pipeline and the watchdog finish cards whose work they own, so they pass, as do
+// QA/TRIAGE/calibration cards (legacy kit QA cards by their markers).
 //
 // Two legacy kit accidents shaped the choice rule (archive/devteam-kit:services/kanban-autoland.mjs@6da71597,
 // onReviewToDone): only a Review → Done move landed, so a card dragged to Done from another column with work in its
@@ -25,7 +30,7 @@
 // legacy kit (which lands after Done) keeps working during the shadow day.
 import { getWorkspacePipelineSettings, type ParsedPipelineConfig, readPipelineConfig } from "../config/pipeline-config";
 import type { RuntimeBoardCard, RuntimeTaskLandingOutcome, RuntimeTaskTrashTrigger } from "../core/api-contract";
-import { isKanbanLandedCard, resolveCardRole } from "../core/card-role";
+import { isKanbanLandedCard, isProjectWorkCard, resolveCardRole } from "../core/card-role";
 import { createIssueLandCommenter, type IssueCardFinishedInput } from "../issues/issue-comment";
 import type { KitFeature } from "../kits/kit-schema";
 import { findKitLandVeto, type KitLandVeto, type KitLandVetoAnswer, type KitLandVetoInput } from "../kits/land-veto";
@@ -44,6 +49,7 @@ import { takeTaskSnapshot } from "../pipeline/snapshots";
 import {
 	buildLandCommitMessage,
 	checkLand,
+	isSnapshotPushed,
 	type LandCheck,
 	type LandResult,
 	landCommit,
@@ -85,6 +91,13 @@ function landedVia(trigger: RuntimeTaskTrashTrigger): PipelineEventMap["landed"]
 async function defaultFindWorktree(workspacePath: string, card: RuntimeBoardCard): Promise<string | null> {
 	const info = await getTaskWorkspacePathInfo({ cwd: workspacePath, taskId: card.id, baseRef: card.baseRef });
 	return info.exists ? info.path : null;
+}
+
+/** The Done requests a human makes; only those are asked to choose before work is dropped. */
+const HUMAN_TRIGGERS: ReadonlySet<RuntimeTaskTrashTrigger> = new Set(["cli", "browser", "approve"]);
+
+function discardRequiredReason(card: RuntimeBoardCard, detail: string): string {
+	return `Task ${card.id} has work that is not on ${card.baseRef} (${detail}), and Done deletes its worktree. Commit it first (Commit / Open PR), or discard it: Done with "discard" (kanban task done --task-id ${card.id} --discard); its patch is still saved.`;
 }
 
 function requiredReason(card: RuntimeBoardCard): string {
@@ -144,6 +157,13 @@ export function createLandVetoPrecheck(
 		}
 		return null;
 	};
+}
+
+/** How far a run got: `gated` once a failure may no longer let the Done through without a choice. */
+interface GateProgress {
+	gated: boolean;
+	/** The card is one Kanban lands (the `qa` step), not one whose unlanded work only needs a discard. */
+	landedByKanban: boolean;
 }
 
 export function createTaskLandingGate(deps: TaskLandingGateDependencies = {}): TaskDoneGate {
@@ -227,13 +247,53 @@ export function createTaskLandingGate(deps: TaskLandingGateDependencies = {}): T
 		});
 	};
 
-	const decide = async (input: TaskDoneGateInput, progress: { gated: boolean }): Promise<TaskDoneGateDecision> => {
+	/** A card Kanban doesn't land: a human's Done that would drop unpushed work needs an explicit discard. */
+	const decideUnlanded = async (input: TaskDoneGateInput, progress: GateProgress): Promise<TaskDoneGateDecision> => {
+		const { card } = input;
+		if (!HUMAN_TRIGGERS.has(input.trigger) || !isProjectWorkCard(card)) {
+			return { proceed: true };
+		}
+		const baseRef = card.baseRef;
+		if (input.landing === "discard") {
+			return { proceed: true, landing: { decision: "discarded", baseRef } };
+		}
+		progress.gated = true;
+		const worktreePath = await findWorktree(input.workspacePath, card);
+		if (!worktreePath) {
+			return { proceed: true };
+		}
+		const source = await takeTaskSnapshot({
+			worktreePath,
+			taskId: card.id,
+			baseRef,
+			reason: "pre-done",
+			dryRun: true,
+		});
+		const check: LandCheck = await checkLand({ repoPath: input.workspacePath, baseRef, commit: source.commit });
+		if (check.status === "noop" || (await isSnapshotPushed({ worktreePath, ...source }))) {
+			return { proceed: true };
+		}
+		const detail =
+			check.status === "error"
+				? `could not compare it with ${baseRef}: ${check.error}`
+				: check.status === "conflict"
+					? `it conflicts with ${baseRef} in ${check.files.join(", ")}`
+					: "uncommitted changes or commits that are not landed";
+		return {
+			proceed: false,
+			reason: discardRequiredReason(card, detail),
+			landing: { decision: "discard_required", baseRef },
+		};
+	};
+
+	const decide = async (input: TaskDoneGateInput, progress: GateProgress): Promise<TaskDoneGateDecision> => {
 		const parsed = await readConfig();
 		const settings = getWorkspacePipelineSettings(parsed.config, input.workspaceId);
 		const { card } = input;
 		if (!isKanbanLandedCard(card, settings.landing.mode)) {
-			return { proceed: true };
+			return await decideUnlanded(input, progress);
 		}
+		progress.landedByKanban = true;
 		const shadow = settings.pipeline.shadow;
 		progress.gated = !shadow;
 		const catalog = await loadCatalog();
@@ -370,7 +430,7 @@ export function createTaskLandingGate(deps: TaskLandingGateDependencies = {}): T
 	};
 
 	return async (input) => {
-		const progress = { gated: false };
+		const progress: GateProgress = { gated: false, landedByKanban: false };
 		try {
 			return await decide(input, progress);
 		} catch (error) {
@@ -380,6 +440,13 @@ export function createTaskLandingGate(deps: TaskLandingGateDependencies = {}): T
 			// every board; once it is, only "discard" may still finish it, so work is never dropped unasked.
 			if (!progress.gated || input.landing === "discard") {
 				return { proceed: true };
+			}
+			if (!progress.landedByKanban) {
+				return {
+					proceed: false,
+					reason: discardRequiredReason(input.card, `could not check it: ${message}`),
+					landing: { decision: "discard_required", baseRef: input.card.baseRef },
+				};
 			}
 			return {
 				proceed: false,

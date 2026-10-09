@@ -4,12 +4,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CardDetailView } from "@/components/card-detail-view";
 import { LocalStorageKey } from "@/storage/local-storage-store";
+import { setLandingMode } from "@/stores/landing-mode-store";
 import { TERMINAL_THEME_COLORS } from "@/terminal/theme-colors";
 import type { BoardCard, BoardColumn, CardSelection } from "@/types";
 
 const mockUseRuntimeWorkspaceChanges = vi.fn();
+const mockUseTaskWorkspaceSnapshotValue = vi.fn((_taskId: string): { changedFiles: number } | null => null);
 const { mockAgentTerminalPanel, mockDiffViewerPanel } = vi.hoisted(() => ({
-	mockAgentTerminalPanel: vi.fn((_props: { panelBackgroundColor?: string; terminalBackgroundColor?: string }) => null),
+	mockAgentTerminalPanel: vi.fn(
+		(_props: { panelBackgroundColor?: string; terminalBackgroundColor?: string; moveToTrashLabel?: string }) => null,
+	),
 	mockDiffViewerPanel: vi.fn((..._args: unknown[]) => null),
 }));
 
@@ -50,6 +54,7 @@ vi.mock("@/runtime/use-runtime-workspace-changes", () => ({
 
 vi.mock("@/stores/workspace-metadata-store", () => ({
 	useTaskWorkspaceStateVersionValue: () => 0,
+	useTaskWorkspaceSnapshotValue: (taskId: string) => mockUseTaskWorkspaceSnapshotValue(taskId),
 }));
 
 vi.mock("@/resize/layout-customizations", () => ({
@@ -172,6 +177,9 @@ describe("CardDetailView", () => {
 			root.unmount();
 		});
 		mockUseRuntimeWorkspaceChanges.mockReset();
+		mockUseTaskWorkspaceSnapshotValue.mockReset();
+		mockUseTaskWorkspaceSnapshotValue.mockReturnValue(null);
+		setLandingMode(null);
 		mockAgentTerminalPanel.mockClear();
 		mockDiffViewerPanel.mockClear();
 		vi.restoreAllMocks();
@@ -443,6 +451,35 @@ describe("CardDetailView", () => {
 			panelBackgroundColor: "var(--color-surface-0)",
 			terminalBackgroundColor: TERMINAL_THEME_COLORS.surfacePrimary,
 		});
+	});
+
+	it.each([
+		{ landing: "off", changedFiles: 3, label: "Discard Changes & Move To Done" },
+		{ landing: "off", changedFiles: 0, label: undefined },
+		{ landing: "qa", changedFiles: 3, label: undefined },
+	] as const)("the Done button says it discards (landing $landing, $changedFiles changed files)", async (row) => {
+		setLandingMode(row.landing);
+		mockUseTaskWorkspaceSnapshotValue.mockReturnValue({ changedFiles: row.changedFiles });
+		await act(async () => {
+			root.render(
+				<CardDetailView
+					selection={createSelection()}
+					currentProjectId="workspace-1"
+					sessionSummary={null}
+					taskSessions={{}}
+					onSessionSummary={() => {}}
+					onCardSelect={() => {}}
+					onTaskDragEnd={() => {}}
+					onMoveToTrash={() => {}}
+					bottomTerminalOpen={false}
+					bottomTerminalTaskId={null}
+					bottomTerminalSummary={null}
+					onBottomTerminalClose={() => {}}
+				/>,
+			);
+		});
+
+		expect(mockAgentTerminalPanel.mock.calls.at(-1)?.[0].moveToTrashLabel).toBe(row.label);
 	});
 
 	it("loads the saved agent-to-diff panel ratio from local storage", async () => {

@@ -104,7 +104,7 @@ on). There is no `pause` command.
 | Task | Command |
 |---|---|
 | Approve & land without QA (landing `qa`) | the card's Approve & land button, or `kanban task approve --task-id <id>` |
-| Done on a card with unlanded work | `kanban task done --task-id <id> --land` or `--discard` (the browser asks "land or discard?"; a Done with no choice is refused) |
+| Done on a card with unlanded work | `kanban task done --task-id <id> --land` or `--discard` (the browser asks "land or discard?"; a Done with no choice is refused). On landing `off`/`commit`/`pr` there is nothing to land: commit it (Commit / Open PR) or `--discard` (the browser asks "discard uncommitted work?"); pushed work passes |
 | Hand an escalated card back | `kanban task handback --task-id <id> --note "<why>" [--extra-rounds N] [--by NAME]` |
 | Release a held PASS (runoff) | `kanban task release-hold --task-id <id> --land` or `--discard [--tag preserve/<id>-<model>] [--note …]` |
 | Who moved a card to Done, or deleted it | `kanban task history [<id>] [--limit N]`: every Done (also refused or skipped ones) and every delete from `data/<ws>/task-history.jsonl`, with trigger (`cli`, `browser`, `approve`, `auto_review`, `pipeline`, `hold_release`, `watchdog`), caller (user, card or orchestrator session, unknown; `null` for in-process triggers), from-column, landing choice and outcome, sessions stopped, worktree deleted |

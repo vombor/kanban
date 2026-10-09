@@ -63,6 +63,11 @@ export function resolveCardRole(card: CardRoleInput): RuntimeTaskRole {
 // differs: the pipeline never QAs a plan card, so nothing lands one on a PASS.
 const KANBAN_LANDED_ROLES: ReadonlySet<RuntimeTaskRole> = new Set(["dev", "plan"]);
 
+/** A dev or plan card: its worktree holds the project's work (code, a spec), so no Done may drop it unasked. */
+export function isProjectWorkCard(card: CardRoleInput): boolean {
+	return KANBAN_LANDED_ROLES.has(resolveCardRole(card));
+}
+
 /**
  * Whether Kanban itself lands this card (the `qa` landing step, src/server/task-landing-gate.ts): a dev or plan card
  * on a landing-mode-`qa` workspace that the auto-review reconciler doesn't own (auto-review on with `commit`/`pr`).
@@ -74,7 +79,7 @@ export function isKanbanLandedCard(
 ): boolean {
 	return (
 		landingMode === "qa" &&
-		KANBAN_LANDED_ROLES.has(resolveCardRole(card)) &&
+		isProjectWorkCard(card) &&
 		!(card.autoReviewEnabled === true && card.autoReviewMode !== "qa")
 	);
 }

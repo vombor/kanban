@@ -15,10 +15,14 @@ import { capturePendingDoneMove, withoutPendingDoneMoves } from "@/state/pending
 import type { BoardCard, BoardColumnId, BoardData } from "@/types";
 import { getNextDetailTaskIdAfterTrashMove } from "@/utils/detail-view-task-order";
 
-/** Done on a landing-mode-qa card with work was refused until the user chooses "land" or "discard". */
+/**
+ * Done on a card with work not on its base was refused until the user chooses: "land" or "discard" where Kanban
+ * lands the card (landing mode qa), else only "discard" (`canLand: false`: commit it first, or discard it).
+ */
 export interface LandingDecisionRequest {
 	task: BoardCard;
 	baseRef: string;
+	canLand: boolean;
 }
 
 interface RequestMoveTaskToTrashOptions {
@@ -53,7 +57,7 @@ export function useLinkedBacklogTaskActions({
 	/** Approve & land: lands a landing-mode-qa card onto its base without QA, then moves it to Done. */
 	approveAndLandTask: (taskId: string) => Promise<void>;
 	landingDecisionRequest: LandingDecisionRequest | null;
-	/** The "land or discard?" answer; null leaves the card where it was. */
+	/** The "land or discard?" (or "discard?") answer; null leaves the card where it was. */
 	resolveLandingDecision: (choice: RuntimeTaskLandingChoice | null) => void;
 } {
 	const { flushWorkspaceState, holdPendingDoneMove, releasePendingDoneMove, awaitPendingDoneMoveSettled } =
@@ -141,8 +145,13 @@ export function useLinkedBacklogTaskActions({
 					releasePendingDoneMove(task.id);
 					setBoard((currentBoardState) => withoutPendingDoneMoves(currentBoardState, [pendingMove]));
 				}
-				if (result?.landing?.decision === "required") {
-					setLandingDecisionRequest({ task, baseRef: result.landing.baseRef ?? task.baseRef });
+				const decision = result?.landing?.decision;
+				if (decision === "required" || decision === "discard_required") {
+					setLandingDecisionRequest({
+						task,
+						baseRef: result?.landing?.baseRef ?? task.baseRef,
+						canLand: decision === "required",
+					});
 					return;
 				}
 				if (result?.error) {

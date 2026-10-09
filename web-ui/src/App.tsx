@@ -1089,6 +1089,7 @@ export default function App(): ReactElement {
 						open={landingDecisionRequest !== null}
 						taskTitle={landingDecisionRequest?.task.title || landingDecisionRequest?.task.id || ""}
 						baseRef={landingDecisionRequest?.baseRef ?? ""}
+						canLand={landingDecisionRequest?.canLand ?? false}
 						onChoose={resolveLandingDecision}
 					/>
 					<StartupOnboardingDialog
