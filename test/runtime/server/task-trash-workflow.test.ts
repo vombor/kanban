@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RuntimeBoardData } from "../../../src/core/api-contract";
 import {
+	addTaskDependency,
 	getTaskColumnId,
 	moveTaskToColumn,
 	trashTaskAndGetReadyLinkedTaskIds,
+	updateTaskDependencies,
 } from "../../../src/core/task-board-mutations";
+import { getTaskPrerequisiteStatus } from "../../../src/core/task-prerequisites";
 import {
 	type CreateTaskTrashWorkflowDependencies,
 	createTaskTrashWorkflow,
@@ -400,5 +403,91 @@ describe("task trash workflow", () => {
 		const result = await trash({ taskId: "task-1" });
 
 		expect(result).toMatchObject({ status: "trashed", worktreeDeleted: false, worktreeDeleteError: "busy" });
+	});
+});
+
+describe("task trash workflow: issue #21 replay (restart-fresh of a prerequisite, then its pipeline Done)", () => {
+	// notes, 2026-10-09: "A->B" means A waits on B. e1535 waits on 4416f, 248ae and 81410; 81410 waits on 4416f.
+	function issue21Board(): RuntimeBoardData {
+		return createBoard(
+			{
+				backlog: [createCard({ id: "81410" }), createCard({ id: "e1535" })],
+				in_progress: [createCard({ id: "4416f" })],
+				review: [createCard({ id: "248ae" })],
+				trash: [createCard({ id: "f423d" })],
+			},
+			[
+				{ id: "dep-81410-4416f", fromTaskId: "81410", toTaskId: "4416f", createdAt: 0 },
+				{ id: "dep-e1535-4416f", fromTaskId: "e1535", toTaskId: "4416f", createdAt: 0 },
+				{ id: "dep-e1535-248ae", fromTaskId: "e1535", toTaskId: "248ae", createdAt: 0 },
+				{ id: "dep-e1535-81410", fromTaskId: "e1535", toTaskId: "81410", createdAt: 0 },
+				{ id: "dep-4416f-f423d", fromTaskId: "4416f", toTaskId: "f423d", createdAt: 0 },
+				{ id: "dep-248ae-f423d", fromTaskId: "248ae", toTaskId: "f423d", createdAt: 0 },
+			],
+		);
+	}
+
+	/** A board move as the CLI saves it and the next read normalizes it (`readWorkspaceBoard`). */
+	function move(board: RuntimeBoardData, taskId: string, to: Parameters<typeof moveTaskToColumn>[2]) {
+		const moved = moveTaskToColumn(board, taskId, to);
+		expect(moved.moved).toBe(true);
+		return updateTaskDependencies(moved.board);
+	}
+
+	function links(board: RuntimeBoardData): string[] {
+		return board.dependencies.map((dependency) => `${dependency.fromTaskId}->${dependency.toTaskId}`).sort();
+	}
+
+	it("starts only 81410 when 4416f lands, and e1535 keeps waiting on 248ae and 81410", async () => {
+		let board = updateTaskDependencies(issue21Board());
+		// restart-fresh 4416f: park it in Backlog, then start it again.
+		board = move(board, "4416f", "backlog");
+		expect(links(board)).toEqual(
+			expect.arrayContaining(["81410->4416f", "e1535->4416f", "e1535->248ae", "e1535->81410"]),
+		);
+		board = move(board, "4416f", "in_progress");
+		// Its turn ends; QA passes.
+		board = move(board, "4416f", "review");
+		const { store, effects, trash } = createHarness(board);
+
+		const result = await trash({ taskId: "4416f", trigger: "pipeline" });
+
+		expect(result.readyTaskIds).toEqual(["81410"]);
+		expect(result.autoStartedTasks).toEqual([{ taskId: "81410", ok: true }]);
+		expect(effects.startTaskSession).toHaveBeenCalledTimes(1);
+		expect(findCardInBoard(store.stored.board, "e1535")?.columnId).toBe("backlog");
+		expect(findCardInBoard(store.stored.board, "81410")?.columnId).toBe("in_progress");
+		expect(links(store.stored.board)).toEqual(["e1535->248ae", "e1535->4416f", "e1535->81410"]);
+		expect(getTaskPrerequisiteStatus(store.stored.board, "e1535")).toEqual({
+			total: 3,
+			done: 1,
+			waitingOnTaskIds: ["248ae", "81410"],
+			missingTaskIds: [],
+		});
+	});
+
+	it("restart-fresh --after keeps every other link of the card and of its dependents", () => {
+		// restart-fresh 81410 --after 248ae while 81410 runs and e1535 waits on it.
+		let board = updateTaskDependencies(issue21Board());
+		board = move(board, "4416f", "review");
+		board = move(board, "4416f", "trash");
+		board = move(board, "81410", "in_progress");
+		board = move(board, "81410", "backlog");
+		const linked = addTaskDependency(board, "81410", "248ae");
+		expect(linked.added).toBe(true);
+		board = updateTaskDependencies(linked.board);
+
+		// 81410's link to 4416f went when 81410 started (neither card in Backlog); 4416f was Done, so nothing is lost.
+		expect(links(board)).toEqual(["81410->248ae", "e1535->248ae", "e1535->4416f", "e1535->81410"]);
+		expect(getTaskPrerequisiteStatus(board, "e1535")).toMatchObject({
+			total: 3,
+			done: 1,
+			waitingOnTaskIds: ["248ae", "81410"],
+		});
+
+		// The orchestrator's own call: restart-fresh e1535 --after 81410 with e1535 already in Backlog.
+		const again = addTaskDependency(board, "e1535", "81410");
+		expect(again.added).toBe(false);
+		expect(links(updateTaskDependencies(again.board))).toEqual(links(board));
 	});
 });
