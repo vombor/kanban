@@ -15,7 +15,7 @@ import {
 	recoveryRedoReason,
 	sinceBudget,
 } from "../../../src/pipeline/recovery";
-import { CONTINUE_PROMPT } from "../../../src/pipeline/recovery-prompts";
+import { CONTINUE_PROMPT, IMAGE_TOO_LARGE_NOTE, SMALL_IMAGES_ONLY } from "../../../src/pipeline/recovery-prompts";
 import type { ClineSessionDetail, ClineSessionDetailMessage } from "../../../src/terminal/cline-session-files";
 
 const NOW = Date.parse("2026-10-07T12:00:00.000Z");
@@ -279,6 +279,25 @@ describe("decideRecovery: Review cards", () => {
 			decideRecovery(input({ detail: overflow, profile: { clearContextCommand: null, cancelTurnInput: null } })),
 			"escalate",
 		);
+	});
+
+	it("clears an image over the size limits with the image note, not the poisoned-history one (issue #12)", () => {
+		const oversized = detail([
+			message("user", "go"),
+			message(
+				"assistant",
+				"messages.1.content.86.image.source.base64.data: At least one of the image dimensions exceed max allowed size: 8000 pixels",
+			),
+		]);
+		const nudge = expectKind(
+			decideRecovery(input({ session: session({ reviewReason: "error" }), detail: oversized })),
+			"nudge",
+		);
+		expect(nudge).toMatchObject({ cause: "premature", clear: "/clear" });
+		expect(nudge.text.startsWith("Implement the thing.")).toBe(true);
+		expect(nudge.text).toContain(IMAGE_TOO_LARGE_NOTE);
+		expect(nudge.text).toContain(SMALL_IMAGES_ONLY);
+		expect(nudge.reason).toContain("size limits");
 	});
 
 	it("nudges a crash up to maxNudges, then escalates", () => {

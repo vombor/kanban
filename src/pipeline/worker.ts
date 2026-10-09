@@ -66,7 +66,7 @@ import { createQaGate, type QaGate } from "./qa-gate";
 import { type AppendQaLog, createQaLogAppender } from "./qa-log";
 import { createQaPreviewController } from "./qa-preview";
 import { readQaVerdictFile } from "./qa-verdict";
-import { createWorkerRecoveryStage } from "./recovery-runtime";
+import { createQaRunErrorReader, createWorkerRecoveryStage } from "./recovery-runtime";
 import type { RecoveryStage, RecoveryStageDependencies } from "./recovery-stage";
 import { createReworkStage, type ReworkStage } from "./rework";
 import { stopScratchProcesses } from "./scratch-processes";
@@ -340,6 +340,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			bus,
 			preview: createQaPreviewController({ log }),
 			readVerdict: readQaVerdictFile,
+			readRunError: createQaRunErrorReader(),
 			stopScratchProcesses: async (dirs) => await stopScratchProcesses(dirs, log),
 			log,
 		});

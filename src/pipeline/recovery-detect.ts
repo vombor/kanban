@@ -6,7 +6,7 @@
 // prematureStop, finalProviderError, overflowCulprit, hungRequest). The incident behind each rule is in
 // docs/team/HISTORY.md ("Pipeline: recovery").
 import type { ClineSessionDetail, ClineSessionDetailMessage } from "../terminal/cline-session-files";
-import { getClineProviderErrorText, isClineNoImagesRejection } from "../terminal/cline-turn-outcome";
+import { getClineImageRejection, getClineProviderErrorText } from "../terminal/cline-turn-outcome";
 
 // An API error that stays in the conversation and fails every later request: "continue" can't help, only a new
 // conversation (/clear) with the card prompt resent (c09cd4b: `ls -R` over node_modules overflowed a 131k context
@@ -42,7 +42,8 @@ export function isTransientProviderError(text: string): boolean {
 
 export type PrematureStop =
 	| { kind: "empty"; outputCap: boolean }
-	| { kind: "no_images"; text: string }
+	/** `tooLarge`: the model takes images, but one was over its size limits (issue #12), not a text-only model. */
+	| { kind: "no_images"; text: string; tooLarge: boolean }
 	| { kind: "announcement"; text: string };
 
 function isBlank(message: ClineSessionDetailMessage): boolean {
@@ -64,7 +65,7 @@ function textOf(message: ClineSessionDetailMessage): string {
 /**
  * A turn that ended without finishing: an empty final reply (fc270f0, bd4eeff: Bedrock then rejects the empty
  * message in history, so it needs /clear), one at the output cap (8590bad), a "model doesn't support images" reply
- * (0f713ad: the image stays in history), or an announcement with no tool call (9496770). Null otherwise.
+ * (0f713ad: the image stays in history) or an "image exceeds the max size" one (issue #12, the same), or an announcement with no tool call (9496770). Null otherwise.
  */
 export function detectPrematureStop(
 	messages: readonly ClineSessionDetailMessage[],
@@ -80,8 +81,9 @@ export function detectPrematureStop(
 		return null;
 	}
 	const text = textOf(last);
-	if (isClineNoImagesRejection(text)) {
-		return { kind: "no_images", text: text.slice(-160) };
+	const rejection = getClineImageRejection(text);
+	if (rejection) {
+		return { kind: "no_images", text: text.slice(-160), tooLarge: rejection === "too_large" };
 	}
 	return text && ANNOUNCE_PATTERN.test(text.slice(-200))
 		? { kind: "announcement", text: text.replace(/\s+/g, " ").slice(-160) }
@@ -158,4 +160,35 @@ export function detectHungRequest(
 	return idleMin >= (firstCall ? options.hungFirstMin : options.hungMin)
 		? { sessionId: detail.snapshot.sessionId, lastWriteAt, idleMin: Math.round(idleMin), firstCall }
 		: null;
+}
+
+/** An agent run that ended on its own (or its provider's) error, not on its work. */
+export type AgentRunError =
+	| { kind: "image_rejected"; tooLarge: boolean; text: string }
+	| { kind: "empty_reply"; text: string }
+	| { kind: "provider_error"; text: string }
+	| { kind: "session_failed"; text: string };
+
+/**
+ * Why a finished run's last turn is the agent's own failure, or null: an image rejection, an empty reply or a fatal
+ * provider error poisons the conversation (every later request fails the same way), and a failed session file
+ * ends the run. A QA card that ended like this never got to judge its dev card (issue #12: a QA card's last turns
+ * were the 8000 px image error, and its "no verdict" STALLED took the dev card over).
+ */
+export function detectRunError(detail: ClineSessionDetail): AgentRunError | null {
+	const premature = detectPrematureStop(detail.messages);
+	if (premature?.kind === "no_images") {
+		return { kind: "image_rejected", tooLarge: premature.tooLarge, text: premature.text };
+	}
+	if (premature?.kind === "empty") {
+		return {
+			kind: "empty_reply",
+			text: premature.outputCap ? "empty model reply at the output cap" : "empty model reply",
+		};
+	}
+	const error = detectFinalProviderError(detail.messages);
+	if (error) {
+		return { kind: "provider_error", text: error.slice(0, 300) };
+	}
+	return detail.snapshot.status === "failed" ? { kind: "session_failed", text: "the Cline session failed" } : null;
 }

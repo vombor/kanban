@@ -2,7 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import { resolveReviewedTaskId } from "../../../src/core/card-role";
 import { buildQaCardTitle, buildQaPrompt, buildQaRequirements } from "../../../src/pipeline/qa-prompt";
-import { getChromiumLaunchEnv, resolveShotUrl, resolveViewport, slugifyRoute } from "../../../src/pipeline/qa-shot";
+import {
+	capShotClip,
+	getChromiumLaunchEnv,
+	QA_SHOT_MAX_PX,
+	resolveShotUrl,
+	resolveViewport,
+	slugifyRoute,
+} from "../../../src/pipeline/qa-shot";
 
 // The full prompt is checked word for word against the legacy kit in test/runtime/kits/team-qa-prompt.test.ts.
 const BASE_INPUT = {
@@ -90,5 +97,23 @@ describe("kanban qa shot helpers", () => {
 		const env = { PATH: "/bin" };
 		expect(getChromiumLaunchEnv(null, env)).toBe(env);
 		expect(getChromiumLaunchEnv("/nonexistent-libs", env)).toEqual(env);
+	});
+
+	it("cuts a full-page capture to the top QA_SHOT_MAX_PX image pixels, so no model rejects it (issue #12)", () => {
+		expect(QA_SHOT_MAX_PX).toBeLessThan(8000);
+		expect(capShotClip({ width: 1280, height: 4000, scale: 1 })).toBeNull();
+		expect(capShotClip({ width: 1280, height: 12_000, scale: 1 })).toEqual({
+			x: 0,
+			y: 0,
+			width: 1280,
+			height: QA_SHOT_MAX_PX,
+		});
+		// A 2x device: the limit is in image pixels, the clip in CSS pixels.
+		expect(capShotClip({ width: 375, height: 5000, scale: 2 })).toEqual({
+			x: 0,
+			y: 0,
+			width: 375,
+			height: QA_SHOT_MAX_PX / 2,
+		});
 	});
 });

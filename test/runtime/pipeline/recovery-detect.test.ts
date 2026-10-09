@@ -4,6 +4,7 @@ import {
 	detectFinalProviderError,
 	detectHungRequest,
 	detectPrematureStop,
+	detectRunError,
 	findOverflowCulprit,
 	isContextOverflowError,
 	isPoisonedHistoryError,
@@ -35,6 +36,40 @@ const toolResult = (size: number, query?: string): ClineSessionDetailMessage => 
 	ts: null,
 });
 
+const ISSUE_12_IMAGE_ERROR =
+	"messages.1.content.86.image.source.base64.data: At least one of the image dimensions exceed max allowed size: 8000 pixels";
+
+const detailOf = (messages: ClineSessionDetailMessage[], status = "idle"): ClineSessionDetail => ({
+	snapshot: { sessionId: "s1", status, startedAt: 1, messagesWrittenAt: 2, lastMessage: null },
+	messages,
+	lastWriteAt: 2,
+});
+
+describe("detectRunError", () => {
+	it("calls a run whose last turn is the agent's own error a run error", () => {
+		expect(detectRunError(detailOf([text("user", "go"), toolCall, text("assistant", ISSUE_12_IMAGE_ERROR)]))).toEqual(
+			{
+				kind: "image_rejected",
+				tooLarge: true,
+				text: ISSUE_12_IMAGE_ERROR.slice(-160),
+			},
+		);
+		expect(detectRunError(detailOf([text("assistant", "The operation timed out.")]))).toEqual({
+			kind: "provider_error",
+			text: "The operation timed out.",
+		});
+		expect(detectRunError(detailOf([text("assistant", " ")]))?.kind).toBe("empty_reply");
+		expect(detectRunError(detailOf([text("user", "go"), toolCall], "failed"))?.kind).toBe("session_failed");
+	});
+
+	it("leaves a finished run alone", () => {
+		expect(
+			detectRunError(detailOf([text("assistant", "QA abc12 round 1: PASS, report in /tmp/out/verdict.json")])),
+		).toBeNull();
+		expect(detectRunError(detailOf([text("user", "go"), toolCall]))).toBeNull();
+	});
+});
+
 describe("detectPrematureStop", () => {
 	it("calls an announcement without a tool call a premature stop (9496770)", () => {
 		expect(detectPrematureStop([text("user", "go"), text("assistant", "Now let me examine the files:")])).toEqual({
@@ -58,6 +93,17 @@ describe("detectPrematureStop", () => {
 		expect(detectPrematureStop([text("assistant", "Error: this model does not support image input")])?.kind).toBe(
 			"no_images",
 		);
+	});
+
+	it("finds an image over the provider's size limits as an image rejection (issue #12)", () => {
+		expect(detectPrematureStop([text("assistant", `${ISSUE_12_IMAGE_ERROR}`)])).toMatchObject({
+			kind: "no_images",
+			tooLarge: true,
+		});
+		expect(detectPrematureStop([text("assistant", "this model does not support image input")])).toMatchObject({
+			kind: "no_images",
+			tooLarge: false,
+		});
 	});
 
 	it("leaves finished replies and tool calls alone", () => {

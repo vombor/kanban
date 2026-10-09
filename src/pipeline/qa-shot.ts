@@ -46,7 +46,7 @@ interface ShotPage {
 	title(): Promise<string>;
 	url(): string;
 	evaluate<T>(expression: string): Promise<T>;
-	screenshot(options: { path: string; fullPage: boolean }): Promise<unknown>;
+	screenshot(options: { path: string; fullPage: boolean; clip?: ShotClip }): Promise<unknown>;
 	fill(selector: string, value: string, options: { timeout: number }): Promise<void>;
 	click(selector: string, options: { timeout: number }): Promise<void>;
 	press(selector: string, key: string, options: { timeout: number }): Promise<void>;
@@ -67,6 +67,13 @@ interface ShotPlaywright {
 }
 
 interface Viewport {
+	width: number;
+	height: number;
+}
+
+export interface ShotClip {
+	x: number;
+	y: number;
 	width: number;
 	height: number;
 }
@@ -108,6 +115,8 @@ interface ShotRecord {
 	console: string[];
 	failed: string[];
 	shots: string[];
+	/** Full-page captures cut to QA_SHOT_MAX_PX, one line each. */
+	cropped?: string[];
 	steps?: string[];
 	outline?: string[];
 }
@@ -125,6 +134,12 @@ const VIEWPORTS: Record<string, Viewport> = {
 	tablet: { width: 768, height: 1024 },
 	desktop: { width: 1280, height: 720 },
 };
+/**
+ * The longest side of a screenshot, in image pixels. Anthropic/Bedrock reject an image over 8000 px on a side, and the
+ * image then stays in the agent's conversation and fails every later request (issue #12: a full-page capture of a
+ * long page), so full-page captures are cut to the top of the page.
+ */
+export const QA_SHOT_MAX_PX = 7_680;
 const NAVIGATION_TIMEOUT_MS = 45_000;
 const WAIT_FOR_TIMEOUT_MS = 15_000;
 const STEP_TIMEOUT_MS = 10_000;
@@ -199,6 +214,47 @@ function findCachedHeadlessShell(): string | null {
 	return null;
 }
 
+/** The clip that keeps a full-page capture within `max` image pixels a side (CSS px; null: it fits as it is). */
+export function capShotClip(
+	page: { width: number; height: number; scale: number },
+	max = QA_SHOT_MAX_PX,
+): ShotClip | null {
+	const limit = Math.floor(max / Math.max(page.scale, 1));
+	if (page.width <= limit && page.height <= limit) {
+		return null;
+	}
+	return { x: 0, y: 0, width: Math.min(page.width, limit), height: Math.min(page.height, limit) };
+}
+
+// Runs in the page, so it is a string: Kanban's TypeScript has no DOM types.
+const PAGE_SIZE_SCRIPT = `(() => {
+	const root = document.documentElement;
+	const body = document.body || root;
+	return {
+		width: Math.max(root.scrollWidth, body.scrollWidth),
+		height: Math.max(root.scrollHeight, body.scrollHeight),
+		scale: window.devicePixelRatio || 1,
+	};
+})()`;
+
+async function takeShot(page: ShotPage, file: string, fullPage: boolean, record: ShotRecord): Promise<void> {
+	if (!fullPage) {
+		await page.screenshot({ path: file, fullPage: false });
+		return;
+	}
+	const size = await page
+		.evaluate<{ width: number; height: number; scale: number }>(PAGE_SIZE_SCRIPT)
+		.catch(() => null);
+	const clip = size ? capShotClip(size) : null;
+	await page.screenshot({ path: file, fullPage: true, ...(clip ? { clip } : {}) });
+	if (size && clip) {
+		record.cropped ??= [];
+		record.cropped.push(
+			`${file}: the page is ${size.width}x${size.height} px, kept the top ${clip.width}x${clip.height} (models reject images over 8000 px)`,
+		);
+	}
+}
+
 // Runs in the page, so it is a string: Kanban's TypeScript has no DOM types.
 const OUTLINE_SCRIPT = `(() => {
 	const lines = [];
@@ -268,7 +324,12 @@ export function formatShotBlock(record: ShotRecord): string {
 		...(record.failed.length ? record.failed.map((line) => `  ${line}`) : ["  (none)"]),
 	);
 	lines.push(rule, "PAGE OUTLINE:", ...(record.outline?.length ? record.outline : ["  (empty)"]));
-	lines.push(rule, ...record.shots.map((shot) => `Screenshot saved: ${shot}`), "");
+	lines.push(
+		rule,
+		...record.shots.map((shot) => `Screenshot saved: ${shot}`),
+		...(record.cropped ?? []).map((line) => `Screenshot cropped: ${line}`),
+		"",
+	);
 	return lines.join("\n");
 }
 
@@ -327,7 +388,7 @@ async function runStep(page: ShotPage, step: QaShotStep, record: ShotRecord, opt
 			const target = step.path ?? `step-${record.shots.length + 1}.png`;
 			const file = isAbsolute(target) ? target : join(options.out, target);
 			mkdirSync(dirname(file), { recursive: true });
-			await page.screenshot({ path: file, fullPage: step.fullPage ?? options.fullPage });
+			await takeShot(page, file, step.fullPage ?? options.fullPage, record);
 			record.shots.push(file);
 			return;
 		}
@@ -385,7 +446,7 @@ export async function runQaShot(options: QaShotOptions): Promise<{ exitCode: num
 				record.title = await page.title();
 				record.outline = await page.evaluate<string[]>(OUTLINE_SCRIPT);
 				const file = join(out, `${slugifyRoute(route)}-${viewport}.png`);
-				await page.screenshot({ path: file, fullPage: options.fullPage });
+				await takeShot(page, file, options.fullPage, record);
 				record.shots.push(file);
 			} catch (error) {
 				record.error = firstLine(error);
@@ -417,7 +478,7 @@ export async function runQaShot(options: QaShotOptions): Promise<{ exitCode: num
 			} catch (error) {
 				record.steps?.push(`FAIL ${label}: ${firstLine(error).slice(0, 200)}`);
 				const file = join(out, `${slugifyRoute(basename(script, ".json"))}-failure.png`);
-				await page.screenshot({ path: file, fullPage: true }).catch(() => {});
+				await takeShot(page, file, true, record).catch(() => {});
 				record.shots.push(file);
 				record.error = `step failed: ${label}`;
 				break;

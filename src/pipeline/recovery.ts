@@ -455,7 +455,9 @@ function nudgeForPremature(input: RecoveryCardInput, stop: PrematureStop): Recov
 				? "(empty model reply: output cap)"
 				: "(empty model reply)"
 			: stop.kind === "no_images"
-				? "(model rejects images)"
+				? stop.tooLarge
+					? "(model rejects an image over its size limits)"
+					: "(model rejects images)"
 				: stop.text;
 	const used = sinceBudget(flow.continues, flow);
 	const label = modelLabel(input.model);
@@ -611,14 +613,16 @@ function decideReview(input: RecoveryCardInput): RecoveryDecision {
 				}
 			: { kind: "none", reason: "finished (STATUS: DONE)" };
 	}
-	const stop = stopReason(input);
+	const premature = input.continuesPrematureStops ? detectPrematureStop(messages) : null;
+	// An image rejection reads as a poisoned-history error too ("messages.1.content.86.image…"): it gets the image
+	// note instead, or the cleared conversation opens the same image again (issue #12).
+	const stop = premature?.kind === "no_images" ? null : stopReason(input);
 	if (stop) {
 		if (input.capacityHold) {
 			return { kind: "wait", reason: describeCapacityHold(input.capacityHold) };
 		}
 		return withPatch(nudgeForError(input, stop), clearHold);
 	}
-	const premature = input.continuesPrematureStops ? detectPrematureStop(messages) : null;
 	if (!premature) {
 		return flow.liveHold
 			? { kind: "wait", reason: "the held session ended normally", patch: clearHold }

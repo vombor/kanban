@@ -7,7 +7,8 @@
 // the reply is one of:
 //   - a reply with a `STATUS:` line (the status-line rule asks every model to end a finished turn with one),
 //   - a QA reviewer's final line "QA <id> round N: PASS|FAIL|STALLED, report in …" (QA ends with no STATUS line),
-//   - a provider "no images" rejection or a bare provider error (the session file may even stay "running"),
+//   - a provider image rejection ("no images", or an image over its size limits) or a bare provider error (the
+//     session file may even stay "running"),
 //   - with `requireStatus: false`, any final reply (used to stop a running → in_progress bounce).
 // The reply must be newer than the moment the session last turned "running"; a reply from before that only
 // counts after BOUNCE_QUIET_MS with nothing written (a bounce back to running that no new message followed).
@@ -89,6 +90,13 @@ export interface ClineTurnEndInput {
 // screenshot (kimi-k3 aa1fe, gpt-6.1-sol a2cbb 10/06). Every later request fails until /clear.
 const NO_IMAGES_PATTERN =
 	/(doesn't|does not|do not) support (the )?image|image (input|field)s? (is |are )?not supported/i;
+// A request-size rejection of an image the model does accept: the image stays in history and poisons the
+// conversation the same way (issue #12, foo QA ebeb2 10/09: a full-page screenshot over 8000 px, "messages.1.
+// content.86.image.source.base64.data: At least one of the image dimensions exceed max allowed size: 8000 pixels").
+// Anthropic/Bedrock also say "image exceeds 5 MB maximum" and "... max allowed size for many-image requests: 2000
+// pixels"; OpenAI-compatible servers say "image is too large".
+const IMAGE_TOO_LARGE_PATTERN =
+	/image dimensions? exceeds? (the )?max(imum)?|image (size |file )?exceeds? (the )?(\d+(\.\d+)? ?[KMG]i?B )?(max|limit)|image (is |was )?too (large|big)|image (size|dimensions?) (is |are )?(too large|over the limit)|exceeds? (the )?max(imum)? (allowed )?image (size|dimensions?|pixels)/i;
 
 // A provider/transport error shown as the whole final assistant text (a2cbb 10/06 20:29Z: "The operation timed
 // out.", session idle, no STATUS line, no hook event, so the card sat In Progress for 80 min).
@@ -134,8 +142,19 @@ export function parseClineQaFinalLine(text: string): ClineQaVerdictKind | null {
 	return match?.[1] ? (match[1].toUpperCase() as ClineQaVerdictKind) : null;
 }
 
+/** Why a provider rejected an image in the conversation: a text-only model, or an image over its size limits. */
+export type ClineImageRejection = "unsupported" | "too_large";
+
+export function getClineImageRejection(text: string): ClineImageRejection | null {
+	if (NO_IMAGES_PATTERN.test(text)) {
+		return "unsupported";
+	}
+	return IMAGE_TOO_LARGE_PATTERN.test(text) ? "too_large" : null;
+}
+
+/** Any image rejection (getClineImageRejection): the image stays in history and every later request fails. */
 export function isClineNoImagesRejection(text: string): boolean {
-	return NO_IMAGES_PATTERN.test(text);
+	return getClineImageRejection(text) !== null;
 }
 
 /** The text when the whole reply is a short provider/transport error, else null. */

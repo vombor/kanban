@@ -557,6 +557,37 @@ describe("rework limits", () => {
 		expect(readEscalationRecord(readQaflow(await harness.entry("d1111")))).toBeNull();
 	});
 
+	it("a STALLED from the QA agent's own errors goes to the orchestrator, never to the kit's takeover (issue #12)", async () => {
+		const harness = createHarness({
+			onFail: () => ({
+				action: "escalate",
+				to: { agentId: "codex", model: { provider: "bedrock", model: "us.moonshot.kimi-k3" } },
+				requireApproval: false,
+				reason: "QA stalled: take it over",
+			}),
+		});
+		await harness.seed("d1111", {
+			qaVerdicts: [
+				failVerdict(1, {
+					verdict: "STALLED",
+					qaAgentError: "image over the model's size limits: At least one of the image dimensions exceed …",
+				}),
+			],
+		});
+		await harness.tick({ review: [DEV] }, [SESSION]);
+
+		expect(harness.onFailCalls).toEqual([]);
+		expect(kinds(harness.actions)).toEqual(["blockTask:d1111"]);
+		const escalated = readEscalationRecord(readQaflow(await harness.entry("d1111")));
+		expect(escalated).toMatchObject({ to: "orchestrator", cause: "qa_agent_error" });
+		expect(escalated?.reason).toContain("the QA agent's own runs failed");
+		expect(escalated?.sibling).toBeUndefined();
+
+		const result = await handBack(harness, REWORK_T0 + 60_000, 0);
+		expect(result.reworks).toBe(false);
+		expect(result.qaLogSection).toContain("the QA gate gives the same snapshot a new QA card");
+	});
+
 	it("a handback after a STALLED escalation says the pipeline won't rework it, and doesn't", async () => {
 		const harness = createHarness({
 			onFail: (input) =>

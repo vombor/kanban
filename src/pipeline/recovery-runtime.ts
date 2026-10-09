@@ -3,17 +3,22 @@
 import { stat } from "node:fs/promises";
 
 import { readPipelineConfig } from "../config/pipeline-config";
+import { type RuntimeBoardCard, runtimeAgentIdSchema } from "../core/api-contract";
 import { canProbeProvider, probeModel } from "../models/model-probe";
 import { loadModelProbeDependencies } from "../models/model-probe-setup";
 import { createAgentToolProcessFinder } from "../server/process-reaper";
 import { getClineDataDirPath, getPipelineStatePath } from "../state/kanban-home";
+import { getAgentTurnEndSource } from "../terminal/agent-session-adapters";
 import { createClineSessionFileReader, getClineSessionsPath } from "../terminal/cline-session-files";
 import { readClineTuiSignInGap } from "../terminal/cline-tui-sign-in";
+import { isClineSessionOfRun } from "../terminal/cline-turn-check";
 import { runGit } from "../workspace/git-utils";
 import { getTaskWorkspacePathInfo } from "../workspace/task-worktree";
 import type { PipelineDecisionLog } from "./decision-log";
 import { createPipelineStateStore, type PipelineStateStore } from "./pipeline-state";
+import type { QaGateDependencies } from "./qa-gate";
 import type { RecoveryFlowPatch } from "./recovery";
+import { detectRunError } from "./recovery-detect";
 import { createRecoveryStage, type RecoveryStage, type RecoveryStageDependencies } from "./recovery-stage";
 import {
 	consumeRestartRecoveryRequest,
@@ -74,6 +79,37 @@ export function applyRecoveryPatches(
 	return next;
 }
 
+async function locateTaskWorktree(workspacePath: string, card: RuntimeBoardCard): Promise<string | null> {
+	try {
+		const info = await getTaskWorkspacePathInfo({ cwd: workspacePath, taskId: card.id, baseRef: card.baseRef });
+		return info.exists ? info.path : null;
+	} catch {
+		return null;
+	}
+}
+
+async function readClineSessionsPath(): Promise<string> {
+	const { config } = await readPipelineConfig();
+	return getClineSessionsPath(getClineDataDirPath(config.agents.cline.dataDir));
+}
+
+/**
+ * The QA gate's `readRunError`: the QA card's own Cline session (this run's, newest in its worktree) when its last
+ * turn is the agent's error (detectRunError). Agents without readable session files answer null.
+ */
+export function createQaRunErrorReader(): NonNullable<QaGateDependencies["readRunError"]> {
+	const reader = createClineSessionFileReader();
+	return async ({ workspacePath, card, session, agentId }) => {
+		const parsed = runtimeAgentIdSchema.safeParse(agentId);
+		if (!parsed.success || getAgentTurnEndSource(parsed.data) !== "cline-session-files") {
+			return null;
+		}
+		const worktree = session?.workspacePath ?? (await locateTaskWorktree(workspacePath, card));
+		const detail = worktree ? await reader.readLatestSessionDetail(await readClineSessionsPath(), worktree) : null;
+		return detail && isClineSessionOfRun(detail, session?.startedAt ?? null) ? detectRunError(detail) : null;
+	};
+}
+
 export function createWorkerRecoveryStage(options: {
 	store: PipelineStateStore;
 	decisionLog: PipelineDecisionLog;
@@ -82,21 +118,10 @@ export function createWorkerRecoveryStage(options: {
 	now?: () => number;
 }): RecoveryStage {
 	const reader = createClineSessionFileReader();
-	const sessionsPath = async (): Promise<string> => {
-		const { config } = await readPipelineConfig();
-		return getClineSessionsPath(getClineDataDirPath(config.agents.cline.dataDir));
-	};
 	return createRecoveryStage({
-		locateWorktree: async (workspacePath, card) => {
-			try {
-				const info = await getTaskWorkspacePathInfo({ cwd: workspacePath, taskId: card.id, baseRef: card.baseRef });
-				return info.exists ? info.path : null;
-			} catch {
-				return null;
-			}
-		},
+		locateWorktree: locateTaskWorktree,
 		readSessionDetail: async (worktreePath) =>
-			await reader.readLatestSessionDetail(await sessionsPath(), worktreePath),
+			await reader.readLatestSessionDetail(await readClineSessionsPath(), worktreePath),
 		readSignInGap: async (providerId) => {
 			const { config } = await readPipelineConfig();
 			return await readClineTuiSignInGap(getClineDataDirPath(config.agents.cline.dataDir), providerId);

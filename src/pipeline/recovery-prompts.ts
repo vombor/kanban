@@ -23,6 +23,15 @@ export const RESTART_RESUME_NOTE =
 /** Between the clear command and the text that follows it, so the TUI has started the new conversation. */
 export const CLEAR_SETTLE_MS = 1_500;
 
+/**
+ * Issue #12: an image over the provider's size limits (Anthropic/Bedrock: 8000 px on a side, 5 MB; 2000 px once a
+ * request carries many images). Also appended to the prompt of a QA card recreated after that error (qa-gate.ts).
+ */
+export const IMAGE_TOO_LARGE_NOTE =
+	"Your previous conversation was cleared: you opened an image larger than the model accepts (over 8000 pixels on a side, or over 5 MB), and every later request failed.";
+export const SMALL_IMAGES_ONLY =
+	"Never open a full-page screenshot or any image taller or wider than 2000 pixels: take viewport-sized screenshots (no --full-page), and check pages through the screenshot tool's text report (status, console, outline) instead.";
+
 const WORK_IS_HERE = "Your work so far is in this worktree (git status / git diff): continue the task from there.";
 
 /** The card prompt resent after /clear for a premature stop that poisoned the history. */
@@ -30,6 +39,9 @@ export function buildClearedPrematurePrompt(
 	cardPrompt: string,
 	stop: Exclude<PrematureStop, { kind: "announcement" }>,
 ): string {
+	if (stop.kind === "no_images" && stop.tooLarge) {
+		return `${cardPrompt}\n\n${IMAGE_TOO_LARGE_NOTE} ${WORK_IS_HERE} ${SMALL_IMAGES_ONLY}`;
+	}
 	if (stop.kind === "no_images") {
 		return `${cardPrompt}\n\nYour previous conversation was cleared: you opened an image file, your model doesn't accept images, and every later request failed. ${WORK_IS_HERE} Never read image files (.png/.jpg/.gif/.webp); check screenshots through the screenshot tool's text report (status, console, outline) instead.`;
 	}

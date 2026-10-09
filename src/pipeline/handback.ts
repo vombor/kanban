@@ -27,7 +27,8 @@ export interface HandBackResult {
 	/**
 	 * Whether the pipeline acts again on its own: extra rounds were granted and the card was escalated over a FAIL or
 	 * a land conflict (the rework stage re-acts on those). A STALLED QA round is not reworked: QA of that snapshot
-	 * already has its verdict, so the card needs a restart, or a change that makes a new snapshot, from a human.
+	 * already has its verdict, so the card needs a restart, or a change that makes a new snapshot, from a human. A
+	 * STALLED from the QA agent's own errors (`qa_agent_error`) is QA'd again: that verdict stops counting.
 	 */
 	reworks: boolean;
 	/** The QA log section to append. */
@@ -75,9 +76,11 @@ export async function handBackTask(store: PipelineStateStore, input: HandBackInp
 	const recorded: HandbackRecord = handback;
 	const escalated = readEscalationRecord({ escalated: recorded.escalated });
 	const rounds = input.extraRounds > 0 ? ` (+${input.extraRounds} FAIL round${input.extraRounds > 1 ? "s" : ""})` : "";
-	const reworks = input.extraRounds > 0 && escalated?.cause !== "stalled";
-	const stalledNote =
-		input.extraRounds > 0 && !reworks
+	const qaAgentError = escalated?.cause === "qa_agent_error";
+	const reworks = input.extraRounds > 0 && escalated?.cause !== "stalled" && !qaAgentError;
+	const stalledNote = qaAgentError
+		? "- It was escalated because the QA agent's own runs failed: once it is back in Review, the QA gate gives the same snapshot a new QA card.\n"
+		: input.extraRounds > 0 && !reworks
 			? "- It was escalated over a STALLED QA round, which the pipeline does not rework: restart or change the card for a new QA round; the extra rounds count for later FAILs.\n"
 			: "";
 	return {

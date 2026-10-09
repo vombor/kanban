@@ -329,7 +329,7 @@ export async function runCalibration(
 
 	/**
 	 * The model rejected an image, which stays in its history and fails every later request, so "continue" can't help:
-	 * the pipeline's image recovery (clear the conversation, resend the run prompt with the no-images note). A
+	 * the pipeline's image recovery (clear the conversation, resend the run prompt with the no-images or image-size note). A
 	 * rejection right after one, or with no nudge left, ends the run DNF.
 	 */
 	const recoverFromImageRejection = async (
@@ -337,6 +337,7 @@ export async function runCalibration(
 		entry: CalibrationRunState,
 		board: CalibrationBoardState,
 		taskId: string,
+		tooLarge: boolean,
 	): Promise<void> => {
 		const nudges = entry.nudges ?? 0;
 		const clear = getAgentRecoveryProfile(run.model.agent).clearContextCommand;
@@ -365,7 +366,7 @@ export async function runCalibration(
 		let sent = await deliver(clear);
 		if (sent.ok) {
 			await deps.sleep(CLEAR_SETTLE_MS);
-			sent = await deliver(buildClearedPrematurePrompt(prompt, { kind: "no_images", text: "" }));
+			sent = await deliver(buildClearedPrematurePrompt(prompt, { kind: "no_images", text: "", tooLarge }));
 		}
 		deps.log(
 			`${run.key}: ${IMAGE_REJECTION_REASON}; ${clear} + run prompt without images, nudge ${entry.nudges}/${spec.maxNudges} ${sent.ok ? "sent" : `FAILED (${sent.error ?? "not delivered"})`}`,
@@ -426,8 +427,9 @@ export async function runCalibration(
 		if (running || column !== "review" || verdict || pid.brownout || now - (entry.lastNudge ?? 0) <= NUDGE_GAP_MS) {
 			return;
 		}
-		if (workspacePath && (await deps.signals.hasImageRejection(agentId, workspacePath)) === true) {
-			await recoverFromImageRejection(run, entry, board, taskId);
+		const rejection = workspacePath ? await deps.signals.hasImageRejection(agentId, workspacePath) : null;
+		if (rejection) {
+			await recoverFromImageRejection(run, entry, board, taskId, rejection === "too_large");
 			return;
 		}
 		entry.imageRecoverySent = false;

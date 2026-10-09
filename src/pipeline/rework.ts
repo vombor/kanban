@@ -143,7 +143,13 @@ export interface ReworkRecord {
 	clearContext?: "auto" | "always" | "never";
 }
 
-export type EscalationCause = FailCause | "never_started" | "rework_impossible" | "rework_failed" | "outage";
+export type EscalationCause =
+	| FailCause
+	| "never_started"
+	| "rework_impossible"
+	| "rework_failed"
+	| "outage"
+	| "qa_agent_error";
 
 /** `qaflow.escalated`: the watchdog lists it in ATTENTION.md until a handback clears it. */
 export interface EscalationRecord {
@@ -235,6 +241,8 @@ export interface ReworkTrigger {
 	conflict: ReworkConflict | null;
 	/** Where the QA gate kept the round's artifacts, when it recorded them. */
 	artifactsDir?: string | null;
+	/** A STALLED the QA agent's own errors caused (QaVerdictRecord.qaAgentError): not the dev card's failure. */
+	qaAgentError?: string | null;
 }
 
 function verdictKey(round: number, verdict: string, at: number): string {
@@ -1038,6 +1046,20 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 			delete next.stopped;
 			return next;
 		});
+		if (trigger.qaAgentError) {
+			// Issue #12: the QA harness failed, not the dev card (its QA cards kept ending on their own errors, and the
+			// QA gate already recreated them). The kit's onFail would rework the dev card or hand it to escalate.to.
+			await escalate(scope, {
+				round: trigger.round,
+				reason: `QA of round ${trigger.round} never gave a verdict: the QA agent's own runs failed (${trigger.qaAgentError.slice(0, 200)})`,
+				cause: "qa_agent_error",
+				details: [
+					"The dev card's work was not judged; fix the QA agent (model, provider, screenshots) and hand the card back.",
+				],
+				answer: { core: "qaAgentError" },
+			});
+			return;
+		}
 		const failRounds = countFailRounds(await loadEntry(workspaceId, card.id));
 		await updateFlow(workspaceId, card.id, (current) => ({ ...current, failRounds }));
 		const { history } = readCardHistory(await loadEntry(workspaceId, card.id));
@@ -1143,6 +1165,7 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 				snapshot: latest.snapshot,
 				conflict: null,
 				artifactsDir: latest.artifactsDir,
+				qaAgentError: latest.verdict === "STALLED" ? (latest.qaAgentError ?? null) : null,
 			};
 		} else {
 			const pass = readQaPassEntry(entry);

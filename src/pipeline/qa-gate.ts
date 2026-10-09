@@ -9,7 +9,8 @@
 // 3. ingest: a QA card in Review is done. Its outbox verdict.json is recorded (qa-log, artifacts, the dev card's
 //    pipeline state, the `verdictRecorded` event), its scratch servers are stopped, and it goes to Done through the
 //    Done workflow (`finishTask`, never landed). A QA card that stopped without a usable verdict is nudged, then
-//    recorded STALLED.
+//    recorded STALLED. One whose last turn is its own agent's error (an image rejection, a provider error) is not
+//    nudged but replaced, then recorded STALLED with `qaAgentError` (qa-agent-error.ts, issue #12).
 // 4. PASS: the kit's `onPass` (decideOnPass, hold.ts) may hold the card; otherwise the Done workflow lands it
 //    (src/server/task-landing-gate.ts, trigger `pipeline`). FAIL, STALLED and a land conflict are the rework stage's
 //    (rework.ts): the gate records them (the verdict, `qaPass.landing`) and does nothing more.
@@ -77,6 +78,17 @@ import { decideOnPass, readPipelineHold } from "./hold";
 import type { PipelineCardState, PipelineStateStore, PipelineWorkspaceState } from "./pipeline-state";
 import { type CapacityCard, findProviderCapacityHold } from "./provider-capacity";
 import {
+	buildQaAgentErrorNote,
+	describeQaAgentError,
+	listQaAgentErrors,
+	QA_AGENT_ERROR_RETRIES,
+	type QaAgentError,
+	type QaAgentErrorRecord,
+	readLastHandbackAt,
+	readQaAgentErrors,
+	resolveQaAgentError,
+} from "./qa-agent-error";
+import {
 	buildQaChecksReport,
 	decideQaChecks,
 	describeQaChecksOutcome,
@@ -96,6 +108,7 @@ import {
 	type QaVerdictRead,
 } from "./qa-verdict";
 import { type RecoveryFlowState, readRecoveryFlow } from "./recovery";
+import type { AgentRunError } from "./recovery-detect";
 import { lostToRestart } from "./restart-recovery";
 import { getSnapshotRef, readTaskSnapshot } from "./snapshots";
 import type { PipelineFinishTaskRequest } from "./worker-protocol";
@@ -164,6 +177,8 @@ export interface QaVerdictRecord {
 	visual: QaVerdict["visual"];
 	artifactsDir: string | null;
 	at: number;
+	/** A STALLED the QA agent's own errors caused (qa-agent-error.ts): the rework stage escalates it to the orchestrator. */
+	qaAgentError?: string | null;
 }
 
 export interface QaGateContext {
@@ -216,6 +231,16 @@ export interface QaGateDependencies {
 	/** The configured check scripts a snapshot's package.json has (none: QA doesn't wait). Default: git show. */
 	readCheckScripts?: (repoPath: string, snapshot: string, scripts: readonly string[]) => Promise<string[]>;
 	readVerdict: (outboxDir: string) => Promise<QaVerdictRead>;
+	/**
+	 * The QA card's last turn when it is the agent's own error (detectRunError on its Cline session), or null. Default:
+	 * none read (only a session summary's `reviewReason: "error"` counts).
+	 */
+	readRunError?: (input: {
+		workspacePath: string;
+		card: RuntimeBoardCard;
+		session: PipelineSessionView | null;
+		agentId: string;
+	}) => Promise<AgentRunError | null>;
 	stopScratchProcesses: (dirs: string[]) => Promise<number>;
 	copyArtifacts?: (from: string, to: string) => Promise<void>;
 	/** For reading the QA log (rounds, earlier sections). */
@@ -538,7 +563,13 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			const qaTaskId = String(devEntry.qaCard ?? "?");
 			return { outcome: "none", note: describeExisting(qaTaskId, readQaGateEntry(state.cards[qaTaskId]), short) };
 		}
-		if (readQaVerdictRecords(devEntry).some((verdict) => verdict.snapshot === qaSnapshot.commit)) {
+		// A STALLED from the QA agent's own errors doesn't count once the card was handed back: it never judged the work.
+		const handbackAt = readLastHandbackAt(devEntry);
+		if (
+			readQaVerdictRecords(devEntry).some(
+				(verdict) => verdict.snapshot === qaSnapshot.commit && !(verdict.qaAgentError && verdict.at < handbackAt),
+			)
+		) {
 			return { outcome: "none", note: `snapshot ${short} already has a QA verdict` };
 		}
 		// QA starts on finished checks (their report goes into the prompt), or without them after checksWaitMin. The
@@ -581,7 +612,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		const outboxDir = join(context.qa.outboxRoot, qaTaskId);
 		const scratchDir = join(context.qa.scratchRoot, card.id);
 		const devTitle = card.title || card.prompt;
-		const prompt = buildQaPrompt({
+		const qaPrompt = buildQaPrompt({
 			devTaskId: card.id,
 			round,
 			devTitle,
@@ -596,6 +627,8 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			kanbanHome: kanbanHomeOf(),
 			checksReport: buildQaChecksReport({ status: checks, snapshot: qaSnapshot.commit, baseRef: card.baseRef }),
 		});
+		const agentError = listQaAgentErrors(devEntry, qaSnapshot.commit).at(-1);
+		const prompt = agentError ? `${qaPrompt}\n\n${buildQaAgentErrorNote(agentError)}` : qaPrompt;
 		const created = await deps.actions.run({
 			kind: "createTask",
 			workspaceId,
@@ -677,6 +710,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		entry: QaGateEntry,
 		fileVerdict: QaVerdict,
 		pipelineNote: string | null,
+		qaAgentError: string | null = null,
 	): Promise<string> => {
 		const workspaceId = context.snapshot.workspaceId;
 		const ruled = applyQaVerdictRules(fileVerdict);
@@ -696,6 +730,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			visual: verdict.visual,
 			artifactsDir,
 			at,
+			...(qaAgentError ? { qaAgentError } : {}),
 		};
 		await deps.store.update(workspaceId, (state) => {
 			const devEntry = state.cards[entry.reviewsTaskId] ?? {};
@@ -774,6 +809,73 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		return `moving the QA card to Done failed (${done.error ?? done.status}); retried next pass`;
 	};
 
+	const readQaAgentError = async (
+		context: QaGateContext,
+		qaTaskId: string,
+		entry: QaGateEntry,
+	): Promise<QaAgentError | null> => {
+		const card = listCards(context.snapshot).find((candidate) => candidate.card.id === qaTaskId)?.card;
+		const session = context.snapshot.sessions.find((candidate) => candidate.taskId === qaTaskId) ?? null;
+		const runError =
+			card && deps.readRunError
+				? await deps
+						.readRunError({
+							workspacePath: context.snapshot.workspacePath,
+							card,
+							session,
+							agentId: session?.agentId ?? entry.agentId,
+						})
+						.catch(() => null)
+				: null;
+		return resolveQaAgentError(runError, session);
+	};
+
+	/**
+	 * A QA card that ended on its own agent's error: replaced by a fresh QA card for the same snapshot (superseded, so
+	 * the dev card's next settled Review queues one, with a note about the error), up to QA_AGENT_ERROR_RETRIES; after
+	 * that a STALLED carrying the error, which the rework stage hands to the orchestrator, never to the kit's onFail.
+	 */
+	const replaceAfterAgentError = async (
+		context: QaGateContext,
+		qaTaskId: string,
+		entry: QaGateEntry,
+		error: QaAgentError,
+	): Promise<string> => {
+		const workspaceId = context.snapshot.workspaceId;
+		const state = await deps.store.load(workspaceId);
+		const earlier = listQaAgentErrors(state.cards[entry.reviewsTaskId], entry.snapshot);
+		const what = describeQaAgentError(error);
+		const attempt = earlier.length + 1;
+		const errorRecord: QaAgentErrorRecord = {
+			qaTaskId,
+			snapshot: entry.snapshot,
+			round: entry.round,
+			at: context.now,
+			...error,
+		};
+		await updateCard(workspaceId, entry.reviewsTaskId, (dev) => ({
+			...dev,
+			qaAgentErrors: [...readQaAgentErrors(dev), errorRecord].slice(-20),
+		}));
+		if (earlier.length < QA_AGENT_ERROR_RETRIES) {
+			const stopped = await markSuperseded(context, qaTaskId, entry);
+			deps.log(
+				`qa-ingest ${qaTaskId}: the QA agent's own run failed (${what}); replacing it (${attempt}/${QA_AGENT_ERROR_RETRIES})`,
+			);
+			return `the QA agent's own run failed (${what}); not nudged (that resends the failing conversation): superseded${stopped > 0 ? ` (stopped ${stopped} scratch process(es))` : ""}, and ${entry.reviewsTaskId} gets a new QA card for snapshot ${entry.snapshot.slice(0, 8)} (replacement ${attempt}/${QA_AGENT_ERROR_RETRIES}); ${await trashQaCard(context, qaTaskId)}`;
+		}
+		const reason = `QA agent's own runs failed ${attempt} times on this snapshot (last: ${what})`;
+		const recorded = await recordVerdict(
+			context,
+			qaTaskId,
+			entry,
+			createStalledQaVerdict(reason),
+			`${earlier.length} replacement QA card(s) used; a QA harness failure, not the dev card's`,
+			what,
+		);
+		return `${recorded}; ${await trashQaCard(context, qaTaskId)}`;
+	};
+
 	const ingest = async (context: QaGateContext, qaTaskId: string, entry: QaGateEntry): Promise<string | null> => {
 		const workspaceId = context.snapshot.workspaceId;
 		if (entry.status === "ingested") {
@@ -790,6 +892,11 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		}
 		if (context.now - seenAt < context.qa.verdictGraceSec * 1000) {
 			return null;
+		}
+		// Before any nudge: a nudge resends the conversation that ends on the error (issue #12).
+		const agentError = await readQaAgentError(context, qaTaskId, entry);
+		if (agentError) {
+			return await replaceAfterAgentError(context, qaTaskId, entry, agentError);
 		}
 		if (entry.nudges < context.qa.maxNudges) {
 			const nudges = entry.nudges + 1;

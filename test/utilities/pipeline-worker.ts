@@ -25,6 +25,7 @@ import { createQaGate } from "../../src/pipeline/qa-gate";
 import { type AppendQaLog, createQaLogAppender } from "../../src/pipeline/qa-log";
 import type { QaPreviewController } from "../../src/pipeline/qa-preview";
 import type { QaVerdictRead } from "../../src/pipeline/qa-verdict";
+import type { AgentRunError } from "../../src/pipeline/recovery-detect";
 import { createReworkStage } from "../../src/pipeline/rework";
 import type { StageQaNotesInput } from "../../src/pipeline/rework-notes";
 import type { StaleBase } from "../../src/pipeline/rework-text";
@@ -95,6 +96,7 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 	};
 	const previewCalls: Array<{ call: "ensure" | "stopIfIdle"; workspaceId: string; qaActive?: boolean }> = [];
 	const verdicts = new Map<string, QaVerdictRead>();
+	const runErrors = new Map<string, AgentRunError>();
 	const stoppedScratch: string[][] = [];
 	let uuidCount = 0;
 	let siblingCount = 0;
@@ -147,6 +149,7 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 		readSnapshot: async (_repoPath, taskId) => snapshotOf(taskId),
 		readCheckScripts: async (_repoPath, snapshot) => options.checkScripts?.(snapshot) ?? [],
 		readVerdict: async (outboxDir) => verdicts.get(outboxDir) ?? { kind: "missing" },
+		readRunError: async ({ card }) => runErrors.get(card.id) ?? null,
 		stopScratchProcesses: async (dirs) => {
 			stoppedScratch.push(dirs);
 			return 0;
@@ -250,6 +253,14 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 		setVerdict: (outboxDir: string, read: QaVerdictRead) => {
 			verdicts.set(outboxDir, read);
 		},
+		/** The QA card's last turn as its agent's own error (the QA gate's readRunError); null clears it. */
+		setRunError: (taskId: string, error: AgentRunError | null) => {
+			if (error) {
+				runErrors.set(taskId, error);
+			} else {
+				runErrors.delete(taskId);
+			}
+		},
 		setNow: (next: number) => {
 			now = next;
 		},
@@ -294,6 +305,7 @@ export function createSnapshot(input: {
 				...(session.startedAt !== undefined ? { startedAt: session.startedAt } : {}),
 				...(session.stateChangedAt !== undefined ? { stateChangedAt: session.stateChangedAt } : {}),
 				...(session.workspacePath !== undefined ? { workspacePath: session.workspacePath } : {}),
+				...(session.reviewReason !== undefined ? { reviewReason: session.reviewReason } : {}),
 				...(session.live !== undefined ? { live: session.live } : {}),
 			}),
 		),

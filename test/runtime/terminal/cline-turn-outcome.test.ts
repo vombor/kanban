@@ -8,6 +8,7 @@ import {
 	type ClineSessionSnapshot,
 	type ClineTurnEndInput,
 	evaluateClineTurnEnd,
+	getClineImageRejection,
 	getClineProviderErrorText,
 	hasClineStatusLine,
 	isClineNoImagesRejection,
@@ -74,6 +75,7 @@ describe("reply classifiers", () => {
 
 	it("recognizes no-images rejections and bare provider errors", () => {
 		expect(isClineNoImagesRejection("This model does not support image input.")).toBe(true);
+		expect(getClineImageRejection("This model does not support image input.")).toBe("unsupported");
 		expect(getClineProviderErrorText("The operation timed out.")).toBe("The operation timed out.");
 		expect(getClineProviderErrorText("The operation timed out. ".repeat(20))).toBeNull();
 		expect(getClineProviderErrorText("Everything fine.")).toBeNull();
@@ -183,5 +185,25 @@ describe("evaluateClineTurnEnd", () => {
 
 	it("does not end a rework typed seconds ago that Cline hasn't written yet", () => {
 		expect(evaluate({}, { runningSince: NOW - 3_000 })).toEqual({ ended: false, reason: "reply_before_running" });
+	});
+});
+
+describe("image size rejections (issue #12)", () => {
+	it("counts request-size image errors of Anthropic/Bedrock and OpenAI-compatible providers as image rejections", () => {
+		for (const text of [
+			"messages.1.content.86.image.source.base64.data: At least one of the image dimensions exceed max allowed size: 8000 pixels",
+			"messages.3.content.2.image.source.base64.data: At least one of the image dimensions exceed max allowed size for many-image requests: 2000 pixels",
+			"messages.0.content.1.image.source.base64: image exceeds 5 MB maximum: 5316852 bytes > 5242880 bytes",
+			"Invalid request: image is too large",
+			"The image size exceeds the limit",
+		]) {
+			expect(getClineImageRejection(text), text).toBe("too_large");
+			expect(isClineNoImagesRejection(text), text).toBe(true);
+		}
+	});
+
+	it("leaves replies that only talk about images alone", () => {
+		expect(getClineImageRejection("The hero image looks right on mobile; STATUS: DONE")).toBeNull();
+		expect(getClineImageRejection("I resized the image to fit the card.")).toBeNull();
 	});
 });

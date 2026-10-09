@@ -567,6 +567,114 @@ describe("QA gate", () => {
 		expect(record).toMatchObject({ verdict: "STALLED", notes: expect.stringContaining("unusable verdict.json") });
 	});
 
+	describe("a QA card whose own agent failed (issue #12)", () => {
+		const IMAGE_ERROR = {
+			kind: "image_rejected" as const,
+			tooLarge: true,
+			text: "messages.1.content.86.image.source.base64.data: At least one of the image dimensions exceed max allowed size: 8000 pixels",
+		};
+		const config = {
+			pipeline: { qa: { maxNudges: 2, verdictGraceSec: 20 } },
+			workspaces: { foo: QA_WORKSPACE },
+		};
+		const dev = () => createCard({ id: "d1111", ...OPENAI_DEV });
+		const qaCard = (id: string) => createCard({ id, role: "qa", reviewsTaskId: "d1111" });
+
+		/** The QA card ends in Review with no verdict: seen once, then once more after the grace. */
+		const endInReview = async (harness: ReturnType<typeof createHarness>, qaTaskId: string, at: number) => {
+			harness.setNow(at);
+			await send(harness, { review: [dev(), qaCard(qaTaskId)] });
+			harness.setNow(at + 21_000);
+			await send(harness, { review: [dev(), qaCard(qaTaskId)] });
+		};
+		/** The superseded QA card is in Done: the dev card's next Review queues its replacement, then it starts. */
+		const replace = async (harness: ReturnType<typeof createHarness>, oldId: string, newId: string) => {
+			await send(harness, { review: [dev()], trash: [qaCard(oldId)] });
+			await send(harness, { backlog: [qaCard(newId)], review: [dev()], trash: [qaCard(oldId)] });
+		};
+
+		it("is not nudged but replaced for the same snapshot, then STALLED for the orchestrator, never a takeover", async () => {
+			const harness = createHarness({ config });
+			await startQa(harness);
+			harness.setRunError("qa001", IMAGE_ERROR);
+
+			await endInReview(harness, "qa001", T0 + 60_000);
+			// No nudge: it would resend the conversation whose image fails every request.
+			expect(harness.actions.filter((action) => action.kind === "deliverInput")).toEqual([]);
+			expect(kinds(harness.actions)).toEqual(["finishTask:qa001"]);
+			let state = await harness.store.load("foo");
+			expect(readQaGateEntry(state.cards.qa001)).toMatchObject({ status: "superseded", trashed: true });
+			expect(readQaVerdictRecords(state.cards.d1111)).toEqual([]);
+			expect(state.cards.d1111?.qaCreated).toBeUndefined();
+			expect(harness.readCardDecisions("foo", "qa_ingest").at(-1)?.note).toContain(
+				"the QA agent's own run failed (image over the model's size limits",
+			);
+
+			await replace(harness, "qa001", "qa002");
+			const [replacement] = createdTasks(harness.actions);
+			expect(replacement).toMatchObject({ taskId: "qa002", reviewsTaskId: "d1111" });
+			// Same round, same snapshot; the legacy prompt with the note after it.
+			expect(replacement?.prompt).toContain("You are the QA reviewer (round 1) for Kanban dev card d1111");
+			expect(replacement?.prompt).toMatch(
+				/NOTE \(Kanban\): an earlier QA card for this snapshot ended on its own error/u,
+			);
+			expect(replacement?.prompt).toContain("Never open a full-page screenshot");
+			expect(readQaGateEntry((await harness.store.load("foo")).cards.qa002)).toMatchObject({
+				snapshot: "snap-d1111",
+				round: 1,
+			});
+
+			harness.setRunError("qa002", IMAGE_ERROR);
+			await endInReview(harness, "qa002", T0 + 5 * 60_000);
+			await replace(harness, "qa002", "qa003");
+			harness.setRunError("qa003", IMAGE_ERROR);
+			harness.actions.length = 0;
+			await endInReview(harness, "qa003", T0 + 10 * 60_000);
+
+			state = await harness.store.load("foo");
+			const [record] = readQaVerdictRecords(state.cards.d1111);
+			expect(record).toMatchObject({
+				qaTaskId: "qa003",
+				verdict: "STALLED",
+				qaAgentError: expect.stringContaining("image over the model's size limits"),
+			});
+			// The rework stage hands it to the orchestrator: the dev card is blocked, no sibling takes it over.
+			const escalated = (state.cards.d1111?.qaflow as Record<string, unknown> | undefined)?.escalated;
+			expect(escalated).toMatchObject({ to: "orchestrator", cause: "qa_agent_error" });
+			expect(createdTasks(harness.actions)).toEqual([]);
+			expect(harness.actions.filter((action) => action.kind === "deliverInput")).toEqual([]);
+			expect(kinds(harness.actions)).toEqual(["finishTask:qa003"]);
+			expect(harness.actions.some((action) => action.kind === "blockTask" && action.taskId === "d1111")).toBe(true);
+		});
+
+		it("still nudges a QA card that just stopped without a verdict", async () => {
+			const harness = createHarness({ config });
+			await startQa(harness);
+			await endInReview(harness, "qa001", T0 + 60_000);
+			expect(harness.actions).toMatchObject([{ kind: "deliverInput", taskId: "qa001" }]);
+		});
+
+		it("takes an agent error from the session summary too", async () => {
+			const harness = createHarness({ config });
+			await startQa(harness);
+			const sessions = [
+				{
+					taskId: "qa001",
+					state: "awaiting_review" as const,
+					reviewReason: "error" as const,
+					stateChangedAt: T0,
+					live: true,
+				},
+			];
+			harness.setNow(T0 + 60_000);
+			await send(harness, { review: [dev(), qaCard("qa001")] }, { sessions });
+			harness.setNow(T0 + 90_000);
+			await send(harness, { review: [dev(), qaCard("qa001")] }, { sessions });
+			expect(kinds(harness.actions)).toEqual(["finishTask:qa001"]);
+			expect(readQaGateEntry((await harness.store.load("foo")).cards.qa001)).toMatchObject({ status: "superseded" });
+		});
+	});
+
 	it("a QA card moved to Done without a verdict does not block QA: it is superseded and the snapshot gets a new one", async () => {
 		const harness = createHarness({ config: { workspaces: { foo: QA_WORKSPACE } } });
 		await startQa(harness);

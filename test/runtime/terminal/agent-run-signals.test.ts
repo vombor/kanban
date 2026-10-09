@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	countToolUse,
 	createAgentRunSignals,
-	endsOnImageRejection,
+	findEndingImageRejection,
 	findRepeatedToolCall,
 } from "../../../src/terminal/agent-run-signals";
 import type { ClineSessionFileReader } from "../../../src/terminal/cline-session-files";
@@ -56,10 +56,23 @@ describe("tool-call signals", () => {
 			role: "assistant",
 			content: [{ type: "text", text: "This model doesn't support the image field for user messages." }],
 		};
-		expect(endsOnImageRejection([toolCall("read_files", {}), rejection])).toBe(true);
-		expect(endsOnImageRejection([rejection, toolCall("read_files", {})])).toBe(false);
-		expect(endsOnImageRejection([rejection, { role: "assistant", content: "Done. STATUS: ok" }])).toBe(false);
-		expect(endsOnImageRejection([{ role: "user", content: "hi" }])).toBe(false);
+		expect(findEndingImageRejection([toolCall("read_files", {}), rejection])).toBe("unsupported");
+		expect(findEndingImageRejection([rejection, toolCall("read_files", {})])).toBeNull();
+		expect(findEndingImageRejection([rejection, { role: "assistant", content: "Done. STATUS: ok" }])).toBeNull();
+		expect(findEndingImageRejection([{ role: "user", content: "hi" }])).toBeNull();
+	});
+
+	it("tells an image over the provider's size limits (issue #12)", () => {
+		const rejection = {
+			role: "assistant",
+			content: [
+				{
+					type: "text",
+					text: "messages.1.content.86.image.source.base64.data: At least one of the image dimensions exceed max allowed size: 8000 pixels",
+				},
+			],
+		};
+		expect(findEndingImageRejection([toolCall("read_files", {}), rejection])).toBe("too_large");
 	});
 });
 
