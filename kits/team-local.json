@@ -1,0 +1,187 @@
+{
+	"kit": 1,
+	"name": "team-local",
+	"description": "The team workflow on local Lemonade models only (Cline + provider lemonade, no cloud anywhere): GLM-4.7-Flash builds and plans, Devstral (another family) reviews, same-model rework for 3 rounds, then the fallback dev model Qwen3.6-35B-A3B-MTP takes the task over on a sibling card (started at once); only when the fallback fails too does the card go to the orchestrator. All model picks (dev, QA, fallback) are PROVISIONAL until kanban bench calibrate picks them",
+	"dev": {
+		"agent": "cline",
+		"model": {
+			"tier": "dev"
+		}
+	},
+	"qa": {
+		"enabled": true,
+		"requireDifferentVendor": true,
+		"skip": {
+			"roles": [
+				"qa",
+				"triage",
+				"calibration",
+				"plan"
+			],
+			"effectiveAgents": []
+		},
+		"default": {
+			"agent": "cline",
+			"provider": "lemonade",
+			"model": "Devstral-Small-2507-GGUF"
+		},
+		"routes": [
+			{
+				"devModel": "^(?:Devstral|Mistral|Codestral|Magistral|Ministral)-",
+				"agent": "cline",
+				"provider": "lemonade",
+				"model": "GLM-4.7-Flash-GGUF",
+				"why": "Mistral-built cards can't be reviewed by Devstral (same vendor): GLM-4.7-Flash reviews them"
+			}
+		],
+		"promptNotes": {
+			"screenshotFallback": "This QA model may not accept images (Lemonade's Devstral and GLM are text-only): never open .png/.jpg files; judge the visuals from the screenshot tool's text reports (status, console, outline) in report.txt and say in visual that you read the reports, not the images."
+		}
+	},
+	"plan": {
+		"enabled": true,
+		"agent": "cline",
+		"model": {
+			"tier": "dev"
+		},
+		"startInPlanMode": true,
+		"rules": {},
+		"candidates": [
+			{
+				"agent": "cline",
+				"model": {
+					"provider": "lemonade",
+					"model": "GLM-4.7-Flash-GGUF"
+				},
+				"note": "in use (provisional): the dev model, so a plan card needs no model swap and has GLM's 200K context for reading the codebase"
+			},
+			{
+				"agent": "cline",
+				"model": {
+					"provider": "lemonade",
+					"model": "Qwen3.6-35B-A3B-MTP-GGUF"
+				},
+				"note": "candidate; 64K context as Lemonade loads it"
+			}
+		],
+		"note": "Plans run on the dev tier's model in Cline's plan mode (--plan). Provisional like the dev pick."
+	},
+	"onFail": {
+		"rework": "same-model",
+		"reworkRounds": 3,
+		"conflict": "rework",
+		"then": "escalate",
+		"runoff": null
+	},
+	"onOutage": {
+		"then": "orchestrator"
+	},
+	"escalate": {
+		"to": {
+			"tier": "senior"
+		},
+		"requireApproval": false
+	},
+	"features": [
+		"scoreboard",
+		"bench",
+		"calibration",
+		"tiers"
+	],
+	"tiers": {
+		"dev": [
+			{
+				"provider": "lemonade",
+				"model": "GLM-4.7-Flash-GGUF",
+				"default": true,
+				"note": "PROVISIONAL dev pick (2026-10-09, before calibration): tool-calling, a 30B-A3B MoE so it is fast on the one GPU, MLA attention so its KV cache is small (131072 context ≈ 7 GB), and already Cline's Lemonade default. The memory budget assumes Lemonade loads it at 131072 (its max is 202752)"
+			},
+			{
+				"provider": "lemonade",
+				"model": "Devstral-Small-2507-GGUF",
+				"note": "candidate: coding + tool-calling labels, 131072 context; dense 24B, slower. Calibration v11 saw it answer with <run_commands> text instead of native tool calls"
+			},
+			{
+				"provider": "lemonade",
+				"model": "Qwen3.6-35B-A3B-MTP-GGUF",
+				"note": "candidate: tool-calling + vision, but Lemonade loads it with a 65536 context (raise ctx_size in Lemonade before using it for dev work)"
+			},
+			{
+				"provider": "lemonade",
+				"model": "DeepSeek-V4-Flash-0731-GGUF-BF16",
+				"note": "candidate, untested: a custom import with the tool-calling label and a 1M context (the KV cache at that size may not fit next to anything else)"
+			}
+		],
+		"qa": [
+			{
+				"provider": "lemonade",
+				"model": "Devstral-Small-2507-GGUF",
+				"default": true,
+				"note": "PROVISIONAL QA pick: another family (Mistral) than the GLM dev model, coding + tool-calling; text-only. A dense 24B with a large KV cache (160 KB/token), so the memory budget assumes Lemonade loads it at 65536, not its default 131072"
+			},
+			{
+				"provider": "lemonade",
+				"model": "GLM-4.7-Flash-GGUF",
+				"note": "QA for Mistral-built cards (qa.routes[0])"
+			},
+			{
+				"provider": "lemonade",
+				"model": "Qwen3.6-35B-A3B-MTP-GGUF",
+				"note": "candidate: the only vision model that is also strong at code, so it can look at screenshots; 65536 context"
+			},
+			{
+				"provider": "lemonade",
+				"model": "Gemma-4-12B-it-GGUF",
+				"note": "candidate: vision + tool-calling, small (12B) and 65536 context"
+			}
+		],
+		"senior": [
+			{
+				"provider": "lemonade",
+				"model": "Qwen3.6-35B-A3B-MTP-GGUF",
+				"default": true,
+				"note": "PROVISIONAL fallback dev model (escalate.to): a third family (Qwen), neither the GLM dev model nor the Devstral QA model, so its sibling is still reviewed by Devstral. Started without approval (local runs cost 0); the core never hands a task onto the card's own model and sends a fallback sibling that fails to the orchestrator, so the takeover happens once"
+			}
+		]
+	},
+	"dropped": [
+		{
+			"provider": "lemonade",
+			"model": "LMX-Omni-52B-Halo",
+			"at": "2026-10-09",
+			"why": "a Lemonade collection (Qwen3.6-35B-A3B + Flux + Whisper + Kokoro) without the tool-calling label, so it is not in Cline's Lemonade list; route to Qwen3.6-35B-A3B-MTP-GGUF instead"
+		}
+	],
+	"tierRules": {
+		"dev": "Lemonade models with the tool-calling label; cost 0",
+		"qa": "a different vendor (model family) than the dev model",
+		"senior": "the fallback dev model: a family other than dev and QA"
+	},
+	"tierNotes": {
+		"dev": "Memory budget (one GPU: Ryzen AI MAX+ 395, 96 GB GPU-addressable of 125 GB RAM): dev + QA + fallback must stay resident side by side within 80 GB, leaving 16 GB headroom. Estimate at the contexts this kit assumes (weights = Lemonade's size; KV cache f16 from each model's config): GLM-4.7-Flash at 131072 = 16.3 + 7.1 (MLA, 54 KB/token) = 23.4 GB; Devstral-Small-2507 at 65536 = 13.3 + 10.7 (160 KB/token) = 24.0 GB; Qwen3.6-35B-A3B at 65536 = 22.1 + 1.3 (10 of 40 layers full attention, 20 KB/token) = 23.4 GB; plus ~1.5 GB compute buffers each: about 75 GB. At Lemonade's defaults (GLM 202752, Devstral 131072) it is about 90 GB, over the budget: set the contexts (lemonade load <model> --ctx-size <n> --llamacpp vulkan --save-options) and Lemonade's max_loaded_models to 3. kanban bench calibrate picks the final models",
+		"qa": "requireDifferentVendor reads the family from the model id (GLM → zai, Devstral → mistral, Qwen → qwen, Gemma → google, DeepSeek → deepseek)"
+	},
+	"prices": {
+		"autoSync": false
+	},
+	"recommends": {
+		"landingMode": "qa",
+		"settings": [
+			{
+				"key": "agents.cline.turnDetector.mode",
+				"value": "on",
+				"why": "Lemonade/llama.cpp ends Cline turns without the TaskComplete hook; only the turn detector in mode on ends them (report only logs), or every card sits running with an idle TUI"
+			},
+			{
+				"key": "pipeline.recovery.mode",
+				"value": "on",
+				"why": "local models need recovery to act: a no-images rejection or an overflowing context is cleared (/clear) and resent, and a Lemonade outage (connection refused, /health down) is held and probed instead of escalated"
+			},
+			{
+				"key": "workspace.recovery.enabled",
+				"value": true,
+				"why": "recovery must not be switched off for this project"
+			}
+		]
+	}
+}

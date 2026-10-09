@@ -16,7 +16,7 @@ describe("kit schema", () => {
 	it("parses the built-in kits", () => {
 		expect(kitDocumentSchema.safeParse(readKitFile("default")).success).toBe(true);
 		expect(kitDocumentSchema.safeParse(readKitFile("team")).success).toBe(true);
-		expect([...getBuiltInKits().keys()]).toEqual(["default", "team"]);
+		expect([...getBuiltInKits().keys()]).toEqual(["default", "team", "team-local"]);
 	});
 
 	it("rejects unknown keys at every level", () => {

@@ -294,6 +294,42 @@ describe("QA gate", () => {
 		expect(holds()[1]).toEqual(["qa001", "acted", expect.stringContaining("started QA of d1111 round 1")]);
 	});
 
+	it("starts no QA card on a provider at its capacity while In Progress cards hold another model there", async () => {
+		const harness = createHarness({
+			config: { workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team-local" } } } },
+		});
+		const onGlm = {
+			agentId: "cline" as const,
+			agentSettings: { providerId: "lemonade", modelId: "GLM-4.7-Flash-GGUF" },
+		};
+		const dev = createCard({ id: "d1111", ...onGlm });
+		const busy = createCard({ id: "d2222", ...onGlm });
+		await send(harness, { review: [dev], in_progress: [busy] });
+		expect(createdTasks(harness.actions)).toMatchObject([
+			{ taskId: "qa001", agentSettings: { providerId: "lemonade", modelId: "Devstral-Small-2507-GGUF" } },
+		]);
+
+		// Lemonade loads one model: Devstral would evict GLM while d2222 still runs on it. One record per hold.
+		harness.actions.length = 0;
+		const qa = createCard({ id: "qa001", role: "qa", reviewsTaskId: "d1111", ...onGlm });
+		const qaOnDevstral = { ...qa, agentSettings: { providerId: "lemonade", modelId: "Devstral-Small-2507-GGUF" } };
+		await send(harness, { backlog: [qaOnDevstral], in_progress: [busy], review: [dev] });
+		await send(harness, { backlog: [qaOnDevstral], in_progress: [busy], review: [dev] });
+		expect(harness.actions).toEqual([]);
+		const starts = () =>
+			harness
+				.readDecisions("foo")
+				.filter((record) => record.stage === "qa_start")
+				.map((record) => [record.taskId, record.outcome, record.note]);
+		expect(starts()).toEqual([
+			["qa001", "none", "waiting for provider lemonade (max 1 loaded model(s)): held by d2222 (GLM-4.7-Flash-GGUF)"],
+		]);
+
+		// d2222 finished (it gets a QA card of its own): GLM is free, so Devstral may load.
+		await send(harness, { backlog: [qaOnDevstral], review: [dev, busy] });
+		expect(kinds(harness.actions)).toEqual(["createTask:qa002", "startTask:qa001"]);
+	});
+
 	it("frees the slot of a QA card that runs past timeoutMin", async () => {
 		const harness = createHarness({
 			config: { pipeline: { qa: { slots: 1, timeoutMin: 60 } }, workspaces: { foo: QA_WORKSPACE } },

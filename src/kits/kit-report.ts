@@ -2,10 +2,16 @@
 // sample cards, so a kit's routing can be read without running the pipeline. This is the only caller of the
 // evaluator until the pipeline (P4-1) and card creation (P3-5) use it.
 
-import type { LandingMode } from "../config/pipeline-config";
+import type { LandingMode, PipelineConfig } from "../config/pipeline-config";
 import type { RuntimeAgentId, RuntimeBoardCard } from "../core/api-contract";
 import type { EffectiveModel } from "../core/effective-agent";
+import {
+	describeRecommendedValue,
+	evaluateKitRecommendedSettings,
+	type KitRecommendedSettingStatus,
+} from "./kit-recommendations";
 import { getUsableTierEntries, type KitDocument } from "./kit-schema";
+import type { LocalResidencyFinding } from "./local-residency";
 import {
 	answerPlanAssignment,
 	type CardHistory,
@@ -19,6 +25,9 @@ import {
 	type QaPolicyAnswer,
 } from "./policy";
 import { type ResolvedKit, readKitValue } from "./resolve-kit";
+
+/** The `workspaceId` `kanban kit show` passes when it shows a kit without a project. */
+export const NO_WORKSPACE_ID = "(none)";
 
 export interface KitValueRow {
 	key: string;
@@ -41,6 +50,10 @@ export interface KitReport {
 	warnings: string[];
 	/** Shown, never applied without `kanban kit apply --landing`. */
 	recommendedLandingMode: LandingMode | null;
+	/** `recommends.settings` against the config the report was built with; never applied by the kit. */
+	recommendedSettings: KitRecommendedSettingStatus[];
+	/** Whether the local server keeps the kit's models loaded side by side; null: not checked (no local models). */
+	localResidency: LocalResidencyFinding[] | null;
 }
 
 export function listKitValues(resolved: ResolvedKit): KitValueRow[] {
@@ -98,6 +111,10 @@ export function buildKitReport(input: {
 	maxFailRounds: number;
 	/** `pipeline.recovery.outage.maxMin`: when recovery gives an outage hold up. */
 	outageMaxMin: number;
+	/** The parsed config.json, to compare the kit's recommended settings with. */
+	config: PipelineConfig;
+	/** `assessLocalResidency()` against Lemonade's /api/v1/health, from the caller (this module does no I/O). */
+	localResidency?: LocalResidencyFinding[] | null;
 }): KitReport {
 	const { kit } = input.resolved;
 	const policy = createRoutingPolicy(kit);
@@ -145,6 +162,12 @@ export function buildKitReport(input: {
 		},
 		warnings,
 		recommendedLandingMode: kit.recommends?.landingMode ?? null,
+		localResidency: input.localResidency ?? null,
+		recommendedSettings: evaluateKitRecommendedSettings(
+			kit,
+			input.config,
+			input.workspaceId === NO_WORKSPACE_ID ? null : input.workspaceId,
+		),
 	};
 }
 
@@ -208,6 +231,18 @@ export function formatKitReport(report: KitReport): string[] {
 			`Recommends landing mode "${report.recommendedLandingMode}" (applied only with kanban kit apply --landing ${report.recommendedLandingMode}).`,
 		);
 	}
+	if (report.recommendedSettings.length > 0) {
+		lines.push("", "Settings this kit needs (config.json; the kit never applies them):");
+		lines.push(...formatRecommendedSettings(report.recommendedSettings));
+	}
+	if (report.localResidency && report.localResidency.length > 0) {
+		lines.push("", "Local models loaded side by side (Lemonade /api/v1/health):");
+		for (const finding of report.localResidency) {
+			lines.push(
+				`  ${finding.level === "pass" ? "ok  " : "WARN"} ${finding.message}${finding.hint ? ` → ${finding.hint}` : ""}`,
+			);
+		}
+	}
 	for (const warning of report.warnings) {
 		lines.push(`Warning: ${warning}`);
 	}
@@ -216,4 +251,13 @@ export function formatKitReport(report: KitReport): string[] {
 		lines.push(`  ${row.key} = ${JSON.stringify(row.value)}  [${row.source}]`);
 	}
 	return lines;
+}
+
+/** One line per recommended setting: ok / SET (unmet) / UNKNOWN, the config key, what it is and what it should be. */
+export function formatRecommendedSettings(statuses: KitRecommendedSettingStatus[]): string[] {
+	return statuses.map(({ setting, configKey, current, status }) => {
+		const label = status === "met" ? "ok     " : status === "unmet" ? "SET    " : "UNKNOWN";
+		const now = status === "unknown" ? "not a setting in this build" : `now ${JSON.stringify(current)}`;
+		return `  ${label} ${configKey} = ${describeRecommendedValue(setting)} (${now}): ${setting.why}`;
+	});
 }

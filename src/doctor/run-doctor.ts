@@ -43,6 +43,7 @@ import { checkGuardrails, type GuardrailCheckDeps } from "./guardrail-checks";
 import { checkHomeLocation } from "./home-location-checks";
 import { checkIsolation } from "./isolation-checks";
 import { checkIssueImport, createIssueCheckDeps, type IssueCheckDeps } from "./issue-checks";
+import { checkKitLemonadeModels, checkKitRecommendedSettings } from "./kit-settings-checks";
 import { checkOneOwner } from "./one-owner-checks";
 
 export interface DoctorOptions {
@@ -139,6 +140,14 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
 		...(await checkClineLemonadeModels({
 			modelsPath: clineModelsPath,
 			origin: options.origin,
+			lemonadeModelList: (await readLemonadeModelListSettings()).settings,
+			fetch: options.fetch,
+		})),
+	);
+	findings.push(...checkKitRecommendedSettings(projectContext));
+	findings.push(
+		...(await checkKitLemonadeModels({
+			...projectContext,
 			lemonadeModelList: (await readLemonadeModelListSettings()).settings,
 			fetch: options.fetch,
 		})),

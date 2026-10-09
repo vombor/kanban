@@ -138,7 +138,7 @@ describe("detectRestartQaGaps: the automatic QA replacement didn't happen", () =
 			{
 				taskId: "d0001",
 				note: expect.stringMatching(
-					/QA card q0011 .* replaces a dead QA card and is queued: waiting for a QA slot$/u,
+					/QA card q0011 .* replaces a dead QA card and is queued: waiting for a QA slot or provider capacity$/u,
 				),
 			},
 		]);

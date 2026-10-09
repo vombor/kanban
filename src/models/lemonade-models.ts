@@ -24,6 +24,7 @@ const lemonadeModelSchema = z.object({
 const lemonadeModelsResponseSchema = z.object({ data: z.array(z.unknown()).default([]) });
 const lemonadeParamsSchema = z.looseObject({ ctx_size: z.number().optional() });
 const lemonadeHealthSchema = z.looseObject({
+	max_models: z.looseObject({ llm: z.number().optional() }).optional(),
 	all_models_loaded: z
 		.array(
 			z.looseObject({
@@ -131,6 +132,21 @@ export async function fetchLemonadeModels(
 	timeoutMs = UPSTREAM_TIMEOUT_MS,
 ): Promise<LemonadeModel[]> {
 	return parseLemonadeModels(await fetchJson(`${apiBaseUrl.replace(/\/+$/u, "")}/models`, fetchImpl, timeoutMs));
+}
+
+/**
+ * Lemonade's `max_models.llm` from /api/v1/health: how many LLMs it keeps loaded (its `max_loaded_models`; -1 =
+ * unlimited). Null when the payload has no such field (an older Lemonade). Throws when Lemonade is down.
+ */
+export async function fetchLemonadeMaxLoadedLlms(
+	apiBaseUrl: string,
+	fetchImpl: typeof fetch = fetch,
+	timeoutMs = UPSTREAM_TIMEOUT_MS,
+): Promise<number | null> {
+	const health = lemonadeHealthSchema.safeParse(
+		await fetchJson(`${apiBaseUrl.replace(/\/+$/u, "")}/health`, fetchImpl, timeoutMs),
+	);
+	return health.success ? (health.data.max_models?.llm ?? null) : null;
 }
 
 /**

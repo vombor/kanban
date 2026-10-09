@@ -36,7 +36,11 @@ import {
 	CalibrationRunnerBusyError,
 	type CalibrationRunnerLock,
 } from "../kits/team/calibration/calibration-runner-lock";
-import { type CalibrationSpec, parseCalibrationSpec } from "../kits/team/calibration/calibration-spec";
+import {
+	type CalibrationSpec,
+	findCalibrationCapacityIssue,
+	parseCalibrationSpec,
+} from "../kits/team/calibration/calibration-spec";
 import { measureCard } from "../kits/team/scoreboard/scoreboard-store";
 import { buildQaRequirements } from "../pipeline/qa-prompt";
 import { readQaVerdictFile } from "../pipeline/qa-verdict";
@@ -129,6 +133,10 @@ async function loadTarget(specArgument: string, options: CalibrateOptions): Prom
 		throw new Error(
 			`workspace ${target.workspaceId} is on kit ${resolution.kitName}, which doesn't list the calibration feature (--force to run anyway)`,
 		);
+	}
+	const capacityIssue = findCalibrationCapacityIssue(spec, config.models.providerCapacity);
+	if (capacityIssue && !options.force && !options.print) {
+		throw new Error(`${capacityIssue} (--force to run anyway)`);
 	}
 	const known = kit.qa?.rules ?? {};
 	for (const model of spec.models) {

@@ -138,6 +138,27 @@ const postLandStepSchema = z
 	})
 	.strict();
 
+/**
+ * A core setting the kit's routing needs (`recommends.settings`): a dotted key of config.json, where `workspace.`
+ * means the project's own `workspaces.<id>` entry. Like `recommends.landingMode` it is shown (`kanban kit show`)
+ * and checked (`kanban doctor`), never applied: the kit holds no mechanics.
+ */
+export const kitRecommendedSettingSchema = z
+	.object({
+		key: z.string().regex(/^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+$/u, "a dotted config.json key"),
+		/** `equals` (default), or a number bound: `atMost`, `atLeast`. */
+		op: z.enum(["equals", "atMost", "atLeast"]).optional(),
+		value: z.union([z.string(), z.number(), z.boolean()]),
+		why: z.string().min(1),
+	})
+	.strict()
+	.superRefine((setting, context) => {
+		if (setting.op && setting.op !== "equals" && typeof setting.value !== "number") {
+			context.addIssue({ code: "custom", path: ["value"], message: `${setting.op} needs a number` });
+		}
+	});
+export type KitRecommendedSetting = z.infer<typeof kitRecommendedSettingSchema>;
+
 /** The kit document without the cross-key checks (used for single layers before they are merged). */
 export const kitDocumentObjectSchema = z
 	.object({
@@ -230,7 +251,13 @@ export const kitDocumentObjectSchema = z
 		tierRules: z.record(z.string(), z.string()).optional(),
 		tierNotes: z.record(z.string(), z.string()).optional(),
 		prices: z.object({ region: z.string().optional(), autoSync: z.boolean().optional() }).strict().optional(),
-		recommends: z.object({ landingMode: landingModeSchema.optional() }).strict().optional(),
+		recommends: z
+			.object({
+				landingMode: landingModeSchema.optional(),
+				settings: z.array(kitRecommendedSettingSchema).optional(),
+			})
+			.strict()
+			.optional(),
 	})
 	.strict();
 

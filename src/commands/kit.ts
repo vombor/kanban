@@ -1,14 +1,24 @@
 import type { Command } from "commander";
+import { readLemonadeModelListSettings } from "../config/model-lists-config";
 import {
 	getWorkspacePipelineSettings,
 	type LandingMode,
 	landingModeSchema,
+	type PipelineConfig,
 	readPipelineConfig,
 } from "../config/pipeline-config";
 import { loadGlobalRuntimeConfig } from "../config/runtime-config";
 import { type ApplyKitResult, applyWorkspaceKit } from "../kits/apply-kit";
-import { buildKitReport, formatKitReport } from "../kits/kit-report";
+import { buildKitReport, formatKitReport, formatRecommendedSettings, NO_WORKSPACE_ID } from "../kits/kit-report";
+import type { KitDocument } from "../kits/kit-schema";
+import {
+	assessLocalResidency,
+	LEMONADE_PROVIDER,
+	type LocalResidencyFinding,
+	listKitLocalWorkingSet,
+} from "../kits/local-residency";
 import { loadKitCatalog, resolveKitByName, resolveWorkspaceKit } from "../kits/resolve-kit";
+import { fetchLemonadeMaxLoadedLlms, lemonadeApiBaseUrl } from "../models/lemonade-models";
 import { getKanbanKitsPath } from "../state/kanban-home";
 import { resolveWorkspaceTarget } from "./workspace-target";
 
@@ -86,8 +96,43 @@ function formatApplyResult(result: ApplyKitResult, dryRun: boolean): string[] {
 			`Kit ${result.kitName.to} recommends landing mode "${result.recommendedLandingMode}"; it is not applied without --landing ${result.recommendedLandingMode}.`,
 		);
 	}
+	if (result.unmetSettings.length > 0) {
+		lines.push(`Kit ${result.kitName.to} needs these config.json settings; it never applies them:`);
+		lines.push(...formatRecommendedSettings(result.unmetSettings));
+	}
 	lines.push(dryRun ? "Dry run: nothing written." : "Written.");
 	return lines;
+}
+
+const LEMONADE_HEALTH_TIMEOUT_MS = 1_500;
+
+/** For a kit that runs several local models at once: does Lemonade keep them loaded? Null: nothing to check. */
+async function readLocalResidency(
+	kitName: string,
+	kit: KitDocument,
+	config: PipelineConfig,
+): Promise<LocalResidencyFinding[] | null> {
+	const workingSet = listKitLocalWorkingSet(kit);
+	if (workingSet.length < 2) {
+		return null;
+	}
+	const apiBaseUrl = lemonadeApiBaseUrl((await readLemonadeModelListSettings()).settings.url);
+	try {
+		const maxLlm = await fetchLemonadeMaxLoadedLlms(apiBaseUrl, fetch, LEMONADE_HEALTH_TIMEOUT_MS);
+		if (maxLlm === null) {
+			return null;
+		}
+		return assessLocalResidency({
+			kitName,
+			workingSet,
+			lemonadeMaxLlm: maxLlm,
+			kanbanCapacity: config.models.providerCapacity[LEMONADE_PROVIDER]?.maxLoadedModels,
+		});
+	} catch (error) {
+		return [
+			{ level: "warn", message: `not checked: ${apiBaseUrl}/health did not answer (${toErrorMessage(error)})` },
+		];
+	}
 }
 
 export function registerKitCommand(program: Command): void {
@@ -172,10 +217,12 @@ export function registerKitCommand(program: Command): void {
 				const report = buildKitReport({
 					kitName,
 					resolved: resolution,
-					workspaceId: target?.workspaceId ?? "(none)",
+					workspaceId: target?.workspaceId ?? NO_WORKSPACE_ID,
 					selectedAgentId: runtimeConfig.selectedAgentId,
 					maxFailRounds: config.pipeline.rework.maxFailRounds,
 					outageMaxMin: config.pipeline.recovery.outage.maxMin,
+					config,
+					localResidency: await readLocalResidency(kitName, resolution.kit, config),
 				});
 				const landingMode = target ? getWorkspacePipelineSettings(config, target.workspaceId).landing.mode : null;
 				if (options.json) {

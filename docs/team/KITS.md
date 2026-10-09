@@ -10,10 +10,12 @@ something is done, and the core never decides who does it.
   "no" to every question, so a project on it behaves like upstream Kanban.
 - **`team`** is the built-in preset for the dev-team workflow (Cline juniors on tier-3 models, cross-vendor QA,
   same-model rework, escalation to the orchestrator).
+- **`team-local`** is the same workflow on local Lemonade models only (Cline + provider `lemonade`, nothing paid
+  or in the cloud), with a fallback local model before the orchestrator. See [The `team-local` kit](#the-team-local-kit).
 - **User kits** live in `<home>/kits/<name>.json`.
 
 Code: `src/kits/kit-schema.ts` (schema), `src/kits/resolve-kit.ts` (resolver), `src/kits/policy.ts` (the one
-evaluator), `kits/default.json`, `kits/team.json`. Plan: `docs/fork/kit-merge-plan.md` §3.2-§3.4, §4.0.
+evaluator), `kits/default.json`, `kits/team.json`, `kits/team-local.json`. Plan: `docs/fork/kit-merge-plan.md` §3.2-§3.4, §4.0.
 
 ## The questions
 
@@ -126,6 +128,7 @@ user kit file), never a silent no-op. A missing key means "no answer", so the `d
 | `tierRules`, `tierNotes` | text per tier | shown by `kanban bench tiers` | | |
 | `prices.{region,autoSync}` | | the `bench` feature's daily AWS price check | | `us-west-2`, `true` |
 | `recommends.landingMode` | landing mode | shown by `kanban kit show/apply`, **never applied** without `--landing` | | `qa` |
+| `recommends.settings[]` | `{ key, op?, value, why }` | core settings the kit's routing needs: `key` is a dotted config.json key (`workspace.` = the project's own `workspaces.<id>` entry), `op` `equals` (default), `atMost` or `atLeast`. Shown by `kanban kit show/apply` and warned about by `kanban doctor` when unmet, **never applied** | | (team-local: three) |
 
 Checks across keys run on the resolved kit:
 
@@ -133,6 +136,11 @@ Checks across keys run on the resolved kit:
 - at most one entry per tier has `default: true`;
 - a route's `rules` must exist in `qa.rules`;
 - `dev.model` needs `dev.agent`, `plan.model` needs `plan.agent`.
+
+A model id's vendor (for `qa.requireDifferentVendor`) is `getModelVendor()` in `src/kits/policy.ts`: a Bedrock
+`<vendor>.` prefix, or a known family name for bare local ids (`GLM` → `zai`, `Devstral`/`Mistral` → `mistral`,
+`Qwen` → `qwen`, `Gemma` → `google`, `DeepSeek` → `deepseek`), named like the Bedrock vendors so a local and a
+Bedrock model of one family count as one vendor. An id it can't place gives no vendor, and the rule doesn't refuse.
 
 A tier lookup returns the tier's `default` entry, else its first usable one, and skips `dropped` models
 (`src/kits/tier-lookup.ts`).
@@ -226,6 +234,160 @@ One known difference from the legacy kit: Claude-built dev cards get QA (by Code
 because of a literal `agentId === "claude"` check. To skip them, set `qa.skip.effectiveAgents: ["claude"]` as an
 override (plan §12).
 
+## The `team-local` kit
+
+`kits/team-local.json`: the team workflow on the local Lemonade server (http://localhost:13305/api/v1, OpenAI
+compatible) through the Cline CLI with provider `lemonade`. No paid or cloud provider appears anywhere in it
+(`test/runtime/kits/team-local-kit.test.ts` checks every model and agent). Every model pick is **provisional**
+until `kanban bench calibrate` picks the final ones on the project.
+
+| Role | Model (provisional) | Why |
+|---|---|---|
+| Dev (`tiers.dev` default), plan cards (`plan.model`, Cline `--plan`) | `GLM-4.7-Flash-GGUF` | tool-calling; a 30B-A3B MoE, so fast on one GPU; MLA attention keeps its KV cache small (131072 context in the memory budget, max 202752); already Cline's Lemonade default. Plans on the dev model need no model swap |
+| QA (`qa.default`) | `Devstral-Small-2507-GGUF` | another family (Mistral) than GLM, coding + tool-calling; 65536 context in the memory budget (its KV cache is the largest). Text-only |
+| QA of Mistral-built cards (`qa.routes[0]`) | `GLM-4.7-Flash-GGUF` | Devstral can't review its own family |
+| Fallback dev model (`escalate.to: { tier: "senior" }`) | `Qwen3.6-35B-A3B-MTP-GGUF` | a third family, neither the dev nor the QA model, so its sibling is still reviewed by Devstral. 65536 context as Lemonade loads it (its KV cache is small, so a bigger one costs little memory) |
+
+The other coding models are candidates in `tiers` (`Devstral`, `Qwen3.6` and `DeepSeek-V4-Flash-0731-GGUF-BF16` for
+dev; `GLM`, `Qwen3.6` and `Gemma-4-12B-it-GGUF` for QA, the last two with vision). `LMX-Omni-52B-Halo` is in
+`dropped`: it is a Lemonade collection (Qwen3.6 + image + speech models) without the tool-calling label, so Cline's
+Lemonade list doesn't offer it.
+
+- **FAIL:** same-model rework for 3 rounds (conflicts too), then the fallback: a sibling card on Qwen3.6 takes the
+  task over and starts at once (`requireApproval: false`: a local run costs nothing). The core never hands a task
+  onto the model the card runs on, and a fallback sibling that fails in turn goes to the orchestrator, never to
+  another sibling (`refuseTakeover()` in `src/pipeline/rework.ts`). So the orchestrator is the last resort, after
+  the fallback has failed too.
+- **Outage:** `onOutage.then: "orchestrator"`. Lemonade down (connection refused, `/health` not `ok`) is a provider
+  outage: recovery holds the card and probes `/health` every `pipeline.recovery.outage.probeEveryMin`, resumes it
+  when Lemonade is back, and gives it to the orchestrator at `maxMin`. A takeover would not help: every model in the
+  kit runs on the same server.
+- **Features:** `scoreboard`, `bench`, `calibration` and `tiers` (the fallback is a tier). Dropped:
+  - `runoffs` races sibling cards on several models at once, which one GPU can only do by swapping models on every
+    request;
+  - the `bench` feature's daily AWS price check (`prices.autoSync: false`): local models have no AWS price, and
+    the check skips local-provider models anyway.
+- **Costs:** a turn on provider `lemonade` costs 0 whatever the model id (`LOCAL_PROVIDER_IDS` in
+  `src/kits/team/bench/prices.ts`), so the scoreboard, `kanban bench metrics` and the calibration results show
+  `$0.00`, not "no price".
+- **Recommends** landing `qa`.
+
+### One GPU: keep dev, QA and fallback loaded
+
+team-local runs three local models at the same time: GLM (dev and plan), Devstral (QA) and Qwen3.6 (fallback).
+Lemonade keeps at most `max_loaded_models` LLMs resident (`/api/v1/health` `max_models.llm`, default 1). When it is
+full it evicts the least recently used one, so with one slot every dev ↔ QA switch reloads a model. Raise it to 3:
+
+- Lemonade's container image: the env var `LEMONADE_MAX_LOADED_MODELS=3`, then restart the container;
+- otherwise `lemonade config set max_loaded_models=3` (applies live and is saved in Lemonade's config.json).
+
+Pinning (`lemonade pin`, `"pinned": true` on `/api/v1/load`) is not needed and not recommended: with enough slots
+LRU keeps all three, and a full set of pinned models makes the next load fail with 409 `slots_pinned_error`.
+
+Kanban's own limit, `models.providerCapacity.lemonade.maxLoadedModels` (default 1), must match Lemonade's:
+
+- recovery's retries, nudges and restart resumes, and the QA gate's QA card starts, wait while In Progress cards
+  hold that many other Lemonade models. The QA gate records the hold once ("waiting for provider lemonade … held
+  by …");
+- `kanban bench calibrate` refuses a spec with more Lemonade models than that and `parallel` above it.
+
+Above Lemonade's value, cards on different models make it reload on every request. Below it, QA cards wait for
+nothing. `kanban doctor` and `kanban kit show` read `/api/v1/health` and warn about both cases, and when
+`max_models.llm` is below the 3 models the kit runs. With Lemonade at 1 and Kanban at 1, work runs one model at a
+time: a QA card waits until no dev card runs on GLM, and every switch still costs a model load. Not covered yet: a
+card a human starts by hand, and the rework stage's sibling and resume starts.
+
+**Memory budget** (`tierNotes.dev`): the three models must stay resident within 80 GB of the 96 GB the iGPU can
+address (Ryzen AI MAX+ 395, 125 GB RAM), leaving 16 GB headroom. Weights are Lemonade's sizes; the KV cache is f16,
+from each model's architecture config:
+
+| Model | Context | Weights | KV cache | Total |
+|---|---|---|---|---|
+| GLM-4.7-Flash (MLA, 54 KB/token) | 131072 | 16.3 GB | 7.1 GB | 23.4 GB |
+| Devstral-Small-2507 (8 KV heads × 40 layers, 160 KB/token) | 65536 | 13.3 GB | 10.7 GB | 24.0 GB |
+| Qwen3.6-35B-A3B (10 of 40 layers full attention, 20 KB/token) | 65536 | 22.1 GB | 1.3 GB | 23.4 GB |
+| compute buffers (about 1.5 GB each) | | | | 4.5 GB |
+| **sum** | | | | **about 75 GB** |
+
+Lemonade's current contexts (GLM 202752, Devstral 131072) add about 15 GB, which puts the total near 90 GB, over the
+budget. Set the two contexts in Lemonade (`--save-options` replaces the model's stored options, so repeat the
+backend), then let Cline's models.json follow:
+
+```sh
+lemonade load GLM-4.7-Flash-GGUF --ctx-size 131072 --llamacpp vulkan --save-options
+lemonade load Devstral-Small-2507-GGUF --ctx-size 65536 --llamacpp vulkan --save-options
+kanban cline apply-lemonade-models --origin <kanban origin>    # doctor's "cline lemonade models" row prints it
+```
+
+### Settings team-local needs
+
+The kit lists them in `recommends.settings`; Kanban's Lemonade limit is checked against Lemonade itself (above). `kanban kit show` prints each with its current value, `kanban kit apply`
+lists the unmet ones, and `kanban doctor` warns for every project on the kit whose config lacks one. None is
+applied for you:
+
+| Setting | Value | For |
+|---|---|---|
+| `agents.cline.turnDetector.mode` | `on` | Lemonade/llama.cpp ends Cline turns without the TaskComplete hook; only the turn detector in mode `on` ends them (`report` only logs) |
+| `pipeline.recovery.mode` | `on` | a no-images rejection is cleared and resent (with "never read image files"), a poisoned or overflowing context is cleared and resent, a Lemonade outage is held and probed instead of escalated |
+| `workspaces.<id>.recovery.enabled` | `true` (default) | the same, for this project |
+
+The other local gotchas:
+
+- **Images.** Devstral and GLM are text-only. `qa.promptNotes.screenshotFallback` tells QA never to open PNGs and to
+  judge from the screenshot tool's text reports.
+- **Context overflow.** Cline compacts at 0.9 × the `contextWindow` in its models.json, so that window must be the
+  one Lemonade really loads. `kanban doctor`'s "cline lemonade models" row compares them, and
+  `kanban cline apply-lemonade-models --origin <origin>` (the user's command) fixes models.json. Beyond that,
+  recovery (mode `on`) clears an overflowed history.
+- **Models.** `kanban doctor` also warns when Lemonade doesn't list a model the kit routes to, hasn't downloaded it,
+  or doesn't mark it tool-calling. It reports INFO when Lemonade is down.
+
+### Applying it to a new project
+
+```sh
+kanban project create /projects/<name>                    # or: kanban project add /projects/<name>
+kanban kit apply team-local --project /projects/<name> --landing qa --dry-run
+kanban kit apply team-local --project /projects/<name> --landing qa
+kanban kit show --project /projects/<name>                # routing + "Settings this kit needs"
+kanban doctor /projects/<name>                            # warns about unmet settings and missing models
+```
+
+### Calibrating it
+
+`kanban bench calibrate` runs the same QA review, on fixed snapshots, by every QA candidate. It needs finished dev
+work: a few dev cards on the project whose commits (`ref`), bases (`base`) and card ids (`fromCard`) become the
+spec's `sets`. Keep `parallel` at 1, or the command refuses the spec (one GPU):
+
+```jsonc
+// /projects/<name>/calibration/local-qa-v1.json (anywhere works; results go to <home>/data/<ws>/calibration/local-qa-v1/)
+{
+  "name": "local-qa-v1",
+  "parallel": 1,
+  "timeoutMin": 120,
+  "maxCostUSD": 10,
+  "sets": [
+    { "id": "A", "ref": "<commit with the work>", "base": "<its base commit>", "fromCard": "<dev card id>", "expect": "PASS" },
+    { "id": "B", "ref": "<commit with a known bug>", "base": "<base>", "fromCard": "<dev card id>", "expect": "FAIL" }
+  ],
+  "models": [
+    { "key": "devstral", "agent": "cline", "provider": "lemonade", "model": "Devstral-Small-2507-GGUF" },
+    { "key": "glm", "agent": "cline", "provider": "lemonade", "model": "GLM-4.7-Flash-GGUF" },
+    { "key": "qwen36", "agent": "cline", "provider": "lemonade", "model": "Qwen3.6-35B-A3B-MTP-GGUF" },
+    { "key": "gemma4", "agent": "cline", "provider": "lemonade", "model": "Gemma-4-12B-it-GGUF" }
+  ]
+}
+```
+
+```sh
+kanban bench calibrate /projects/<name>/calibration/local-qa-v1.json --project /projects/<name> --print   # checks inputs only
+kanban bench calibrate /projects/<name>/calibration/local-qa-v1.json --project /projects/<name>
+```
+
+Results go to `results.md` in that directory. Calibration compares QA models only. Dev and fallback models are
+compared on real cards: the scoreboard and `kanban bench tiers`. Once a model is picked, write it as an override:
+`kanban kit apply team-local --project <ws> --set 'qa.default={"agent":"cline","provider":"lemonade","model":"<id>"}'`,
+or `--set 'tiers.dev=[…]'` for the dev tier.
+
 ### The team features
 
 They are built in (`src/kits/team/`) and run only for projects whose kit lists them in `features`.
@@ -245,7 +407,7 @@ The scoreboard is the team kit's score of its routing decisions. It is not the c
 
 1. Start from the kit closest to what you want: `kanban kit show team --json` prints it resolved.
 2. Write `<home>/kits/<name>.json` with only the keys that differ from `default`. The file name must equal
-   `name`, and `default` and `team` are taken.
+   `name`, and `default`, `team` and `team-local` are taken.
 
    ```jsonc
    {

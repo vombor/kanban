@@ -75,6 +75,7 @@ import {
 import type { PipelineEventBus } from "./events";
 import { decideOnPass, readPipelineHold } from "./hold";
 import type { PipelineCardState, PipelineStateStore, PipelineWorkspaceState } from "./pipeline-state";
+import { type CapacityCard, findProviderCapacityHold } from "./provider-capacity";
 import {
 	buildQaChecksReport,
 	decideQaChecks,
@@ -176,6 +177,11 @@ export interface QaGateContext {
 	/** The workspace's active features, asked `onPass` before the kit (the team `runoffs` feature holds). */
 	featureOnPass?: (input: { dev: EffectiveCard; verdict: KitVerdict }) => Promise<OnPassAnswer | null>;
 	agentDefaultModels?: EffectiveModelConfig["agentDefaultModels"];
+	/**
+	 * `models.providerCapacity`: a QA card on a provider at its limit waits while In Progress cards hold its other
+	 * models (Lemonade loads one model at a time). None = no limit.
+	 */
+	providerCapacity?: Readonly<Record<string, { maxLoadedModels: number }>>;
 	now: number;
 	/** Asks for another evaluation of the workspace at `at` (a QA card waiting for checks times out then). */
 	requestWake?: (at: number) => void;
@@ -354,6 +360,8 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 	const runningByWorkspace = new Map<string, number>();
 	/** Workspaces whose queued QA cards are held for PID pressure (already logged). */
 	const pressureHolds = new Set<string>();
+	// "<workspace>:<qaTaskId>" of QA cards waiting for provider capacity, so each hold is recorded once.
+	const capacityHolds = new Set<string>();
 	/** workspaceId → the dead QA cards retired since the last tick (submit and the sweep), for one summary line. */
 	const retiredByWorkspace = new Map<string, string[]>();
 
@@ -1103,6 +1111,20 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 				outcome: "none",
 			});
 		}
+		const capacity = context.providerCapacity ?? {};
+		const inProgress: CapacityCard[] = snapshot.board.columns
+			.filter((column) => column.id === "in_progress")
+			.flatMap((column) => column.cards)
+			.map((card) => ({
+				taskId: card.id,
+				model: toEffectiveCard({
+					card,
+					session: sessions.get(card.id) ?? null,
+					workspaceId,
+					selectedAgentId: snapshot.selectedAgentId,
+					agentDefaultModels: context.agentDefaultModels,
+				}).effective.model,
+			}));
 		for (const { qaTaskId, entry } of pressureHeld ? [] : queued) {
 			const totalRunning = [...runningByWorkspace.values()].reduce((sum, count) => sum + count, 0);
 			if (totalRunning >= qa.slots) {
@@ -1116,6 +1138,26 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			if (findColumn(snapshot, entry.reviewsTaskId) === "in_progress") {
 				continue;
 			}
+			// One GPU box: starting a QA model while dev cards run on another model of the same provider makes it swap
+			// models on every request. The QA card waits; a later one on a free provider may still start.
+			const holdKey = `${workspaceId}:${qaTaskId}`;
+			const capacityHold = findProviderCapacityHold({ taskId: qaTaskId, model: entry.model, inProgress, capacity });
+			if (capacityHold) {
+				if (!capacityHolds.has(holdKey)) {
+					capacityHolds.add(holdKey);
+					records.push({
+						...record(
+							context,
+							qaTaskId,
+							"qa_start",
+							`waiting for provider ${capacityHold.provider} (max ${capacityHold.maxLoadedModels} loaded model(s)): held by ${capacityHold.holders.join(", ")}`,
+						),
+						outcome: "none",
+					});
+				}
+				continue;
+			}
+			capacityHolds.delete(holdKey);
 			if (preview) {
 				await deps.preview.ensure({ workspaceId, repoPath: snapshot.workspacePath, preview });
 			}
@@ -1130,6 +1172,8 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 				continue;
 			}
 			await updateQaEntry(workspaceId, qaTaskId, { status: "running", startedAt: context.now });
+			// The QA card now holds its model like any In Progress card.
+			inProgress.push({ taskId: qaTaskId, model: entry.model });
 			running += 1;
 			runningByWorkspace.set(workspaceId, running);
 			records.push(

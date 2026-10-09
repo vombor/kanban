@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { stripReworkSections } from "../../../../src/kits/team/calibration/calibration-prompt";
 import {
+	findCalibrationCapacityIssue,
 	getCalibrationSetRef,
 	listCalibrationRuns,
 	parseCalibrationSpec,
@@ -101,5 +102,24 @@ describe("finished calibrations (watchdog, prune-done)", () => {
 		await writeRun(root, "legacy-done", { runs: { d: { id: "ddddd" } } }, true);
 		expect(await readCalibrationRunIds(root, { onlyUnfinished: true })).toEqual(new Set(["aaaaa", "ccccc"]));
 		expect(await readCalibrationRunIds(root)).toEqual(new Set(["aaaaa", "bbbbb", "ccccc", "ddddd"]));
+	});
+});
+
+describe("findCalibrationCapacityIssue", () => {
+	const local = (parallel: number, models: string[]) =>
+		parseCalibrationSpec({
+			name: "local-qa-v1",
+			parallel,
+			sets: [{ id: "A", ref: "r", base: "b", fromCard: "c" }],
+			models: models.map((model) => ({ key: model.slice(0, 6), agent: "cline", provider: "lemonade", model })),
+		});
+	const capacity = { lemonade: { maxLoadedModels: 1 } };
+
+	it("refuses waves of several local models on a one-model Lemonade, and accepts parallel 1", () => {
+		const models = ["Devstral-Small-2507-GGUF", "Qwen3.6-35B-A3B-MTP-GGUF"];
+		expect(findCalibrationCapacityIssue(local(3, models), capacity)).toContain('set "parallel": 1');
+		expect(findCalibrationCapacityIssue(local(1, models), capacity)).toBeNull();
+		expect(findCalibrationCapacityIssue(local(3, ["Devstral-Small-2507-GGUF"]), capacity)).toBeNull();
+		expect(findCalibrationCapacityIssue(local(3, models), {})).toBeNull();
 	});
 });

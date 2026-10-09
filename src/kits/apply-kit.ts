@@ -8,6 +8,7 @@ import {
 	readPipelineConfig,
 	updateWorkspacePipelineEntry,
 } from "../config/pipeline-config";
+import { evaluateKitRecommendedSettings, type KitRecommendedSettingStatus } from "./kit-recommendations";
 import { DEFAULT_KIT_NAME, loadKitCatalog, readKitValue, resolveKitByName, resolveWorkspaceKit } from "./resolve-kit";
 
 export interface ApplyKitInput {
@@ -36,6 +37,8 @@ export interface ApplyKitResult {
 	overrides: Record<string, unknown>;
 	changes: KitValueChange[];
 	recommendedLandingMode: LandingMode | null;
+	/** The kit's `recommends.settings` the config doesn't meet yet (never applied here). */
+	unmetSettings: KitRecommendedSettingStatus[];
 	/** Issues with the workspace's current kit (it fell back to `default`). */
 	previousIssues: string[];
 	written: boolean;
@@ -85,6 +88,9 @@ export async function applyWorkspaceKit(input: ApplyKitInput): Promise<ApplyKitR
 		overrides,
 		changes,
 		recommendedLandingMode: after.kit.recommends?.landingMode ?? null,
+		unmetSettings: evaluateKitRecommendedSettings(after.kit, config, input.workspaceId).filter(
+			(status) => status.status !== "met",
+		),
 		previousIssues: before.issues,
 		written: false,
 	};

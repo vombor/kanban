@@ -22,6 +22,16 @@ describe("price table", () => {
 		expect(seed.priceFor("not-a-model")).toBeNull();
 	});
 
+	it("prices every model on a local provider at 0, whatever its id, even in a table without a rule for it", () => {
+		const table = createPriceTable({ prices: [{ pattern: ".*", in: 1, cacheRead: 1, cacheWrite: 1, out: 1 }] }, "x");
+		for (const model of ["LMX-Omni-52B-Halo", "DeepSeek-V4-Flash-0731-GGUF-BF16", "glm"]) {
+			const price = table.priceFor(model, "lemonade");
+			expect(price && turnCost(price, { input: 1000, cacheRead: 0, cacheWrite: 0, output: 100 })).toBe(0);
+		}
+		expect(table.priceFor("glm", "bedrock")?.in).toBe(1);
+		expect(createPriceTable(getSeedPriceTableFile(), "seed").priceFor("LMX-Omni-52B-Halo")).toBeNull();
+	});
+
 	it("prices the Bedrock models Cline records no cost for, by their Converse ids", () => {
 		const seed = createPriceTable(getSeedPriceTableFile(), "seed");
 		expect(seed.priceFor("qwen.qwen3-vl-235b-a22b")?.awsModel).toBe("qwen.qwen3-vl-235b-a22b-instruct");

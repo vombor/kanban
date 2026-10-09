@@ -99,6 +99,24 @@ export function listCalibrationRuns(spec: CalibrationSpec): CalibrationRunPlan[]
 	return spec.sets.flatMap((set) => spec.models.map((model) => ({ key: `${set.id}-${model.key}`, set, model })));
 }
 
+/**
+ * A spec whose waves would run more models at once on a provider than it can load (`models.providerCapacity`:
+ * Lemonade loads one LLM, so three local QA models in one wave swap it on every request and every run times out).
+ * Null when the spec fits.
+ */
+export function findCalibrationCapacityIssue(
+	spec: CalibrationSpec,
+	capacity: Readonly<Record<string, { maxLoadedModels: number }>>,
+): string | null {
+	for (const [provider, { maxLoadedModels }] of Object.entries(capacity)) {
+		const models = new Set(spec.models.filter((model) => model.provider === provider).map((model) => model.model));
+		if (models.size > maxLoadedModels && spec.parallel > maxLoadedModels) {
+			return `${models.size} models on provider ${provider} with parallel ${spec.parallel}, but ${provider} loads at most ${maxLoadedModels} at a time (models.providerCapacity): set "parallel": ${maxLoadedModels} in the spec`;
+		}
+	}
+	return null;
+}
+
 /** The ref the runner points at a set's commit, so QA reads the work from a ref as it does for a real card. */
 export function getCalibrationSetRef(spec: CalibrationSpec, set: CalibrationSet): string {
 	return `refs/kanban/calibration/${spec.name}-${set.id}`;

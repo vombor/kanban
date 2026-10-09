@@ -6,19 +6,20 @@
 // every routing question. That is the structural fix for the 2026-10-06 incident (a new board got the dev-team
 // kit's routing because a project entry inherited the top-level toggles, archive/devteam-kit:lib/config.cjs).
 //
-// Built-in kits (`default`, `team`) ship in the package (`kits/*.json`). User kits are data files in
+// Built-in kits (`default`, `team`, `team-local`) ship in the package (`kits/*.json`). User kits are data files in
 // `$KANBAN_HOME/kits/<name>.json`; a user kit with a built-in name is refused.
 import { readdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
 import defaultKitJson from "../../kits/default.json" with { type: "json" };
 import teamKitJson from "../../kits/team.json" with { type: "json" };
+import teamLocalKitJson from "../../kits/team-local.json" with { type: "json" };
 import { getWorkspacePipelineSettings, type PipelineConfig } from "../config/pipeline-config";
 import { getKanbanKitsPath } from "../state/kanban-home";
 import { formatKitIssues, type KitDocument, kitDocumentObjectSchema, kitDocumentSchema } from "./kit-schema";
 
 export const DEFAULT_KIT_NAME = "default";
-export const BUILT_IN_KIT_NAMES: readonly string[] = ["default", "team"];
+export const BUILT_IN_KIT_NAMES: readonly string[] = ["default", "team", "team-local"];
 
 /** Keys a workspace override may not set: they identify the kit. */
 const NON_OVERRIDABLE_KEYS: ReadonlySet<string> = new Set(["kit", "name"]);
@@ -77,6 +78,7 @@ export function getBuiltInKits(): Map<string, KitDocument> {
 	builtInKits ??= new Map([
 		["default", parseBuiltInKit(defaultKitJson, "default")],
 		["team", parseBuiltInKit(teamKitJson, "team")],
+		["team-local", parseBuiltInKit(teamLocalKitJson, "team-local")],
 	]);
 	return builtInKits;
 }

@@ -184,7 +184,7 @@ export function detectRestartQaGaps(input: RestartCheckInput): RestartCheckResul
 			if (isReplacement && entry.status === "queued" && qaColumn === "backlog") {
 				notes.push({
 					taskId: card.id,
-					note: `${about} replaces a dead QA card and is queued: waiting for ${input.pidPressure ? "PID pressure to clear" : "a QA slot"}`,
+					note: `${about} replaces a dead QA card and is queued: waiting for ${input.pidPressure ? "PID pressure to clear" : "a QA slot or provider capacity"}`,
 				});
 			}
 			continue;

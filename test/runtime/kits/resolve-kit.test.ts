@@ -129,7 +129,7 @@ describe("loadKitCatalog", () => {
 			writeFileSync(join(path, "broken.json"), "{");
 			writeFileSync(join(path, "typo.json"), JSON.stringify({ kit: 1, name: "typo", qa: { enable: true } }));
 			const catalog = await loadKitCatalog(path);
-			expect([...catalog.kits.keys()].sort()).toEqual(["default", "solo", "team"]);
+			expect([...catalog.kits.keys()].sort()).toEqual(["default", "solo", "team", "team-local"]);
 			expect(catalog.kits.get("team")?.origin).toEqual({ kind: "built-in" });
 			expect(catalog.kits.get("solo")?.origin).toEqual({ kind: "user", path: join(path, "solo.json") });
 			expect(catalog.errors.map((error) => error.path).sort()).toEqual(
@@ -148,7 +148,7 @@ describe("loadKitCatalog", () => {
 			const notADir = join(path, "kits");
 			writeFileSync(notADir, "");
 			const catalog = await loadKitCatalog(notADir);
-			expect([...catalog.kits.keys()]).toEqual(["default", "team"]);
+			expect([...catalog.kits.keys()]).toEqual(["default", "team", "team-local"]);
 			expect(catalog.errors).toEqual([{ path: notADir, error: expect.stringContaining("ENOTDIR") }]);
 		} finally {
 			cleanup();
@@ -159,7 +159,7 @@ describe("loadKitCatalog", () => {
 		const { path, cleanup } = createTempDir("kanban-kits-");
 		try {
 			const catalog = await loadKitCatalog(join(path, "missing"));
-			expect([...catalog.kits.keys()]).toEqual(["default", "team"]);
+			expect([...catalog.kits.keys()]).toEqual(["default", "team", "team-local"]);
 			expect(catalog.errors).toEqual([]);
 		} finally {
 			cleanup();
@@ -181,6 +181,7 @@ describe("kanban kit show report", () => {
 			selectedAgentId: "claude",
 			maxFailRounds: 3,
 			outageMaxMin: 360,
+			config: parsePipelineConfig({}).config,
 		});
 		const sourceOf = (key: string) => report.values.find((row) => row.key === key)?.source;
 		expect(sourceOf("qa.blurb")).toBe("override");
@@ -216,6 +217,7 @@ describe("kanban kit show report", () => {
 				selectedAgentId: "claude",
 				maxFailRounds: 3,
 				outageMaxMin: 360,
+				config: parsePipelineConfig({}).config,
 			}),
 		);
 		expect(lines).toContain("After 45 min of provider outage: take over on codex bedrock/us.moonshotai.kimi-k3");

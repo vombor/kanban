@@ -404,12 +404,12 @@ export async function computeCardMetrics(input: CardMetricsInput, sources: CardM
 	let lastEndMs: number | null = null;
 	let activeMs = 0;
 	const seenMessages = new Set<string>();
-	const addTurn = (model: string | null | undefined, turn: TurnTokens): void => {
+	const addTurn = (model: string | null | undefined, provider: string | null | undefined, turn: TurnTokens): void => {
 		totals.tokensIn += turn.input;
 		totals.tokensOut += turn.output;
 		totals.tokensCacheRead += turn.cacheRead;
 		totals.tokensCacheWrite += turn.cacheWrite;
-		const price = sources.prices.priceFor(model);
+		const price = sources.prices.priceFor(model, provider);
 		if (price) {
 			cost += turnCost(price, turn);
 			costNoCache += turnCostNoCache(price, turn);
@@ -465,12 +465,16 @@ export async function computeCardMetrics(input: CardMetricsInput, sources: CardM
 						count(roundModels, key);
 					}
 				}
-				addTurn(message.modelInfo?.id || session.meta.model, {
-					input: inputTokens,
-					output: message.metrics?.outputTokens || 0,
-					cacheRead: message.metrics?.cacheReadTokens || 0,
-					cacheWrite: message.metrics?.cacheWriteTokens || 0,
-				});
+				addTurn(
+					message.modelInfo?.id || session.meta.model,
+					message.modelInfo?.id ? message.modelInfo.provider : session.meta.provider,
+					{
+						input: inputTokens,
+						output: message.metrics?.outputTokens || 0,
+						cacheRead: message.metrics?.cacheReadTokens || 0,
+						cacheWrite: message.metrics?.cacheWriteTokens || 0,
+					},
+				);
 			}
 			for (const block of Array.isArray(message.content) ? message.content : []) {
 				const typed = block as { type?: string; is_error?: boolean; content?: unknown };
@@ -501,7 +505,7 @@ export async function computeCardMetrics(input: CardMetricsInput, sources: CardM
 			if (inRound(session.startMs)) {
 				count(roundModels, key);
 			}
-			addTurn(session.model, turn);
+			addTurn(session.model, null, turn);
 		}
 		if (lastEndMs === null || session.endMs > lastEndMs) {
 			lastEndMs = session.endMs;

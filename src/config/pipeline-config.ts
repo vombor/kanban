@@ -364,8 +364,10 @@ const modelsSectionSchema = z
 			})
 			.strict()
 			.default({ default: "bedrock", fallback: {}, deprecated: {} }),
-		// Provider id → capacity. A rework or start waits while another card holds a different model on a provider
-		// at its limit (Lemonade loads one model at a time).
+		// Provider id → capacity. Recovery's retries, nudges and resumes, the QA gate's QA card starts and
+		// `kanban bench calibrate`'s waves wait (or are refused) while other cards hold a different model on a
+		// provider at its limit (Lemonade loads one model at a time). The rework stage's sibling and resume starts
+		// don't check it yet.
 		// Merged over the defaults: setting one provider keeps Lemonade's limit.
 		providerCapacity: z
 			.record(z.string(), providerCapacitySchema)

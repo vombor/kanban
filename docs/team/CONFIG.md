@@ -190,7 +190,7 @@ session `__home_agent__:<ws>:<selected agent>` of the workspace the items are ab
 | `models.providers.default` | `bedrock` | the provider for Cline models |
 | `models.providers.fallback` | `{}` | model id → provider, for models proven not to work on the default |
 | `models.providers.deprecated` | `{}` | documented workarounds `kanban models providers --cleanup` removes |
-| `models.providerCapacity.<id>.maxLoadedModels` | `lemonade: 1` | a rework or start waits while another card holds a different model on that provider (merged over the default) |
+| `models.providerCapacity.<id>.maxLoadedModels` | `lemonade: 1` | recovery's retries, nudges and resumes and the QA gate's QA card starts wait while another In Progress card holds a different model on that provider; `kanban bench calibrate` refuses a spec that would run more at once (merged over the default) |
 | `models.bedrockRegion` | `us-west-2` | probes |
 | `models.lists.lemonade.url`, `.requireLabels` | `http://localhost:13305`, `["tool-calling"]` | the model-lists route `GET /api/model-lists/lemonade` (read on every request) |
 | `agents.pretrust` | `true` | pre-trust every workspace's main repo root for Claude Code and Codex |

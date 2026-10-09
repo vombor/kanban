@@ -263,8 +263,8 @@ it also resumes Claude cards with `claude --continue` and a short resume note), 
   metrics de-duplicate a resumed Cline session's copied messages and skip its cumulative last message, or turns and
   cost count twice. Models come from the session files, not the board, because board settings get edited after the
   work is done.
-- Lemonade loads one model at a time (`models.providerCapacity.lemonade.maxLoadedModels: 1`): a rework or start on
-  another Lemonade model waits.
+- Lemonade loads one model at a time (`models.providerCapacity.lemonade.maxLoadedModels: 1`): recovery's work and
+  QA card starts on another Lemonade model wait while In Progress cards hold one (KITS.md, the `team-local` kit).
 
 ## 12. Where it runs
 

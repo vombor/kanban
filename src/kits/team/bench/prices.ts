@@ -49,8 +49,32 @@ export interface PriceTable {
 	/** Where the table came from (a file path, or "seed"). */
 	source: string;
 	file: PriceTableFile;
-	priceFor: (model: string | null | undefined) => PriceEntry | null;
+	/** A turn on a local provider (`LOCAL_PROVIDER_IDS`) is free whatever its model id; else the first matching entry. */
+	priceFor: (model: string | null | undefined, provider?: string | null) => PriceEntry | null;
 }
+
+/**
+ * Providers that run on this machine and charge nothing per token: Lemonade (llama.cpp GGUF). Its model ids are
+ * whatever the server lists ("GLM-4.7-Flash-GGUF", "LMX-Omni-52B-Halo", "DeepSeek-V4-Flash-0731-GGUF-BF16"), so no
+ * id pattern in the table can tell them apart from a paid model; the provider can. A live prices.json written
+ * before this rule needs no edit.
+ */
+export const LOCAL_PROVIDER_IDS: readonly string[] = ["lemonade"];
+
+export function isLocalProvider(provider: string | null | undefined): boolean {
+	return Boolean(provider && LOCAL_PROVIDER_IDS.includes(provider));
+}
+
+const LOCAL_PROVIDER_PRICE: PriceEntry = {
+	pattern: ".*",
+	in: 0,
+	cacheRead: 0,
+	cacheWrite: 0,
+	out: 0,
+	pin: true,
+	source: "manual",
+	note: "local provider: no per-token cost",
+};
 
 function compilePattern(pattern: string): RegExp | null {
 	try {
@@ -67,7 +91,10 @@ export function createPriceTable(file: PriceTableFile, source: string): PriceTab
 	return {
 		source,
 		file,
-		priceFor: (model) => compiled.find(({ re }) => re.test(model ?? ""))?.entry ?? null,
+		priceFor: (model, provider) =>
+			isLocalProvider(provider)
+				? LOCAL_PROVIDER_PRICE
+				: (compiled.find(({ re }) => re.test(model ?? ""))?.entry ?? null),
 	};
 }
 

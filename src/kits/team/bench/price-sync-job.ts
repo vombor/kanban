@@ -17,7 +17,7 @@ import { getPricesDataPaths, getTeamBenchWorkspacePaths, type PricesDataPaths } 
 import type { KitDocument } from "../../kit-schema";
 import { type KitCatalog, loadKitCatalog, resolveKitByName, resolveWorkspaceKit } from "../../resolve-kit";
 import { type PriceSyncResult, runPriceSync } from "./price-sync";
-import { loadPriceTable } from "./prices";
+import { isLocalProvider, loadPriceTable } from "./prices";
 
 const DEFAULT_PRICES_REGION = "us-west-2";
 const TEAM_KIT_NAME = "team";
@@ -37,11 +37,11 @@ export interface BenchPriceContext {
 	autoSync: boolean;
 }
 
+/** The kit models the AWS price check proposes entries for: local-provider models (Lemonade) cost nothing, skipped. */
 export function listKitModels(kit: KitDocument): string[] {
-	const models = [
-		...Object.values(kit.tiers ?? {}).flatMap((entries) => entries.map((entry) => entry.model)),
-		...(kit.dropped ?? []).map((entry) => entry.model),
-	];
+	const models = [...Object.values(kit.tiers ?? {}).flat(), ...(kit.dropped ?? [])]
+		.filter((entry) => !isLocalProvider(entry.provider))
+		.map((entry) => entry.model);
 	return [...new Set(models)];
 }
 

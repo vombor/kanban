@@ -42,8 +42,8 @@ describe("plan routing (the kit's plan section)", () => {
 		expect(decision.ok === false && decision.error).toContain("plan.enabled");
 	});
 
-	it("both built-in kits skip QA for plan cards, and the evaluator never QAs one", () => {
-		for (const name of ["default", "team"]) {
+	it("every built-in kit skip QA for plan cards, and the evaluator never QAs one", () => {
+		for (const name of ["default", "team", "team-local"]) {
 			const { kit } = resolveBuiltIn(name);
 			expect(kit.qa?.skip?.roles).toContain("plan");
 			const answer = createRoutingPolicy(kit).qaPolicy({
@@ -113,6 +113,7 @@ describe("plan routing (the kit's plan section)", () => {
 					selectedAgentId: "claude",
 					maxFailRounds: 3,
 					outageMaxMin: 360,
+					config: parsePipelineConfig({}).config,
 				}),
 			).join("\n");
 		expect(report("team")).toContain(

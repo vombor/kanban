@@ -183,6 +183,18 @@ describe("getModelVendor", () => {
 		expect(getModelVendor("gpt-6.1-sol")).toBe("openai");
 		expect(getModelVendor("claude-opus-5-5")).toBe("anthropic");
 		expect(getModelVendor("local-model")).toBeNull();
+	});
+
+	it("tells local (Lemonade GGUF) model families apart, named like their Bedrock vendors", () => {
+		expect(getModelVendor("GLM-4.7-Flash-GGUF")).toBe("zai");
+		expect(getModelVendor("Devstral-Small-2507-GGUF")).toBe("mistral");
+		expect(getModelVendor("Qwen3.6-35B-A3B-MTP-GGUF")).toBe("qwen");
+		expect(getModelVendor("qwen.qwen3-next-80b-a3b")).toBe(getModelVendor("Qwen3.6-35B-A3B-MTP-GGUF"));
+		expect(getModelVendor("Gemma-4-12B-it-GGUF")).toBe("google");
+		expect(getModelVendor("DeepSeek-V4-Flash-0731-GGUF-BF16")).toBe("deepseek");
+		expect(getModelVendor("deepseek.v3.2")).toBe("deepseek");
+		expect(getModelVendor("LMX-Omni-52B-Halo")).toBe("qwen");
+		expect(getModelVendor("gpt-oss-20b-mxfp4-GGUF")).toBe("openai");
 		expect(getModelVendor(null)).toBeNull();
 	});
 });

@@ -555,6 +555,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			policy,
 			featureOnPass: async (input: PipelineFeaturePassInput) => await features.answerOnPass(workspaceId, input),
 			agentDefaultModels,
+			providerCapacity: parsed.config.models.providerCapacity,
 			now: now(),
 		};
 		// A workspace watched only for recovery (landing off/commit/pr) gets no QA-gate decisions.
