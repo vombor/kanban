@@ -6,7 +6,8 @@
 #  1. well-known key shapes (Bedrock ABSK..., AWS AKIA.../ASIA..., sk-... at a token start, so
 #     "task-agent-settings-fields" is not a hit; ghp_/gho_/ghs_/github_pat_..., private key blocks);
 #  2. the EXACT secret values used on this machine, read at run time from the files that hold them
-#     (Claude settings, Cline providers.json, Codex config.toml, $KANBAN_HOME/data/*/*.env), plus the GitHub PAT in
+#     (Claude settings, Cline providers.json, Codex config.toml, $KANBAN_HOME/data/*/*.env, the Kanban GitHub App's
+#     private key in $KANBAN_HOME/secrets/github-app.json, line by line; docs/fork/github-bots.md), plus the GitHub PAT in
 #     $GH_TOKEN / $GITHUB_TOKEN, Copilot's token in $COPILOT_GITHUB_TOKEN and the Bedrock key in
 #     $AWS_BEARER_TOKEN_BEDROCK when set (docs/fork/github-auth.md).
 # It never prints a secret, only the commit, the kind of hit and the files.
@@ -30,7 +31,8 @@ while IFS= read -r v; do [ ${#v} -ge 16 ] && known+=("$v"); done < <(
 			const fs=require("fs"),H=process.argv[1],out=new Set();
 			const walk=(o)=>{if(!o||typeof o!=="object")return;for(const [k,v] of Object.entries(o)){if(typeof v==="string"&&/key|token|secret|password|bearer/i.test(k))out.add(v);else walk(v)}};
 			for(const f of [H+"/.claude/settings.json",H+"/.cline/data/settings/providers.json"]){try{walk(JSON.parse(fs.readFileSync(f,"utf8")))}catch{}}
-			console.log([...out].join("\n"))' "$H"
+			try{for(const l of String(JSON.parse(fs.readFileSync(process.argv[2]+"/secrets/github-app.json","utf8")).privateKey).split(/\r?\n/))if(!l.startsWith("-----"))out.add(l.trim())}catch{}
+			console.log([...out].join("\n"))' "$H" "$KH"
 		grep -hoE '(bearer_token|api_key|token|key)[[:space:]]*=[[:space:]]*"[^"]+"' "$H/.codex/config.toml" 2>/dev/null |
 			sed -E 's/^[^"]*"([^"]+)".*/\1/'
 		grep -hoE '^[A-Z_]*(KEY|TOKEN|SECRET)[A-Z_]*=.+' "$KH"/data/*/*.env 2>/dev/null | sed -E 's/^[^=]+=//'

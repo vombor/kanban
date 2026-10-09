@@ -1,13 +1,15 @@
 // `issues.commentOnLand` (off by default): when Kanban lands or discards a card imported from an issue (the `qa`
-// landing step, src/server/task-landing-gate.ts), it comments on the issue. It needs a token with write access
-// (issue-auth.ts). Only the project's own repository is ever commented on, and a failure is logged, never fatal:
+// landing step, src/server/task-landing-gate.ts), it comments on the issue as the machine's Kanban GitHub App, signed
+// with the project (src/github-app/issue-writer.ts); until the app exists, with the user's token (issue-auth.ts). Only the project's own repository is ever commented on, and a failure is logged, never fatal:
 // the Done has already happened.
 import { getWorkspacePipelineSettings, type ParsedPipelineConfig, readPipelineConfig } from "../config/pipeline-config";
 import type { RuntimeBoardCard } from "../core/api-contract";
 import { resolveCardRole } from "../core/card-role";
+import { type GitHubAppTokenSource, getSharedGitHubAppTokenSource } from "../github-app/installation-tokens";
+import { performGitHubIssueAction, resolveIssueWriteCredential } from "../github-app/issue-writer";
 import { getIssueWorkspacePaths } from "../state/kanban-home";
-import { createGitHubIssueProvider, createMemoryIssueHttpCache, type IssueFetch } from "./github-provider";
-import { type IssueAuth, resolveGitHubAuth } from "./issue-auth";
+import type { IssueFetch } from "./github-provider";
+import type { IssueAuth } from "./issue-auth";
 import { type GitRemote, listGitRemotes, resolvePinnedIssueRepo } from "./issue-repo";
 import { readIssueSyncState } from "./issue-state";
 
@@ -29,7 +31,9 @@ export interface IssueLandCommenterDependencies {
 	listRemotes?: (repoPath: string) => Promise<GitRemote[]>;
 	/** The repository the first sync pinned (issue-state.ts), or null. */
 	readPinnedRepo?: (workspaceId: string) => Promise<{ repo: string } | null>;
+	/** The user's token, used only while there is no Kanban GitHub App. */
 	resolveAuth?: () => Promise<IssueAuth>;
+	tokenSource?: GitHubAppTokenSource;
 	fetch?: IssueFetch;
 	apiOrigin?: string;
 	log?: (message: string) => void;
@@ -55,7 +59,8 @@ export function createIssueLandCommenter(
 		if (!issue) {
 			return null;
 		}
-		const settings = getWorkspacePipelineSettings((await readConfig()).config, input.workspaceId).issues;
+		const { config } = await readConfig();
+		const settings = getWorkspacePipelineSettings(config, input.workspaceId).issues;
 		if (!settings.commentOnLand || settings.mode === "off" || settings.provider !== issue.provider) {
 			return null;
 		}
@@ -75,16 +80,33 @@ export function createIssueLandCommenter(
 			deps.log?.(`issues ${input.workspaceId}: no comment on #${issue.number}: ${reason}`);
 			return null;
 		}
-		const auth = await (deps.resolveAuth ?? (async () => await resolveGitHubAuth()))();
-		const provider = createGitHubIssueProvider({
-			token: auth.token,
-			cache: createMemoryIssueHttpCache(),
-			fetch: deps.fetch,
-			apiOrigin: deps.apiOrigin,
-		});
 		try {
-			await provider.comment(repo.repo, issue.number, buildIssueFinishedComment(input));
-			return `commented on ${repo.repo}#${issue.number} (${input.outcome}, via ${auth.source})`;
+			const credential = await resolveIssueWriteCredential({
+				repo: repo.repo,
+				tokenSource: deps.tokenSource ?? getSharedGitHubAppTokenSource(),
+				resolvePat: deps.resolveAuth,
+			});
+			if (!credential.ok) {
+				deps.log?.(`issues ${input.workspaceId}: no comment on ${repo.repo}#${issue.number}: ${credential.error}`);
+				return null;
+			}
+			await performGitHubIssueAction({
+				action: {
+					action: "comment",
+					repo: repo.repo,
+					number: issue.number,
+					body: buildIssueFinishedComment(input),
+				},
+				token: credential.credential.token,
+				author: { project: input.workspaceId, role: null },
+				attribution: config.github,
+				http: { fetch: deps.fetch, apiOrigin: deps.apiOrigin },
+			});
+			const via =
+				credential.credential.via === "app"
+					? `app ${credential.credential.app.slug}`
+					: credential.credential.source;
+			return `commented on ${repo.repo}#${issue.number} (${input.outcome}, via ${via})`;
 		} catch (error) {
 			deps.log?.(
 				`issues ${input.workspaceId}: could not comment on ${repo.repo}#${issue.number}: ${error instanceof Error ? error.message : String(error)}`,

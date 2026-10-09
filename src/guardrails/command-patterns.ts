@@ -12,6 +12,9 @@
 // `{shared-dest}` (only as a pattern's last word, e.g. `git fetch {shared-dest}`) matches a later word that is a
 // refspec `<src>:<dst>` with a shared destination: `git fetch . card:main` and `git fetch origin main:main`
 // fast-forward the local main, `git fetch origin main` (no destination) doesn't.
+// `{issues-write}` (only as `gh api {issues-write}`) matches a `gh api` call that writes an issue or an issue
+// comment: a REST endpoint under `repos/<owner>/<name>/issues` with a method other than GET (`-X`/`--method`, or
+// fields, which make gh POST), or a GraphQL mutation that creates, edits, closes or comments on an issue.
 // A destination is shared when, after stripping `refs/` and `heads/`, it is a shared branch or ends in
 // `/<shared>`: git's DWIM resolves `card:heads/main` to the remote's main (isSharedRefDestination).
 //
@@ -30,6 +33,7 @@ import { basename } from "node:path";
 const SHARED_BRANCH_PLACEHOLDER = "{shared}";
 const SHARED_PUSH_PLACEHOLDER = "{shared-push}";
 const SHARED_DESTINATION_PLACEHOLDER = "{shared-dest}";
+const ISSUES_WRITE_PLACEHOLDER = "{issues-write}";
 
 /**
  * Agents never approve a plan: the user approves it on the board (or from their own shell). Every card with guardrails
@@ -40,6 +44,22 @@ const SHARED_DESTINATION_PLACEHOLDER = "{shared-dest}";
 export const PLAN_APPROVAL_DENY_COMMANDS: readonly string[] = [
 	"kanban plan approve",
 	"kanban plan expand --approved-by-user",
+];
+
+/**
+ * Agents file and comment on GitHub issues as the machine's Kanban GitHub App, through `kanban github issue ...`
+ * (src/commands/github.ts), which signs each post with the project; never with `gh` and the user's PAT. Appended
+ * like the plan-approval rail, so a configured `denyCommands` can't drop them. Reading issues stays allowed.
+ */
+export const GITHUB_ISSUE_DENY_COMMANDS: readonly string[] = [
+	"gh issue create|comment|edit|close|reopen|delete|lock|unlock|transfer|pin|unpin",
+	`gh api ${ISSUES_WRITE_PLACEHOLDER}`,
+];
+
+/** The rails every card with guardrails and the orchestrator's isolation guardrails get on top of their own rules. */
+export const BUILT_IN_DENY_COMMANDS: readonly string[] = [
+	...PLAN_APPROVAL_DENY_COMMANDS,
+	...GITHUB_ISSUE_DENY_COMMANDS,
 ];
 
 /** One denied-command rule: `words[i]` lists the words allowed in slot i. */
@@ -53,6 +73,8 @@ export interface DeniedCommandRule {
 	sharedPush?: string[];
 	/** `… {shared-dest}`: the shared branch names no later refspec may name as its destination (hasSharedRefspec). */
 	sharedDestination?: string[];
+	/** `gh api {issues-write}`: matches only a call that writes an issue or comment (isGhApiIssueWrite). */
+	issuesApiWrite?: boolean;
 }
 
 function toSharedBranchName(branch: string): string {
@@ -128,6 +150,13 @@ export function parseDeniedCommandPatterns(
 				continue;
 			}
 		}
+		const issuesApiWrite = tokens.at(-1) === ISSUES_WRITE_PLACEHOLDER;
+		if (issuesApiWrite) {
+			tokens.pop();
+			if (tokens.join(" ") !== "gh api") {
+				continue;
+			}
+		}
 		const sharedDestination = tokens.at(-1) === SHARED_DESTINATION_PLACEHOLDER;
 		if (sharedDestination) {
 			tokens.pop();
@@ -160,6 +189,7 @@ export function parseDeniedCommandPatterns(
 			headLength,
 			...(sharedPush ? { sharedPush: sharedNames } : {}),
 			...(sharedDestination ? { sharedDestination: sharedNames } : {}),
+			...(issuesApiWrite ? { issuesApiWrite: true } : {}),
 		});
 	}
 	return rules;
@@ -170,6 +200,7 @@ function isPlainGitPushRule(rule: DeniedCommandRule): boolean {
 	return (
 		!rule.sharedPush &&
 		!rule.sharedDestination &&
+		!rule.issuesApiWrite &&
 		rule.words.length === 2 &&
 		program?.length === 1 &&
 		program[0] === "git" &&
@@ -466,6 +497,79 @@ export function pushMayUpdateSharedBranch(args: readonly string[], sharedBranche
 	});
 }
 
+// `gh api` options that take a value (gh api --help); fields make gh send a POST unless a method is given.
+const GH_API_FIELD_OPTIONS = new Set(["-f", "--raw-field", "-F", "--field", "--input"]);
+const GH_API_VALUE_OPTIONS = new Set([
+	"-X",
+	"--method",
+	"-H",
+	"--header",
+	"-q",
+	"--jq",
+	"-t",
+	"--template",
+	"--hostname",
+	"--cache",
+	"-p",
+	"--preview",
+	...GH_API_FIELD_OPTIONS,
+]);
+const ISSUES_ENDPOINT = /^\/?repos\/[^/\s]+\/[^/\s]+\/issues(?:[/?#]|$)/u;
+const ISSUE_MUTATION =
+	/\bmutation\b[\s\S]*\b(createIssue|updateIssue|closeIssue|reopenIssue|deleteIssue|addComment|updateIssueComment|deleteIssueComment|transferIssue|pinIssue|unpinIssue|lockLockable|unlockLockable)\b/u;
+
+/** Whether `gh api <args>` writes a GitHub issue or issue comment. */
+export function isGhApiIssueWrite(args: readonly string[]): boolean {
+	let endpoint: string | null = null;
+	let method: string | null = null;
+	let hasFields = false;
+	const values: string[] = [];
+	for (let index = 0; index < args.length; index += 1) {
+		const arg = args[index] ?? "";
+		const [name, inline] = arg.startsWith("--")
+			? [arg.split("=")[0] ?? arg, arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : null]
+			: [arg, null];
+		// `-XPOST` and `-fbody=x`: the value glued to a short option.
+		const short = /^-([XfF])(.+)$/u.exec(arg);
+		if (short) {
+			if (short[1] === "X") {
+				method = short[2] ?? null;
+			} else {
+				hasFields = true;
+				values.push(short[2] ?? "");
+			}
+			continue;
+		}
+		if (GH_API_VALUE_OPTIONS.has(name)) {
+			const value = inline ?? args[index + 1] ?? "";
+			if (inline === null) {
+				index += 1;
+			}
+			if (name === "-X" || name === "--method") {
+				method = value;
+			} else if (GH_API_FIELD_OPTIONS.has(name)) {
+				hasFields = true;
+				values.push(value);
+			}
+			continue;
+		}
+		if (!arg.startsWith("-") && endpoint === null) {
+			endpoint = arg;
+		}
+	}
+	if (endpoint === null) {
+		return false;
+	}
+	if (endpoint === "graphql") {
+		return values.some((value) => ISSUE_MUTATION.test(value));
+	}
+	if (!ISSUES_ENDPOINT.test(endpoint)) {
+		return false;
+	}
+	const effective = (method ?? (hasFields ? "POST" : "GET")).toUpperCase();
+	return effective !== "GET" && effective !== "HEAD";
+}
+
 /** Whether each floating slot is matched by a different one of `words`, in any order. */
 function matchFloatingSlots(slots: readonly string[][], words: readonly string[], used: boolean[] = []): boolean {
 	const [slot, ...rest] = slots;
@@ -491,6 +595,9 @@ function ruleMatchesWords(rule: DeniedCommandRule, words: string[]): boolean {
 		return false;
 	}
 	const after = words.slice(rule.headLength);
+	if (rule.issuesApiWrite) {
+		return isGhApiIssueWrite(after);
+	}
 	if (rule.sharedPush) {
 		return pushMayUpdateSharedBranch(after, rule.sharedPush);
 	}
@@ -521,6 +628,9 @@ export function describeDeniedCommand(match: DeniedCommandMatch): string {
 	const blocked = `Blocked by Kanban's task-card guardrails: \`${match.command}\``;
 	if (PLAN_APPROVAL_DENY_COMMANDS.includes(match.rule.pattern)) {
 		return `Blocked by Kanban's guardrails: \`${match.command}\`. Agents never approve a plan; the user approves it on the board (Approve plan). Tell the user the plan is ready for their approval.`;
+	}
+	if (GITHUB_ISSUE_DENY_COMMANDS.includes(match.rule.pattern)) {
+		return `${blocked} writes a GitHub issue with the user's own login. Use Kanban's GitHub App instead, which signs the post with this project: \`kanban github issue create --repo <owner/name> --title <title> --body-file <file>\` (also \`comment --number <n> --body-file <file>\`, \`edit\`, \`close\`). Reading issues (\`gh issue view|list\`, \`gh api\` GETs) is fine.`;
 	}
 	if (match.rule.sharedPush) {
 		return `${blocked} may update a shared branch (${match.rule.sharedPush.join(", ")}). This card may push only its own branch, named explicitly: \`git push -u origin HEAD:<your-branch>\` or \`git push -u origin <your-branch>\`.`;

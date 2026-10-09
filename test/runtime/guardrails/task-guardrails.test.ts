@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { parsePipelineConfig } from "../../../src/config/pipeline-config";
-import { findDeniedCommand, PLAN_APPROVAL_DENY_COMMANDS } from "../../../src/guardrails/command-patterns";
+import { BUILT_IN_DENY_COMMANDS, findDeniedCommand } from "../../../src/guardrails/command-patterns";
 import {
 	buildGuardrailPromptNote,
 	listGuardrailWritableRoots,
@@ -127,7 +127,7 @@ describe("task guardrails", () => {
 		// A config that replaces the default denies can't drop the rail.
 		const custom = parsePipelineConfig({ guardrails: { denyCommands: ["npm publish"] } }).config;
 		const card = await resolveTaskGuardrails({ ...input, config: custom });
-		expect(card?.deniedCommands.map((rule) => rule.pattern)).toEqual(["npm publish", ...PLAN_APPROVAL_DENY_COMMANDS]);
+		expect(card?.deniedCommands.map((rule) => rule.pattern)).toEqual(["npm publish", ...BUILT_IN_DENY_COMMANDS]);
 		const rules = card ? listMatcherDeniedCommands(card) : [];
 		expect(findDeniedCommand("kanban plan approve 1a2b3", rules)?.rule.pattern).toBe("kanban plan approve");
 		expect(findDeniedCommand("kanban plan expand 1a2b3 --approved-by-user", rules)?.rule.pattern).toBe(
@@ -149,7 +149,7 @@ describe("task guardrails", () => {
 			claudeProjectDirs: [],
 		};
 		const orchestrator = await resolveOrchestratorGuardrails({ projectPath: repo, isolation });
-		expect(orchestrator?.deniedCommands.map((rule) => rule.pattern)).toEqual([...PLAN_APPROVAL_DENY_COMMANDS]);
+		expect(orchestrator?.deniedCommands.map((rule) => rule.pattern)).toEqual([...BUILT_IN_DENY_COMMANDS]);
 		expect(await resolveOrchestratorGuardrails({ projectPath: repo, isolation: null })).toBeNull();
 	});
 

@@ -845,3 +845,20 @@ of this repository is the complete record of changes.
   `src/pipeline/shadow-diff/shadow-diff.ts`: `kanban task reassign` gives Backlog dev cards that never started the
   kit's current dev assignment (`decideDevReassignment()`), logged to dev-assignment.jsonl with `source: "reassign"`;
   `task update --agent-id default` on a kit-routed Backlog card prints the reassign command.
+- `src/github-app/` (new: `app-credentials.ts`, `app-jwt.ts`, `app-manifest.ts`, `attribution.ts`, `github-http.ts`,
+  `installation-tokens.ts`, `issue-writer.ts`), `src/trpc/github-api.ts`, `src/server/github-app-route.ts`,
+  `src/commands/github.ts`, `src/doctor/github-app-checks.ts` (new), `src/trpc/app-router.ts`,
+  `src/server/runtime-server.ts`, `src/cli-program.ts`, `src/config/pipeline-config.ts`, `src/state/kanban-home.ts`,
+  `src/issues/issue-comment.ts`, `src/issues/github-provider.ts`, `src/guardrails/command-patterns.ts`,
+  `src/guardrails/task-guardrails.ts`, `src/terminal/agent-guardrails.ts`, `src/doctor/run-doctor.ts`,
+  `src/doctor/guardrail-checks.ts`, `src/isolation/cli-scope.ts`, `src/isolation/isolation-paths.ts`,
+  `src/setup/claude-md-section.ts`, `src/prompts/append-system-prompt.ts`, `scripts/secret-guard.sh`,
+  `docs/fork/github-bots.md` (new),
+  `docs/fork/github-auth.md`, tests (user request 2026-10-09): GitHub issues and comments as one Kanban GitHub App
+  for the machine. The user creates it once with `kanban github bot create` (GitHub's App Manifest flow through the
+  running server; Issues read/write, Metadata read, no webhook) and installs it on All repositories; its private key
+  is `<home>/secrets/github-app.json` (0600). Agents post with `kanban github issue create|comment|edit|close`: the
+  server decides the project with the strict caller lookup, mints a repository-scoped installation token, and adds
+  an attribution line naming the project and role (`github.attribution`). Without an app it falls back to the PAT
+  with a warning. The land commenter uses the same writer; cards' guardrails deny `gh issue` and `gh api` issue
+  writes; doctor checks the app, its file mode and which projects' repositories it covers.

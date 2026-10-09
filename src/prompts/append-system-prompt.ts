@@ -179,6 +179,7 @@ Use this prefix for every Kanban command in this session:
 
 - If the user asks for GitHub work (issues, PRs, repos, comments, labels, milestones) or includes a \`github.com\` URL, prefer the \`gh\` CLI first.
 - Prefer native GitHub commands over manual browser walkthroughs when possible, for example: \`gh issue view\`, \`gh pr view\`, \`gh repo view\`, \`gh pr checks\`, \`gh pr diff\`.
+- Writing GitHub issues and comments is the exception: file, comment on, edit and close them with \`${kanbanCommand} github issue create|comment|edit|close --repo <owner/name> ... --body-file <file>\`, which posts as Kanban's GitHub App and names this project. Never \`gh issue create|comment|edit|close\` or \`gh api\` writes to issues; reading them with \`gh\` is fine.
 - If \`gh\` is missing, guide installation based on platform:
   - macOS: \`brew install gh\`
   - Windows: \`winget install --id GitHub.cli\`

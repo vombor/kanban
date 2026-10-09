@@ -141,6 +141,14 @@ import { isHomeAgentSessionId, isHomeAgentSessionIdForWorkspace } from "../core/
 import type { CallerRequest } from "../isolation/isolation-service";
 import type { RuntimeCaller } from "../isolation/session-identity";
 import {
+	githubAppStartRequestSchema,
+	githubAppStartResponseSchema,
+	githubAppStatusResponseSchema,
+	githubIssueRequestSchema,
+	githubIssueResponseSchema,
+	type RuntimeGitHubApi,
+} from "./github-api";
+import {
 	isolationApprovalRequestResponseSchema,
 	isolationApprovalRequestSchema,
 	isolationApprovalStatusResponseSchema,
@@ -214,6 +222,8 @@ export interface RuntimeTrpcContext {
 	kitSettingsApi?: RuntimeKitSettingsApi;
 	/** A project's shortcuts from the CLI, and a run's port (src/trpc/shortcuts-api.ts); absent = not available. */
 	shortcutsApi?: RuntimeShortcutsApi;
+	/** GitHub issues and comments as the Kanban GitHub App (src/trpc/github-api.ts); absent = not available. */
+	githubApi?: RuntimeGitHubApi;
 	runtimeApi: {
 		loadConfig: (scope: RuntimeTrpcWorkspaceScope | null) => Promise<RuntimeConfigResponse>;
 		saveConfig: (
@@ -933,6 +943,55 @@ export const runtimeAppRouter = t.router({
 					request: input,
 				});
 			}),
+	}),
+	// GitHub issues and comments as the machine's Kanban GitHub App, and the user's creation of the app.
+	github: t.router({
+		issue: workspaceProcedure
+			.input(githubIssueRequestSchema)
+			.output(githubIssueResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.githubApi) {
+					return {
+						ok: false,
+						via: null,
+						number: null,
+						url: null,
+						commentUrl: null,
+						postedAs: null,
+						warning: null,
+						error: "GitHub posts are not available here.",
+					};
+				}
+				// In every isolation mode: the caller decides the project the post names, so a session without its
+				// credential is traced to its process tree.
+				return await ctx.githubApi.issue({
+					caller: await readStrictCaller(ctx),
+					workspaceId: ctx.workspaceScope.workspaceId,
+					workspacePath: ctx.workspaceScope.workspacePath,
+					request: input,
+				});
+			}),
+		startAppCreation: t.procedure
+			.input(githubAppStartRequestSchema)
+			.output(githubAppStartResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.githubApi) {
+					return {
+						ok: false,
+						startUrl: null,
+						expiresAt: null,
+						existing: null,
+						error: "GitHub App creation is not available here.",
+					};
+				}
+				return await ctx.githubApi.startAppCreation({ caller: await readStrictCaller(ctx), request: input });
+			}),
+		appStatus: t.procedure.output(githubAppStatusResponseSchema).query(async ({ ctx }) => {
+			if (!ctx.githubApi) {
+				return { ok: false, app: null, error: "GitHub App status is not available here." };
+			}
+			return await ctx.githubApi.appStatus({ caller: await readCaller(ctx) });
+		}),
 	}),
 	// Orchestrator messages between projects (src/isolation/messages.ts).
 	message: t.router({

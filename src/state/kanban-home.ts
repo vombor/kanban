@@ -36,6 +36,8 @@ const KITS_DIR = "kits";
 const DATA_DIR = "data";
 const MODELS_DATA_DIR = "models";
 const LOGS_DIR = "logs";
+const SECRETS_DIR = "secrets";
+const GITHUB_APP_FILENAME = "github-app.json";
 const LEGACY_KIT_BOARD_BACKUPS_DIR = "board-backups";
 const LEGACY_KIT_BOARD_LATEST_FILENAME = "board-latest.json";
 const PIPELINE_STATE_FILENAME = "pipeline-state.json";
@@ -605,6 +607,19 @@ export function getWatchdogWorkspacePaths(workspaceId: string, homePath = getKan
 		runoffs: join(dataDir, "runoffs.json"),
 		calibrationDir: join(dataDir, "calibration"),
 	};
+}
+
+/**
+ * Secrets Kanban holds itself (`<home>/secrets`, mode 0700): never in config.json, a project repo, a log or an
+ * agent's env. Machine-wide, not per workspace.
+ */
+export function getKanbanSecretsPath(homePath = getKanbanHomePath()): string {
+	return join(homePath, SECRETS_DIR);
+}
+
+/** The machine's Kanban GitHub App: its id, slug and private key (`<home>/secrets/github-app.json`, mode 0600). */
+export function getGitHubAppCredentialsPath(homePath = getKanbanHomePath()): string {
+	return join(getKanbanSecretsPath(homePath), GITHUB_APP_FILENAME);
 }
 
 /** Kanban's own logs (`<home>/logs`): the orchestrator's headless runs write here. */

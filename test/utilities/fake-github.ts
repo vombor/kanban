@@ -1,6 +1,7 @@
-// An in-memory GitHub REST API for the issue import tests: the issues and comments endpoints with ETags (304 on
-// If-None-Match), Link pagination and a switchable rate limit. Tests pass its `fetch` to the provider, so nothing
-// ever reaches the network.
+// An in-memory GitHub REST API for the issue import and GitHub App tests: the issues and comments endpoints with
+// ETags (304 on If-None-Match), Link pagination and a switchable rate limit; issue writes (create, comment, edit,
+// close) on any repository; and the app endpoints (manifest conversion, installation lookup, installation tokens).
+// Tests pass its `fetch` to the provider, so nothing ever reaches the network.
 import { createHash } from "node:crypto";
 
 import type { IssueFetch } from "../../src/issues/github-provider";
@@ -47,16 +48,40 @@ export interface FakeGitHub {
 	perPage: number;
 	upsertIssue: (issue: FakeGitHubIssue) => void;
 	addComment: (number: number, comment: FakeGitHubComment) => void;
+	/** The app side: manifest codes, the repositories the app is installed on, the tokens it minted. */
+	app: {
+		/** code → the conversion answer (`pem` included). */
+		manifestCodes: Map<string, Record<string, unknown>>;
+		/** Lowercase owner/name → installation id. */
+		installations: Map<string, number>;
+		/** Every token minted: installation id, the request body, the token. */
+		minted: Array<{ installationId: number; body: unknown; token: string }>;
+		/** How long a minted token lives. */
+		tokenLifetimeMs: number;
+		now: () => number;
+	};
+	/** Issue writes by any token: repo, method, path, body. */
+	writes: Array<{ repo: string; method: string; path: string; body: unknown; authorization: string | null }>;
 }
 
 export function createFakeGitHub(repo = "vombor/kanban"): FakeGitHub {
 	const issues = new Map<number, FakeGitHubIssue>();
 	const comments = new Map<number, FakeGitHubComment[]>();
 	const requests: FakeGitHubRequest[] = [];
+	let nextIssueNumber = 1000;
+	let nextCommentId = 5000;
 	const fake: FakeGitHub = {
 		issues,
 		comments,
 		requests,
+		app: {
+			manifestCodes: new Map(),
+			installations: new Map(),
+			minted: [],
+			tokenLifetimeMs: 60 * 60 * 1000,
+			now: Date.now,
+		},
+		writes: [],
 		rateLimit: null,
 		perPage: 100,
 		upsertIssue: (issue) => {
@@ -91,6 +116,69 @@ export function createFakeGitHub(repo = "vombor/kanban"): FakeGitHub {
 					status: fake.rateLimit.status,
 					headers,
 				});
+			}
+			const json = (status: number, body: unknown) => {
+				record(status);
+				return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+			};
+			const conversion = /^\/app-manifests\/([^/]+)\/conversions$/u.exec(parsed.pathname);
+			if (conversion && init.method === "POST") {
+				const answer = fake.app.manifestCodes.get(conversion[1] ?? "");
+				fake.app.manifestCodes.delete(conversion[1] ?? "");
+				return answer ? json(201, answer) : json(404, { message: "Not Found" });
+			}
+			const installation = /^\/repos\/([^/]+\/[^/]+)\/installation$/u.exec(parsed.pathname);
+			if (installation && init.method === "GET") {
+				if (!init.headers.Authorization?.startsWith("Bearer ey")) {
+					return json(401, { message: "A JSON web token could not be decoded" });
+				}
+				const id = fake.app.installations.get((installation[1] ?? "").toLowerCase());
+				return id ? json(200, { id }) : json(404, { message: "Not Found" });
+			}
+			const tokens = /^\/app\/installations\/(\d+)\/access_tokens$/u.exec(parsed.pathname);
+			if (tokens && init.method === "POST") {
+				const installationId = Number(tokens[1]);
+				if (![...fake.app.installations.values()].includes(installationId)) {
+					return json(404, { message: "Not Found" });
+				}
+				const token = `ghs_fake${fake.app.minted.length + 1}`;
+				fake.app.minted.push({ installationId, body: JSON.parse(init.body ?? "{}"), token });
+				return json(201, {
+					token,
+					expires_at: new Date(fake.app.now() + fake.app.tokenLifetimeMs).toISOString(),
+				});
+			}
+			const write = /^\/repos\/([^/]+\/[^/]+)\/issues(?:\/(\d+)(\/comments)?)?$/u.exec(parsed.pathname);
+			if (write && (init.method === "POST" || init.method === "PATCH")) {
+				const writeRepo = write[1] ?? "";
+				const body: unknown = JSON.parse(init.body ?? "{}");
+				fake.writes.push({
+					repo: writeRepo,
+					method: init.method,
+					path: parsed.pathname,
+					body,
+					authorization: init.headers.Authorization ?? null,
+				});
+				if (init.method === "POST" && !write[2]) {
+					nextIssueNumber += 1;
+					return json(201, {
+						number: nextIssueNumber,
+						html_url: `https://github.com/${writeRepo}/issues/${nextIssueNumber}`,
+					});
+				}
+				if (init.method === "POST" && write[3]) {
+					nextCommentId += 1;
+					return json(201, {
+						id: nextCommentId,
+						html_url: `https://github.com/${writeRepo}/issues/${write[2]}#issuecomment-${nextCommentId}`,
+					});
+				}
+				if (init.method === "PATCH" && write[2] && !write[3]) {
+					return json(200, {
+						number: Number(write[2]),
+						html_url: `https://github.com/${writeRepo}/issues/${write[2]}`,
+					});
+				}
 			}
 			const base = `/repos/${repo}/issues`;
 			let items: unknown[];

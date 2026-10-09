@@ -5,6 +5,7 @@ import { registerBoardCommand } from "./commands/board";
 import { registerClineCommand } from "./commands/cline";
 import { registerConfigCommand } from "./commands/config";
 import { registerDoctorCommand } from "./commands/doctor";
+import { registerGitHubCommand } from "./commands/github";
 import { registerHomeCommand } from "./commands/home";
 import { registerHooksCommand } from "./commands/hooks";
 import { registerIsolationCommand } from "./commands/isolation";
@@ -113,6 +114,7 @@ export function registerCliCommands(program: Command, version: string): void {
 	registerDoctorCommand(program, version);
 	registerQaCommand(program);
 	registerIsolationCommand(program);
+	registerGitHubCommand(program);
 	registerIssuesCommand(program);
 	registerMessageCommand(program);
 }

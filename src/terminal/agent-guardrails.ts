@@ -111,8 +111,9 @@ export function buildCopilotDenyTools(rules: readonly DeniedCommandRule[]): {
 	const unenforced: DeniedCommandRule[] = [];
 	for (const rule of rules) {
 		const [program, subcommands] = rule.words;
-		if (rule.sharedDestination) {
-			// `shell(git fetch)` would deny every fetch: Copilot can't look at a refspec.
+		if (rule.sharedDestination || rule.issuesApiWrite) {
+			// `shell(git fetch)` would deny every fetch, `shell(gh api)` every API read: Copilot can't look at the
+			// arguments.
 			unenforced.push(rule);
 		} else if (rule.words.length === 1 && program) {
 			denyTools.push(...program.map((word) => `shell(${word})`));
@@ -169,13 +170,14 @@ export function listRuleSlotOrders(rule: DeniedCommandRule): string[][][] {
 /**
  * The execpolicy rules file: one `forbidden` prefix rule per pattern and order of its floating slots (a list
  * position = alternatives). A `{shared-push}` rule forbids every `git push`: an argv prefix can't tell the
- * target branch. A `{shared-dest}` rule is left out: forbidding its prefix would forbid every `git fetch`.
+ * target branch. A `{shared-dest}` rule is left out: forbidding its prefix would forbid every `git fetch`; so is
+ * `gh api {issues-write}` (every `gh api` read).
  */
 export function buildCodexRulesFile(rules: readonly DeniedCommandRule[]): string {
 	const lines = [
 		`# ${CODEX_GUARDRAIL_RULES_MARKER} (guardrails.denyCommands in Kanban's config.json). Rewritten at each launch.`,
 	];
-	for (const rule of rules.filter((candidate) => !candidate.sharedDestination)) {
+	for (const rule of rules.filter((candidate) => !candidate.sharedDestination && !candidate.issuesApiWrite)) {
 		for (const slots of listRuleSlotOrders(rule)) {
 			// The program position is always a single word: one rule per program.
 			const [programs = [], ...rest] = slots;
@@ -386,6 +388,10 @@ function buildClaudeSharedDestinationDeny(head: readonly string[], sharedBranche
 export function buildClaudeBashDeny(rule: DeniedCommandRule): string[] {
 	if (rule.sharedPush) {
 		return buildClaudeSharedPushDeny(rule.sharedPush);
+	}
+	if (rule.issuesApiWrite) {
+		// A Bash(...) rule can't look at the method or endpoint; Kanban's claude-guard hook matches it.
+		return [];
 	}
 	if (rule.sharedDestination) {
 		return expandSlots(rule.words).flatMap((head) =>
@@ -637,7 +643,9 @@ export function describeAgentGuardrails(
 				reads: unrestrictedReads,
 				unenforced: [
 					"command forms other than the plain prefix",
-					...describeUnenforcedRules((context.deniedCommands ?? []).filter((rule) => rule.sharedDestination)),
+					...describeUnenforcedRules(
+						(context.deniedCommands ?? []).filter((rule) => rule.sharedDestination || rule.issuesApiWrite),
+					),
 					...(sandbox || !confineWrites ? [] : ["writes outside the worktree"]),
 				],
 			};

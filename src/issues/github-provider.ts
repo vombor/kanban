@@ -179,7 +179,7 @@ export function readRateLimitUntil(
 	return null;
 }
 
-function readGitHubMessage(bodyText: string): string {
+export function readGitHubMessage(bodyText: string): string {
 	try {
 		const parsed = JSON.parse(bodyText) as { message?: unknown };
 		return typeof parsed.message === "string" ? parsed.message : bodyText.slice(0, 200);

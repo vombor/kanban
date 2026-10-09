@@ -9,7 +9,7 @@ import type { PipelineConfig, WorkspacePipelineSettings } from "../config/pipeli
 import { RUNTIME_AGENT_CATALOG } from "../core/agent-catalog";
 import type { RuntimeAgentId } from "../core/api-contract";
 import { parseDeniedCommandPatterns } from "../guardrails/command-patterns";
-import { withPlanApprovalDenies } from "../guardrails/task-guardrails";
+import { withBuiltInDenies } from "../guardrails/task-guardrails";
 import {
 	type AgentGuardrailReport,
 	describeAgentGuardrails,
@@ -150,10 +150,7 @@ export async function checkGuardrails(
 		return [...findings, ...workspaceFindings];
 	}
 	// The shared branches here are the configured ones; each card adds its base branch.
-	const deniedCommands = parseDeniedCommandPatterns(
-		withPlanApprovalDenies(settings.denyCommands),
-		settings.sharedBranches,
-	);
+	const deniedCommands = parseDeniedCommandPatterns(withBuiltInDenies(settings.denyCommands), settings.sharedBranches);
 	const installed: RuntimeAgentId[] = [];
 	for (const entry of RUNTIME_AGENT_CATALOG) {
 		if (!deps.isInstalled(entry.binary)) {

@@ -38,6 +38,7 @@ import {
 	filterExistingRepos,
 } from "./doctor-checks";
 import type { DoctorFinding, DoctorFixOutcome, DoctorReport } from "./doctor-report";
+import { checkGitHubApp, type GitHubAppCheckDeps } from "./github-app-checks";
 import { checkGitHubAuth, type GitHubAuthCheckDeps } from "./github-auth-checks";
 import { checkGuardrails, type GuardrailCheckDeps } from "./guardrail-checks";
 import { checkHomeLocation } from "./home-location-checks";
@@ -58,6 +59,8 @@ export interface DoctorOptions {
 	deepDeps?: DeepCheckDeps;
 	guardrailDeps?: GuardrailCheckDeps;
 	githubAuthDeps?: GitHubAuthCheckDeps;
+	/** Test hook: the GitHub App rows' token source (a fake GitHub), file modes and remotes. */
+	githubAppDeps?: GitHubAppCheckDeps;
 	/** Test hook: the fetch the Lemonade models row asks Lemonade with. */
 	fetch?: typeof fetch;
 	/** Test hook: the issue import rows' remotes, state and auth source. */
@@ -136,6 +139,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
 		})),
 	);
 	findings.push(...(await checkGitHubAuth(options.githubAuthDeps)));
+	findings.push(...(await checkGitHubApp(config.github, liveEntries, options.githubAppDeps)));
 	const clineModelsPath = getClineModelsSettingsPath(config.agents.cline.dataDir);
 	findings.push(
 		...(await checkClineLemonadeModels({

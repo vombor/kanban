@@ -576,6 +576,26 @@ const isolationSectionSchema = z
 	.strict();
 export type IsolationSettings = z.infer<typeof isolationSectionSchema>;
 
+/** The repository Kanban bug reports go to; every project may file and comment there (`github.sharedRepos`). */
+export const KANBAN_BUG_REPORT_REPO = "vombor/kanban";
+export const DEFAULT_GITHUB_ATTRIBUTION = "— {project} · {role} (Kanban)";
+export const DEFAULT_GITHUB_ATTRIBUTION_WITHOUT_ROLE = "— {project} (Kanban)";
+
+// The machine's Kanban GitHub App (src/github-app/, docs/fork/github-bots.md). Every issue and comment Kanban posts
+// for a project ends with an attribution line naming the project (`{project}`, its workspace id) and, when known,
+// the poster's role (`{role}`: orchestrator, dev, qa, plan, user); `attributionWithoutRole` is used when there is
+// none (Kanban's own comments). An agent reaches its project's own GitHub repositories plus `sharedRepos`.
+const githubSectionSchema = z
+	.object({
+		attribution: z.string().min(1).default(DEFAULT_GITHUB_ATTRIBUTION),
+		attributionWithoutRole: z.string().min(1).default(DEFAULT_GITHUB_ATTRIBUTION_WITHOUT_ROLE),
+		sharedRepos: z
+			.array(z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u, "expected owner/name"))
+			.default(() => [KANBAN_BUG_REPORT_REPO]),
+	})
+	.strict();
+export type GitHubSettings = z.infer<typeof githubSectionSchema>;
+
 const SECTION_SCHEMAS = {
 	sessionSync: sessionSyncSectionSchema,
 	pipeline: pipelineSectionSchema,
@@ -587,6 +607,7 @@ const SECTION_SCHEMAS = {
 	guardrails: guardrailsSectionSchema,
 	projects: projectsSectionSchema,
 	isolation: isolationSectionSchema,
+	github: githubSectionSchema,
 } as const;
 
 type SectionName = keyof typeof SECTION_SCHEMAS;

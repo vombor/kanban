@@ -45,9 +45,16 @@ export function renderClaudeMdSection(): string {
   a combination vetted for that role (\`kanban models list --project <path>\`). For another one, run
   \`kanban models vet --agent <a> [--provider <p>] [--model <m>] --role dev|qa|plan\` and give the Kanban project its
   proposal; provisional combinations are the user's to allow.
+- GitHub issues and comments go out as Kanban's GitHub App, signed with your project: \`kanban github issue create
+  --repo <owner/name> --title <title> --body-file <file>\`, \`kanban github issue comment --repo <owner/name> --number <n>
+  --body-file <file>\`, \`edit\`, \`close\`. Never \`gh issue create|comment|edit|close\` or \`gh api\` writes; reading with gh
+  (\`gh issue list|view\`) is fine. Kanban bug reports: search first (\`gh issue list --repo vombor/kanban --search
+  "<words>"\`), comment on an existing issue with \`kanban github issue comment --repo vombor/kanban --number <n>
+  --body-file <file>\`, else \`kanban github issue create --repo vombor/kanban --title "<short summary>" --body-file <file>\`.
 
 **If you are a task agent on a Kanban card:** follow your card prompt. Don't run \`kanban doctor --fix\`,
 \`kanban setup\`, \`kanban kit apply\` or \`kanban config import-kit\` unless the prompt says so; \`kanban kit set\` is
-the orchestrator's (Kanban refuses it from a card).
+the orchestrator's (Kanban refuses it from a card). For GitHub issues and comments use \`kanban github issue ...\`,
+never \`gh issue\` writes.
 `;
 }

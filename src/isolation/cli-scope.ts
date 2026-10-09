@@ -71,6 +71,8 @@ export const USER_ONLY_COMMANDS = [
 	"kit migrate-overrides",
 	// Lets a project route to combinations the vetted model registry hasn't vetted yet.
 	"models allow-provisional",
+	// Creates the machine's Kanban GitHub App, whose key the server keeps (src/github-app/).
+	"github bot create",
 ] as const;
 
 /** The plan approval refusal (the server's, src/trpc/plans-api.ts, says the same). */

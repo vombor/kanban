@@ -17,8 +17,9 @@ import { getGitStdout } from "../workspace/git-utils";
 import { readSymlinkedIgnoredPaths } from "../workspace/task-worktree";
 import {
 	allowOwnBranchPush,
+	BUILT_IN_DENY_COMMANDS,
 	type DeniedCommandRule,
-	PLAN_APPROVAL_DENY_COMMANDS,
+	GITHUB_ISSUE_DENY_COMMANDS,
 	parseDeniedCommandPatterns,
 } from "./command-patterns";
 
@@ -57,9 +58,13 @@ export interface TaskGuardrails {
 	isolation: SessionIsolation | null;
 }
 
-/** The configured patterns plus the plan-approval rail. */
-export function withPlanApprovalDenies(patterns: readonly string[]): string[] {
-	return [...new Set([...patterns, ...PLAN_APPROVAL_DENY_COMMANDS])];
+/** The prompt line that steers an agent to Kanban's GitHub App for issue writes. */
+export const GITHUB_ISSUE_PROMPT_LINE =
+	"- GitHub issues and comments: file, comment, edit and close them with `kanban github issue create|comment|edit|close --repo <owner/name> ... --body-file <file>`, which posts as Kanban's GitHub App and names this project; never with `gh issue create|comment|edit|close` or `gh api` writes. Reading issues with gh is fine.";
+
+/** The configured patterns plus the built-in rails: plan approval and GitHub issue writes (command-patterns.ts). */
+export function withBuiltInDenies(patterns: readonly string[]): string[] {
+	return [...new Set([...patterns, ...BUILT_IN_DENY_COMMANDS])];
 }
 
 export interface ResolveTaskGuardrailsInput {
@@ -153,7 +158,7 @@ async function readGitCommonDir(cwd: string): Promise<string | null> {
 }
 
 /**
- * The orchestrator's guardrails under project isolation: the isolation denies plus the plan-approval rail, writes
+ * The orchestrator's guardrails under project isolation: the isolation denies plus the built-in rails, writes
  * anywhere in its own project (it reviews, lands and fixes its cards' worktrees). Null without isolation.
  */
 export async function resolveOrchestratorGuardrails(input: {
@@ -175,7 +180,7 @@ export async function resolveOrchestratorGuardrails(input: {
 		linkedDirs: [],
 		extraWritableDirs: [],
 		sharedBranches: [],
-		deniedCommands: parseDeniedCommandPatterns(PLAN_APPROVAL_DENY_COMMANDS, []),
+		deniedCommands: parseDeniedCommandPatterns(BUILT_IN_DENY_COMMANDS, []),
 		ownBranchPush: false,
 		isolation: input.isolation,
 	};
@@ -239,7 +244,7 @@ export async function resolveTaskGuardrails(input: ResolveTaskGuardrailsInput): 
 		extraWritableDirs,
 		sharedBranches,
 		deniedCommands: parseDeniedCommandPatterns(
-			withPlanApprovalDenies([...settings.denyCommands, ...workspace.guardrails.extraDenyCommands]),
+			withBuiltInDenies([...settings.denyCommands, ...workspace.guardrails.extraDenyCommands]),
 			sharedBranches,
 		),
 		ownBranchPush: input.gitAction === "pr" && settings.prCardPush === "own-branch",
@@ -289,6 +294,9 @@ export function buildGuardrailPromptNote(
 		if (rule.sharedDestination) {
 			return `${rule.pattern.replace(/\s*\{shared-dest\}$/u, "")} into a shared branch (a refspec <src>:<shared branch>)`;
 		}
+		if (rule.issuesApiWrite) {
+			return "gh api calls that write an issue or issue comment";
+		}
 		return rule.pattern.replaceAll("{shared}", "<shared branch>");
 	});
 	const lines = [
@@ -298,6 +306,9 @@ export function buildGuardrailPromptNote(
 			: `- Never edit the main checkout ${guardrails.projectPath} or another card's worktree.`,
 		`- Never run: ${patterns.join("; ")}. Shared branches: ${shared}. Never rebase, reset or move them; rebasing your own branch onto them is fine.`,
 	];
+	if (rules.some((rule) => GITHUB_ISSUE_DENY_COMMANDS.includes(rule.pattern))) {
+		lines.push(GITHUB_ISSUE_PROMPT_LINE);
+	}
 	if (unenforced.length > 0) {
 		lines.push(`- Not blocked for you (${unenforced.join(", ")}), so these rules rely on you.`);
 	}

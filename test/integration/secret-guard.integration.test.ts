@@ -125,6 +125,26 @@ describe.sequential("scripts/secret-guard.sh", () => {
 		expect(result.stderr).not.toContain(pat);
 	});
 
+	it("knows the Kanban GitHub App's private key lines as secret values, without printing them", () => {
+		// A key line without the BEGIN header: only the secrets file can make this a hit.
+		const keyLine = "MIIEowIBAAKCAQEAplainfakekeyline0123456789abcdef";
+		const secretsDir = join(env.KANBAN_HOME ?? "", "secrets");
+		mkdirSync(secretsDir, { recursive: true });
+		writeFileSync(
+			join(secretsDir, "github-app.json"),
+			JSON.stringify({
+				privateKey: `-----BEGIN RSA ${"PRIVATE"} KEY-----\n${keyLine}\n-----END RSA ${"PRIVATE"} KEY-----\n`,
+			}),
+		);
+		const commit = commitFile("leak.txt", `${keyLine}\n`, "leak");
+
+		const result = runGuard(["--scan", "HEAD"]);
+
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain(`commit ${commit.slice(0, 10)} adds a secret value used on this machine`);
+		expect(result.stderr).not.toContain(keyLine);
+	});
+
 	it("knows Copilot's token from COPILOT_GITHUB_TOKEN as a secret value", () => {
 		const token = "plain-copilot-value-1234567890";
 		const commit = commitFile("copilot.txt", `copilot: ${token}\n`, "copilot");

@@ -22,6 +22,9 @@ import {
 	getKanbanRuntimeTls,
 	isKanbanRemoteHost,
 } from "../core/runtime-endpoint";
+import { writeGitHubAppCredentials } from "../github-app/app-credentials";
+import { createGitHubAppCreationFlow } from "../github-app/app-manifest";
+import { getSharedGitHubAppTokenSource } from "../github-app/installation-tokens";
 import { createIsolationService, type IsolationService } from "../isolation/isolation-service";
 import { createMessageNoticeQueue } from "../isolation/message-notices";
 import { applyIssueSync } from "../issues/issue-apply";
@@ -54,6 +57,7 @@ import { DEFAULT_REVIEW_SETTLE_MS } from "../terminal/review-settle";
 import type { TerminalSessionManager } from "../terminal/session-manager";
 import { createTerminalWebSocketBridge } from "../terminal/ws-server";
 import { type RuntimeTrpcContext, type RuntimeTrpcWorkspaceScope, runtimeAppRouter } from "../trpc/app-router";
+import { createGitHubApi } from "../trpc/github-api";
 import { createHooksApi } from "../trpc/hooks-api";
 import { createIsolationApi } from "../trpc/isolation-api";
 import { createKitSettingsApi } from "../trpc/kit-settings-api";
@@ -68,6 +72,7 @@ import {
 	getTaskWorktreeCandidatePaths,
 } from "../workspace/task-worktree";
 import { getWebUiDir, normalizeRequestPath, readAsset } from "./assets";
+import { createGitHubAppRequestHandler } from "./github-app-route";
 import { handleHttpRequest, handleSocketUpgrade } from "./middleware";
 import { createModelListsRequestHandler } from "./model-lists-route";
 import { createOrphanProcessSweeper } from "./orphan-process-sweeper";
@@ -360,6 +365,22 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		ports: shortcutPorts,
 		onChanged: (workspaceId) => deps.runtimeStateHub.broadcastProjectShortcutsUpdated(workspaceId),
 	});
+	const githubAppTokenSource = getSharedGitHubAppTokenSource();
+	const githubAppCreationFlow = createGitHubAppCreationFlow({
+		writeCredentials: async (credentials) => await writeGitHubAppCredentials(credentials),
+		log: deps.warn,
+	});
+	const githubApi = createGitHubApi({
+		tokenSource: githubAppTokenSource,
+		flow: githubAppCreationFlow,
+		log: isolation.log,
+		warn: deps.warn,
+	});
+	const handleGitHubAppRequest = createGitHubAppRequestHandler({
+		flow: githubAppCreationFlow,
+		tokenSource: githubAppTokenSource,
+		webUiDir,
+	});
 
 	const handleWatchdogRequest = createWatchdogActionHandler({
 		getWorkspacePathById: deps.workspaceRegistry.getWorkspacePathById,
@@ -450,6 +471,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			plansApi,
 			kitSettingsApi,
 			shortcutsApi,
+			githubApi,
 			runtimeApi,
 			workspaceApi: createWorkspaceApi({
 				ensureTerminalManagerForWorkspace: deps.ensureTerminalManagerForWorkspace,
@@ -533,6 +555,11 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			// Model lists are fetched by agent CLIs (Cline's modelsSourceUrl), which have no session cookie or token.
 			// They hold only model ids and labels, so they are served ahead of the passcode gate.
 			if (await handleModelListsRequest(req, res, pathname)) {
+				return;
+			}
+			// The GitHub App's manifest flow: GitHub's redirect carries no session cookie; its one-time state
+			// authorizes it (src/server/github-app-route.ts).
+			if (await handleGitHubAppRequest(req, res, pathname)) {
 				return;
 			}
 

@@ -31,6 +31,11 @@ Create a **classic** PAT (Settings → Developer settings → Personal access to
 
 `GITHUB_TOKEN` is accepted as a fallback for `GH_TOKEN` in the container, but set `GH_TOKEN`.
 
+GitHub issues and comments are the other exception: agents and Kanban's own issue comments post as the machine's
+Kanban GitHub App, signed with the project, and fall back to the PAT only until the user creates the app
+([github-bots.md](github-bots.md)). The app's private key is in `<home>/secrets/github-app.json` (0600), never in an env
+variable; secret-guard knows its lines.
+
 The Bedrock key `AWS_BEARER_TOKEN_BEDROCK` (with `AWS_REGION`) comes in through the same podman-secret route
 (`Secret=<name>,type=env,target=AWS_BEARER_TOKEN_BEDROCK`) and is handled like `GH_TOKEN`: pipeline checks never see
 it and secret-guard knows its value. `AWS_REGION` is not a secret and stays everywhere. Cline's TUI, which every card

@@ -116,6 +116,7 @@ describe("applyCliSessionScope", () => {
 				"cline store-bedrock-key",
 				"cline remove-bedrock-key",
 				"kit migrate-overrides",
+				"github bot create",
 			]) {
 				expect(
 					await applyCliSessionScope({

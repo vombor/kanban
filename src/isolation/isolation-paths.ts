@@ -11,6 +11,7 @@ import type { PipelineConfig } from "../config/pipeline-config";
 import { isPathInside } from "../guardrails/task-guardrails";
 import {
 	getBoardBackupsPath,
+	getKanbanSecretsPath,
 	getKanbanWorkspaceDataPath,
 	getKanbanWorkspacesRootPath,
 	getLegacyKitDefaultDataRootPath,
@@ -26,7 +27,7 @@ export interface SessionIsolation {
 	projectPath: string;
 	/** The project's Kanban data dir (`<home>/data/<ws>`): the orchestrator writes its plan and notes there. */
 	dataDir: string;
-	/** Other projects' checkouts, worktrees and Kanban data: no reads, no writes. */
+	/** Other projects' checkouts, worktrees and Kanban data, and Kanban's secrets dir: no reads, no writes. */
 	deniedDirs: string[];
 	/** Machine-wide config: no writes (getMachineConfigPaths). */
 	machineConfigPaths: string[];
@@ -104,6 +105,8 @@ export async function resolveSessionIsolation(input: ResolveSessionIsolationInpu
 		addUnique(deniedDirs, join(getKanbanWorkspacesRootPath(), entry.workspaceId));
 		addUnique(deniedDirs, getBoardBackupsPath(entry.workspaceId));
 	}
+	// Kanban's own secrets (the GitHub App's private key): no session reads them, its own project's included.
+	addUnique(deniedDirs, getKanbanSecretsPath());
 	return {
 		workspaceId: input.workspaceId,
 		projectPath,
