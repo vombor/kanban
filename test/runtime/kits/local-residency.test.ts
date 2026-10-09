@@ -15,7 +15,7 @@ function resolveBuiltIn(name: string, overrides: Record<string, unknown> = {}) {
 	return resolved.kit;
 }
 
-const TEAM_LOCAL_SET = ["GLM-4.7-Flash-GGUF", "Devstral-Small-2507-GGUF", "Qwen3.6-35B-A3B-MTP-GGUF"];
+const TEAM_LOCAL_SET = ["GLM-4.7-Flash-GGUF", "Gemma-4-12B-it-GGUF", "Qwen3.6-35B-A3B-MTP-GGUF"];
 
 describe("local residency", () => {
 	it("counts the local models team-local runs at once: dev (= plan), QA and fallback", () => {

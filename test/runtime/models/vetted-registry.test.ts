@@ -43,8 +43,12 @@ describe("the vetted model registry (models/vetted.json)", () => {
 		// Vetted per role: Haiku is not vetted for dev, Opus only provisional for dev.
 		expect(status("cline", "bedrock", "us.anthropic.claude-haiku-5-5", "dev")).toBe("unknown");
 		expect(status("cline", "bedrock", "us.anthropic.claude-opus-5-5", "dev")).toBe("provisional");
-		// team-local's Lemonade models are provisional until vetted.
-		expect(status("cline", "lemonade", "GLM-4.7-Flash-GGUF", "dev")).toBe("provisional");
+		// team-local's routes, vetted by kanban models vet (2026-10-09); Devstral stays provisional.
+		expect(status("cline", "lemonade", "GLM-4.7-Flash-GGUF", "dev")).toBe("vetted");
+		expect(status("cline", "lemonade", "GLM-4.7-Flash-GGUF", "plan")).toBe("vetted");
+		expect(status("cline", "lemonade", "GLM-4.7-Flash-GGUF", "qa")).toBe("provisional");
+		expect(status("cline", "lemonade", "Gemma-4-12B-it-GGUF", "qa")).toBe("vetted");
+		expect(status("cline", "lemonade", "Qwen3.6-35B-A3B-MTP-GGUF", "dev")).toBe("vetted");
 		expect(status("cline", "lemonade", "Devstral-Small-2507-GGUF", "qa")).toBe("provisional");
 		// Another provider is another combination.
 		expect(status("cline", "lemonade", "us.anthropic.claude-haiku-5-5", "qa")).toBe("unknown");

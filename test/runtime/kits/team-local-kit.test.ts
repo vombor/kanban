@@ -11,6 +11,7 @@ import { PROVISIONAL_ALLOWED } from "../../utilities/routing-vetting";
 
 const GLM = { provider: "lemonade", model: "GLM-4.7-Flash-GGUF" };
 const DEVSTRAL = { provider: "lemonade", model: "Devstral-Small-2507-GGUF" };
+const GEMMA = { provider: "lemonade", model: "Gemma-4-12B-it-GGUF" };
 const QWEN = { provider: "lemonade", model: "Qwen3.6-35B-A3B-MTP-GGUF" };
 
 function resolveTeamLocal(overrides: Record<string, unknown> = {}) {
@@ -94,24 +95,27 @@ describe("team-local kit", () => {
 				round: 1,
 				history: createCardHistory(),
 			});
-		expect(qaFor(GLM)).toMatchObject({ kind: "qa", agentId: "cline", model: DEVSTRAL, route: null });
-		expect(qaFor(QWEN)).toMatchObject({ kind: "qa", model: DEVSTRAL });
-		expect(qaFor(DEVSTRAL)).toMatchObject({ kind: "qa", model: GLM, route: "qa.routes[0]" });
+		expect(qaFor(GLM)).toMatchObject({ kind: "qa", agentId: "cline", model: GEMMA, route: null });
+		expect(qaFor(QWEN)).toMatchObject({ kind: "qa", model: GEMMA });
+		expect(qaFor(DEVSTRAL)).toMatchObject({ kind: "qa", model: GEMMA, route: null });
 		expect(qaFor({ provider: "lemonade", model: "DeepSeek-V4-Flash-0731-GGUF-BF16" })).toMatchObject({
 			kind: "qa",
-			model: DEVSTRAL,
+			model: GEMMA,
 		});
 	});
 
 	it("refuses QA by the dev model's own family", () => {
-		const policy = createRoutingPolicy(resolveTeamLocal({ "qa.routes": [] }).kit, PROVISIONAL_ALLOWED);
+		const policy = createRoutingPolicy(resolveTeamLocal().kit, PROVISIONAL_ALLOWED);
 		expect(
 			policy.qaPolicy({
-				dev: createEffectiveCard({ agentId: "cline", model: DEVSTRAL }),
+				dev: createEffectiveCard({
+					agentId: "cline",
+					model: { provider: "lemonade", model: "Gemma-3-27B-it-GGUF" },
+				}),
 				round: 1,
 				history: createCardHistory(),
 			}),
-		).toMatchObject({ kind: "none", reason: expect.stringContaining("(mistral)") });
+		).toMatchObject({ kind: "none", reason: expect.stringContaining("(google)") });
 	});
 
 	it("reworks on the same model, then hands the task to the fallback local model at once, and waits out Lemonade outages", () => {
@@ -159,7 +163,7 @@ describe("team-local kit", () => {
 		});
 	});
 
-	it("shows in kanban kit show without refused QA routes, with the settings it needs", () => {
+	it("shows in kanban kit show with every route vetted, with the settings it needs", () => {
 		const resolved = resolveTeamLocal();
 		const report = buildKitReport({
 			kitName: "team-local",
@@ -168,15 +172,19 @@ describe("team-local kit", () => {
 			selectedAgentId: "claude",
 			maxFailRounds: 3,
 			outageMaxMin: 360,
-			config: parsePipelineConfig({ workspaces: { local: { models: { allowProvisional: true } } } }).config,
+			config: parsePipelineConfig({}).config,
 		});
-		expect(report.warnings).toEqual([]);
+		// Every route is vetted (strict config). The one refusal is a sample card built on the QA model itself:
+		// no QA model of another family is vetted, so a card someone builds on Gemma waits in Review.
+		expect(report.warnings).toEqual([
+			expect.stringContaining("Gemma-4-12B-it-GGUF is from the dev card's vendor (google)"),
+		]);
 		expect(report.recommendedLandingMode).toBe("qa");
 		const text = formatKitReport(report).join("\n");
 		expect(text).toContain(
 			"New dev cards (when the creator sets no agent):\n  cline on lemonade/GLM-4.7-Flash-GGUF (tier dev)",
 		);
-		expect(text).toContain("cline on Devstral-Small-2507-GGUF: cline on lemonade/GLM-4.7-Flash-GGUF [qa.routes[0]]");
+		expect(text).not.toContain("[qa.routes[");
 		expect(text).toContain("Settings this kit needs (config.json; the kit never applies them):");
 		expect(text).toContain('  SET     agents.cline.turnDetector.mode = "on" (now "report"):');
 	});

@@ -21,9 +21,9 @@ team is a different kit.
 Every agent + provider + model a kit or a project routes a role to must be in the **vetted model registry**
 (`models/vetted.json`, [MODELS.md](MODELS.md)) for that role: vetted, or provisional where the user allowed
 provisional combinations for the project. The kit gives each role a default; the project picks another within the
-registry. The built-in `team` kit's own defaults (Cline on sol, Codex's and Claude's default models) and all of
-`team-local`'s Lemonade models are provisional, so a project on them needs `--allow-provisional` (or its own vetted
-role models, as foo has).
+registry. The built-in `team` kit's own defaults (Cline on sol, Codex's and Claude's default models) are provisional,
+so a project on them needs `--allow-provisional` (or its own vetted role models, as foo has). `team-local`'s routes
+(GLM dev and plan, Gemma QA, Qwen fallback) are vetted (2026-10-09).
 
 Code: `src/kits/kit-schema.ts` (schema), `src/kits/kit-roles.ts` (roles and the fallback flow),
 `src/kits/project-settings.ts` (what a project may set), `src/kits/kit-legacy-keys.ts` (keys from before the split), `src/kits/resolve-kit.ts` (resolver), `src/kits/policy.ts` (the one
@@ -416,18 +416,17 @@ override (plan §12).
 
 `kits/team-local.json`: the team workflow on the local Lemonade server (http://localhost:13305/api/v1, OpenAI
 compatible) through the Cline CLI with provider `lemonade`. No paid or cloud provider appears anywhere in it
-(`test/runtime/kits/team-local-kit.test.ts` checks every model and agent). Every model pick is **provisional**
-until `kanban bench calibrate` picks the final ones on the project.
+(`test/runtime/kits/team-local-kit.test.ts` checks every model and agent). Every route is **vetted** for its role
+(`kanban models vet`, 2026-10-09, cline 3.0.70); `kanban bench calibrate` can still compare candidates on the project.
 
-| Role | Model (provisional) | Why |
+| Role | Model (vetted) | Why |
 |---|---|---|
 | Dev (`roles.dev`: tier `dev`), plan cards (`roles.plan`, Cline `--plan`) | `GLM-4.7-Flash-GGUF` | tool-calling; a 30B-A3B MoE, so fast on one GPU; MLA attention keeps its KV cache small (131072 context in the memory budget, max 202752); already Cline's Lemonade default. Plans on the dev model need no model swap |
-| QA (`roles.qa`) | `Devstral-Small-2507-GGUF` | another family (Mistral) than GLM, coding + tool-calling; 65536 context in the memory budget (its KV cache is the largest). Text-only |
-| QA of Mistral-built cards (`qa.routes[0]`) | `GLM-4.7-Flash-GGUF` | Devstral can't review its own family |
-| Fallback dev model (`roles.fallback`: tier `senior`) | `Qwen3.6-35B-A3B-MTP-GGUF` | a third family, neither the dev nor the QA model, so its sibling is still reviewed by Devstral. 65536 context as Lemonade loads it (its KV cache is small, so a bigger one costs little memory) |
+| QA (`roles.qa`) | `Gemma-4-12B-it-GGUF` | another family (google) than every dev model, vision + tool-calling, small (12B, 6.8 GB); 131072 context. Replaced Devstral, which stalled twice as notes' QA (2026-10-09). No `qa.routes`: no QA model of another family is vetted, so a card someone builds on Gemma itself gets no QA (`kit show` warns) |
+| Fallback dev model (`roles.fallback`: tier `senior`) | `Qwen3.6-35B-A3B-MTP-GGUF` | a third family, neither the dev nor the QA model, so its sibling is still reviewed by Gemma. 131072 context as Lemonade loads it (its KV cache is small) |
 
 The other coding models are candidates in `tiers` (`Devstral`, `Qwen3.6` and `DeepSeek-V4-Flash-0731-GGUF-BF16` for
-dev; `GLM`, `Qwen3.6` and `Gemma-4-12B-it-GGUF` for QA, the last two with vision). `LMX-Omni-52B-Halo` is
+dev; `Devstral` and `Qwen3.6` for QA, both provisional). `LMX-Omni-52B-Halo` is
 rejected in the vetted model registry: it is a Lemonade collection (Qwen3.6 + image + speech models) without the tool-calling label, so Cline's
 Lemonade list doesn't offer it.
 
@@ -452,7 +451,7 @@ Lemonade list doesn't offer it.
 
 ### One GPU: keep dev, QA and fallback loaded
 
-team-local runs three local models at the same time: GLM (dev and plan), Devstral (QA) and Qwen3.6 (fallback).
+team-local runs three local models at the same time: GLM (dev and plan), Gemma (QA) and Qwen3.6 (fallback).
 Lemonade keeps at most `max_loaded_models` LLMs resident (`/api/v1/health` `max_models.llm`, default 1). When it is
 full it evicts the least recently used one, so with one slot every dev ↔ QA switch reloads a model. Raise it to 3:
 
@@ -482,18 +481,16 @@ from each model's architecture config:
 | Model | Context | Weights | KV cache | Total |
 |---|---|---|---|---|
 | GLM-4.7-Flash (MLA, 54 KB/token) | 131072 | 16.3 GB | 7.1 GB | 23.4 GB |
-| Devstral-Small-2507 (8 KV heads × 40 layers, 160 KB/token) | 65536 | 13.3 GB | 10.7 GB | 24.0 GB |
-| Qwen3.6-35B-A3B (10 of 40 layers full attention, 20 KB/token) | 65536 | 22.1 GB | 1.3 GB | 23.4 GB |
+| Gemma-4-12B (8 of 48 layers full attention, 1 KV head of 512, 16 KB/token; 40 sliding-window layers of 1024 tokens) | 131072 | 6.8 GB | 2.4 GB | 9.2 GB |
+| Qwen3.6-35B-A3B (10 of 40 layers full attention, 20 KB/token) | 131072 | 22.1 GB | 2.6 GB | 24.7 GB |
 | compute buffers (about 1.5 GB each) | | | | 4.5 GB |
-| **sum** | | | | **about 75 GB** |
+| **sum** | | | | **about 62 GB** |
 
-Lemonade's current contexts (GLM 202752, Devstral 131072) add about 15 GB, which puts the total near 90 GB, over the
-budget. Set the two contexts in Lemonade (`--save-options` replaces the model's stored options, so repeat the
-backend), then let Cline's models.json follow:
+GLM at its max context (202752) adds about 4 GB. Keep it at 131072 in Lemonade (`--save-options` replaces the
+model's stored options, so repeat the backend), then let Cline's models.json follow:
 
 ```sh
 lemonade load GLM-4.7-Flash-GGUF --ctx-size 131072 --llamacpp vulkan --save-options
-lemonade load Devstral-Small-2507-GGUF --ctx-size 65536 --llamacpp vulkan --save-options
 kanban cline apply-lemonade-models --origin <kanban origin>    # doctor's "cline lemonade models" row prints it
 ```
 
@@ -511,8 +508,8 @@ applied for you:
 
 The other local gotchas:
 
-- **Images.** Devstral and GLM are text-only. `qa.promptNotes.screenshotFallback` tells QA never to open PNGs and to
-  judge from the screenshot tool's text reports.
+- **Images.** GLM is text-only; the QA model (Gemma) and the fallback (Qwen3.6) read images, so the kit has no
+  `qa.promptNotes.screenshotFallback`. Recovery clears and resends an image a model rejects (too large or no vision).
 - **Context overflow.** Cline compacts at 0.9 × the `contextWindow` in its models.json, so that window must be the
   one Lemonade really loads. `kanban doctor`'s "cline lemonade models" row compares them, and
   `kanban cline apply-lemonade-models --origin <origin>` (the user's command) fixes models.json. Beyond that,
@@ -524,8 +521,8 @@ The other local gotchas:
 
 ```sh
 kanban project create /projects/<name>                    # or: kanban project add /projects/<name>
-kanban kit apply team-local --project /projects/<name> --landing qa --allow-provisional --dry-run
-kanban kit apply team-local --project /projects/<name> --landing qa --allow-provisional   # its models are provisional until vetted
+kanban kit apply team-local --project /projects/<name> --landing qa --dry-run
+kanban kit apply team-local --project /projects/<name> --landing qa   # every route is vetted
 kanban task reassign --column backlog --project-path /projects/<name>   # existing Backlog cards onto the kit
 kanban kit show --project /projects/<name>                # routing + "Settings this kit needs"
 kanban doctor /projects/<name>                            # warns about unmet settings and missing models

@@ -170,7 +170,8 @@ describe("kanban models vet: the runner", () => {
 			evidence: { run: "r1" },
 		});
 		// Other roles' vettings and the capabilities already recorded stay.
-		expect(proposal.entry.roles.plan?.status).toBe("provisional");
+		expect(proposal.entry.roles.plan?.status).toBe("vetted");
+		expect(proposal.entry.roles.qa?.status).toBe("provisional");
 		expect(proposal.entry.capabilities).toMatchObject({ toolUse: true, turnEnd: true, contextWindow: 131072 });
 		expect(formatVetReport(result, proposal, { repoPath: REPO })).toContain("Outcome: **PASSED**");
 	});
@@ -308,8 +309,10 @@ describe("kanban models vet: harness failures (the first runs, 2026-10-09)", () 
 			harness: true,
 			detail: expect.stringMatching(/^provider timeout while lemonade loads .*\(still after 2 retries\)$/u),
 		});
+		// A registry without the combination's entry, so no recorded capability carries over.
+		const registry = getVettedRegistry();
 		const proposal = buildVetProposal(
-			getVettedRegistry(),
+			{ ...registry, entries: registry.entries.filter((entry) => entry.model !== "GLM-4.7-Flash-GGUF") },
 			{ ...result, toolUse: { native: 0, textual: 0, turns: 1 } },
 			null,
 		);

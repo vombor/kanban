@@ -62,7 +62,14 @@ the `codex + bedrock + sol` entry). When several entries fit, the least permissi
 | cline + bedrock + us.amazon.nova-2-lite-v1:0 | provisional | provisional | |
 | codex + its own default model | | provisional (team kit's `roles.qa`) | |
 | claude + its own default model | | | provisional (team kit's `roles.plan`) |
-| cline + lemonade + GLM-4.7-Flash-GGUF, Devstral-Small-2507-GGUF, Qwen3.6-35B-A3B-MTP-GGUF, Gemma-4-12B-it-GGUF, DeepSeek-V4-Flash-0731-GGUF-BF16 | provisional (team-local, until vetted) | | |
+| cline + lemonade + GLM-4.7-Flash-GGUF | vetted (team-local's dev) | provisional | vetted (team-local's planner) |
+| cline + lemonade + Gemma-4-12B-it-GGUF | | vetted (team-local's QA) | |
+| cline + lemonade + Qwen3.6-35B-A3B-MTP-GGUF | vetted (team-local's fallback) | provisional | provisional |
+| cline + lemonade + Devstral-Small-2507-GGUF | provisional | provisional (stalled twice as notes' QA, not re-vetted) | |
+| cline + lemonade + DeepSeek-V4-Flash-0731-GGUF-BF16 | provisional | | |
+
+The team-local entries were vetted by `kanban models vet` on cline 3.0.70 (2026-10-09; run ids in each entry). The
+first runs that morning failed for harness reasons (fixed in 3eef296b) and are not recorded as rejections.
 
 Rejected on every agent and provider (the kits' old `dropped` lists): `qwen.qwen3-next-80b-a3b`,
 `openai.gpt-oss-120b-1:0`, `nvidia.nemotron-super-3-120b`, `us.openai.gpt-6-luna`, `us.anthropic.claude-sonnet-5-5`,

@@ -194,28 +194,34 @@
 			"model": "GLM-4.7-Flash-GGUF",
 			"roles": {
 				"dev": {
-					"status": "provisional",
+					"status": "vetted",
 					"at": "2026-10-09",
-					"cliVersion": null,
+					"cliVersion": "3.0.70",
 					"evidence": {
-						"run": null,
-						"summary": "team-local's dev pick before calibration: tool-calling label, 30B-A3B MoE, already Cline's Lemonade default"
+						"run": "2026-10-09-dev-cline-0n3nm",
+						"summary": "kanban models vet dev smoke test passed (file read, edit, tests untouched, test suite, shell command, commit) in 19 min, $0.00, 10 native tool calls; team-local's dev model"
 					}
 				},
 				"plan": {
-					"status": "provisional",
+					"status": "vetted",
 					"at": "2026-10-09",
-					"cliVersion": null,
-					"evidence": { "run": null, "summary": "team-local's planner (the dev model in Cline's plan mode)" }
+					"cliVersion": "3.0.70",
+					"evidence": {
+						"run": "2026-10-09-plan-cline-6w58b",
+						"summary": "kanban models vet plan smoke test passed (plan written, 3 numbered steps naming their files, file read, no code change) in 15 min, $0.00, 4 native tool calls; the run just before it (2026-10-09-plan-cline-zirxf) wrote no PLAN.md because its only model reply was \"Response stream ended without a finish reason\" (0 tool calls: a cut provider stream, not a planning failure)"
+					}
 				},
 				"qa": {
 					"status": "provisional",
 					"at": "2026-10-09",
 					"cliVersion": null,
-					"evidence": { "run": null, "summary": "team-local's QA for Mistral-built cards (qa.routes)" }
+					"evidence": {
+						"run": null,
+						"summary": "was team-local's QA for Mistral-built cards (qa.routes) until Gemma-4-12B took QA (2026-10-09); not vetted for qa"
+					}
 				}
 			},
-			"capabilities": { "images": false, "contextWindow": 131072, "turnEnd": false },
+			"capabilities": { "toolUse": true, "images": false, "contextWindow": 131072, "turnEnd": true },
 			"note": "Lemonade/llama.cpp ends Cline turns without the TaskComplete hook: needs agents.cline.turnDetector.mode on (team-local recommends it)"
 		},
 		{
@@ -229,7 +235,7 @@
 					"cliVersion": null,
 					"evidence": {
 						"run": null,
-						"summary": "team-local's QA pick before calibration: another family (Mistral) than the GLM dev model"
+						"summary": "stalled twice as notes' QA (2026-10-09, no output); not re-vetted"
 					}
 				},
 				"dev": {
@@ -251,12 +257,12 @@
 			"model": "Qwen3.6-35B-A3B-MTP-GGUF",
 			"roles": {
 				"dev": {
-					"status": "provisional",
+					"status": "vetted",
 					"at": "2026-10-09",
-					"cliVersion": null,
+					"cliVersion": "3.0.70",
 					"evidence": {
-						"run": null,
-						"summary": "team-local's fallback dev model before calibration (a third family)"
+						"run": "2026-10-09-dev-cline-pfomu",
+						"summary": "kanban models vet dev smoke test passed (file read, edit, tests untouched, test suite, shell command, commit) in 6 min, $0.00, 7 native tool calls; team-local's fallback dev model"
 					}
 				},
 				"qa": {
@@ -272,7 +278,7 @@
 					"evidence": { "run": null, "summary": "plan candidate (team-local plan.candidates)" }
 				}
 			},
-			"capabilities": { "images": true, "contextWindow": 65536, "turnEnd": false }
+			"capabilities": { "toolUse": true, "images": true, "contextWindow": 131072, "turnEnd": true }
 		},
 		{
 			"agent": "cline",
@@ -280,13 +286,16 @@
 			"model": "Gemma-4-12B-it-GGUF",
 			"roles": {
 				"qa": {
-					"status": "provisional",
+					"status": "vetted",
 					"at": "2026-10-09",
-					"cliVersion": null,
-					"evidence": { "run": null, "summary": "team-local QA candidate: vision + tool-calling, 12B" }
+					"cliVersion": "3.0.70",
+					"evidence": {
+						"run": "2026-10-09-qa-cline-pop2i",
+						"summary": "kanban models vet qa smoke test passed (verdict file parses, right verdict: FAIL with 1 blocking, file read, no code change) in 5 min, $0.00, 7 native tool calls; team-local's QA"
+					}
 				}
 			},
-			"capabilities": { "images": true, "contextWindow": 65536, "turnEnd": false }
+			"capabilities": { "toolUse": true, "images": true, "contextWindow": 131072, "turnEnd": true }
 		},
 		{
 			"agent": "cline",
