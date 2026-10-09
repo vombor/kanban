@@ -172,8 +172,13 @@ describe("team kit parity with foo's legacy kit.config.json", () => {
 				});
 				expect(answer.action).toBe(testCase.legacy);
 				if (answer.action === "escalate") {
-					// The legacy kit parked escalated cards as "BLOCKED:" and woke the orchestrator; no senior tier.
-					expect(answer).toMatchObject({ to: "orchestrator", requireApproval: true });
+					// The legacy kit parked escalated cards as "BLOCKED:" and woke the orchestrator. Since 2026-10-09 the team
+					// kit hands the card to its fallback role first (user: the fallback is team definition, not a foo
+					// override), without approval; the card is still parked as BLOCKED.
+					expect(answer).toMatchObject({
+						to: { agentId: "cline", model: { provider: "bedrock", model: "us.moonshotai.kimi-k3" } },
+						requireApproval: false,
+					});
 				}
 				if (answer.action === "rework") {
 					expect(answer.clearContext).toBe("auto");

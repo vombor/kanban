@@ -9,12 +9,17 @@ something is done, and the core never decides who does it.
 - Every project is on the built-in **`default`** kit unless its config entry names another one. `default` answers
   "no" to every question, so a project on it behaves like upstream Kanban.
 - **`team`** is the built-in preset for the dev-team workflow (Cline juniors on tier-3 models, cross-vendor QA,
-  same-model rework, escalation to the orchestrator).
+  same-model rework, then a fallback model, then the orchestrator).
 - **`team-local`** is the same workflow on local Lemonade models only (Cline + provider `lemonade`, nothing paid
   or in the cloud), with a fallback local model before the orchestrator. See [The `team-local` kit](#the-team-local-kit).
 - **User kits** live in `<home>/kits/<name>.json`.
 
-Code: `src/kits/kit-schema.ts` (schema), `src/kits/resolve-kit.ts` (resolver), `src/kits/policy.ts` (the one
+A kit is the **team definition**: its roles with a default model each, and the flow. A project changes only its
+**project settings** on top (role models and project facts, [Project settings](#project-settings)); a different
+team is a different kit.
+
+Code: `src/kits/kit-schema.ts` (schema), `src/kits/kit-roles.ts` (roles and the fallback flow),
+`src/kits/project-settings.ts` (what a project may set), `src/kits/kit-legacy-keys.ts` (keys from before the split), `src/kits/resolve-kit.ts` (resolver), `src/kits/policy.ts` (the one
 evaluator), `kits/default.json`, `kits/team.json`, `kits/team-local.json`. Plan: `docs/fork/kit-merge-plan.md` §3.2-§3.4, §4.0.
 
 ## The questions
@@ -47,10 +52,13 @@ The core keeps these guarantees whatever the kit says:
   cap the core still asks the kit, so that it can keep the kit's escalation target.
 - **A rework can't switch model.** It is refused (and escalated) when the card's session ran on a different agent
   or model than the card names, or when there is nothing to resume on that model.
-- **A takeover never repeats itself.** An escalation to a model (a FAIL, an outage) goes to the orchestrator
-  instead when the target is the model the card runs on, or when the card is itself a sibling that took the task
-  over: otherwise the sibling on `escalate.to` would escalate to `escalate.to` again, sibling after sibling.
-- **`requireApproval` parks the card.** It goes to Backlog as `BLOCKED: …` until the orchestrator or the user acts.
+- **A fallback never repeats itself** (#8). A hand-over to the fallback role (a FAIL, a stall, an outage) goes to
+  the orchestrator instead when the fallback is the model the card runs on, when the card is itself a sibling that
+  took the task over (otherwise the fallback sibling would fall back onto the fallback again, sibling after
+  sibling), or when the card races in a runoff (`refuseTakeover()` in `src/pipeline/rework.ts`). No kit can turn
+  this off.
+- **`fallback.requireApproval` parks the sibling.** It waits in Backlog until the orchestrator or the user starts
+  it. Either way the original card goes to Backlog as `BLOCKED: …`.
 - **Only a hold stops a PASS from landing.** The hold is answered by the team kit's `runoffs` feature;
   `kanban task release-hold` is the human way out.
 
@@ -58,9 +66,13 @@ The core keeps these guarantees whatever the kit says:
 
 A key's value comes from the first of these that has it:
 
-1. The workspace's `kit.overrides` in config.json (dotted key → value, e.g. `"qa.blurb"`).
+1. The workspace's project settings: `kit.overrides` in config.json (dotted key → value, e.g. `"qa.blurb"`).
 2. The named kit.
 3. The `default` kit.
+
+A role names a `model` or a `tier`, never both: a layer that sets one drops the other's value from the layers
+below, so a project's `roles.dev.model` replaces the kit's `roles.dev.tier` (its provider then comes from
+`roles.dev.provider`, else the agent's default).
 
 Arrays are replaced, never merged: overriding `qa.routes` replaces the whole list. Nothing is inherited from another
 workspace, and there is no top-level routing key a project could pick up by accident. A workspace without a `kit`
@@ -75,8 +87,9 @@ entry gets `default`. If the named kit is missing, or its overrides don't valida
 }
 ```
 
-`kanban kit show --project <ws>` prints every resolved value with its source (`override`, the kit's name, or
-`default`). The pipeline worker reads the kit and its overrides on every evaluation, so a kit change needs no
+`kanban kit show --project <ws>` prints the team definition (each role's effective agent and model with its
+source, the fallback and its triggers), the project settings with their history, and every resolved value with its
+source (`project`, the kit's name, or `default`). The pipeline worker reads the kit and its overrides on every evaluation, so a kit change needs no
 restart.
 
 The landing mode is a core setting ([CONFIG.md](CONFIG.md)), not a kit key. Applying a kit never changes it.
@@ -92,12 +105,13 @@ user kit file), never a silent no-op. A missing key means "no answer", so the `d
 | `kit` | `1` | schema version | `1` | `1` |
 | `name` | lowercase `[a-z0-9_-]`, the file name | | `default` | `team` |
 | `description` | text | `kanban kit list` | | |
-| `dev.agent` | agent id | `devAssignment` | none (→ `null`) | `cline` |
-| `dev.model` | `{ tier }` or `{ provider?, model }` (needs `dev.agent`) | `devAssignment` | none | `{ tier: "tier3" }` |
+| `roles.dev` | `{ agent?, provider?, model? \| tier?, note? }` | `devAssignment`: the agent and model of new dev cards (model needs agent) | none (→ `null`) | `cline`, tier `tier3` |
+| `roles.qa` | same | `qaPolicy`: the QA agent and model when no route matches. No model = the agent's own default (Codex: `~/.codex/config.toml`) | none | `codex` |
+| `roles.plan` | same | `planAssignment`: the planner; no agent = the selected agent, no model = the agent's own default | none | `claude` |
+| `roles.fallback` | same | the model a dev card's task falls back to (`fallback.on`). No agent = the dev role's agent, else the card's; a tier needs the `tiers` feature | none | tier `tier2` |
 | `qa.enabled` | boolean | `qaPolicy`: does a dev card get QA at all | `false` | `true` |
 | `qa.skip.roles` | roles | `qaPolicy`: roles that never get QA | `qa`, `triage`, `calibration`, `plan` | same |
 | `qa.skip.effectiveAgents` | agent ids | `qaPolicy`: effective agents whose cards never get QA | `[]` | `[]` |
-| `qa.default` | `{ agent, model?, provider? }` | `qaPolicy`: the QA agent when no route matches. No `model` = the agent's own default (Codex: `~/.codex/config.toml`) | none | `{ agent: "codex" }` |
 | `qa.routes[]` | `{ devModel, agent, model?, provider?, rules?, why? }` | `qaPolicy`: `devModel` is a regex on the dev card's effective model; first match wins | `[]` | OpenAI-built → `cline` + Haiku 4.5, rules `["drive"]` |
 | `qa.requireDifferentVendor` | boolean | `qaPolicy`: refuse (answer `none`) a route whose QA model has the dev model's vendor | `false` | `true` |
 | `qa.rules.<name>` | text | QA prompt steps a route names in `rules`; `{outbox}` is filled in | `{}` | `drive` |
@@ -106,8 +120,6 @@ user kit file), never a silent no-op. A missing key means "no answer", so the `d
 | `qa.serversScript` | path or null | the script QA uses to start the project's servers in its scratch copy | `null` | `null` |
 | `qa.preview` | `{ pidFile, start, stop }` or null | the preview QA screenshots go through. Started before a QA card when down, stopped after `pipeline.qa.previewIdleMin` idle minutes, only if the pid is still the one the QA gate started | `null` | `null` |
 | `plan.enabled` | boolean | `planAssignment`: does the project make plan cards at all | `false` | `true` |
-| `plan.agent` | agent id | the planner's agent; none = the selected agent | none | `claude` |
-| `plan.model` | `{ tier }` or `{ provider?, model }` (needs `plan.agent`) | the planner's model; none = the agent's own default | none | none (the Claude CLI default) |
 | `plan.startInPlanMode` | boolean | the plan card starts in the agent's plan mode | `false` | `true` |
 | `plan.rules.<name>` | text | project rules added to the plan prompt, in key order | `{}` | `{}` |
 | `plan.candidates[]` | `{ agent, model?, note? }` | agents and models a later runoff or calibration compares; never read for routing | `[]` | `claude` |
@@ -117,13 +129,16 @@ user kit file), never a silent no-op. A missing key means "no answer", so the `d
 | `onFail.conflict` | `stop` \| `rework` | `onFail`: a merge conflict at land | `stop` | `rework` |
 | `onFail.then` | `escalate` \| `stop` | `onFail`: after the rounds run out, after STALLED, after an unchanged rework | `stop` | `escalate` |
 | `onFail.runoff` | `{ models: [{ agent, model, provider? }] }` or null | `onFail`: race sibling cards on these models (needs the `runoffs` feature, else escalates) | `null` | `null` |
-| `onOutage.then` | `escalate` \| `orchestrator` | `onOutage`: hand an outage-held card to `escalate.to` (a sibling card, work kept), or wait the outage out | `orchestrator` | (default) |
-| `onOutage.afterMin` | number | `onOutage`: minutes of outage hold before the takeover | `pipeline.recovery.outage.maxMin` | (default) |
-| `escalate.to` | `"orchestrator"` \| `{ tier }` \| `{ agent, model, provider? }` | who takes an escalated card. `{ tier }` needs the `tiers` feature, else it goes to the orchestrator | `orchestrator` | `orchestrator` |
-| `escalate.requireApproval` | boolean | park the escalated card in Backlog `BLOCKED:` | `false` | `true` |
+| `fallback.on.qaFails` | boolean | `onFail`: after `onFail.reworkRounds` failed QA rounds, hand the task to `roles.fallback` (else the orchestrator) | `false` | `true` |
+| `fallback.on.qaStalled` | boolean | `onFail`: the same for QA STALLED/DNF | `false` | `true` |
+| `fallback.on.unchanged` | boolean | `onFail`: the same for a rework that came back unchanged | `false` | `true` |
+| `fallback.on.conflict` | boolean | `onFail`: the same for a merge conflict its reworks didn't fix (`onFail.conflict: rework`) | `false` | `true` |
+| `fallback.on.outage` | boolean | `onOutage`: hand an outage-held card to the fallback after `fallback.outageAfterMin` | `false` | `true` |
+| `fallback.outageAfterMin` | number | minutes of outage hold before the outage trigger fires | `pipeline.recovery.outage.maxMin` | (default) |
+| `fallback.requireApproval` | boolean | the fallback sibling waits in Backlog for the orchestrator or the user | `false` | `false` |
 | `land.postLand[]` | `{ paths, run, stopUnder? }` | commands the core runs after a land that touched a file matching `paths` (regex) | `[]` | `[]` (foo overrides it) |
 | `features[]` | `scoreboard`, `bench`, `runoffs`, `calibration`, `tiers` | built-in team features that run for the project | `[]` | all five |
-| `tiers.<name>[]` | `{ provider?, model, default?, note? }` | `dev.model: { tier }`, `escalate.to: { tier }`, `kanban bench tiers`, `bench runoff create --tier` | | `tier3`, `tier2`, `tier1`, `qa` |
+| `tiers.<name>[]` | `{ provider?, model, default?, note? }` | `roles.<role>.tier`, `kanban bench tiers`, `bench runoff create --tier` | | `tier3`, `tier2`, `tier1`, `qa` |
 | `dropped[]` | `{ provider?, model, at?, why? }` | models no tier lookup returns, on any provider | | five models |
 | `tierRules`, `tierNotes` | text per tier | shown by `kanban bench tiers` | | |
 | `prices.{region,autoSync}` | | the `bench` feature's daily AWS price check | | `us-west-2`, `true` |
@@ -135,7 +150,86 @@ Checks across keys run on the resolved kit:
 - a `{ tier }` reference must name a tier with at least one model that isn't dropped;
 - at most one entry per tier has `default: true`;
 - a route's `rules` must exist in `qa.rules`;
-- `dev.model` needs `dev.agent`, `plan.model` needs `plan.agent`.
+- a role names a model or a tier, not both; `provider` needs `model`; a model or tier needs the role's `agent`
+  (except `roles.fallback`, which runs on the dev role's agent);
+- a `fallback.on` trigger that is on needs `roles.fallback`.
+
+### Legacy keys
+
+Kits and overrides from before the team/project split may still use the old keys. Each layer is translated before it
+is merged (`src/kits/kit-legacy-keys.ts`), so they keep working with their layer's precedence, and a resolved kit
+(and `kanban kit show`) only has the new keys. `kanban kit set` refuses them; `kanban doctor` warns about them.
+
+| Legacy key | Means |
+|---|---|
+| `dev.agent`, `dev.model` | `roles.dev.agent`, `roles.dev.tier` or `roles.dev.{provider,model}` |
+| `qa.default.{agent,provider,model}` | `roles.qa.{agent,provider,model}` |
+| `plan.agent`, `plan.model` | `roles.plan.*` |
+| `escalate.to: "orchestrator"` | every `fallback.on` trigger off (outages included) |
+| `escalate.to: { tier }` / `{ agent, model, provider? }` | `roles.fallback` (no provider = the agent's default), and `fallback.on.{qaFails,qaStalled,unchanged,conflict}` on |
+| `escalate.requireApproval` | `fallback.requireApproval` |
+| `onOutage.then: "escalate" / "orchestrator"` | `fallback.on.outage: true / false` |
+| `onOutage.afterMin` | `fallback.outageAfterMin` |
+
+## Project settings
+
+A project's settings are what it sets on its kit: `workspaces.<id>.kit.overrides` in config.json, now limited to
+
+- **role models**: `roles.<role>.agent|provider|model|tier`, for a role the project's kit defines (`dev`, `qa`,
+  `plan`, `fallback`; an unknown role, or one the kit doesn't define, is an error);
+- **project facts**: `qa.blurb`, `qa.promptNotes.{dbSetup,knownBaseIssues,screenshotFallback}`, `qa.serversScript`,
+  `qa.preview`, `land.postLand`, `plan.rules` (`PROJECT_FACT_KEYS` in `src/kits/project-settings.ts`).
+
+Everything else is the team definition and is refused with a message: `onFail.*`, `fallback.*` (the triggers and
+the approval rule), `qa.enabled`, `qa.requireDifferentVendor`, `qa.skip`, `qa.routes`, `qa.rules`, `tiers`,
+`dropped`, `features`, `plan.enabled`, `recommends`, `description`, `roles.<role>.note`. A project changes its
+team by using another kit, and that is the user's `kanban kit apply`.
+
+```sh
+kanban kit set roles.fallback.model us.moonshotai.kimi-k3 --project /projects/foo
+kanban kit set roles.fallback.agent codex --project /projects/foo
+kanban kit set qa.promptNotes.dbSetup "npx prisma migrate deploy" --project /projects/foo
+kanban kit set land.postLand '[{"paths":"^prisma/","run":"npx prisma generate"}]' --project /projects/foo
+kanban kit unset roles.dev.model --project /projects/foo       # the kit's dev model again
+kanban kit unset roles.fallback --project /projects/foo        # every field of the role
+kanban kit set onFail.reworkRounds 5 --project /projects/foo   # refused: part of the team definition (kit team)
+```
+
+The value is JSON when it parses as JSON (`true`, `3`, `null`, `[…]`, `{…}`, `"text"`), else the text itself. A
+change applies at once (the pipeline reads the kit on every evaluation): no card, no land, no approval code.
+
+**Who.** `kanban kit set|unset` go through the running server (tRPC `kit.set`/`kit.unset`,
+`src/trpc/kit-settings-api.ts`), which decides the caller with the strict lookup (a session without its credential
+is traced to its process tree), in every isolation mode, off included:
+
+| Caller | |
+|---|---|
+| the user (the browser, the user's own shell) | allowed |
+| the project's own orchestrator (its sidebar session or its headless wake) | allowed |
+| another project's orchestrator | refused (send that project's orchestrator a message) |
+| any card session, of this project or another | refused |
+| an unidentified caller (a credential outside its process tree) | refused |
+
+The CLI also refuses `kit set|unset` in a card session before it asks the server (`ORCHESTRATOR_OR_USER_COMMANDS`),
+and every refusal is logged to `data/<ws>/isolation.jsonl`.
+
+**Where.** Project settings stay in config.json (`workspaces.<id>.kit.overrides`), not in the project repo: a card
+can edit and land repo files, which is the problem this avoids. They are the resolver's existing input, written
+atomically under the config lock, and moved with the rest of `workspaces.<id>` by `kanban project rename-id`.
+Every change is appended to `data/<ws>/kit-settings-history.jsonl` (one JSON line: `at`, `kitName`, `key`, `from`,
+`to`, `by` = user / orchestrator with its session id / a user-run command, `via` = `kit set`, `kit unset`,
+`kit apply` or `kit migrate-overrides`). `kanban kit show --project` prints its path and the last change.
+
+**Overrides from before the split.** Legacy keys and team keys stored as overrides keep applying. `kanban doctor`
+warns about each project that has them and points at `kanban kit migrate-overrides --project <ws> --dry-run`, the
+user's command (an agent session can't run it; doctor `--fix` doesn't either). It
+
+1. turns legacy model keys into their `roles.*` keys;
+2. keeps role models and facts as project settings;
+3. drops team keys the kit already has with the same value;
+4. puts the remaining team keys into a new user kit `<home>/kits/<ws>-team.json` (`--into <name>`): the project's
+   kit with them applied, and switches the project to it;
+5. refuses unless the project resolves to exactly the same routing afterwards, and logs every change.
 
 A model id's vendor (for `qa.requireDifferentVendor`) is `getModelVendor()` in `src/kits/policy.ts`: a Bedrock
 `<vendor>.` prefix, or a known family name for bare local ids (`GLM` → `zai`, `Devstral`/`Mistral` → `mistral`,
@@ -149,8 +243,8 @@ A tier lookup returns the tier's `default` entry, else its first usable one, and
 
 `createRoutingPolicy()` in `src/kits/policy.ts` is the only evaluator. A kit can't add code to it.
 
-**`devAssignment`.** `dev.agent`, with `dev.model` resolved (a tier → its model). Without `dev.agent` the answer is
-`null`. The provider comes from the model entry, else from `kanban models providers --for <model>`. With
+**`devAssignment`.** `roles.dev.agent`, with its model or tier resolved (a tier → its model). Without
+`roles.dev.agent` the answer is `null`. The provider comes from the model entry, else from `kanban models providers --for <model>`. With
 `workspaces.<id>.pipeline.shadow` on, the proposal is only logged (`data/<ws>/dev-assignment.jsonl`); the card is
 created as its creator set it.
 
@@ -159,7 +253,7 @@ created as its creator set it.
 1. a role other than `dev` → `none`;
 2. `qa.enabled` not `true` → `none`;
 3. the role is in `qa.skip.roles`, or the effective agent is in `qa.skip.effectiveAgents` → `none`;
-4. the first `qa.routes[]` entry whose `devModel` matches the effective model, else `qa.default`; neither → `none`;
+4. the first `qa.routes[]` entry whose `devModel` matches the effective model, else `roles.qa`; neither → `none`;
 5. with `qa.requireDifferentVendor`, a QA model from the dev model's vendor → `none` (refused, with the reason).
 
 A Cline card with no model of its own counts as the Cline CLI's default model (`resolveEffectiveModel()`). The
@@ -175,24 +269,26 @@ puts them into its QA prompt skeleton (`src/pipeline/qa-prompt.ts`).
   `onFail.then`.
 - below the cap: `onFail.runoff` if set (only for a FAIL), else `rework`.
 
-`onFail.then: "escalate"` answers with `escalate.to` and `escalate.requireApproval`, and `"stop"` answers `stop`.
-A stopped card stays in Review: one ATTENTION.md line, and the orchestrator is woken.
+`onFail.then: "escalate"` hands the card to the fallback when the cause's trigger is on (`fallback.on.qaFails` for
+FAIL rounds, `qaStalled`, `unchanged`, `conflict`) and `roles.fallback` resolves to a model, with
+`fallback.requireApproval`; otherwise it escalates to the orchestrator. `"stop"` answers `stop`. A stopped card
+stays in Review: one ATTENTION.md line, and the orchestrator is woken.
 
 **`onOutage`**, asked for a dev card in a provider outage hold (recovery holds a card once its provider-error
 retries are used up and the provider has a probe):
 
-- `onOutage.then` not `escalate` → `hold`: the hold probes on, and at `pipeline.recovery.outage.maxMin` the card
-  goes to the orchestrator.
-- held less than `onOutage.afterMin` (default `maxMin`) → `hold`.
-- `escalate.to` resolves to the orchestrator, or to the model the card runs on → `hold` (nothing to take it over).
-- otherwise → `escalate` with `escalate.to` and `escalate.requireApproval`. Recovery ends the hold
+- `fallback.on.outage` off → `hold`: the hold probes on, and at `pipeline.recovery.outage.maxMin` the card goes
+  to the orchestrator.
+- held less than `fallback.outageAfterMin` (default `maxMin`) → `hold`.
+- no fallback model, or the fallback is the model the card runs on → `hold` (nothing to take it over).
+- otherwise → `escalate` to the fallback with `fallback.requireApproval`. Recovery ends the hold
   (`qaflow.takeover`) and the rework loop hands the task to a sibling card on that model, as for a FAIL
   escalation; no FAIL round is counted. A provider outage is the only recovery stop that takes a card over: an
   agent's `STATUS: BLOCKED`, repeated crashes or stalls still go to the orchestrator.
 
 **`planAssignment`.** `plan.enabled` not `true` → `disabled`, and `kanban task create --role plan` is refused (the
-dev agent plans its own work). Otherwise `plan.agent` (or the selected agent), `plan.model` resolved like
-`dev.model` (none = the agent's own default), `plan.startInPlanMode` and the `plan.rules` texts. An agent, model
+dev agent plans its own work). Otherwise `roles.plan.agent` (or the selected agent), its model resolved like the dev
+role's (none = the agent's own default), `plan.startInPlanMode` and the `plan.rules` texts. An agent, model
 or `--start-in-plan-mode` the creator sets wins. `pipeline.shadow` doesn't hold it back: there is no legacy
 planner to compare with. The flow around plan cards is [WORKFLOW.md](WORKFLOW.md) §13.
 
@@ -224,9 +320,14 @@ parity against the legacy kit's live config (`test/runtime/kits/team-parity.test
 - **QA:** every dev card. OpenAI-built cards (`(^|\.)openai\.|^gpt-`) get Cline on Haiku 4.5 plus the `drive` rule
   ("log in and drive the changed path, screenshot it"). Everything else gets Codex with its own model. The QA
   vendor must differ from the dev vendor.
-- **FAIL:** same-model rework for 3 rounds, then escalate to the orchestrator with `requireApproval` (tier-2 runs
-  cost more than about $20 and need the user). Conflicts are reworked with rebase notes. `escalate.to: { tier:
-  "tier2" }` is the one-key opt-in for automatic senior-tier escalation.
+- **FAIL:** same-model rework for 3 rounds (conflicts too, with rebase notes), then the **fallback**.
+- **Fallback** (since 2026-10-09, user: it is team definition, not one project's overrides; foo ran it through
+  `escalate.to`/`escalate.requireApproval: false`/`onOutage.then: escalate` overrides before): `roles.fallback` is
+  the `tier2` pick (`us.moonshotai.kimi-k3` on bedrock) on the dev role's agent. It takes the task over on a
+  sibling card, started at once (`requireApproval: false`), after 3 failed QA rounds, a QA stall, an unchanged
+  rework, a conflict its reworks didn't fix, or a provider outage hold that lasted `pipeline.recovery.outage.maxMin`.
+  A fallback sibling that fails goes to the orchestrator. A project picks its own fallback model with
+  `kanban kit set roles.fallback.agent|model` (foo: Codex on kimi-k3).
 - **Features:** `scoreboard`, `bench`, `runoffs`, `calibration`, `tiers`.
 - **Recommends** landing `qa`.
 
@@ -243,10 +344,10 @@ until `kanban bench calibrate` picks the final ones on the project.
 
 | Role | Model (provisional) | Why |
 |---|---|---|
-| Dev (`tiers.dev` default), plan cards (`plan.model`, Cline `--plan`) | `GLM-4.7-Flash-GGUF` | tool-calling; a 30B-A3B MoE, so fast on one GPU; MLA attention keeps its KV cache small (131072 context in the memory budget, max 202752); already Cline's Lemonade default. Plans on the dev model need no model swap |
-| QA (`qa.default`) | `Devstral-Small-2507-GGUF` | another family (Mistral) than GLM, coding + tool-calling; 65536 context in the memory budget (its KV cache is the largest). Text-only |
+| Dev (`roles.dev`: tier `dev`), plan cards (`roles.plan`, Cline `--plan`) | `GLM-4.7-Flash-GGUF` | tool-calling; a 30B-A3B MoE, so fast on one GPU; MLA attention keeps its KV cache small (131072 context in the memory budget, max 202752); already Cline's Lemonade default. Plans on the dev model need no model swap |
+| QA (`roles.qa`) | `Devstral-Small-2507-GGUF` | another family (Mistral) than GLM, coding + tool-calling; 65536 context in the memory budget (its KV cache is the largest). Text-only |
 | QA of Mistral-built cards (`qa.routes[0]`) | `GLM-4.7-Flash-GGUF` | Devstral can't review its own family |
-| Fallback dev model (`escalate.to: { tier: "senior" }`) | `Qwen3.6-35B-A3B-MTP-GGUF` | a third family, neither the dev nor the QA model, so its sibling is still reviewed by Devstral. 65536 context as Lemonade loads it (its KV cache is small, so a bigger one costs little memory) |
+| Fallback dev model (`roles.fallback`: tier `senior`) | `Qwen3.6-35B-A3B-MTP-GGUF` | a third family, neither the dev nor the QA model, so its sibling is still reviewed by Devstral. 65536 context as Lemonade loads it (its KV cache is small, so a bigger one costs little memory) |
 
 The other coding models are candidates in `tiers` (`Devstral`, `Qwen3.6` and `DeepSeek-V4-Flash-0731-GGUF-BF16` for
 dev; `GLM`, `Qwen3.6` and `Gemma-4-12B-it-GGUF` for QA, the last two with vision). `LMX-Omni-52B-Halo` is in
@@ -258,7 +359,7 @@ Lemonade list doesn't offer it.
   onto the model the card runs on, and a fallback sibling that fails in turn goes to the orchestrator, never to
   another sibling (`refuseTakeover()` in `src/pipeline/rework.ts`). So the orchestrator is the last resort, after
   the fallback has failed too.
-- **Outage:** `onOutage.then: "orchestrator"`. Lemonade down (connection refused, `/health` not `ok`) is a provider
+- **Outage:** `fallback.on.outage: false` (the same fallback structure as `team`, with this trigger off). Lemonade down (connection refused, `/health` not `ok`) is a provider
   outage: recovery holds the card and probes `/health` every `pipeline.recovery.outage.probeEveryMin`, resumes it
   when Lemonade is back, and gives it to the orchestrator at `maxMin`. A takeover would not help: every model in the
   kit runs on the same server.
@@ -384,9 +485,8 @@ kanban bench calibrate /projects/<name>/calibration/local-qa-v1.json --project /
 ```
 
 Results go to `results.md` in that directory. Calibration compares QA models only. Dev and fallback models are
-compared on real cards: the scoreboard and `kanban bench tiers`. Once a model is picked, write it as an override:
-`kanban kit apply team-local --project <ws> --set 'qa.default={"agent":"cline","provider":"lemonade","model":"<id>"}'`,
-or `--set 'tiers.dev=[…]'` for the dev tier.
+compared on real cards: the scoreboard and `kanban bench tiers`. Once a model is picked, set it as the project's
+role model: `kanban kit set roles.qa.model <id> --project <ws>` (likewise `roles.dev.model`, `roles.fallback.model`).
 
 ### The team features
 
@@ -398,7 +498,7 @@ They are built in (`src/kits/team/`) and run only for projects whose kit lists t
 | `bench` | card metrics (turns, tokens, list-price cost), `kanban bench metrics|record-verdict|scoreboard|reset`, the daily AWS price check (a watchdog feature job) | `data/prices/` |
 | `runoffs` | holds the PASS of every card in an open runoff, decides once all have passed or escalated (mean QA score, then fewer FAIL rounds, then lower cost), lands the winner and tags and discards the losers through the Done workflow; `benchOnly` lands nothing | `data/<ws>/runoffs.json` |
 | `calibration` | `kanban bench calibrate <spec>`: the same QA review on fixed snapshots by several QA models | `data/<ws>/calibration/<name>/` |
-| `tiers` | `escalate.to: { tier }` (a sibling card on that tier's model), `kanban bench tiers` | |
+| `tiers` | a fallback by tier (`roles.fallback.tier`: a sibling card on that tier's model), `kanban bench tiers` | |
 
 The scoreboard is the team kit's score of its routing decisions. It is not the core's record of verdicts (that is
 `pipeline-state.json`), and no core decision reads it.
@@ -413,11 +513,15 @@ The scoreboard is the team kit's score of its routing decisions. It is not the c
    {
      "kit": 1,
      "name": "claude-qa",
-     "description": "Claude Code builds, Codex reviews, one rework, then the orchestrator",
-     "dev": { "agent": "claude" },
-     "qa": { "enabled": true, "requireDifferentVendor": true, "default": { "agent": "codex" } },
+     "description": "Claude Code builds, Codex reviews, one rework, then Codex takes over (approved), then the orchestrator",
+     "roles": {
+       "dev": { "agent": "claude" },
+       "qa": { "agent": "codex" },
+       "fallback": { "agent": "codex", "model": "gpt-6.1-sol" }
+     },
+     "qa": { "enabled": true, "requireDifferentVendor": true },
      "onFail": { "rework": "same-model", "reworkRounds": 1, "conflict": "rework", "then": "escalate" },
-     "escalate": { "to": "orchestrator", "requireApproval": false },
+     "fallback": { "on": { "qaFails": true, "qaStalled": true }, "requireApproval": true },
      "recommends": { "landingMode": "qa" }
    }
    ```
@@ -428,9 +532,10 @@ The scoreboard is the team kit's score of its routing decisions. It is not the c
    mode in the same step.
 5. Check the result: `kanban kit show --project <ws>` (every value and its source) and `kanban doctor <path>`.
 
-Per-project tweaks belong in overrides, not in a copy of the kit:
-`kanban kit apply team --project foo --set qa.blurb="Project: Pawsome…" --set 'land.postLand=[…]'`
-(the value is JSON, else text). `--unset <key>` removes one.
+Per-project models and facts belong in project settings, not in a copy of the kit: `kanban kit set` (the user or
+the project's orchestrator, [Project settings](#project-settings)), or at apply time
+`kanban kit apply team --project foo --set qa.blurb="Project: Pawsome…" --set 'land.postLand=[…]'` (`--set` takes
+only project settings; `--unset <key>` removes any stored key).
 
 What a kit can't do, on purpose:
 

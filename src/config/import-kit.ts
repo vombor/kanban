@@ -148,8 +148,8 @@ const NOT_IMPORTED: Readonly<Record<string, string>> = {
 	wakeTarget: "removed: each workspace wakes only its own orchestrator (project isolation)",
 	"modelLists.port": "the model-lists route is on the Kanban server",
 	"providers.legacyUpstream": "dropped (upstream Kanban's embedded Cline only)",
-	devAgent: "routing: only compared for projects that get kit team (dev.agent)",
-	qaAgent: "routing: only compared for projects that get kit team (qa.default.agent)",
+	devAgent: "routing: only compared for projects that get kit team (roles.dev.agent)",
+	qaAgent: "routing: only compared for projects that get kit team (roles.qa.agent)",
 	qaRoutes: "routing: only compared for projects that get kit team (qa.routes)",
 	benchmark: "routing: only compared for projects that get kit team (tiers, dropped, tierRules, tierNotes)",
 	pricesRegion: "team kit data: only compared for projects that get kit team (prices.region)",
@@ -262,11 +262,11 @@ function buildTeamEquivalent(
 
 	const devAgent = projectOrTop(project, raw, "devAgent");
 	if (devAgent !== undefined) {
-		values["dev.agent"] = normalizeAgentId(devAgent);
+		values["roles.dev.agent"] = normalizeAgentId(devAgent);
 	}
 	const qaAgent = projectOrTop(project, raw, "qaAgent");
 	if (qaAgent !== undefined) {
-		values["qa.default.agent"] = normalizeAgentId(qaAgent);
+		values["roles.qa.agent"] = normalizeAgentId(qaAgent);
 	}
 	const routes = projectOrTop(project, raw, "qaRoutes") ?? LEGACY_DEFAULT_QA_ROUTES;
 	if (Array.isArray(routes)) {

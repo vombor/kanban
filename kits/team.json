@@ -1,11 +1,24 @@
 {
 	"kit": 1,
 	"name": "team",
-	"description": "Cline juniors on tier-3 models, cross-vendor QA, same-model rework, escalation to the orchestrator",
-	"dev": {
-		"agent": "cline",
-		"model": {
-			"tier": "tier3"
+	"description": "Cline juniors on tier-3 models, cross-vendor QA, same-model rework, then a fallback sibling on the tier-2 model (no approval), then the orchestrator",
+	"roles": {
+		"dev": {
+			"agent": "cline",
+			"tier": "tier3",
+			"note": "new dev cards: Cline on the tier-3 pick"
+		},
+		"qa": {
+			"agent": "codex",
+			"note": "the QA reviewer when no qa.routes entry matches the dev card's model; Codex's own default model"
+		},
+		"plan": {
+			"agent": "claude",
+			"note": "plan cards: the Claude CLI's own default model (user 2026-10-07: planning is its own role, Claude plans for now)"
+		},
+		"fallback": {
+			"tier": "tier2",
+			"note": "takes a dev card's task over on a sibling card (the dev role's agent on the tier-2 pick); a project usually sets its own (kanban kit set roles.fallback.model ...)"
 		}
 	},
 	"qa": {
@@ -19,9 +32,6 @@
 				"plan"
 			],
 			"effectiveAgents": []
-		},
-		"default": {
-			"agent": "codex"
 		},
 		"routes": [
 			{
@@ -41,7 +51,6 @@
 	},
 	"plan": {
 		"enabled": true,
-		"agent": "claude",
 		"startInPlanMode": true,
 		"rules": {},
 		"candidates": [
@@ -50,7 +59,7 @@
 				"note": "in use: the Claude CLI's own default model (user 2026-10-07: planning is its own role, Claude plans for now)"
 			}
 		],
-		"note": "No model pin: the Claude CLI default. candidates is where a later runoff or calibration lists the agents and models it compares (Claude, Codex, Copilot); routing reads only agent/model, so adding candidates changes nothing until one is picked."
+		"note": "No model pin on roles.plan: the Claude CLI default. candidates is where a later runoff or calibration lists the agents and models it compares (Claude, Codex, Copilot); routing reads only roles.plan, so adding candidates changes nothing until one is picked."
 	},
 	"onFail": {
 		"rework": "same-model",
@@ -59,9 +68,16 @@
 		"then": "escalate",
 		"runoff": null
 	},
-	"escalate": {
-		"to": "orchestrator",
-		"requireApproval": true
+	"fallback": {
+		"on": {
+			"qaFails": true,
+			"qaStalled": true,
+			"unchanged": true,
+			"conflict": true,
+			"outage": true
+		},
+		"requireApproval": false,
+		"note": "Team default since 2026-10-09 (formerly foo's overrides escalate.to, escalate.requireApproval=false, onOutage.then=escalate): after reworkRounds QA FAILs, a QA stall, a rework that came back unchanged, a merge conflict that its reworks didn't fix, or a provider outage hold that lasted pipeline.recovery.outage.maxMin, the fallback model takes the task over at once; when the fallback fails too, the card goes to the orchestrator. The core never falls back onto the card's own model, never twice in one chain, and never from a runoff racer."
 	},
 	"features": [
 		"scoreboard",

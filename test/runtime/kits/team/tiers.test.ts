@@ -27,31 +27,40 @@ const escalateAfterStall = (kit: ReturnType<typeof team>) =>
 	});
 
 describe("tiers feature", () => {
-	it("escalate.to { tier: tier2 } answers a sibling on the tier's model on the kit's dev agent (tier-2 escalation)", () => {
-		expect(escalateAfterStall(team({ "escalate.to": { tier: "tier2" } }))).toEqual({
+	it("the team kit's fallback role { tier: tier2 } answers a sibling on the tier's model on the dev role's agent, no approval", () => {
+		expect(escalateAfterStall(team())).toEqual({
 			action: "escalate",
 			to: { agentId: "cline", model: { provider: "bedrock", model: "us.moonshotai.kimi-k3" } },
-			requireApproval: true,
+			requireApproval: false,
 			reason: "QA stalled",
 		});
 	});
 
-	it("without the tiers feature a tier escalation goes to the orchestrator", () => {
-		const answer = escalateAfterStall(
-			team({ "escalate.to": { tier: "tier2" }, features: ["scoreboard", "bench", "runoffs"] }),
-		);
-		expect(answer).toMatchObject({ action: "escalate", to: "orchestrator", requireApproval: true });
+	it("the legacy escalate.to { tier } and escalate.requireApproval still mean the fallback role and its approval", () => {
+		expect(
+			escalateAfterStall(team({ "escalate.to": { tier: "tier2" }, "escalate.requireApproval": true })),
+		).toMatchObject({
+			action: "escalate",
+			to: { agentId: "cline", model: { model: "us.moonshotai.kimi-k3" } },
+			requireApproval: true,
+		});
+	});
+
+	it("without the tiers feature a tier fallback goes to the orchestrator", () => {
+		const answer = escalateAfterStall(team({ features: ["scoreboard", "bench", "runoffs"] }));
+		expect(answer).toMatchObject({ action: "escalate", to: "orchestrator", requireApproval: false });
 		expect(answer.action === "escalate" && answer.reason).toContain('needs the "tiers" feature');
 	});
 
-	it("the team kit as shipped still escalates to the orchestrator (no automatic senior tier, §12)", () => {
-		expect(escalateAfterStall(team())).toMatchObject({ action: "escalate", to: "orchestrator" });
+	it("a trigger that is off (or the legacy escalate.to orchestrator) goes to the orchestrator", () => {
+		expect(escalateAfterStall(team({ "fallback.on.qaStalled": false }))).toMatchObject({ to: "orchestrator" });
+		expect(escalateAfterStall(team({ "escalate.to": "orchestrator" }))).toMatchObject({ to: "orchestrator" });
 	});
 
 	it("kanban bench tiers: each tier's pick, default and dropped entries, and what uses a tier", () => {
 		const report = buildTiersReport(team());
 		expect(report.featureOn).toBe(true);
-		expect(report.uses).toEqual({ devTier: "tier3", escalateTier: null });
+		expect(report.uses).toEqual({ devTier: "tier3", escalateTier: "tier2" });
 		const tier3 = report.tiers.find((tier) => tier.name === "tier3");
 		expect(tier3?.pick).toEqual({ provider: "bedrock", model: "us.openai.gpt-6.1-sol" });
 		// A candidate after the default is listed, not dropped, and not picked (Nova 2 Lite, back 2026-10-07).
@@ -75,11 +84,9 @@ describe("tiers feature", () => {
 		expect(text).toContain("  - bedrock/us.amazon.nova-2-lite-v1:0: candidate; dropped 2026-10-05");
 		expect(text).not.toContain("[DROPPED]");
 		expect(text).toContain("Dropped (skipped on every provider):");
-		expect(text).toContain("dev.model: tier tier3; escalate.to: no tier");
+		expect(text).toContain("roles.dev: tier tier3; roles.fallback: tier tier2");
 
-		const off = formatTiersReport(buildTiersReport(team({ "escalate.to": { tier: "tier2" }, features: [] }))).join(
-			"\n",
-		);
-		expect(off).toContain("escalate.to: tier tier2 (ignored: the tiers feature is off");
+		const off = formatTiersReport(buildTiersReport(team({ features: [] }))).join("\n");
+		expect(off).toContain("roles.fallback: tier tier2 (ignored: the tiers feature is off");
 	});
 });

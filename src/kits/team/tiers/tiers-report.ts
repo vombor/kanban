@@ -39,7 +39,7 @@ export interface TiersReport {
 	featureOn: boolean;
 	tiers: TierReport[];
 	dropped: Array<{ provider: string | null; model: string; at: string | null; why: string | null }>;
-	/** Which tier `dev.model` and `escalate.to` name, if any. */
+	/** Which tier `roles.dev` and `roles.fallback` name, if any. */
 	uses: { devTier: string | null; escalateTier: string | null };
 }
 
@@ -64,7 +64,6 @@ export function buildTiersReport(kit: KitDocument): TiersReport {
 			pick,
 		};
 	});
-	const escalateTo = kit.escalate?.to;
 	return {
 		kitName: kit.name,
 		featureOn: (kit.features ?? []).includes("tiers"),
@@ -76,8 +75,8 @@ export function buildTiersReport(kit: KitDocument): TiersReport {
 			why: entry.why ?? null,
 		})),
 		uses: {
-			devTier: kit.dev?.model && "tier" in kit.dev.model ? kit.dev.model.tier : null,
-			escalateTier: escalateTo && typeof escalateTo === "object" && "tier" in escalateTo ? escalateTo.tier : null,
+			devTier: kit.roles?.dev?.tier ?? null,
+			escalateTier: kit.roles?.fallback?.tier ?? null,
 		},
 	};
 }
@@ -119,7 +118,7 @@ export function formatTiersReport(report: TiersReport): string[] {
 	}
 	lines.push(
 		"",
-		`dev.model: ${report.uses.devTier ? `tier ${report.uses.devTier}` : "no tier"}; escalate.to: ${report.uses.escalateTier ? `tier ${report.uses.escalateTier}${report.featureOn ? "" : " (ignored: the tiers feature is off, escalations go to the orchestrator)"}` : "no tier"}`,
+		`roles.dev: ${report.uses.devTier ? `tier ${report.uses.devTier}` : "no tier"}; roles.fallback: ${report.uses.escalateTier ? `tier ${report.uses.escalateTier}${report.featureOn ? "" : " (ignored: the tiers feature is off, fallbacks go to the orchestrator)"}` : "no tier"}`,
 	);
 	return lines;
 }

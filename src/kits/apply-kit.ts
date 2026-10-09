@@ -1,5 +1,6 @@
-// `kanban kit apply`: points a workspace at a kit (`workspaces.<id>.kit.name`), keeps its existing overrides,
-// edits them with `--set`/`--unset`, and with `--landing` also sets the core landing mode. Applying a kit never
+// `kanban kit apply`: points a workspace at a kit (`workspaces.<id>.kit.name`), keeps its existing project settings,
+// edits them with `--set` (role models and project facts only, src/kits/project-settings.ts) / `--unset` (any stored
+// key, so a team key from before the split can be removed), logs those edits to the settings history, and with `--landing` also sets the core landing mode. Applying a kit never
 // changes the landing mode on its own (§4.2). The new resolution is validated before anything is written, so an
 // unknown override key or a tier without a usable model is refused here, not discovered by the pipeline.
 import {
@@ -8,7 +9,9 @@ import {
 	readPipelineConfig,
 	updateWorkspacePipelineEntry,
 } from "../config/pipeline-config";
+import { getKitSettingsHistoryPath } from "../state/kanban-home";
 import { evaluateKitRecommendedSettings, type KitRecommendedSettingStatus } from "./kit-recommendations";
+import { appendKitSettingsHistory, classifyKitSettingKey, diffOverridesForHistory } from "./project-settings";
 import { DEFAULT_KIT_NAME, loadKitCatalog, readKitValue, resolveKitByName, resolveWorkspaceKit } from "./resolve-kit";
 
 export interface ApplyKitInput {
@@ -20,6 +23,7 @@ export interface ApplyKitInput {
 	dryRun?: boolean;
 	configPath?: string;
 	kitsDir?: string;
+	historyPath?: string;
 }
 
 export interface KitValueChange {
@@ -61,6 +65,16 @@ export async function applyWorkspaceKit(input: ApplyKitInput): Promise<ApplyKitR
 			throw new Error(`--unset ${key}: the workspace has no override for ${key}.`);
 		}
 		delete overrides[key];
+	}
+	const team = resolveKitByName(catalog, input.kitName);
+	if (!team.ok) {
+		throw new Error(`Kit ${input.kitName} does not resolve: ${team.error}`);
+	}
+	for (const key of Object.keys(input.set ?? {})) {
+		const classified = classifyKitSettingKey(key, team.kit);
+		if (classified.kind === "team" || classified.kind === "invalid") {
+			throw new Error(`--set ${key}: ${classified.message}`);
+		}
 	}
 	Object.assign(overrides, input.set ?? {});
 	const after = resolveKitByName(catalog, input.kitName, overrides);
@@ -118,5 +132,17 @@ export async function applyWorkspaceKit(input: ApplyKitInput): Promise<ApplyKitR
 		},
 		input.configPath,
 	);
+	const base = {
+		at: new Date().toISOString(),
+		workspaceId: input.workspaceId,
+		kitName: input.kitName,
+		by: { kind: "user-command" as const },
+		via: "kit apply" as const,
+	};
+	const history = diffOverridesForHistory(settings.kit?.overrides ?? {}, overrides, base);
+	if (before.kitName !== input.kitName) {
+		history.unshift({ ...base, key: "(kit)", from: before.kitName, to: input.kitName });
+	}
+	await appendKitSettingsHistory(history, input.historyPath ?? getKitSettingsHistoryPath(input.workspaceId));
 	return { ...result, written: true };
 }

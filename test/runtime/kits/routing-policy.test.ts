@@ -94,7 +94,21 @@ describe("routing policy evaluator", () => {
 			});
 		expect(onFail([1]).action).toBe("rework");
 		expect(onFail([1, 2]).action).toBe("rework");
-		expect(onFail([1, 2, 3])).toMatchObject({ action: "escalate", to: "orchestrator", requireApproval: true });
+		expect(onFail([1, 2, 3])).toMatchObject({
+			action: "escalate",
+			to: { agentId: "cline", model: { model: "us.moonshotai.kimi-k3" } },
+			requireApproval: false,
+		});
+		// With the qaFails trigger off the card goes to the orchestrator.
+		expect(
+			teamPolicy({ "fallback.on.qaFails": false }).onFail({
+				dev,
+				cause: "fail",
+				verdict: null,
+				history: createCardHistory([1, 2, 3]),
+				limits: { maxFailRounds: 3 },
+			}),
+		).toMatchObject({ action: "escalate", to: "orchestrator", requireApproval: false });
 		// The core cap wins over the kit's rounds; handback rounds add to both.
 		expect(onFail([1, 2], 2).action).toBe("escalate");
 		expect(onFail([1, 2, 3], 3, 1).action).toBe("rework");
@@ -109,6 +123,33 @@ describe("routing policy evaluator", () => {
 		expect(answer("stalled")).toBe("escalate");
 		expect(answer("unchanged")).toBe("escalate");
 		expect(answer("conflict")).toBe("rework");
+	});
+
+	it("a conflict its reworks didn't fix goes to the fallback only with the conflict trigger", () => {
+		const ask = (overrides: Record<string, unknown>) =>
+			teamPolicy(overrides).onFail({
+				dev: createEffectiveCard({ agentId: "cline", model: "us.openai.gpt-6.1-sol" }),
+				cause: "conflict",
+				verdict: null,
+				history: createCardHistory([1, 2, 3]),
+				limits: { maxFailRounds: 3 },
+			});
+		expect(ask({})).toMatchObject({ action: "escalate", to: { model: { model: "us.moonshotai.kimi-k3" } } });
+		expect(ask({ "fallback.on.conflict": false })).toMatchObject({ action: "escalate", to: "orchestrator" });
+	});
+
+	it("a project's fallback model is used with the kit's triggers; a fallback without an agent runs on the dev role's", () => {
+		const answer = teamPolicy({ "roles.fallback.model": "us.anthropic.claude-opus-5-5" }).onFail({
+			dev: createEffectiveCard({ agentId: "codex", model: "us.openai.gpt-6.1-sol" }),
+			cause: "stalled",
+			verdict: null,
+			history: createCardHistory(),
+			limits: { maxFailRounds: 3 },
+		});
+		expect(answer).toMatchObject({
+			action: "escalate",
+			to: { agentId: "cline", model: { provider: null, model: "us.anthropic.claude-opus-5-5" } },
+		});
 	});
 
 	it("escalates to a tier's model on the kit's dev agent", () => {
@@ -141,7 +182,7 @@ describe("routing policy evaluator", () => {
 		expect(answer).toEqual({ action: "runoff", models: [{ agentId: "cline", provider: null, model: "m1" }] });
 	});
 
-	it("hands an outage-held card to escalate.to after onOutage.afterMin (default maxMin), never onto its own model", () => {
+	it("hands an outage-held card to the fallback after fallback.outageAfterMin (default maxMin), never onto its own model", () => {
 		const fallback = { agent: "codex", model: "us.moonshotai.kimi-k3", provider: "bedrock" };
 		const dev = createEffectiveCard({
 			agentId: "codex",
@@ -154,9 +195,13 @@ describe("routing policy evaluator", () => {
 				maxMin: 360,
 			});
 
-		// Without the key (the default kit's "orchestrator") an outage is waited out, as before.
-		expect(ask({}, 400)).toMatchObject({ action: "hold" });
+		// With the outage trigger off an outage is waited out, as before (legacy onOutage.then: orchestrator too).
+		expect(ask({ "fallback.on.outage": false }, 400)).toMatchObject({ action: "hold" });
+		expect(ask({ "onOutage.then": "orchestrator" }, 400)).toMatchObject({ action: "hold" });
+		// The team kit's own trigger, and the legacy key that asked for it.
 		const on = { "onOutage.then": "escalate" };
+		expect(ask({}, 360)).toMatchObject({ action: "escalate" });
+		expect(ask({ "fallback.outageAfterMin": 30 }, 31)).toMatchObject({ action: "escalate" });
 		expect(ask(on, 359)).toMatchObject({ action: "hold" });
 		expect(ask(on, 360)).toEqual({
 			action: "escalate",

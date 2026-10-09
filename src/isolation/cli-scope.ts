@@ -67,6 +67,8 @@ export const USER_ONLY_COMMANDS = [
 	"cline store-bedrock-key",
 	"cline remove-bedrock-key",
 	"plan approve",
+	// Moves team keys into a new user kit and switches the project to it: a change of the project's team.
+	"kit migrate-overrides",
 ] as const;
 
 /** The plan approval refusal (the server's, src/trpc/plans-api.ts, says the same). */
@@ -76,9 +78,18 @@ function planApprovalRefusal(taskId: string | undefined): string {
 
 /**
  * Commands only the user and a project's orchestrator may run, whatever the isolation mode: a card session is
- * refused. `issues sync` calls GitHub with the user's own token (the `gh` login or `GH_TOKEN`).
+ * refused. `issues sync` calls GitHub with the user's own token (the `gh` login or `GH_TOKEN`); `kit set|unset`
+ * change the project's settings on its kit (the server checks the caller again, src/trpc/kit-settings-api.ts).
  */
-export const ORCHESTRATOR_OR_USER_COMMANDS = ["issues sync"] as const;
+export const ORCHESTRATOR_OR_USER_COMMANDS = ["issues sync", "kit set", "kit unset"] as const;
+
+function orchestratorOrUserRefusal(commandPath: string): string {
+	const why =
+		commandPath === "issues sync"
+			? "uses the user's GitHub login"
+			: "changes the project's settings on its kit (role models, project facts)";
+	return `\`kanban ${commandPath}\` ${why}, so only the user or the project's orchestrator runs it, never a card session. Tell your orchestrator what you need.`;
+}
 
 /** The project changes that wait for an approval under `enforce` (src/isolation/approvals.ts). */
 const PROJECT_CHANGE_COMMANDS = { "project add": "project.add", "project create": "project.create" } as const;
@@ -285,7 +296,7 @@ export async function applyCliSessionScope(input: {
 		// The server says which session this is; a card, or a session it can't confirm as the orchestrator, is refused.
 		const caller = await resolveCliSessionScope({ env, config, client: input.createClient() });
 		if (caller?.role !== "orchestrator") {
-			return `\`kanban ${input.commandPath}\` uses the user's GitHub login, so only the user or the project's orchestrator runs it, never a card session. Tell your orchestrator what you need.`;
+			return orchestratorOrUserRefusal(input.commandPath);
 		}
 	}
 	// With isolation off everywhere only the user-only rules apply: nothing is scoped, the server isn't asked.

@@ -272,7 +272,7 @@ landing `off`. Top-level routing is never copied onto a project. The main rename
 | `projects[]` + toggles `QA_CREATE`/`AUTO_REWORK`/`AUTO_DONE` | `workspaces.<id>.landing.mode` + `workspaces.<id>.kit` |
 | `AUTOLAND_DRY_RUN` | `workspaces.<id>.pipeline.shadow` |
 | `projects[].baseBranch`, `.name`, `.projectBlurb`, `.qaPrompt.*`, `.postLand`, `.qaPreview` | `defaultBaseRef`, `name`, kit overrides `qa.blurb`, `qa.promptNotes.*`, `land.postLand`, `qa.preview` |
-| `devAgent`, `qaAgent`, `qaRoutes`, `benchmark.*` | kit keys `dev.*`, `qa.default`, `qa.routes`, `tiers`/`dropped`/`tierRules`/`tierNotes` |
+| `devAgent`, `qaAgent`, `qaRoutes`, `benchmark.*` | kit keys `roles.dev.agent`, `roles.qa.agent`, `qa.routes`, `tiers`/`dropped`/`tierRules`/`tierNotes` |
 | `qaSlots`, `QA_TIMEOUT_MIN`, `QA_NUDGE_MAX`, `QA_VERDICT_GRACE_MS` | `pipeline.qa.slots`, `.timeoutMin`, `.maxNudges`, `.verdictGraceSec` |
 | `QAFLOW_MAX_FAILS`, `REWORK_CLEAR_TURNS`, `REWORK_CLEAR_TOKENS` | `pipeline.rework.*` |
 | `NUDGE_MAX`, `PREMATURE_MAX`, `TRANSIENT_BACKOFF_MIN`, `HUNG_MIN`, `HUNG_FIRST_MIN`, `OUTAGE_*` | `pipeline.recovery.*` |

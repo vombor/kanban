@@ -10,7 +10,8 @@ import {
 	evaluateKitRecommendedSettings,
 	type KitRecommendedSettingStatus,
 } from "./kit-recommendations";
-import { getUsableTierEntries, type KitDocument } from "./kit-schema";
+import { FALLBACK_TRIGGERS, getKitFallbackFlow, type KitRoleAssignment, listKitRoles } from "./kit-roles";
+import { getUsableTierEntries, type KitDocument, type KitFallbackTrigger, type KitRoleName } from "./kit-schema";
 import type { LocalResidencyFinding } from "./local-residency";
 import {
 	answerPlanAssignment,
@@ -24,6 +25,7 @@ import {
 	type PlanAssignmentAnswer,
 	type QaPolicyAnswer,
 } from "./policy";
+import type { ClassifiedOverrides, KitSettingsHistoryEntry } from "./project-settings";
 import { type ResolvedKit, readKitValue } from "./resolve-kit";
 
 /** The `workspaceId` `kanban kit show` passes when it shows a kit without a project. */
@@ -35,9 +37,40 @@ export interface KitValueRow {
 	source: string;
 }
 
+/** A role of the team with its effective agent and model, and where each came from. */
+export interface KitRoleRow extends KitRoleAssignment {
+	/** The source of `roles.<role>.agent` and of its model (`model`/`tier`); null = not set anywhere. */
+	sources: { agent: string | null; model: string | null };
+}
+
+/** The fallback part of the team definition, with the effective values the core uses. */
+export interface KitFallbackReport {
+	role: KitRoleName;
+	on: KitFallbackTrigger[];
+	off: KitFallbackTrigger[];
+	/** After how many failed QA rounds (`onFail.reworkRounds`, capped by the core). */
+	failRounds: number;
+	/** `fallback.outageAfterMin`, else `pipeline.recovery.outage.maxMin`. */
+	outageAfterMin: number;
+	requireApproval: boolean;
+	/** `onFail.then`: "stop" means no trigger but outage can hand a card over. */
+	onFailThen: "escalate" | "stop";
+}
+
+/** The workspace's project settings (`kanban kit set`), shown with `kanban kit show --project`. */
+export interface KitProjectSettingsReport {
+	workspaceId: string;
+	classified: ClassifiedOverrides;
+	historyPath: string;
+	history: KitSettingsHistoryEntry[];
+}
+
 export interface KitReport {
 	kitName: string;
 	description: string | null;
+	roles: KitRoleRow[];
+	fallback: KitFallbackReport;
+	projectSettings: KitProjectSettingsReport | null;
 	values: KitValueRow[];
 	devAssignment: DevAssignmentAnswer;
 	planAssignment: PlanAssignmentAnswer;
@@ -115,6 +148,8 @@ export function buildKitReport(input: {
 	config: PipelineConfig;
 	/** `assessLocalResidency()` against Lemonade's /api/v1/health, from the caller (this module does no I/O). */
 	localResidency?: LocalResidencyFinding[] | null;
+	/** The workspace's project settings and their history, read by the caller. */
+	projectSettings?: KitProjectSettingsReport | null;
 }): KitReport {
 	const { kit } = input.resolved;
 	const policy = createRoutingPolicy(kit);
@@ -136,7 +171,7 @@ export function buildKitReport(input: {
 		{ case: "merge conflict at land", cause: "conflict", failRounds: [1] },
 		{ case: "QA STALLED", cause: "stalled", failRounds: [] },
 	];
-	const outageMinutes = Math.min(kit.onOutage?.afterMin ?? input.outageMaxMin, input.outageMaxMin);
+	const outageMinutes = Math.min(kit.fallback?.outageAfterMin ?? input.outageMaxMin, input.outageMaxMin);
 	const onFail = failCases.map((failCase) => ({
 		case: failCase.case,
 		answer: policy.onFail({
@@ -147,9 +182,30 @@ export function buildKitReport(input: {
 			limits,
 		}),
 	}));
+	const { sources } = input.resolved;
+	const roles = listKitRoles(kit).map((role) => ({
+		...role,
+		sources: {
+			agent: sources[`roles.${role.role}.agent`] ?? null,
+			model: sources[`roles.${role.role}.model`] ?? sources[`roles.${role.role}.tier`] ?? null,
+		},
+	}));
+	const flow = getKitFallbackFlow(kit);
+	const fallback: KitFallbackReport = {
+		role: "fallback",
+		on: FALLBACK_TRIGGERS.filter((trigger) => flow.triggers[trigger]),
+		off: FALLBACK_TRIGGERS.filter((trigger) => !flow.triggers[trigger]),
+		failRounds: Math.min(kit.onFail?.reworkRounds ?? 0, input.maxFailRounds),
+		outageAfterMin: flow.outageAfterMin ?? input.outageMaxMin,
+		requireApproval: flow.requireApproval,
+		onFailThen: kit.onFail?.then ?? "stop",
+	};
 	return {
 		kitName: input.kitName,
 		description: kit.description ?? null,
+		roles,
+		fallback,
+		projectSettings: input.projectSettings ?? null,
 		values: listKitValues(input.resolved),
 		devAssignment,
 		planAssignment: answerPlanAssignment(kit),
@@ -188,8 +244,111 @@ function formatOnFail(answer: OnFailAnswer): string {
 	}
 }
 
+function describeTrigger(trigger: KitFallbackTrigger, fallback: KitFallbackReport): string {
+	switch (trigger) {
+		case "qaFails":
+			return `${fallback.failRounds} failed QA round(s)`;
+		case "qaStalled":
+			return "QA stalled";
+		case "unchanged":
+			return "a rework that came back unchanged";
+		case "conflict":
+			return "a merge conflict its reworks didn't fix";
+		case "outage":
+			return `a provider outage hold of ${fallback.outageAfterMin} min`;
+	}
+}
+
+function formatRoleRow(row: KitRoleRow): string {
+	const agent = row.agentId ?? (row.role === "fallback" ? "the dev role's agent" : "the selected agent");
+	const model = row.error
+		? `no model (${row.error})`
+		: `${formatModel(row.model)}${row.tier ? ` (tier ${row.tier})` : ""}`;
+	return `    ${row.role.padEnd(9)} ${agent} on ${model}  [agent: ${row.sources.agent ?? "-"}, model: ${row.sources.model ?? "-"}]`;
+}
+
+function formatTeamDefinition(report: KitReport): string[] {
+	const lines = [
+		`Team definition (kit ${report.kitName}; a project changes its team only by using another kit: kanban kit apply, the user's):`,
+		"  Roles and their models  [source: project = a project setting, else the kit that set it]:",
+	];
+	lines.push(
+		...(report.roles.length > 0
+			? report.roles.map(formatRoleRow)
+			: ["    (none: every card runs on the agent selected in Kanban settings)"]),
+	);
+	const { fallback } = report;
+	const fallbackRole = report.roles.find((row) => row.role === "fallback");
+	const onFailTriggers = fallback.on.filter((trigger) => trigger !== "outage");
+	lines.push(
+		"  Fallback (a sibling card on the fallback role's model takes a dev card's task over; the card goes to Backlog):",
+	);
+	if (!fallbackRole || fallback.on.length === 0) {
+		lines.push(
+			`    never: ${fallbackRole ? "every trigger is off" : "the kit has no fallback role"}; failures go to the orchestrator`,
+		);
+	} else {
+		lines.push(`    on: ${fallback.on.map((trigger) => describeTrigger(trigger, fallback)).join("; ")}`);
+		if (onFailTriggers.length > 0 && fallback.onFailThen === "stop") {
+			lines.push("    (onFail.then is stop: only the outage trigger can fire)");
+		}
+		if (fallback.off.length > 0) {
+			lines.push(`    off (the orchestrator instead): ${fallback.off.join(", ")}`);
+		}
+		lines.push(
+			`    approval: ${fallback.requireApproval ? "the sibling waits in Backlog until the orchestrator or the user starts it" : "none, the sibling starts at once"}`,
+			"    never (core rule): onto the model the card already runs on, a second time in one chain (a fallback sibling that fails goes to the orchestrator), or from a card racing in a runoff",
+		);
+	}
+	return lines;
+}
+
+function formatHistoryActor(entry: KitSettingsHistoryEntry): string {
+	switch (entry.by.kind) {
+		case "user":
+			return "the user";
+		case "orchestrator":
+			return `the orchestrator (${entry.by.taskId})`;
+		case "user-command":
+			return `the user (${entry.via})`;
+	}
+}
+
+function formatProjectSettings(settings: KitProjectSettingsReport): string[] {
+	const { classified, workspaceId } = settings;
+	const lines = [
+		`Project settings of ${workspaceId} (role models and project facts; kanban kit set|unset, by the user or ${workspaceId}'s orchestrator):`,
+	];
+	const projectKeys = Object.keys(classified.project).sort();
+	lines.push(
+		...(projectKeys.length > 0
+			? projectKeys.map((key) => `  ${key} = ${JSON.stringify(classified.project[key])}`)
+			: ["  (none)"]),
+	);
+	for (const { from, to } of classified.legacy) {
+		lines.push(`  legacy key ${from} (means ${to.join(", ") || "nothing"})`);
+	}
+	const teamKeys = Object.keys(classified.team).sort();
+	if (teamKeys.length > 0) {
+		lines.push(
+			`  Team keys stored as overrides (still applied, but a project can't set them any more): ${teamKeys.join(", ")}`,
+			`  → the user moves them into a user kit: kanban kit migrate-overrides --project ${workspaceId} --dry-run`,
+		);
+	}
+	const last = settings.history[settings.history.length - 1];
+	lines.push(
+		`  History: ${settings.historyPath} (${settings.history.length} change(s)${last ? `; last ${last.at}: ${last.key} by ${formatHistoryActor(last)}` : ""})`,
+	);
+	return lines;
+}
+
 export function formatKitReport(report: KitReport): string[] {
 	const lines = [`Kit ${report.kitName}${report.description ? `: ${report.description}` : ""}`, ""];
+	lines.push(...formatTeamDefinition(report), "");
+	if (report.projectSettings) {
+		lines.push(...formatProjectSettings(report.projectSettings), "");
+	}
+	lines.push("How the kit answers:");
 	lines.push("New dev cards (when the creator sets no agent):");
 	lines.push(
 		report.devAssignment
@@ -209,7 +368,7 @@ export function formatKitReport(report: KitReport): string[] {
 		lines.push(
 			answer.kind === "none"
 				? `  ${card}: no QA (${answer.reason})`
-				: `  ${card}: ${answer.agentId} on ${formatModel(answer.model)}${answer.route ? ` [${answer.route}]` : " [qa.default]"}${answer.promptParts.rules.length > 0 ? `, ${answer.promptParts.rules.length} prompt rule(s)` : ""}`,
+				: `  ${card}: ${answer.agentId} on ${formatModel(answer.model)}${answer.route ? ` [${answer.route}]` : " [roles.qa]"}${answer.promptParts.rules.length > 0 ? `, ${answer.promptParts.rules.length} prompt rule(s)` : ""}`,
 		);
 	}
 	lines.push("After a failure:");

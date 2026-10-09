@@ -561,7 +561,8 @@ describe("QA gate", () => {
 		await send(harness, qaInReview);
 		harness.setNow(T0 + 51_000);
 		await send(harness, qaInReview);
-		expect(kinds(harness.actions)).toEqual(["finishTask:qa001"]);
+		// The team kit's qaStalled trigger hands the dev card to its fallback role at once (a sibling, no approval).
+		expect(kinds(harness.actions)).toEqual(["finishTask:qa001", "createTask:s0001", "startTask:s0001"]);
 		const [record] = readQaVerdictRecords((await harness.store.load("foo")).cards.d1111);
 		expect(record).toMatchObject({ verdict: "STALLED", notes: expect.stringContaining("unusable verdict.json") });
 	});

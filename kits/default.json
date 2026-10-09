@@ -5,18 +5,51 @@
 	"qa": {
 		"enabled": false,
 		"requireDifferentVendor": false,
-		"skip": { "roles": ["qa", "triage", "calibration", "plan"], "effectiveAgents": [] },
+		"skip": {
+			"roles": [
+				"qa",
+				"triage",
+				"calibration",
+				"plan"
+			],
+			"effectiveAgents": []
+		},
 		"routes": [],
 		"rules": {},
 		"blurb": "",
-		"promptNotes": { "screenshotFallback": "", "knownBaseIssues": "", "dbSetup": "" },
+		"promptNotes": {
+			"screenshotFallback": "",
+			"knownBaseIssues": "",
+			"dbSetup": ""
+		},
 		"serversScript": null,
 		"preview": null
 	},
-	"plan": { "enabled": false, "startInPlanMode": false, "rules": {}, "candidates": [] },
-	"onFail": { "rework": "none", "reworkRounds": 0, "conflict": "stop", "then": "stop", "runoff": null },
-	"onOutage": { "then": "orchestrator" },
-	"escalate": { "to": "orchestrator", "requireApproval": false },
-	"land": { "postLand": [] },
+	"plan": {
+		"enabled": false,
+		"startInPlanMode": false,
+		"rules": {},
+		"candidates": []
+	},
+	"onFail": {
+		"rework": "none",
+		"reworkRounds": 0,
+		"conflict": "stop",
+		"then": "stop",
+		"runoff": null
+	},
+	"fallback": {
+		"on": {
+			"qaFails": false,
+			"qaStalled": false,
+			"unchanged": false,
+			"conflict": false,
+			"outage": false
+		},
+		"requireApproval": false
+	},
+	"land": {
+		"postLand": []
+	},
 	"features": []
 }

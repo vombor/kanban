@@ -56,6 +56,7 @@ import { createTerminalWebSocketBridge } from "../terminal/ws-server";
 import { type RuntimeTrpcContext, type RuntimeTrpcWorkspaceScope, runtimeAppRouter } from "../trpc/app-router";
 import { createHooksApi } from "../trpc/hooks-api";
 import { createIsolationApi } from "../trpc/isolation-api";
+import { createKitSettingsApi } from "../trpc/kit-settings-api";
 import { createPlansApi } from "../trpc/plans-api";
 import { createProjectsApi } from "../trpc/projects-api";
 import { createRuntimeApi } from "../trpc/runtime-api";
@@ -344,6 +345,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		notices: messageNotices,
 	});
 	const plansApi = createPlansApi({ approvals: isolation.approvals, log: isolation.log });
+	const kitSettingsApi = createKitSettingsApi({ log: isolation.log });
 
 	const handleWatchdogRequest = createWatchdogActionHandler({
 		getWorkspacePathById: deps.workspaceRegistry.getWorkspacePathById,
@@ -432,6 +434,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			trustedBrowser: isRemoteMode && isPasscodeEnabled() && sessionToken !== null && validateSession(sessionToken),
 			isolationApi,
 			plansApi,
+			kitSettingsApi,
 			runtimeApi,
 			workspaceApi: createWorkspaceApi({
 				ensureTerminalManagerForWorkspace: deps.ensureTerminalManagerForWorkspace,

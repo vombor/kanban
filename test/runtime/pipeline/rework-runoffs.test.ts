@@ -122,13 +122,13 @@ describe("rework siblings never let two cards land", () => {
 		});
 	});
 
-	it("the team kit with escalate.to { tier: tier2 } escalates to a tier-2 sibling after three FAILs (the core cap asks the kit)", async () => {
-		const policy = teamPolicy({ "escalate.to": { tier: "tier2" } });
+	it("the team kit's fallback role (tier2) takes over after three FAILs (the core cap asks the kit); with approval it waits", async () => {
+		const policy = teamPolicy({ "fallback.requireApproval": true });
 		const harness = createHarness({ onFail: (input) => policy.onFail(input) });
 		await harness.seed("d1111", { qaVerdicts: [failVerdict(1), failVerdict(2), failVerdict(3)] });
 		await harness.tick({ review: [DEV] }, [SESSION]);
 
-		// team: requireApproval, so the tier-2 sibling waits in Backlog for the orchestrator or the user.
+		// requireApproval: the tier-2 sibling waits in Backlog for the orchestrator or the user.
 		expect(kinds(harness.actions)).toEqual(["createTask:s0001", "blockTask:d1111"]);
 		expect(harness.actions[0]).toMatchObject({
 			kind: "createTask",
@@ -141,8 +141,8 @@ describe("rework siblings never let two cards land", () => {
 			sibling: { taskId: "s0001", started: false },
 		});
 
-		// Without the opt-in the same three FAILs go to the orchestrator.
-		const plain = teamPolicy({});
+		// With the qaFails trigger off the same three FAILs go to the orchestrator.
+		const plain = teamPolicy({ "fallback.on.qaFails": false });
 		const orchestrator = createHarness({ onFail: (input) => plain.onFail(input) });
 		await orchestrator.seed("d1111", { qaVerdicts: [failVerdict(1), failVerdict(2), failVerdict(3)] });
 		await orchestrator.tick({ review: [DEV] }, [SESSION]);

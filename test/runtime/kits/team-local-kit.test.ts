@@ -48,10 +48,12 @@ describe("team-local kit", () => {
 		const models = collectModelProviders(kit);
 		expect(models.length).toBeGreaterThan(5);
 		expect(models.filter(({ provider }) => provider !== "lemonade")).toEqual([]);
+		// The fallback has no agent of its own: it runs on the dev role's (Cline).
+		expect(kit.roles?.fallback?.agent).toBeUndefined();
 		const agents = [
-			kit.dev?.agent,
-			kit.qa?.default?.agent,
-			kit.plan?.agent,
+			kit.roles?.dev?.agent,
+			kit.roles?.qa?.agent,
+			kit.roles?.plan?.agent,
 			...(kit.qa?.routes ?? []).map((r) => r.agent),
 		];
 		expect(new Set(agents)).toEqual(new Set(["cline"]));

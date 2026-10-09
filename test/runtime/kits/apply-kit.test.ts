@@ -79,8 +79,15 @@ describe("applyWorkspaceKit", () => {
 			).rejects.toThrow(/blurbz/u);
 			await expect(applyWorkspaceKit({ workspaceId: "foo", kitName: "nope" })).rejects.toThrow(/unknown kit/u);
 			await expect(
-				applyWorkspaceKit({ workspaceId: "foo", kitName: "team", set: { "dev.model": { tier: "tier1" } } }),
+				applyWorkspaceKit({ workspaceId: "foo", kitName: "team", set: { "roles.dev.tier": "tier1" } }),
 			).rejects.toThrow(/tier1/u);
+			// --set takes only project settings: legacy keys and the team definition are refused.
+			await expect(
+				applyWorkspaceKit({ workspaceId: "foo", kitName: "team", set: { "dev.agent": "codex" } }),
+			).rejects.toThrow(/legacy key; use roles\.dev\.agent/u);
+			await expect(
+				applyWorkspaceKit({ workspaceId: "foo", kitName: "team", set: { "onFail.reworkRounds": 5 } }),
+			).rejects.toThrow(/part of the team definition/u);
 			await expect(applyWorkspaceKit({ workspaceId: "foo", kitName: "team", unset: ["qa.blurb"] })).rejects.toThrow(
 				/no override/u,
 			);

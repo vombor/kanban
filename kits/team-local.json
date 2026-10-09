@@ -2,10 +2,26 @@
 	"kit": 1,
 	"name": "team-local",
 	"description": "The team workflow on local Lemonade models only (Cline + provider lemonade, no cloud anywhere): GLM-4.7-Flash builds and plans, Devstral (another family) reviews, same-model rework for 3 rounds, then the fallback dev model Qwen3.6-35B-A3B-MTP takes the task over on a sibling card (started at once); only when the fallback fails too does the card go to the orchestrator. All model picks (dev, QA, fallback) are PROVISIONAL until kanban bench calibrate picks them",
-	"dev": {
-		"agent": "cline",
-		"model": {
-			"tier": "dev"
+	"roles": {
+		"dev": {
+			"agent": "cline",
+			"tier": "dev",
+			"note": "PROVISIONAL: Cline on the dev tier's pick (GLM-4.7-Flash)"
+		},
+		"qa": {
+			"agent": "cline",
+			"provider": "lemonade",
+			"model": "Devstral-Small-2507-GGUF",
+			"note": "PROVISIONAL: Devstral, another family than the GLM dev model; qa.routes sends Mistral-built cards to GLM"
+		},
+		"plan": {
+			"agent": "cline",
+			"tier": "dev",
+			"note": "plans run on the dev tier's model in Cline's plan mode (--plan), so a plan card needs no model swap"
+		},
+		"fallback": {
+			"tier": "senior",
+			"note": "PROVISIONAL fallback dev model (Qwen3.6-35B-A3B-MTP, a third family) on the dev role's agent"
 		}
 	},
 	"qa": {
@@ -19,11 +35,6 @@
 				"plan"
 			],
 			"effectiveAgents": []
-		},
-		"default": {
-			"agent": "cline",
-			"provider": "lemonade",
-			"model": "Devstral-Small-2507-GGUF"
 		},
 		"routes": [
 			{
@@ -40,10 +51,6 @@
 	},
 	"plan": {
 		"enabled": true,
-		"agent": "cline",
-		"model": {
-			"tier": "dev"
-		},
 		"startInPlanMode": true,
 		"rules": {},
 		"candidates": [
@@ -64,7 +71,7 @@
 				"note": "candidate; 64K context as Lemonade loads it"
 			}
 		],
-		"note": "Plans run on the dev tier's model in Cline's plan mode (--plan). Provisional like the dev pick."
+		"note": "Plans run on roles.plan (the dev tier's model) in Cline's plan mode (--plan). Provisional like the dev pick."
 	},
 	"onFail": {
 		"rework": "same-model",
@@ -73,14 +80,16 @@
 		"then": "escalate",
 		"runoff": null
 	},
-	"onOutage": {
-		"then": "orchestrator"
-	},
-	"escalate": {
-		"to": {
-			"tier": "senior"
+	"fallback": {
+		"on": {
+			"qaFails": true,
+			"qaStalled": true,
+			"unchanged": true,
+			"conflict": true,
+			"outage": false
 		},
-		"requireApproval": false
+		"requireApproval": false,
+		"note": "Same structure as team: after reworkRounds FAILs, a QA stall, an unchanged rework or an unresolved conflict the fallback sibling starts at once (local runs cost 0). Outages are waited out and then go to the orchestrator: every model is on the same Lemonade server, so a fallback can't get around its outage."
 	},
 	"features": [
 		"scoreboard",

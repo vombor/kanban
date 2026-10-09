@@ -115,6 +115,7 @@ describe("applyCliSessionScope", () => {
 				"cline apply-lemonade-models",
 				"cline store-bedrock-key",
 				"cline remove-bedrock-key",
+				"kit migrate-overrides",
 			]) {
 				expect(
 					await applyCliSessionScope({
@@ -138,6 +139,34 @@ describe("applyCliSessionScope", () => {
 			// The orchestrator expands an approved plan; the user's own terminal is asked by the server.
 			expect(await scope("plan expand", {}, SESSION_ENV)).toBeNull();
 			expect(await scope("plan approve", {}, {})).toBeNull();
+		});
+	});
+
+	it("refuses kit set/unset from a card session (isolation off included), allows the orchestrator and the user", async () => {
+		await withTemporaryKanbanHome(async () => {
+			const asRole = (role: "card" | "orchestrator") => () => ({
+				isolation: {
+					whoami: {
+						query: vi.fn(async () => ({
+							caller: "session",
+							workspaceId: "a",
+							taskId: role === "card" ? "t1" : null,
+							role,
+							mode: "off",
+							reachable: ["a"],
+						})),
+					},
+					requestApproval: { mutate: vi.fn(down) },
+				},
+			});
+			for (const commandPath of ["kit set", "kit unset"]) {
+				const run = async (createClient: () => unknown, env: NodeJS.ProcessEnv = SESSION_ENV) =>
+					await applyCliSessionScope({ commandPath, options: {}, createClient: createClient as never, env });
+				expect(await run(asRole("card"))).toContain("changes the project's settings on its kit");
+				expect(await run(noServer)).toContain("never a card session");
+				expect(await run(asRole("orchestrator"))).toBeNull();
+				expect(await run(noServer, {})).toBeNull();
+			}
 		});
 	});
 

@@ -17,9 +17,13 @@ import {
 	type LocalResidencyFinding,
 	listKitLocalWorkingSet,
 } from "../kits/local-residency";
+import { migrateWorkspaceOverrides, type OverrideMigrationPlan } from "../kits/migrate-overrides";
+import { describeProjectSettings, readKitSettingsHistory } from "../kits/project-settings";
 import { loadKitCatalog, resolveKitByName, resolveWorkspaceKit } from "../kits/resolve-kit";
 import { fetchLemonadeMaxLoadedLlms, lemonadeApiBaseUrl } from "../models/lemonade-models";
-import { getKanbanKitsPath } from "../state/kanban-home";
+import { getKanbanKitsPath, getKitSettingsHistoryPath } from "../state/kanban-home";
+import type { KitSettingChangeResponse } from "../trpc/kit-settings-api";
+import { createRuntimeTrpcClient } from "./runtime-trpc-client";
 import { resolveWorkspaceTarget } from "./workspace-target";
 
 function toErrorMessage(error: unknown): string {
@@ -41,6 +45,15 @@ function collect(value: string, previous: string[]): string[] {
 	return [...previous, value];
 }
 
+/** A value on the command line: JSON when it is JSON (`true`, `3`, `null`, `["a"]`, `"text"`), else the text itself. */
+export function parseKitSettingValue(rawValue: string): unknown {
+	try {
+		return JSON.parse(rawValue);
+	} catch {
+		return rawValue;
+	}
+}
+
 /** `key=value`: the value is parsed as JSON when it is JSON (`true`, `3`, `["a"]`, `"text"`), else kept as text. */
 export function parseSetAssignments(assignments: string[]): Record<string, unknown> {
 	const result: Record<string, unknown> = {};
@@ -50,12 +63,7 @@ export function parseSetAssignments(assignments: string[]): Record<string, unkno
 			throw new Error(`--set ${assignment}: expected key=value.`);
 		}
 		const key = assignment.slice(0, separator).trim();
-		const rawValue = assignment.slice(separator + 1);
-		try {
-			result[key] = JSON.parse(rawValue);
-		} catch {
-			result[key] = rawValue;
-		}
+		result[key] = parseKitSettingValue(assignment.slice(separator + 1));
 	}
 	return result;
 }
@@ -135,6 +143,72 @@ async function readLocalResidency(
 	}
 }
 
+function formatSettingChange(response: KitSettingChangeResponse, workspaceId: string): string[] {
+	const lines = response.changes.map(
+		(change) =>
+			`  ${change.key}: ${change.from === undefined ? "(none)" : JSON.stringify(change.from)} -> ${change.to === undefined ? "(none)" : JSON.stringify(change.to)}`,
+	);
+	return [
+		`Workspace ${workspaceId} (kit ${response.kitName}): ${lines.length > 0 ? "project settings changed, in effect now" : "nothing changed"}`,
+		...lines,
+		...(response.historyPath ? [`History: ${response.historyPath}`] : []),
+	];
+}
+
+/** `kit set`/`kit unset` go through the running server, which decides who is asking (the user, the orchestrator). */
+async function changeKitSetting(
+	options: { project?: string; json?: boolean },
+	change: (client: ReturnType<typeof createRuntimeTrpcClient>) => Promise<KitSettingChangeResponse>,
+	failureLabel: string,
+): Promise<void> {
+	try {
+		const target = await resolveWorkspaceTarget(options.project, { allowUnregistered: false });
+		const client = createRuntimeTrpcClient(target.workspaceId);
+		let response: KitSettingChangeResponse;
+		try {
+			response = await change(client);
+		} catch (error) {
+			throw new Error(
+				`the running Kanban server didn't answer (${toErrorMessage(error)}); project settings change only through it, because it checks who is asking`,
+			);
+		}
+		if (options.json) {
+			printJson({ workspaceId: target.workspaceId, ...response });
+		}
+		if (!response.ok) {
+			throw new Error(response.error ?? "refused");
+		}
+		if (!options.json) {
+			printLines(formatSettingChange(response, target.workspaceId));
+		}
+	} catch (error) {
+		process.stderr.write(`${failureLabel} failed: ${toErrorMessage(error)}\n`);
+		process.exitCode = 1;
+	}
+}
+
+function formatMigrationPlan(plan: OverrideMigrationPlan & { written: boolean }, dryRun: boolean): string[] {
+	if (plan.unchanged) {
+		return [`Workspace ${plan.workspaceId}: its overrides are project settings already; nothing to migrate.`];
+	}
+	const lines = [
+		`Workspace ${plan.workspaceId}: kit ${plan.fromKit}${plan.toKit !== plan.fromKit ? ` -> ${plan.toKit} (new user kit ${plan.userKitPath})` : ""}; routing stays the same (checked).`,
+		"Overrides (stored key -> where it goes):",
+	];
+	for (const row of plan.rows) {
+		const targets = row.to.map((target) =>
+			target.kind === "project"
+				? `project setting ${target.key}`
+				: target.kind === "dropped"
+					? `dropped (${target.why})`
+					: `user kit ${target.kitName} (${target.key})`,
+		);
+		lines.push(`  ${row.from} -> ${[...new Set(targets)].join("; ")}`);
+	}
+	lines.push(dryRun ? "Dry run: nothing written." : "Written.");
+	return lines;
+}
+
 export function registerKitCommand(program: Command): void {
 	const kit = program
 		.command("kit")
@@ -182,9 +256,11 @@ export function registerKitCommand(program: Command): void {
 		});
 
 	kit.command("show")
-		.description("Show a kit's resolved values with their source, and how it answers the routing questions.")
+		.description(
+			"Show a kit's team definition (roles with their effective models and sources, the fallback and its triggers), the project's settings and their history, how it answers the routing questions, and every resolved value with its source.",
+		)
 		.argument("[name]", "Kit name. With --project and no name: the workspace's kit.")
-		.option("--project <workspace>", "Workspace id or project path: resolve with that workspace's overrides.")
+		.option("--project <workspace>", "Workspace id or project path: resolve with that workspace's project settings.")
 		.option("--json", "Print as JSON.")
 		.action(async (name: string | undefined, options: { project?: string; json?: boolean }) => {
 			try {
@@ -214,9 +290,23 @@ export function registerKitCommand(program: Command): void {
 				if (!resolution.ok) {
 					throw new Error(resolution.error);
 				}
+				const classified =
+					workspace && kitName === workspace.kitName
+						? describeProjectSettings(catalog, kitName, workspace.overrides)
+						: null;
+				const historyPath = target ? getKitSettingsHistoryPath(target.workspaceId) : null;
 				const report = buildKitReport({
 					kitName,
 					resolved: resolution,
+					projectSettings:
+						target && classified && historyPath
+							? {
+									workspaceId: target.workspaceId,
+									classified,
+									historyPath,
+									history: await readKitSettingsHistory(historyPath),
+								}
+							: null,
 					workspaceId: target?.workspaceId ?? NO_WORKSPACE_ID,
 					selectedAgentId: runtimeConfig.selectedAgentId,
 					maxFailRounds: config.pipeline.rework.maxFailRounds,
@@ -255,7 +345,7 @@ export function registerKitCommand(program: Command): void {
 
 	kit.command("apply")
 		.description(
-			"Use a kit for a workspace. Keeps its overrides; --set/--unset edit them. The landing mode changes only with --landing.",
+			"Use a kit for a workspace (the user's: it changes the project's team). Keeps its project settings; --set/--unset edit them (--set takes only role models and project facts). The landing mode changes only with --landing.",
 		)
 		.argument("<name>", "Kit name.")
 		.option(
@@ -265,11 +355,11 @@ export function registerKitCommand(program: Command): void {
 		.option("--landing <mode>", "Also set the landing mode: off, commit, pr or qa.")
 		.option(
 			"--set <key=value>",
-			"Set an override (dotted kit key; the value is JSON or text). Repeatable.",
+			"Set a project setting (roles.<role>.agent|provider|model|tier or a project fact; the value is JSON or text). Repeatable.",
 			collect,
 			[],
 		)
-		.option("--unset <key>", "Remove an override. Repeatable.", collect, [])
+		.option("--unset <key>", "Remove a stored override (a team key too). Repeatable.", collect, [])
 		.option("--dry-run", "Print what would change; write nothing.")
 		.option("--json", "Print as JSON.")
 		.action(
@@ -305,4 +395,67 @@ export function registerKitCommand(program: Command): void {
 				}
 			},
 		);
+
+	kit.command("set")
+		.description(
+			"Set a project setting on the project's kit, in effect at once: a role's model (roles.<role>.agent|provider|model|tier, for a role the kit defines) or a project fact (qa.blurb, qa.promptNotes.*, qa.serversScript, qa.preview, land.postLand, plan.rules). Only the user and the project's own orchestrator; never a card. The team definition (flow, triggers, QA routes, tiers, ...) is the kit's: pick another kit with kanban kit apply.",
+		)
+		.argument("<key>", "Dotted kit key, e.g. roles.fallback.model.")
+		.argument("<value>", 'JSON (true, 3, null, [..], {..}, "text") or plain text.')
+		.option(
+			"--project <workspace>",
+			"Workspace id or project path. Defaults to the project containing the current directory.",
+		)
+		.option("--json", "Print as JSON.")
+		.action(async (key: string, value: string, options: { project?: string; json?: boolean }) => {
+			await changeKitSetting(
+				options,
+				async (client) => await client.kit.set.mutate({ key, value: parseKitSettingValue(value) }),
+				"Kit set",
+			);
+		});
+
+	kit.command("unset")
+		.description(
+			"Remove a project setting (a role field, a whole role roles.<role>, or a project fact), so the kit's value applies again. Only the user and the project's own orchestrator.",
+		)
+		.argument("<key>", "Dotted kit key, e.g. roles.dev.model or roles.dev.")
+		.option(
+			"--project <workspace>",
+			"Workspace id or project path. Defaults to the project containing the current directory.",
+		)
+		.option("--json", "Print as JSON.")
+		.action(async (key: string, options: { project?: string; json?: boolean }) => {
+			await changeKitSetting(options, async (client) => await client.kit.unset.mutate({ key }), "Kit unset");
+		});
+
+	kit.command("migrate-overrides")
+		.description(
+			"The user's: turn overrides from before the team/project split into project settings. Legacy model keys become roles.* keys, team keys the kit already has are dropped, the other team keys go into a new user kit (the project's kit with them) that the project then uses. Refused if routing would change.",
+		)
+		.option(
+			"--project <workspace>",
+			"Workspace id or project path. Defaults to the project containing the current directory.",
+		)
+		.option("--into <name>", "Name of the new user kit (default <workspace>-team).")
+		.option("--dry-run", "Print where each override goes; write nothing.")
+		.option("--json", "Print as JSON.")
+		.action(async (options: { project?: string; into?: string; dryRun?: boolean; json?: boolean }) => {
+			try {
+				const target = await resolveWorkspaceTarget(options.project, { allowUnregistered: false });
+				const result = await migrateWorkspaceOverrides({
+					workspaceId: target.workspaceId,
+					into: options.into,
+					dryRun: options.dryRun === true,
+				});
+				if (options.json) {
+					printJson({ ok: true, ...result });
+				} else {
+					printLines(formatMigrationPlan(result, options.dryRun === true));
+				}
+			} catch (error) {
+				process.stderr.write(`Kit migrate-overrides failed: ${toErrorMessage(error)}\n`);
+				process.exitCode = 1;
+			}
+		});
 }

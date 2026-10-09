@@ -147,11 +147,9 @@ export async function addProject(input: AddProjectInput): Promise<AddProjectResu
 	if (configured && input.blurb !== undefined) {
 		if (current.kit?.overrides["qa.blurb"] === undefined) {
 			await applyWorkspaceKit({ workspaceId, kitName: currentKitName, set: { "qa.blurb": input.blurb } });
-			configLines.push("added the qa.blurb override");
+			configLines.push("added the qa.blurb project setting");
 		} else {
-			warnings.push(
-				"--blurb not applied: the qa.blurb override is already set (kanban kit apply … --set qa.blurb=…)",
-			);
+			warnings.push("--blurb not applied: the qa.blurb project setting is already set (kanban kit set qa.blurb …)");
 		}
 	}
 	if (Object.keys(additions).length > 0) {

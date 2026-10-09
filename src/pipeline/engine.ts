@@ -225,7 +225,7 @@ function describeQaAnswer(answer: QaPolicyAnswer): string {
 		return `no QA: ${answer.reason}; the card waits for Approve & land`;
 	}
 	const model = answer.model ? ` on ${answer.model.model}` : "";
-	return `QA by ${answer.agentId}${model} (${answer.route ?? "qa.default"})`;
+	return `QA by ${answer.agentId}${model} (${answer.route ?? "roles.qa"})`;
 }
 
 /** A session the restart cut off: the startup mark (interrupted) on a session lostToRestart() counts as left behind. */

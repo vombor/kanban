@@ -28,11 +28,12 @@ describe("resolveKitLayers", () => {
 	const named = kitDocumentSchema.parse({
 		kit: 1,
 		name: "mine",
-		qa: { enabled: true, default: { agent: "codex" }, skip: { roles: ["qa"] }, blurb: "kit blurb" },
+		roles: { qa: { agent: "codex" } },
+		qa: { enabled: true, skip: { roles: ["qa"] }, blurb: "kit blurb" },
 		onFail: { rework: "same-model", reworkRounds: 2 },
 	});
 
-	it("takes the override, then the kit, then default", () => {
+	it("takes the project setting, then the kit, then default", () => {
 		const resolved = resolveKitLayers(getDefaultKit(), named, { "qa.blurb": "override blurb" });
 		if (!resolved.ok) {
 			throw new Error(resolved.error);
@@ -40,7 +41,7 @@ describe("resolveKitLayers", () => {
 		expect(resolved.kit.qa?.blurb).toBe("override blurb");
 		expect(resolved.kit.onFail?.reworkRounds).toBe(2);
 		expect(resolved.kit.onFail?.then).toBe("stop");
-		expect(resolved.sources["qa.blurb"]).toBe("override");
+		expect(resolved.sources["qa.blurb"]).toBe("project");
 		expect(resolved.sources["onFail.reworkRounds"]).toBe("mine");
 		expect(resolved.sources["onFail.then"]).toBe("default");
 		expect(resolved.sources["qa.routes"]).toBe("default");
@@ -66,6 +67,70 @@ describe("resolveKitLayers", () => {
 	});
 });
 
+describe("roles: model and tier exclude each other across layers", () => {
+	const team = async (overrides: Record<string, unknown>) => {
+		const resolved = resolveKitByName(await builtInCatalog(), "team", overrides);
+		if (!resolved.ok) {
+			throw new Error(resolved.error);
+		}
+		return resolved;
+	};
+
+	it("a project's roles.dev.model replaces the kit's roles.dev.tier, and its source is project", async () => {
+		const resolved = await team({
+			"roles.dev.model": "us.anthropic.claude-opus-5-5",
+			"roles.dev.provider": "bedrock",
+		});
+		expect(resolved.kit.roles?.dev).toMatchObject({ agent: "cline", model: "us.anthropic.claude-opus-5-5" });
+		expect(resolved.kit.roles?.dev?.tier).toBeUndefined();
+		expect(resolved.sources["roles.dev.model"]).toBe("project");
+		expect(resolved.sources["roles.dev.agent"]).toBe("team");
+	});
+
+	it("a project's roles.fallback.tier replaces an explicit model", async () => {
+		const resolved = await team({ "roles.fallback.model": "x", "roles.fallback.tier": "tier3" });
+		expect(resolved.kit.roles?.fallback?.tier).toBe("tier3");
+		expect(resolved.kit.roles?.fallback?.model).toBeUndefined();
+	});
+
+	it("translates legacy override keys into roles and the fallback flow (foo's 2026-10-08 overrides)", async () => {
+		const resolved = await team({
+			"dev.agent": "codex",
+			"qa.default.agent": "cline",
+			"qa.default.provider": "bedrock",
+			"qa.default.model": "us.anthropic.claude-haiku-5-5",
+			"plan.agent": "cline",
+			"plan.model": { provider: "bedrock", model: "us.anthropic.claude-opus-5-5" },
+			"escalate.to": { agent: "codex", model: "us.moonshotai.kimi-k3" },
+			"escalate.requireApproval": false,
+			"onOutage.then": "escalate",
+		});
+		expect(resolved.kit.roles).toMatchObject({
+			dev: { agent: "codex", tier: "tier3" },
+			qa: { agent: "cline", provider: "bedrock", model: "us.anthropic.claude-haiku-5-5" },
+			plan: { agent: "cline", provider: "bedrock", model: "us.anthropic.claude-opus-5-5" },
+			fallback: { agent: "codex", model: "us.moonshotai.kimi-k3", provider: null },
+		});
+		expect(resolved.kit.fallback?.on).toEqual({
+			qaFails: true,
+			qaStalled: true,
+			unchanged: true,
+			conflict: true,
+			outage: true,
+		});
+		expect(resolved.sources["roles.dev.agent"]).toBe("project");
+		expect(resolved.sources["roles.dev.tier"]).toBe("team");
+		for (const key of ["dev", "escalate", "onOutage"]) {
+			expect(key in resolved.kit).toBe(false);
+		}
+	});
+
+	it("legacy escalate.to orchestrator turns every fallback trigger off, outages included", async () => {
+		const resolved = await team({ "escalate.to": "orchestrator", "onOutage.then": "escalate" });
+		expect(Object.values(resolved.kit.fallback?.on ?? {})).toEqual([false, false, false, false, false]);
+	});
+});
+
 describe("resolveWorkspaceKit", () => {
 	it("gives a workspace without a kit entry the default kit", async () => {
 		const catalog = await builtInCatalog();
@@ -88,7 +153,7 @@ describe("resolveWorkspaceKit", () => {
 		const foo = resolveWorkspaceKit(config, "foo", catalog);
 		expect(foo.kitName).toBe("team");
 		expect(foo.kit.qa?.blurb).toBe("Project: Pawsome");
-		expect(foo.sources["qa.blurb"]).toBe("override");
+		expect(foo.sources["qa.blurb"]).toBe("project");
 		expect(foo.sources["qa.enabled"]).toBe("team");
 		for (const workspaceId of ["kanban-2uge", "brand-new"]) {
 			const other = resolveWorkspaceKit(config, workspaceId, catalog);
@@ -136,7 +201,10 @@ describe("loadKitCatalog", () => {
 				["broken.json", "other.json", "team.json", "typo.json"].map((file) => join(path, file)),
 			);
 			const solo = resolveKitByName(catalog, "solo");
-			expect(solo.ok && solo.sources["dev.agent"]).toBe("solo");
+			// A user kit's legacy dev.agent is its roles.dev.agent.
+			expect(solo.ok && solo.sources["roles.dev.agent"]).toBe("solo");
+			expect(solo.ok && solo.kit.roles?.dev).toEqual({ agent: "codex" });
+			expect(solo.ok && "dev" in solo.kit).toBe(false);
 		} finally {
 			cleanup();
 		}
@@ -184,7 +252,7 @@ describe("kanban kit show report", () => {
 			config: parsePipelineConfig({}).config,
 		});
 		const sourceOf = (key: string) => report.values.find((row) => row.key === key)?.source;
-		expect(sourceOf("qa.blurb")).toBe("override");
+		expect(sourceOf("qa.blurb")).toBe("project");
 		expect(sourceOf("qa.enabled")).toBe("team");
 		expect(sourceOf("land.postLand")).toBe("default");
 		expect(report.devAssignment).toMatchObject({ agentId: "cline", tier: "tier3" });
@@ -195,11 +263,26 @@ describe("kanban kit show report", () => {
 		expect(report.qa.some((row) => row.devModel?.model === "qwen.qwen3-next-80b-a3b")).toBe(false);
 		expect(report.recommendedLandingMode).toBe("qa");
 		expect(report.warnings).toEqual([]);
-		expect(formatKitReport(report).join("\n")).toContain('qa.blurb = "Project: Pawsome"  [override]');
-		expect(formatKitReport(report).join("\n")).toContain("After 360 min of provider outage: keep holding");
+		expect(formatKitReport(report).join("\n")).toContain('qa.blurb = "Project: Pawsome"  [project]');
+		const text = formatKitReport(report).join("\n");
+		// The team's fallback (roles.fallback = tier2) takes an outage-held card over once recovery would give up.
+		expect(text).toContain("After 360 min of provider outage: take over on cline bedrock/us.moonshotai.kimi-k3");
+		expect(text).toContain("Team definition (kit team;");
+		expect(text).toMatch(
+			/ {2}dev {7}cline on bedrock\/us\.openai\.gpt-6\.1-sol \(tier tier3\) {2}\[agent: team, model: team\]/u,
+		);
+		expect(text).toMatch(/fallback {2}the dev role's agent on bedrock\/us\.moonshotai\.kimi-k3 \(tier tier2\)/u);
+		expect(text).toContain(
+			"    on: 3 failed QA round(s); QA stalled; a rework that came back unchanged; a merge conflict its reworks didn't fix; a provider outage hold of 360 min",
+		);
+		expect(text).toContain("    approval: none, the sibling starts at once");
+		expect(report.fallback).toMatchObject({
+			on: ["qaFails", "qaStalled", "unchanged", "conflict", "outage"],
+			off: [],
+		});
 	});
 
-	it("shows the outage takeover a kit's onOutage asks for", async () => {
+	it("shows the outage takeover the legacy onOutage/escalate keys ask for", async () => {
 		const resolved = resolveKitByName(await builtInCatalog(), "team", {
 			"onOutage.then": "escalate",
 			"onOutage.afterMin": 45,

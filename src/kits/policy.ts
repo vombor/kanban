@@ -6,8 +6,8 @@
 // pipeline asks the other questions from P4-1 on.
 import type { RuntimeAgentId, RuntimeBoardCard } from "../core/api-contract";
 import type { EffectiveModel } from "../core/effective-agent";
-import type { CardRole, KitDocument } from "./kit-schema";
-import { lookupTierModel, resolveKitModelRef } from "./tier-lookup";
+import { getKitFallbackFlow, resolveKitRole } from "./kit-roles";
+import type { CardRole, KitDocument, KitFallbackTrigger } from "./kit-schema";
 
 export interface EffectiveCard {
 	card: RuntimeBoardCard;
@@ -75,7 +75,7 @@ export type QaPolicyAnswer =
 			kind: "qa";
 			agentId: RuntimeAgentId;
 			model: EffectiveModel | null;
-			/** `qa.routes[<i>]`, or null for `qa.default`. */
+			/** `qa.routes[<i>]`, or null for `roles.qa`. */
 			route: string | null;
 			promptParts: QaPromptParts;
 	  };
@@ -212,80 +212,77 @@ export function answerPlanAssignment(kit: KitDocument): PlanAssignmentAnswer {
 	if (plan?.enabled !== true) {
 		return { kind: "disabled", reason: `kit "${kit.name}" has plan.enabled off` };
 	}
+	const role = resolveKitRole(kit, "plan");
 	const base = {
 		kind: "plan" as const,
-		agentId: plan.agent ?? null,
+		agentId: role?.agentId ?? null,
 		startInPlanMode: plan.startInPlanMode ?? false,
 		rules: Object.values(plan.rules ?? {}),
 	};
-	if (!plan.model) {
+	// No model, or (only a guard: the resolver refuses it) a tier without a usable model.
+	if (!role?.model) {
 		return base;
 	}
-	const resolved = resolveKitModelRef(kit, plan.model);
-	// The resolver refuses a kit whose tier has no usable model, so this is only a guard.
-	if (!resolved.ok) {
-		return base;
-	}
-	return { ...base, model: resolved.choice, ...(resolved.tier ? { tier: resolved.tier } : {}) };
+	return { ...base, model: role.model, ...(role.tier ? { tier: role.tier } : {}) };
 }
 
 /** The evaluator for one resolved kit. `kit` must already be resolved (override > kit > default) and validated. */
 export function createRoutingPolicy(kit: KitDocument): RoutingPolicy {
-	const escalate = (dev: EffectiveCard, reason: string): OnFailAnswer => {
-		const requireApproval = kit.escalate?.requireApproval ?? false;
-		const to = kit.escalate?.to ?? "orchestrator";
-		if (to === "orchestrator") {
-			return { action: "escalate", to, requireApproval, reason };
+	const fallbackFlow = getKitFallbackFlow(kit);
+
+	/**
+	 * Where a card goes when `trigger` fires: the fallback role when the kit hands that trigger to it, else the
+	 * orchestrator. The core still refuses a fallback onto the card's own model, by a fallback sibling or by a runoff
+	 * racer (src/pipeline/rework.ts `refuseTakeover`).
+	 */
+	const escalate = (dev: EffectiveCard, reason: string, trigger: KitFallbackTrigger): OnFailAnswer => {
+		const toOrchestrator = (why: string | null): OnFailAnswer => ({
+			action: "escalate",
+			to: "orchestrator",
+			requireApproval: false,
+			reason: why ? `${reason}; ${why}` : reason,
+		});
+		if (!fallbackFlow.triggers[trigger]) {
+			return toOrchestrator(null);
 		}
-		if ("tier" in to) {
-			// Escalating to a senior tier is the team kit's `tiers` feature (plan §3.2, P4-T3): without it in
-			// `features`, the card goes to the orchestrator as for `"orchestrator"`.
-			if (!(kit.features ?? []).includes("tiers")) {
-				return {
-					action: "escalate",
-					to: "orchestrator",
-					requireApproval,
-					reason: `${reason}; escalate.to.tier needs the "tiers" feature in the kit's features`,
-				};
-			}
-			const lookup = lookupTierModel(kit, to.tier);
-			if (!lookup.ok) {
-				return { action: "escalate", to: "orchestrator", requireApproval, reason: `${reason}; ${lookup.error}` };
-			}
-			// A senior tier runs on the kit's dev agent, else on the agent the card ran on.
-			return {
-				action: "escalate",
-				to: { agentId: kit.dev?.agent ?? dev.agentId, model: lookup.choice },
-				requireApproval,
-				reason,
-			};
+		const role = fallbackFlow.role;
+		if (!role) {
+			return toOrchestrator("the kit has no fallback role");
 		}
+		// Falling back onto a tier is the team kit's `tiers` feature (plan §3.2, P4-T3): without it in `features`, the
+		// card goes to the orchestrator.
+		if (role.tier && !(kit.features ?? []).includes("tiers")) {
+			return toOrchestrator(`roles.fallback.tier needs the "tiers" feature in the kit's features`);
+		}
+		if (role.error) {
+			return toOrchestrator(role.error);
+		}
+		if (!role.model) {
+			return toOrchestrator("roles.fallback names no model");
+		}
+		// A fallback without its own agent runs on the dev role's agent, else on the agent the card ran on.
 		return {
 			action: "escalate",
-			to: { agentId: to.agent, model: { provider: to.provider ?? null, model: to.model } },
-			requireApproval,
+			to: { agentId: role.agentId ?? resolveKitRole(kit, "dev")?.agentId ?? dev.agentId, model: role.model },
+			requireApproval: fallbackFlow.requireApproval,
 			reason,
 		};
 	};
 
-	const afterRounds = (dev: EffectiveCard, reason: string): OnFailAnswer =>
-		(kit.onFail?.then ?? "stop") === "escalate" ? escalate(dev, reason) : { action: "stop", reason };
+	const afterRounds = (dev: EffectiveCard, reason: string, trigger: KitFallbackTrigger): OnFailAnswer =>
+		(kit.onFail?.then ?? "stop") === "escalate" ? escalate(dev, reason, trigger) : { action: "stop", reason };
 
 	return {
 		devAssignment() {
-			const agentId = kit.dev?.agent;
-			if (!agentId) {
+			const role = resolveKitRole(kit, "dev");
+			if (!role?.agentId) {
 				return null;
 			}
-			if (!kit.dev?.model) {
-				return { agentId };
+			// No model, or (only a guard: the resolver refuses it) a tier without a usable model.
+			if (!role.model) {
+				return { agentId: role.agentId };
 			}
-			const resolved = resolveKitModelRef(kit, kit.dev.model);
-			// The resolver refuses a kit whose tier has no usable model, so this is only a guard.
-			if (!resolved.ok) {
-				return { agentId };
-			}
-			return { agentId, model: resolved.choice, ...(resolved.tier ? { tier: resolved.tier } : {}) };
+			return { agentId: role.agentId, model: role.model, ...(role.tier ? { tier: role.tier } : {}) };
 		},
 
 		qaPolicy({ dev }) {
@@ -307,16 +304,22 @@ export function createRoutingPolicy(kit: KitDocument): RoutingPolicy {
 			const routes = kit.qa.routes ?? [];
 			const routeIndex = devModel ? routes.findIndex((route) => new RegExp(route.devModel).test(devModel)) : -1;
 			const route = routeIndex >= 0 ? routes[routeIndex] : undefined;
-			const target = route ?? kit.qa.default;
+			const qaRole = resolveKitRole(kit, "qa");
+			const target = route
+				? {
+						agent: route.agent,
+						model: route.model ? { provider: route.provider ?? null, model: route.model } : null,
+					}
+				: qaRole?.agentId
+					? { agent: qaRole.agentId, model: qaRole.model }
+					: null;
 			if (!target) {
 				return {
 					kind: "none",
-					reason: `kit "${kit.name}" has no QA route for ${devModel ?? "this card"} and no qa.default`,
+					reason: `kit "${kit.name}" has no QA route for ${devModel ?? "this card"} and no roles.qa agent`,
 				};
 			}
-			const qaModel: EffectiveModel | null = target.model
-				? { provider: target.provider ?? null, model: target.model }
-				: null;
+			const qaModel: EffectiveModel | null = target.model;
 			const routeName = route ? `qa.routes[${routeIndex}]` : null;
 			if (kit.qa.requireDifferentVendor === true) {
 				const devVendor = getModelVendor(devModel);
@@ -324,7 +327,7 @@ export function createRoutingPolicy(kit: KitDocument): RoutingPolicy {
 				if (devVendor && qaVendor && devVendor === qaVendor) {
 					return {
 						kind: "none",
-						reason: `refused: ${routeName ?? "qa.default"} QA model ${qaModel?.model} is from the dev card's vendor (${devVendor}) and the kit requires a different vendor`,
+						reason: `refused: ${routeName ?? "roles.qa"} QA model ${qaModel?.model} is from the dev card's vendor (${devVendor}) and the kit requires a different vendor`,
 					};
 				}
 			}
@@ -341,17 +344,21 @@ export function createRoutingPolicy(kit: KitDocument): RoutingPolicy {
 			const fails = history.failRounds.length;
 			const cap = failRoundCap(kit, history, limits);
 			if (cause === "stalled" || cause === "unchanged") {
-				return afterRounds(dev, cause === "stalled" ? "QA stalled" : "the rework came back unchanged");
+				return cause === "stalled"
+					? afterRounds(dev, "QA stalled", "qaStalled")
+					: afterRounds(dev, "the rework came back unchanged", "unchanged");
 			}
 			if (cause === "conflict" && (kit.onFail?.conflict ?? "stop") === "stop") {
 				return { action: "stop", reason: "merge conflict at land; the kit does not rework conflicts" };
 			}
 			const reworks = cause === "conflict" || (kit.onFail?.rework ?? "none") === "same-model";
 			if (!reworks) {
-				return afterRounds(dev, `FAIL in round ${fails}; the kit does not rework`);
+				return afterRounds(dev, `FAIL in round ${fails}; the kit does not rework`, "qaFails");
 			}
 			if (fails >= cap) {
-				return afterRounds(dev, `${fails} failed QA rounds (limit ${cap})`);
+				return cause === "conflict"
+					? afterRounds(dev, `merge conflict at land after ${fails} rounds (limit ${cap})`, "conflict")
+					: afterRounds(dev, `${fails} failed QA rounds (limit ${cap})`, "qaFails");
 			}
 			const runoff = cause === "fail" ? kit.onFail?.runoff : null;
 			if (runoff) {
@@ -372,26 +379,26 @@ export function createRoutingPolicy(kit: KitDocument): RoutingPolicy {
 		},
 
 		onOutage({ dev, heldMin, maxMin }) {
-			if ((kit.onOutage?.then ?? "orchestrator") !== "escalate") {
-				return { action: "hold", reason: "the kit waits out outages (onOutage.then: orchestrator)" };
+			if (!fallbackFlow.triggers.outage) {
+				return { action: "hold", reason: "the kit waits out outages (fallback.on.outage off)" };
 			}
-			const afterMin = kit.onOutage?.afterMin ?? maxMin;
+			const afterMin = fallbackFlow.outageAfterMin ?? maxMin;
 			if (heldMin < afterMin) {
 				return { action: "hold", reason: `the kit hands the card over after ${afterMin} min of outage` };
 			}
 			const reason = `provider outage on ${dev.model?.model ?? "its model"} for ${Math.floor(heldMin)} min`;
-			const answer = escalate(dev, reason);
-			// Nothing to take it over: the hold runs to maxMin and goes to the orchestrator, as without the key.
+			const answer = escalate(dev, reason, "outage");
+			// Nothing to take it over: the hold runs to maxMin and goes to the orchestrator, as without the trigger.
 			if (answer.action !== "escalate" || answer.to === "orchestrator") {
 				return {
 					action: "hold",
-					reason: "onOutage.then is escalate, but escalate.to resolves to the orchestrator",
+					reason: `fallback.on.outage is on, but there is no fallback model (${answer.action === "escalate" ? answer.reason : "no answer"})`,
 				};
 			}
 			if (isSameEscalationModel(dev.model, answer.to.model)) {
 				return {
 					action: "hold",
-					reason: `escalate.to is ${answer.to.model.model}, the model the card already runs on`,
+					reason: `the fallback is ${answer.to.model.model}, the model the card already runs on`,
 				};
 			}
 			return { action: "escalate", to: answer.to, requireApproval: answer.requireApproval, reason };

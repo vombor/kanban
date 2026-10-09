@@ -160,6 +160,12 @@ import {
 	type RuntimeIsolationApi,
 } from "./isolation-api";
 import {
+	kitSettingChangeResponseSchema,
+	kitSettingSetRequestSchema,
+	kitSettingUnsetRequestSchema,
+	type RuntimeKitSettingsApi,
+} from "./kit-settings-api";
+import {
 	planApproveRequestSchema,
 	planApproveResponseSchema,
 	planPreviewRequestSchema,
@@ -195,6 +201,8 @@ export interface RuntimeTrpcContext {
 	isolationApi?: RuntimeIsolationApi;
 	/** Plan approval (src/trpc/plans-api.ts); absent = not available. */
 	plansApi?: RuntimePlansApi;
+	/** A project's settings on its kit (src/trpc/kit-settings-api.ts); absent = not available. */
+	kitSettingsApi?: RuntimeKitSettingsApi;
 	runtimeApi: {
 		loadConfig: (scope: RuntimeTrpcWorkspaceScope | null) => Promise<RuntimeConfigResponse>;
 		saveConfig: (
@@ -818,6 +826,48 @@ export const runtimeAppRouter = t.router({
 					trustedBrowser: ctx.trustedBrowser === true,
 					workspaceId: ctx.workspaceScope.workspaceId,
 					repoPath: ctx.workspaceScope.workspacePath,
+					request: input,
+				});
+			}),
+	}),
+	// A project's settings on its kit (role models, project facts): the user's and that project's orchestrator's.
+	kit: t.router({
+		set: workspaceProcedure
+			.input(kitSettingSetRequestSchema)
+			.output(kitSettingChangeResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.kitSettingsApi) {
+					return {
+						ok: false,
+						kitName: null,
+						changes: [],
+						historyPath: null,
+						error: "Kit settings are not available here.",
+					};
+				}
+				// In every isolation mode: a session without its credential is traced to its process tree.
+				return await ctx.kitSettingsApi.set({
+					caller: await readStrictCaller(ctx),
+					workspaceId: ctx.workspaceScope.workspaceId,
+					request: input,
+				});
+			}),
+		unset: workspaceProcedure
+			.input(kitSettingUnsetRequestSchema)
+			.output(kitSettingChangeResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.kitSettingsApi) {
+					return {
+						ok: false,
+						kitName: null,
+						changes: [],
+						historyPath: null,
+						error: "Kit settings are not available here.",
+					};
+				}
+				return await ctx.kitSettingsApi.unset({
+					caller: await readStrictCaller(ctx),
+					workspaceId: ctx.workspaceScope.workspaceId,
 					request: input,
 				});
 			}),

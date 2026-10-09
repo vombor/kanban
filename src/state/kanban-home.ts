@@ -512,6 +512,15 @@ export function getTaskHistoryLogPath(workspaceId: string, homePath = getKanbanH
 }
 
 /**
+ * Every change of a workspace's project settings (`workspaces.<id>.kit.overrides`), one JSON line each
+ * (`<home>/data/<workspaceId>/kit-settings-history.jsonl`, src/kits/project-settings.ts): who, when, key, old → new.
+ * Inside the workspace's data dir, so `getWorkspaceIdKeyedPaths` moves it with that.
+ */
+export function getKitSettingsHistoryPath(workspaceId: string, homePath = getKanbanHomePath()): string {
+	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), "kit-settings-history.jsonl");
+}
+
+/**
  * Project isolation's files for one workspace (src/isolation/): `isolation.jsonl` logs every refused or reported
  * reach of its sessions, grants and grant uses; `messages.jsonl` is its side of the orchestrator messages.
  */

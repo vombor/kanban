@@ -43,7 +43,7 @@ import { checkGuardrails, type GuardrailCheckDeps } from "./guardrail-checks";
 import { checkHomeLocation } from "./home-location-checks";
 import { checkIsolation } from "./isolation-checks";
 import { checkIssueImport, createIssueCheckDeps, type IssueCheckDeps } from "./issue-checks";
-import { checkKitLemonadeModels, checkKitRecommendedSettings } from "./kit-settings-checks";
+import { checkKitLemonadeModels, checkKitProjectSettings, checkKitRecommendedSettings } from "./kit-settings-checks";
 import { checkOneOwner } from "./one-owner-checks";
 
 export interface DoctorOptions {
@@ -144,6 +144,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
 			fetch: options.fetch,
 		})),
 	);
+	findings.push(...checkKitProjectSettings(projectContext));
 	findings.push(...checkKitRecommendedSettings(projectContext));
 	findings.push(
 		...(await checkKitLemonadeModels({

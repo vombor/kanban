@@ -137,7 +137,7 @@ describe("mapLegacyKitConfig", () => {
 		(projects[0] as Record<string, unknown>).toggles = { QA_CREATE: true, AUTO_REWORK: false, AUTO_DONE: false };
 		const foo = mapLegacyKitConfig(raw, "x").workspaces[0];
 		expect(foo?.overrides).toMatchObject({
-			"qa.default.agent": "claude",
+			"roles.qa.agent": "claude",
 			"onFail.reworkRounds": 5,
 			"onFail.rework": "none",
 		});

@@ -127,13 +127,14 @@ dev card stops ─▶ Review (settled) ─▶ snapshot refs/kanban/snapshots/<id
   STALLED or a rework that came back unchanged, the kit's `onFail.then` runs: `escalate` or `stop`. A rework that
   would switch model is refused and escalated.
 - **Escalation to the orchestrator:** `qaflow.escalated`, `## ESCALATE` in the QA log, and the card to Backlog as
-  `BLOCKED: …`. The watchdog writes ATTENTION.md and wakes the orchestrator. **Escalation to a model** (team's
-  `{ tier }` opt-in): the work is tagged `preserve/<id>-<model>`, and a sibling card takes the task over on that model
-  (left in Backlog when approval is required). A takeover onto the model the card already runs on, or by a card
+  `BLOCKED: …`. The watchdog writes ATTENTION.md and wakes the orchestrator. **The fallback** (the kit's
+  `roles.fallback` when the cause's `fallback.on` trigger is on; team and team-local by default): the work is
+  tagged `preserve/<id>-<model>`, and a sibling card takes the task over on that model (left in Backlog when
+  `fallback.requireApproval`). A takeover onto the model the card already runs on, or by a card
   that took its task over itself, goes to the orchestrator instead, so a fallback never hands the task on and on.
-- **Outage takeover:** with the kit's `onOutage.then: "escalate"`, a card held for a provider outage for
-  `onOutage.afterMin` minutes (default: `pipeline.recovery.outage.maxMin`) is taken over the same way, on
-  `escalate.to`. Without it the hold goes to the orchestrator at `maxMin`.
+- **Outage takeover:** with the kit's `fallback.on.outage`, a card held for a provider outage for
+  `fallback.outageAfterMin` minutes (default: `pipeline.recovery.outage.maxMin`) is taken over the same way, by the
+  fallback role. Without it the hold goes to the orchestrator at `maxMin`.
 - **Siblings are never linked on the board.** A board link starts a Backlog card when the other one goes Done. Once,
   a linked sibling that a human started and landed restarted its BLOCKED original, and both landed. The relation
   lives in pipeline state instead, and the engine and the QA gate never QA or land an escalated card. Only

@@ -87,13 +87,16 @@ describe("plan routing (the kit's plan section)", () => {
 		});
 	});
 
-	it("validates the plan section: strict keys, plan.model needs plan.agent, tier references", () => {
+	it("validates the plan section and role: strict keys, roles.plan.model needs an agent, tier references", () => {
 		const base = { kit: 1, name: "x" };
-		expect(kitDocumentSchema.safeParse({ ...base, plan: { enabled: true, agent: "claude" } }).success).toBe(true);
-		expect(kitDocumentSchema.safeParse({ ...base, plan: { enabled: true, routes: [] } }).success).toBe(false);
-		expect(kitDocumentSchema.safeParse({ ...base, plan: { model: { model: "m" } } }).success).toBe(false);
 		expect(
-			kitDocumentSchema.safeParse({ ...base, plan: { agent: "claude", model: { tier: "missing" } } }).success,
+			kitDocumentSchema.safeParse({ ...base, plan: { enabled: true }, roles: { plan: { agent: "claude" } } })
+				.success,
+		).toBe(true);
+		expect(kitDocumentSchema.safeParse({ ...base, plan: { enabled: true, routes: [] } }).success).toBe(false);
+		expect(kitDocumentSchema.safeParse({ ...base, roles: { plan: { model: "m" } } }).success).toBe(false);
+		expect(
+			kitDocumentSchema.safeParse({ ...base, roles: { plan: { agent: "claude", tier: "missing" } } }).success,
 		).toBe(false);
 		expect(
 			kitDocumentSchema.safeParse({

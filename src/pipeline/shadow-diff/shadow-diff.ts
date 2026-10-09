@@ -188,7 +188,7 @@ function readQaAnswer(answer: unknown): QaAnswerView | null {
 function describeQaAnswer(view: QaAnswerView): string {
 	return view.kind === "none"
 		? `no QA (${view.reason ?? "no reason"})`
-		: `QA on ${view.agentId} with ${describeModel(view.model)} (${view.route ?? "qa.default"})`;
+		: `QA on ${view.agentId} with ${describeModel(view.model)} (${view.route ?? "roles.qa"})`;
 }
 
 function compareQaRouting(

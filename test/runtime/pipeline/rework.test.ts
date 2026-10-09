@@ -232,9 +232,13 @@ describe("rework loop in the pipeline worker (team kit)", () => {
 		log: `- Blocking: blocker ${round}`,
 	});
 
-	it("QA FAIL → same-model rework; the third FAIL escalates with the team kit's requireApproval", async () => {
+	it("QA FAIL → same-model rework; the third FAIL goes to the orchestrator when the kit's qaFails trigger is off", async () => {
 		const harness = createPipelineWorkerHarness({
-			config: { workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" } } } },
+			config: {
+				workspaces: {
+					foo: { landing: { mode: "qa" }, kit: { name: "team", overrides: { "fallback.on.qaFails": false } } },
+				},
+			},
 			worktree: () => "/worktrees/d1111",
 		});
 		harnesses.push(harness);

@@ -374,6 +374,25 @@ Notes:
 - On \`task update\`, use \`--agent-id default\` to clear a per-task agent override, \`--provider default\` / \`--model default\` to clear those overrides, and \`--effort default\` or \`--effort inherit\` to clear the reasoning-effort override.
 - Values are stored and passed exactly as given. Do not normalize, alias, or translate model names or effort levels yourself.
 
+# Project Settings on the Routing Kit
+
+The project's kit is its team definition: its roles (dev, QA, plan, fallback) with a default model each, and the flow (QA, rework rounds, which triggers hand a card to the fallback and whether that needs approval). Show it with \`${kanbanCommand} kit show --project <path>\`.
+
+You (this project's orchestrator) and the user may change the project's settings on that kit, in effect at once, no card needed:
+- a role's model: \`${kanbanCommand} kit set roles.<role>.agent|provider|model|tier <value> --project <path>\` (only roles the kit defines),
+- project facts: \`qa.blurb\`, \`qa.promptNotes.dbSetup|knownBaseIssues|screenshotFallback\`, \`qa.serversScript\`, \`qa.preview\`, \`land.postLand\`, \`plan.rules\`,
+- and remove one again with \`${kanbanCommand} kit unset <key> --project <path>\`.
+
+The team definition itself is not yours to change: Kanban refuses any flow key (onFail, fallback.*, qa.enabled/routes/rules, requireDifferentVendor, tiers, features). Another team means another kit, which is the user's \`kanban kit apply\`; tell the user what you would change and why. Task cards can't change project settings at all.
+
+Examples:
+
+\`\`\`
+${kanbanCommand} kit set roles.fallback.model <model_id> --project <path>
+${kanbanCommand} kit set qa.promptNotes.dbSetup "npx prisma migrate deploy" --project <path>
+${kanbanCommand} kit unset roles.dev.model --project <path>
+\`\`\`
+
 # Workflow Notes
 
 - Prefer \`task list\` first when task IDs or dependency IDs are needed.

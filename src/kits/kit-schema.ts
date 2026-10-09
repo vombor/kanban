@@ -6,6 +6,16 @@
 //
 // The schema is versioned (`"kit": 1`) and strict: an unknown key is an error, not a silent no-op. A missing key
 // means "no answer"; the resolver (resolve-kit.ts) then takes the `default` kit's value.
+//
+// A kit is the TEAM DEFINITION: its roles with a default model each (`roles.<role>`), and the flow (QA on/off and
+// routes, rework rounds, which triggers hand a card to the fallback role and whether that needs approval, features,
+// the landing recommendation). A project changes only its PROJECT SETTINGS on top (`workspaces.<id>.kit.overrides`,
+// src/kits/project-settings.ts): any role's model, and project facts (QA blurb and prompt notes, post-land commands,
+// ...). Everything else is the team: a project gets another team by using another kit (`kanban kit apply`).
+//
+// Legacy keys (`dev.agent`/`dev.model`, `qa.default`, `plan.agent`/`plan.model`, `escalate.*`, `onOutage.*`) still
+// parse in kit files and overrides; the resolver translates each layer into `roles`/`fallback` before merging
+// (src/kits/kit-legacy-keys.ts), so a resolved kit never has them and no reader looks at them.
 import { z } from "zod";
 
 import { landingModeSchema } from "../config/pipeline-config";
@@ -159,19 +169,88 @@ export const kitRecommendedSettingSchema = z
 	});
 export type KitRecommendedSetting = z.infer<typeof kitRecommendedSettingSchema>;
 
+/**
+ * The kit's roles: who works on a card, each with the kit's default model. `dev` builds (new dev cards), `qa` reviews
+ * (the QA reviewer when no `qa.routes` entry matches the dev card's model), `plan` plans (plan cards), `fallback`
+ * takes a dev card's task over on a sibling card when a `fallback.on` trigger fires.
+ */
+export const KIT_ROLE_NAMES = ["dev", "qa", "plan", "fallback"] as const;
+export const kitRoleNameSchema = z.enum(KIT_ROLE_NAMES);
+export type KitRoleName = z.infer<typeof kitRoleNameSchema>;
+
+/**
+ * One role's agent and model. `model` (with an optional `provider`; none = the agent's own default provider) or
+ * `tier` (the tier's pick, its provider included), never both; neither = the agent's own default model. No `agent`
+ * = the agent selected in Kanban settings (dev, plan), the dev role's agent, else the card's (fallback).
+ */
+export const kitRoleModelSchema = z
+	.object({
+		agent: runtimeAgentIdSchema.optional(),
+		provider: providerSchema.optional(),
+		model: z.string().min(1).optional(),
+		tier: z.string().min(1).optional(),
+		note: z.string().optional(),
+	})
+	.strict();
+export type KitRoleModel = z.infer<typeof kitRoleModelSchema>;
+
+/** The leaf keys of a role a project can set (`roles.<role>.<field>`). */
+export const KIT_ROLE_MODEL_FIELDS = ["agent", "provider", "model", "tier"] as const;
+
+/**
+ * What hands a dev card's task to the `fallback` role (a sibling card on its model; the card goes to Backlog as
+ * BLOCKED). A trigger that is off goes to the orchestrator, as does a fallback the core refuses: onto the model the
+ * card already runs on, by a card that is itself a fallback sibling, or by a card racing in a runoff (#8).
+ */
+export const kitFallbackTriggersSchema = z
+	.object({
+		/** After `onFail.reworkRounds` failed QA rounds (needs `onFail.then: escalate`). */
+		qaFails: z.boolean().optional(),
+		/** QA STALLED/DNF (needs `onFail.then: escalate`). */
+		qaStalled: z.boolean().optional(),
+		/** A rework came back unchanged (needs `onFail.then: escalate`). */
+		unchanged: z.boolean().optional(),
+		/** A merge conflict at land after its rework rounds (`onFail.conflict: rework`, `onFail.then: escalate`). */
+		conflict: z.boolean().optional(),
+		/** A provider outage hold that lasted `fallback.outageAfterMin`. */
+		outage: z.boolean().optional(),
+	})
+	.strict();
+export type KitFallbackTriggers = z.infer<typeof kitFallbackTriggersSchema>;
+export type KitFallbackTrigger = keyof KitFallbackTriggers;
+
+/** The legacy keys a kit or an override may still use; translated away before a kit is merged. */
+const legacyDevSchema = z
+	.object({ agent: runtimeAgentIdSchema.optional(), model: kitModelRefSchema.optional() })
+	.strict();
+const legacyOnOutageSchema = z
+	.object({
+		// biome-ignore lint/suspicious/noThenProperty: named like onFail.then; kits are plain data, never awaited.
+		then: z.enum(["escalate", "orchestrator"]).optional(),
+		afterMin: z.number().positive().optional(),
+	})
+	.strict();
+const legacyEscalateSchema = z
+	.object({ to: escalateTargetSchema.optional(), requireApproval: z.boolean().optional() })
+	.strict();
+
 /** The kit document without the cross-key checks (used for single layers before they are merged). */
 export const kitDocumentObjectSchema = z
 	.object({
 		kit: z.literal(KIT_SCHEMA_VERSION),
 		name: kitNameSchema,
 		description: z.string().optional(),
-		dev: z
+		roles: z
 			.object({
-				agent: runtimeAgentIdSchema.optional(),
-				model: kitModelRefSchema.optional(),
+				dev: kitRoleModelSchema.optional(),
+				qa: kitRoleModelSchema.optional(),
+				plan: kitRoleModelSchema.optional(),
+				fallback: kitRoleModelSchema.optional(),
 			})
 			.strict()
 			.optional(),
+		/** Legacy: `roles.dev`. */
+		dev: legacyDevSchema.optional(),
 		qa: z
 			.object({
 				enabled: z.boolean().optional(),
@@ -183,6 +262,7 @@ export const kitDocumentObjectSchema = z
 					})
 					.strict()
 					.optional(),
+				/** Legacy: `roles.qa`. */
 				default: qaAgentSchema.optional(),
 				routes: z.array(kitQaRouteSchema).optional(),
 				rules: z.record(z.string(), z.string()).optional(),
@@ -197,9 +277,9 @@ export const kitDocumentObjectSchema = z
 			.object({
 				/** Whether `kanban task create --role plan` makes plan cards on this project. */
 				enabled: z.boolean().optional(),
-				/** The planner's agent; none = the agent selected in Kanban settings. */
+				/** Legacy: `roles.plan.agent`. */
 				agent: runtimeAgentIdSchema.optional(),
-				/** None = the agent's own default model (the Claude CLI's for `claude`). Needs `plan.agent`. */
+				/** Legacy: `roles.plan.model`/`tier`. */
 				model: kitModelRefSchema.optional(),
 				startInPlanMode: z.boolean().optional(),
 				/** Project rules added to the plan prompt, in key order. */
@@ -225,22 +305,21 @@ export const kitDocumentObjectSchema = z
 			})
 			.strict()
 			.optional(),
-		onOutage: z
+		fallback: z
 			.object({
-				// biome-ignore lint/suspicious/noThenProperty: named like onFail.then; kits are plain data, never awaited.
-				then: z.enum(["escalate", "orchestrator"]).optional(),
-				/** Minutes of outage hold before the takeover; none = `pipeline.recovery.outage.maxMin`. */
-				afterMin: z.number().positive().optional(),
-			})
-			.strict()
-			.optional(),
-		escalate: z
-			.object({
-				to: escalateTargetSchema.optional(),
+				on: kitFallbackTriggersSchema.optional(),
+				/** Minutes of outage hold before the outage trigger fires; none = `pipeline.recovery.outage.maxMin`. */
+				outageAfterMin: z.number().positive().optional(),
+				/** The fallback sibling waits in Backlog until the orchestrator or the user starts it. */
 				requireApproval: z.boolean().optional(),
+				note: z.string().optional(),
 			})
 			.strict()
 			.optional(),
+		/** Legacy: `fallback.on.outage` / `fallback.outageAfterMin`. */
+		onOutage: legacyOnOutageSchema.optional(),
+		/** Legacy: `roles.fallback` + `fallback.on` / `fallback.requireApproval`. */
+		escalate: legacyEscalateSchema.optional(),
 		land: z
 			.object({ postLand: z.array(postLandStepSchema).optional() })
 			.strict()
@@ -293,27 +372,39 @@ export function findKitCrossKeyIssues(kit: KitDocument): KitIssue[] {
 			issues.push({ path, message: `tier "${tier}" has no model that isn't dropped` });
 		}
 	};
-	if (kit.dev?.model && "tier" in kit.dev.model) {
-		checkTierRef("dev.model.tier", kit.dev.model.tier);
+	for (const role of KIT_ROLE_NAMES) {
+		const entry = kit.roles?.[role];
+		if (!entry) {
+			continue;
+		}
+		const path = `roles.${role}`;
+		if (entry.tier !== undefined) {
+			checkTierRef(`${path}.tier`, entry.tier);
+		}
+		if (entry.tier !== undefined && entry.model !== undefined) {
+			issues.push({ path: `${path}.model`, message: `${path} names both a model and a tier; set one` });
+		}
+		if (entry.provider !== undefined && entry.provider !== null && entry.model === undefined) {
+			issues.push({ path: `${path}.provider`, message: `${path}.provider needs ${path}.model` });
+		}
+		// A fallback without an agent runs on the dev role's agent (else the card's); the others need their own.
+		if (role !== "fallback" && (entry.model !== undefined || entry.tier !== undefined) && !entry.agent) {
+			issues.push({ path: `${path}.agent`, message: `${path}.model/tier needs ${path}.agent` });
+		}
 	}
-	if (kit.dev?.model && !kit.dev.agent) {
-		issues.push({ path: "dev.model", message: "dev.model needs dev.agent" });
-	}
-	if (kit.plan?.model && "tier" in kit.plan.model) {
-		checkTierRef("plan.model.tier", kit.plan.model.tier);
-	}
-	if (kit.plan?.model && !kit.plan.agent) {
-		issues.push({ path: "plan.model", message: "plan.model needs plan.agent" });
+	const triggers = kit.fallback?.on ?? {};
+	const firing = Object.entries(triggers).filter(([, on]) => on === true);
+	if (firing.length > 0 && !kit.roles?.fallback) {
+		issues.push({
+			path: "fallback.on",
+			message: `fallback.on.${firing[0]?.[0]} hands cards to the fallback role, but the kit has no roles.fallback`,
+		});
 	}
 	(kit.plan?.candidates ?? []).forEach((candidate, index) => {
 		if (candidate.model && "tier" in candidate.model) {
 			checkTierRef(`plan.candidates.${index}.model.tier`, candidate.model.tier);
 		}
 	});
-	const escalateTo = kit.escalate?.to;
-	if (escalateTo && typeof escalateTo === "object" && "tier" in escalateTo) {
-		checkTierRef("escalate.to.tier", escalateTo.tier);
-	}
 	for (const [tier, entries] of Object.entries(kit.tiers ?? {})) {
 		if (entries.filter((entry) => entry.default === true).length > 1) {
 			issues.push({ path: `tiers.${tier}`, message: "more than one entry is marked default" });
@@ -330,8 +421,30 @@ export function findKitCrossKeyIssues(kit: KitDocument): KitIssue[] {
 	return issues;
 }
 
-/** The full kit schema: the document plus the cross-key checks. */
+/** Legacy keys in a document, as dotted keys; a resolved kit has none (src/kits/kit-legacy-keys.ts). */
+export function listLegacyKitKeys(kit: KitDocument): string[] {
+	return [
+		kit.dev ? "dev" : null,
+		kit.qa?.default ? "qa.default" : null,
+		kit.plan?.agent !== undefined ? "plan.agent" : null,
+		kit.plan?.model !== undefined ? "plan.model" : null,
+		kit.escalate ? "escalate" : null,
+		kit.onOutage ? "onOutage" : null,
+	].filter((key): key is string => key !== null);
+}
+
+/**
+ * The full kit schema: the document plus the cross-key checks. Used on merged (resolved) kits and the built-in ones,
+ * which never carry legacy keys.
+ */
 export const kitDocumentSchema = kitDocumentObjectSchema.superRefine((kit, context) => {
+	for (const key of listLegacyKitKeys(kit)) {
+		context.addIssue({
+			code: "custom",
+			path: key.split("."),
+			message: "a legacy key; translate it (kit-legacy-keys.ts)",
+		});
+	}
 	for (const issue of findKitCrossKeyIssues(kit)) {
 		context.addIssue({ code: "custom", path: issue.path.split("."), message: issue.message });
 	}

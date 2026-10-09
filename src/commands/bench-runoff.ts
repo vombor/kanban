@@ -11,6 +11,7 @@ import { loadGlobalRuntimeConfig } from "../config/runtime-config";
 import type { RuntimeAgentId, RuntimeBoardCard, RuntimeBoardColumnId } from "../core/api-contract";
 import { createUniqueTaskId } from "../core/task-id";
 import { resolveProposalProvider } from "../kits/dev-assignment";
+import { resolveKitRole } from "../kits/kit-roles";
 import type { KitDocument } from "../kits/kit-schema";
 import { loadKitCatalog, resolveKitByName, resolveWorkspaceKit } from "../kits/resolve-kit";
 import {
@@ -118,7 +119,9 @@ async function runCreate(name: string, options: CreateOptions): Promise<number> 
 	const settings = getWorkspacePipelineSettings(config, target.workspaceId);
 	const runtimeConfig = await loadGlobalRuntimeConfig();
 	const defaultAgent: RuntimeAgentId =
-		(options.agent as RuntimeAgentId | undefined) ?? kit.dev?.agent ?? runtimeConfig.selectedAgentId;
+		(options.agent as RuntimeAgentId | undefined) ??
+		resolveKitRole(kit, "dev")?.agentId ??
+		runtimeConfig.selectedAgentId;
 	const contenders: RunoffContender[] = [
 		...(options.tier ? getTierContenders(kit, options.tier, defaultAgent) : []),
 		...(options.model ?? []).map((spec) => parseRunoffModelSpec(spec, defaultAgent)),

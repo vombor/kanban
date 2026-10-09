@@ -6,7 +6,7 @@
 // QA cards wait for nothing. Pure: `kanban doctor` and `kanban kit show` fetch /api/v1/health and print these.
 import type { EffectiveModel } from "../core/effective-agent";
 import type { KitDocument } from "./kit-schema";
-import { createRoutingPolicy, type EffectiveCard } from "./policy";
+import { answerPlanAssignment, createRoutingPolicy, type EffectiveCard } from "./policy";
 
 export const LEMONADE_PROVIDER = "lemonade";
 
@@ -44,7 +44,8 @@ export function listKitLocalWorkingSet(kit: KitDocument): string[] {
 		history,
 		limits: { maxFailRounds: 3 },
 	});
-	const plan = kit.plan?.enabled === true && kit.plan.model && "model" in kit.plan.model ? kit.plan.model : null;
+	const planAnswer = answerPlanAssignment(kit);
+	const plan = planAnswer.kind === "plan" ? (planAnswer.model ?? null) : null;
 	const models: Array<{ provider?: string | null; model: string } | null> = [
 		dev,
 		qa.kind === "qa" ? qa.model : null,

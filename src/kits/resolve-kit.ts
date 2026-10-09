@@ -1,10 +1,14 @@
 // The one place kit files and workspace overrides are read and merged (plan §3.4).
 //
-// A value comes from, first match wins: the workspace's `kit.overrides` (dotted key → value) → the named kit → the
-// `default` kit. Objects merge key by key; arrays and scalars are replaced, not merged. Nothing is inherited from
+// A value comes from, first match wins: the workspace's project settings (`kit.overrides`, dotted key → value,
+// src/kits/project-settings.ts) → the named kit → the `default` kit. Objects merge key by key; arrays and scalars are replaced, not merged. Nothing is inherited from
 // another workspace or a top-level key: a workspace without a `kit` entry gets `default`, which answers "no" to
 // every routing question. That is the structural fix for the 2026-10-06 incident (a new board got the dev-team
 // kit's routing because a project entry inherited the top-level toggles, archive/devteam-kit:lib/config.cjs).
+//
+// Each layer's legacy keys (`dev.*`, `qa.default`, `escalate.*`, ...) are translated into `roles`/`fallback` before it
+// is merged (kit-legacy-keys.ts). A role names a `model` or a `tier`: a layer that sets one drops the other's value from
+// the layers below, so a project's `roles.dev.model` replaces the kit's `roles.dev.tier`.
 //
 // Built-in kits (`default`, `team`, `team-local`) ship in the package (`kits/*.json`). User kits are data files in
 // `$KANBAN_HOME/kits/<name>.json`; a user kit with a built-in name is refused.
@@ -16,6 +20,7 @@ import teamKitJson from "../../kits/team.json" with { type: "json" };
 import teamLocalKitJson from "../../kits/team-local.json" with { type: "json" };
 import { getWorkspacePipelineSettings, type PipelineConfig } from "../config/pipeline-config";
 import { getKanbanKitsPath } from "../state/kanban-home";
+import { translateLegacyKitLayer, translateLegacyOverrides } from "./kit-legacy-keys";
 import { formatKitIssues, type KitDocument, kitDocumentObjectSchema, kitDocumentSchema } from "./kit-schema";
 
 export const DEFAULT_KIT_NAME = "default";
@@ -37,7 +42,10 @@ export interface KitCatalog {
 	errors: Array<{ path: string; error: string }>;
 }
 
-/** Where a resolved value came from: `"override"`, the named kit's name, or `"default"`. */
+/** The source of a value a workspace's project settings set. */
+export const PROJECT_SETTING_SOURCE = "project";
+
+/** Where a resolved value came from: `"project"` (a project setting), the named kit's name, or `"default"`. */
 export type KitValueSource = string;
 
 export interface ResolvedKit {
@@ -54,6 +62,7 @@ export interface WorkspaceKitResolution extends ResolvedKit {
 	requestedKitName: string | null;
 	/** The kit actually used (`default` when the requested one is missing or invalid). */
 	kitName: string;
+	/** The project settings as stored (`workspaces.<id>.kit.overrides`, legacy keys included). */
 	overrides: Record<string, unknown>;
 	issues: string[];
 }
@@ -161,6 +170,35 @@ function mergeLayers(base: unknown, layer: unknown): unknown {
 	return merged;
 }
 
+/** `model` and `tier` exclude each other in a role: the one a layer sets drops the other from the layers below. */
+function dropReplacedRoleChoice(role: PlainObject, setField: string): void {
+	if (setField === "model") {
+		delete role.tier;
+	} else if (setField === "tier") {
+		delete role.model;
+		delete role.provider;
+	}
+}
+
+/** `base` with `layer` merged on top (both legacy-free). */
+function mergeKitLayer(base: PlainObject, layer: PlainObject): PlainObject {
+	const merged = mergeLayers(base, layer) as PlainObject;
+	const layerRoles = isPlainObject(layer.roles) ? layer.roles : {};
+	const mergedRoles = isPlainObject(merged.roles) ? merged.roles : {};
+	for (const [name, layerRole] of Object.entries(layerRoles)) {
+		const role = mergedRoles[name];
+		if (!isPlainObject(layerRole) || !isPlainObject(role)) {
+			continue;
+		}
+		const hasModel = Object.hasOwn(layerRole, "model");
+		const hasTier = Object.hasOwn(layerRole, "tier");
+		if (hasModel !== hasTier) {
+			dropReplacedRoleChoice(role, hasModel ? "model" : "tier");
+		}
+	}
+	return merged;
+}
+
 function splitOverrideKey(key: string): string[] | string {
 	const segments = key.split(".");
 	if (segments.some((segment) => segment.length === 0)) {
@@ -191,7 +229,11 @@ function applyOverride(target: PlainObject, key: string, value: unknown): string
 			return `override key "${key}" goes through ${segment}, which is not an object`;
 		}
 	}
-	node[segments[segments.length - 1] as string] = structuredClone(value);
+	const leaf = segments[segments.length - 1] as string;
+	if (segments.length === 3 && segments[0] === "roles") {
+		dropReplacedRoleChoice(node, leaf);
+	}
+	node[leaf] = structuredClone(value);
 	return null;
 }
 
@@ -234,8 +276,10 @@ export function resolveKitLayers(
 	kit: KitDocument,
 	overrides: Record<string, unknown>,
 ): KitResolution {
-	const merged = mergeLayers(defaultKit, kit) as PlainObject;
-	for (const [key, value] of Object.entries(overrides)) {
+	const kitLayer = translateLegacyKitLayer(kit as unknown as PlainObject).layer;
+	const merged = mergeKitLayer(translateLegacyKitLayer(defaultKit as unknown as PlainObject).layer, kitLayer);
+	const projectSettings = translateLegacyOverrides(overrides).overrides;
+	for (const [key, value] of Object.entries(projectSettings)) {
 		const error = applyOverride(merged, key, value);
 		if (error) {
 			return { ok: false, error };
@@ -245,7 +289,7 @@ export function resolveKitLayers(
 	if (!parsed.success) {
 		return { ok: false, error: formatKitIssues(parsed.error) };
 	}
-	const overrideKeys = Object.keys(overrides);
+	const overrideKeys = Object.keys(projectSettings);
 	const sources: Record<string, KitValueSource> = {};
 	for (const segments of listLeafPaths(parsed.data)) {
 		const key = segments.join(".");
@@ -253,8 +297,8 @@ export function resolveKitLayers(
 			continue;
 		}
 		if (overrideKeys.some((overrideKey) => key === overrideKey || key.startsWith(`${overrideKey}.`))) {
-			sources[key] = "override";
-		} else if (kit.name !== defaultKit.name && hasPath(kit, segments)) {
+			sources[key] = PROJECT_SETTING_SOURCE;
+		} else if (kit.name !== defaultKit.name && hasPath(kitLayer, segments)) {
 			sources[key] = kit.name;
 		} else {
 			sources[key] = DEFAULT_KIT_NAME;

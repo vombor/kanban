@@ -1,0 +1,64 @@
+{
+	"qa.blurb": "Project: Pawsome, a full-stack e-commerce pet shop (fixture copy, shortened).",
+	"qa.promptNotes.dbSetup": "DATABASE_URL=file:./dev.db npx prisma migrate deploy && DATABASE_URL=file:./dev.db npx tsx prisma/seed.ts",
+	"land.postLand": [
+		{
+			"paths": "^prisma/",
+			"run": "npx prisma generate && DATABASE_URL=file:./dev.db npx prisma migrate deploy",
+			"stopUnder": [
+				"server"
+			]
+		}
+	],
+	"dev.agent": "codex",
+	"tiers.tier3": [
+		{
+			"provider": "bedrock",
+			"model": "us.openai.gpt-6.1-sol",
+			"default": true,
+			"note": "LOCKED 2026-10-08 (user): the ONE coder tier: gpt-6.1-sol on"
+		}
+	],
+	"tiers.tier2": [
+		{
+			"provider": "bedrock",
+			"model": "us.moonshotai.kimi-k3",
+			"note": "FALLBACK since 2026-10-08 (user): kimi-k3 on Codex takes ove"
+		}
+	],
+	"tiers.qa": [
+		{
+			"provider": "bedrock",
+			"model": "us.anthropic.claude-haiku-5-5",
+			"note": "QA = Haiku 5.5 on Cline for every dev card (user 2026-10-08,"
+		}
+	],
+	"qa.default.agent": "cline",
+	"qa.default.provider": "bedrock",
+	"qa.default.model": "us.anthropic.claude-haiku-5-5",
+	"qa.routes": [
+		{
+			"devModel": ".",
+			"agent": "cline",
+			"provider": "bedrock",
+			"model": "us.anthropic.claude-haiku-5-5",
+			"rules": [
+				"drive"
+			],
+			"why": "LOCKED 2026-10-08 (user): Haiku on Cline QAs every dev card;"
+		}
+	],
+	"plan.agent": "cline",
+	"plan.model": {
+		"provider": "bedrock",
+		"model": "us.anthropic.claude-opus-5-5"
+	},
+	"tierNotes.qa": "LOCKED 2026-10-08 (user): Haiku on Cline QAs all dev cards; ",
+	"escalate.to": {
+		"agent": "codex",
+		"model": "us.moonshotai.kimi-k3"
+	},
+	"escalate.requireApproval": false,
+	"description": "One coder (sol on Codex) for every dev card, kimi on Codex as the automatic fallback (3 QA FAILs, QA stall or outage), Haiku 5.5 QA on Cline, Opus 5.5 plans on Cline",
+	"onOutage.then": "escalate"
+}
