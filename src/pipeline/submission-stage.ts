@@ -16,7 +16,8 @@
 //
 // A snapshot with no changes against the base is not submitted. Outside shadow it is recorded on the card's
 // pipeline-state entry (`emptyDiff`, empty-diff.ts) with whether the agent ran at all, and the watchdog reports it
-// (issue #14); a later submission with changes removes the record.
+// (issue #14); a later submission with changes removes the record. An empty snapshot whose worktree made a stash
+// entry is said to look stranded in the stash, with the entry's sha (worktree-stash.ts, issue #22), not "never ran".
 import type { WorkspacePipelineSettings } from "../config/pipeline-config";
 import type { RuntimeBoardCard } from "../core/api-contract";
 import type { KitChecks } from "../kits/kit-schema";
@@ -31,6 +32,7 @@ import type { PipelineWorkspaceState } from "./pipeline-state";
 import { readResubmitRequest } from "./resubmit";
 import { type TakeTaskSnapshotInput, type TaskSnapshot, takeTaskSnapshot } from "./snapshots";
 import { probeTaskHasWork } from "./work-probe";
+import { describeWorktreeStashes, findWorktreeStashes, type WorktreeStash } from "./worktree-stash";
 
 /** A stage action for the decision log; the engine adds the card's common fields. */
 export interface PipelineStageRecord {
@@ -79,6 +81,8 @@ export interface CreateSubmissionStageOptions {
 	probeHasWork?: (workspacePath: string, card: RuntimeBoardCard) => Promise<boolean>;
 	/** Writes (or, with null, removes) the card's `emptyDiff` record in pipeline-state. Absent: nothing is recorded. */
 	recordEmptyDiff?: (workspaceId: string, taskId: string, record: EmptyDiffRecord | null) => Promise<void>;
+	/** The stash entries the worktree made, read for an empty snapshot. */
+	findStashes?: (worktreePath: string) => Promise<WorktreeStash[]>;
 	now?: () => number;
 	log?: (message: string) => void;
 }
@@ -106,6 +110,7 @@ export function createSubmissionStage(options: CreateSubmissionStageOptions): Su
 	const resolveWorktree = options.resolveWorktree ?? resolveTaskWorktree;
 	const takeSnapshot = options.takeSnapshot ?? takeTaskSnapshot;
 	const probeHasWork = options.probeHasWork ?? probeTaskHasWork;
+	const findStashes = options.findStashes ?? findWorktreeStashes;
 	const now = options.now ?? Date.now;
 	// "<workspaceId>:<taskId>" → the inspection of the card's current submission.
 	const inspections = new Map<string, { key: string; inspection: SubmissionInspection }>();
@@ -148,6 +153,7 @@ export function createSubmissionStage(options: CreateSubmissionStageOptions): Su
 				: `snapshot ${where}${snapshot.previous ? ` (was ${short(snapshot.previous)})` : ""}`;
 		if (!snapshot.hasChanges) {
 			const turn = describeTurnEvidence(input.session);
+			const stashes = await findStashes(worktree).catch(() => []);
 			if (!shadow && options.recordEmptyDiff) {
 				await options.recordEmptyDiff(context.workspaceId, card.id, {
 					at: new Date(now()).toISOString(),
@@ -157,6 +163,7 @@ export function createSubmissionStage(options: CreateSubmissionStageOptions): Su
 					baseRef: card.baseRef,
 					ran: turn.ran,
 					evidence: turn.evidence,
+					...(stashes.length > 0 ? { stashes } : {}),
 				});
 			}
 			return {
@@ -166,7 +173,7 @@ export function createSubmissionStage(options: CreateSubmissionStageOptions): Su
 						{
 							stage: "snapshot",
 							outcome: "none",
-							note: `${snapshotNote}: no changes against ${card.baseRef}; not submitted (${turn.ran ? "the agent ran but changed nothing" : "the agent likely never ran"}: ${turn.evidence})`,
+							note: `${snapshotNote}: no changes against ${card.baseRef}; not submitted (${stashes.length > 0 ? `${describeWorktreeStashes(stashes)}; ${turn.evidence}` : `${turn.ran ? "the agent ran but changed nothing" : "the agent likely never ran"}: ${turn.evidence}`})`,
 						},
 					],
 				},

@@ -4,8 +4,8 @@
 // src/core/card-role.ts) and the kit's QA answer, never the card's literal agent id: the legacy watchdog looked only
 // at Cline-family cards (`isClineFamily(card.agentId)`), the incident pattern of 2026-10-06.
 //
-//   dev card in Review whose snapshot has no changes against its base (empty-diff.ts, issue #14): the agent ran
-//     → item at once ("Done or restart?"); no turn on record → item after stall.reviewMin unless recovery sent
+//   dev card in Review whose snapshot has no changes against its base (empty-diff.ts, issue #14): its worktree
+//     made a stash entry (issue #22) or the agent ran → item at once ("Done or restart?"); no turn on record → item after stall.reviewMin unless recovery sent
 //     something since                                                                                       → item
 //   any other dev card in Review with nothing pending (the safety net): the kit QA-gates it (a card it doesn't
 //     waits for the user's Approve & land), no QA card, no recovery hold, no rework waiting to start, no checks
@@ -36,6 +36,7 @@ import type { PipelineCardState } from "../pipeline-state";
 import { readQaPassEntry } from "../qa-gate";
 import { recoveryHoldReason } from "../recovery";
 import { isReworkAwaitingStart, readOpenRework } from "../rework-state";
+import { describeWorktreeStashes } from "../worktree-stash";
 
 const MIN = 60_000;
 // The dev card a legacy QA card reviews, from its prompt (archive/devteam-kit:services/review-watch.mjs@6da71597
@@ -190,6 +191,14 @@ function describeEmptyDiffStall(
 ): StallItem | null {
 	const where = `snapshot ${short(emptyDiff.snapshot)} on ${short(emptyDiff.parent)}`;
 	const choice = `Done or restart? (\`kanban task done --task-id ${card.id}\` starts its linked Backlog cards; \`kanban task resume ${card.id}\` starts it over with its card prompt)`;
+	if (emptyDiff.stashes && emptyDiff.stashes.length > 0) {
+		// Not "never ran" and not "changed nothing": the work is in the stash, so it is reported at once (issue #22).
+		return {
+			key: `${card.id}:empty-diff`,
+			taskId: card.id,
+			issue: `dev card has no changes against ${emptyDiff.baseRef} (${where}), but ${describeWorktreeStashes(emptyDiff.stashes)}, then resubmit it (\`kanban task resubmit --task-id ${card.id}\`) or restart it (\`kanban task resume ${card.id}\`).`,
+		};
+	}
 	if (emptyDiff.ran) {
 		return {
 			key: `${card.id}:empty-diff`,

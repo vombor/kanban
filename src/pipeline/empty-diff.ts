@@ -10,6 +10,7 @@
 import type { RuntimeBoardCard } from "../core/api-contract";
 import type { PipelineSessionView } from "./engine";
 import type { PipelineCardState } from "./pipeline-state";
+import type { WorktreeStash } from "./worktree-stash";
 
 /** The pipeline-state field the submission stage writes; a submission with changes removes it. */
 export const EMPTY_DIFF_FIELD = "emptyDiff";
@@ -25,6 +26,8 @@ export interface EmptyDiffRecord {
 	/** The agent took its prompt in this run (`evidence` says how); false: no turn of it is on record. */
 	ran: boolean;
 	evidence: string;
+	/** Stash entries the worktree made (worktree-stash.ts, issue #22): the work is likely there, not missing. */
+	stashes?: WorktreeStash[];
 }
 
 export interface TurnEvidence {
@@ -60,6 +63,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function isWorktreeStash(value: unknown): value is WorktreeStash {
+	return (
+		isRecord(value) &&
+		typeof value.sha === "string" &&
+		typeof value.ref === "string" &&
+		typeof value.head === "string" &&
+		typeof value.at === "number" &&
+		typeof value.message === "string"
+	);
+}
+
 /** The card's `emptyDiff` record, or null when there is none or it is malformed. */
 export function readEmptyDiff(entry: PipelineCardState | undefined): EmptyDiffRecord | null {
 	const value = entry?.[EMPTY_DIFF_FIELD];
@@ -80,6 +94,9 @@ export function readEmptyDiff(entry: PipelineCardState | undefined): EmptyDiffRe
 		baseRef: value.baseRef,
 		ran: value.ran,
 		evidence: typeof value.evidence === "string" ? value.evidence : "",
+		...(Array.isArray(value.stashes) && value.stashes.length > 0
+			? { stashes: value.stashes.filter(isWorktreeStash) }
+			: {}),
 	};
 }
 

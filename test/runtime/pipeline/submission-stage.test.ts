@@ -13,7 +13,7 @@ import type { PipelineWorkspaceState } from "../../../src/pipeline/pipeline-stat
 import { readTaskSnapshot } from "../../../src/pipeline/snapshots";
 import { createSubmissionStage, type SubmissionContext } from "../../../src/pipeline/submission-stage";
 import { createEffectiveCard } from "../../utilities/effective-card";
-import { createRepoWithWorktree } from "../../utilities/git-repo";
+import { createRepoWithWorktree, git } from "../../utilities/git-repo";
 import { createCard } from "../../utilities/workspace-state-store";
 
 const TEAM_QA = { landing: { mode: "qa" }, kit: { name: "team" }, models: { allowProvisional: true } };
@@ -155,6 +155,27 @@ describe("submission stage", () => {
 		);
 		expect(never.records[0]?.note).toContain("(the agent likely never ran: no hook or final message from this run");
 		expect(emptyDiffs[1]?.record).toMatchObject({ ran: false });
+	});
+
+	it("an empty snapshot whose worktree stashed its work says so, with the stash's sha (issue #22)", async () => {
+		const { repo, inspect, emptyDiffs } = setup();
+		writeFileSync(join(repo.worktreePath, "tags.ts"), "work\n");
+		git(repo.worktreePath, ["stash", "push", "-u", "-q", "-m", "248ae"]);
+		const sha = git(repo.worktreePath, ["rev-parse", "refs/stash"]);
+
+		const inspection = await inspect(
+			createCard({ id: "248ae" }),
+			"dev",
+			session({ state: "awaiting_review", reviewReason: "hook" }),
+		);
+		expect(inspection.hasWork).toBe(false);
+		const note = inspection.records[0]?.note ?? "";
+		expect(note).toContain(`the card's work looks stranded in the stash: stash@{0} ${sha.slice(0, 8)}`);
+		expect(note).toContain(`git stash apply ${sha}`);
+		expect(note).not.toContain("changed nothing");
+		expect(emptyDiffs[0]?.record?.stashes).toEqual([
+			expect.objectContaining({ sha, ref: "stash@{0}", head: git(repo.worktreePath, ["rev-parse", "HEAD"]) }),
+		]);
 	});
 
 	it("a submission with changes removes an earlier empty-diff record; shadow records nothing", async () => {

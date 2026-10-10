@@ -67,6 +67,14 @@ describe("rework texts", () => {
 		expect(text.split("\n")[0]).toMatch(
 			/^FIRST bring current main into your worktree .*aaaaaaaa; main is now bbbbbbbb\)/u,
 		);
+		// Never the stash (issue #22): a WIP commit rebased onto the base keeps the work in the files on a conflict.
+		expect(text.split("\n")[0]).toContain(
+			"git add -A && git commit --no-verify --allow-empty -m wip && git rebase main. If the rebase stops on conflicts, your work is still in the files",
+		);
+		expect(text.split("\n")[0]).toContain(
+			"When the rebase is done, run git reset main so your changes are uncommitted again.",
+		);
+		expect(text).not.toMatch(/git stash (-u|pop)/u);
 		expect(text).toContain("REWORK round 3 (QA round 2: PASS, but it does not merge;");
 		expect(text).toContain("Blocking: rebase onto main: conflicts in src/a.ts, src/b.ts.");
 		expect(text).not.toContain("Blocking (from QA)");
@@ -144,6 +152,36 @@ describe("rework notes in the worktree", () => {
 		const exclude = readFileSync(join(repo, ".git/info/exclude"), "utf8");
 		expect(exclude.match(/^\/\.qa\/$/gmu)).toHaveLength(1);
 		expect(git(repo, "status", "--porcelain")).toBe("");
+	});
+
+	it("the stale-base steps leave a conflict in the files and keep the work (issue #22)", async () => {
+		const { root, repo } = createRepo();
+		const worktree = join(root, "wt");
+		git(repo, "worktree", "add", "-q", "--detach", worktree, "main");
+		// main moves on and adds lines to a.txt; the card adds others and a new file.
+		writeFileSync(join(repo, "a.txt"), "a\nmain\n");
+		git(repo, "commit", "-q", "-am", "main");
+		writeFileSync(join(worktree, "a.txt"), "a\ncard\n");
+		writeFileSync(join(worktree, "tags.ts"), "tags\n");
+
+		const run = (...args: string[]) =>
+			execFileSync("git", args, { cwd: worktree, env: createGitTestEnv(), encoding: "utf8", stdio: "pipe" });
+		run("add", "-A");
+		run("-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "--no-verify", "--allow-empty", "-m", "wip");
+		expect(() => run("rebase", "main")).toThrow();
+		// Stopped on the conflict: the work is in the worktree, the conflict marked in the file.
+		expect(readFileSync(join(worktree, "tags.ts"), "utf8")).toBe("tags\n");
+		expect(readFileSync(join(worktree, "a.txt"), "utf8")).toMatch(
+			/<<<<<<<[\s\S]*main[\s\S]*=======[\s\S]*card[\s\S]*>>>>>>>/u,
+		);
+
+		writeFileSync(join(worktree, "a.txt"), "a\nmain\ncard\n");
+		run("add", "-A");
+		run("-c", "core.editor=true", "-c", "user.email=t@example.com", "-c", "user.name=T", "rebase", "--continue");
+		run("reset", "-q", "main");
+		expect(git(worktree, "rev-parse", "HEAD")).toBe(git(repo, "rev-parse", "main"));
+		expect(git(worktree, "status", "--porcelain")).toBe("M a.txt\n?? tags.ts");
+		expect(git(repo, "stash", "list")).toBe("");
 	});
 
 	it("finds a worktree whose HEAD is behind its base branch", async () => {

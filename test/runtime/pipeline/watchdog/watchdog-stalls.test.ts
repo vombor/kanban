@@ -187,6 +187,38 @@ describe("detectStalls", () => {
 		).toEqual([]);
 	});
 
+	it("an empty diff whose worktree stashed its work is reported at once with the stash (issue #22)", () => {
+		const card = createCard({ id: "248ae", updatedAt: NOW - 30 * MIN });
+		const emptyDiff = {
+			at: new Date(NOW - MIN).toISOString(),
+			cardUpdatedAt: card.updatedAt,
+			snapshot: "18aba930aa",
+			parent: "30e6e260bb",
+			baseRef: "main",
+			ran: false,
+			evidence: "no hook or final message from this run",
+			stashes: [
+				{
+					sha: "e8268879cc",
+					ref: "stash@{0}",
+					head: "64243cf1dd",
+					at: NOW - 2 * MIN,
+					message: "WIP on (no branch): 64243cf tags",
+				},
+			],
+		};
+		expect(
+			detectStalls(input(createBoard({ review: [card] }), { pipelineCards: { "248ae": { emptyDiff } } })).items,
+		).toEqual([
+			expect.objectContaining({
+				key: "248ae:empty-diff",
+				issue: expect.stringMatching(
+					/^dev card has no changes against main \(snapshot 18aba930 on 30e6e260\), but the card's work looks stranded in the stash: stash@\{0\} e8268879 .*git stash apply e8268879cc/u,
+				),
+			}),
+		]);
+	});
+
 	it("an empty diff with no turn on record waits reviewMin for recovery, then is reported", () => {
 		const card = createCard({ id: "e0001", updatedAt: NOW - 30 * MIN });
 		const emptyDiff = (minutesAgo: number) => ({

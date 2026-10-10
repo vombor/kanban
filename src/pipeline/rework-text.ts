@@ -64,11 +64,14 @@ export function readBlockingBullets(section: string): string[] {
 }
 
 /**
- * The line that tells a dirty worktree behind its base to bring the base in first (a3f076e: c1e30/de30c 10/05, QA
- * compared against a newer base and read the card as deleting everything that landed since).
+ * The line that tells a worktree behind its base to bring the base in first (a3f076e: c1e30/de30c 10/05, QA
+ * compared against a newer base and read the card as deleting everything that landed since). The work goes into a
+ * WIP commit that is rebased, never into the stash: a conflicting `git stash pop` left notes' 248ae with a clean
+ * worktree on the base and all its work in the stash (issue #22), while a stopped rebase leaves conflict markers in
+ * the files, and the final mixed reset turns the work back into worktree changes, as the rework text asks.
  */
 export function buildStaleBaseLine(baseRef: string, stale: StaleBase): string {
-	return `FIRST bring current ${baseRef} into your worktree (it is based on an older ${baseRef}, ${stale.head.slice(0, 8)}; ${baseRef} is now ${stale.tip.slice(0, 8)}): git stash -u && git checkout --detach ${baseRef} && git stash pop. On conflicts keep ${baseRef}'s version of files that already exist there and re-apply only your own changes. Without this QA sees your diff as deleting everything that landed since.`;
+	return `FIRST bring current ${baseRef} into your worktree (it is based on an older ${baseRef}, ${stale.head.slice(0, 8)}; ${baseRef} is now ${stale.tip.slice(0, 8)}): git add -A && git commit --no-verify --allow-empty -m wip && git rebase ${baseRef}. If the rebase stops on conflicts, your work is still in the files: in each file git status lists as conflicted, remove the <<<<<<< ======= >>>>>>> markers keeping ${baseRef}'s code and your own changes, then git add -A && git -c core.editor=true rebase --continue; repeat until the rebase is done. Never run git rebase --abort, git reset --hard, git checkout -- or git stash. When the rebase is done, run git reset ${baseRef} so your changes are uncommitted again. Without this QA sees your diff as deleting everything that landed since.`;
 }
 
 export function buildReworkText(input: ReworkTextInput): string {
