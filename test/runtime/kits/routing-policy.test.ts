@@ -249,6 +249,7 @@ describe("getModelVendor", () => {
 		expect(getModelVendor("Qwen3.6-35B-A3B-MTP-GGUF")).toBe("qwen");
 		expect(getModelVendor("qwen.qwen3-next-80b-a3b")).toBe(getModelVendor("Qwen3.6-35B-A3B-MTP-GGUF"));
 		expect(getModelVendor("Gemma-4-12B-it-GGUF")).toBe("google");
+		expect(getModelVendor("gemma-4-31B-it-qat-q4_0-gguf-Q4_0")).toBe("google");
 		expect(getModelVendor("DeepSeek-V4-Flash-0731-GGUF-BF16")).toBe("deepseek");
 		expect(getModelVendor("deepseek.v3.2")).toBe("deepseek");
 		expect(getModelVendor("LMX-Omni-52B-Halo")).toBe("qwen");

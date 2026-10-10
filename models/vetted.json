@@ -261,7 +261,7 @@
 				}
 			},
 			"capabilities": { "toolUse": false, "images": false, "contextWindow": 65536, "turnEnd": true },
-			"note": "text-only; the memory budget assumes Lemonade loads it at 65536"
+			"note": "text-only; the memory budget assumes Lemonade loads it at 65536; removed from Lemonade on 2026-10-10"
 		},
 		{
 			"agent": "cline",
@@ -290,7 +290,8 @@
 					"evidence": { "run": null, "summary": "plan candidate (team-local plan.candidates)" }
 				}
 			},
-			"capabilities": { "toolUse": true, "images": true, "contextWindow": 131072, "turnEnd": true }
+			"capabilities": { "toolUse": true, "images": true, "contextWindow": 131072, "turnEnd": true },
+			"note": "removed from Lemonade on 2026-10-10"
 		},
 		{
 			"agent": "cline",
@@ -325,7 +326,8 @@
 					}
 				}
 			},
-			"capabilities": { "toolUse": true, "images": true, "contextWindow": 131072, "turnEnd": true }
+			"capabilities": { "toolUse": true, "images": true, "contextWindow": 131072, "turnEnd": true },
+			"note": "removed from Lemonade on 2026-10-10"
 		},
 		{
 			"agent": "cline",
@@ -485,7 +487,8 @@
 					"reason": "task: plan written: no PLAN.md; steps: at least three numbered steps; names files: steps name the files they change; file read: the title has the ticket id"
 				}
 			},
-			"capabilities": { "toolUse": true, "turnEnd": true }
+			"capabilities": { "toolUse": true, "turnEnd": true },
+			"note": "removed from Lemonade on 2026-10-10"
 		},
 		{
 			"agent": "cline",
@@ -509,11 +512,38 @@
 						"run": "2026-10-10-dev-cline-hfbtx",
 						"summary": "kanban models vet dev smoke test passed in 2026-10-10-dev-cline-1jj93 (file read, edit, tests untouched, test suite, shell command, commit; 9 min, $0.00, 6 native tool calls), but the rerun 2026-10-10-dev-cline-hfbtx at Lemonade ctx_size 65536 failed after 5 min with 0 native tool calls: the model wrote its first run_commands call as a JSON code block instead of a native tool call"
 					},
-					"reason": "inconsistent native tool calls: 2026-10-10-dev-cline-1jj93 passed with 6 native tool calls, the rerun 2026-10-10-dev-cline-hfbtx (ctx_size 65536) wrote its first run_commands call as a JSON code block instead of a native tool call"
+					"reason": "inconsistent native tool calls: 2026-10-10-dev-cline-1jj93 passed with 6 native tool calls, the rerun 2026-10-10-dev-cline-hfbtx (ctx_size 65536) wrote its first run_commands call as a JSON code block instead of a native tool call; 2026-10-10-dev-cline-3uayu failed the same way (a JSON code block instead of a native tool call)"
 				}
 			},
 			"capabilities": { "toolUse": true, "turnEnd": true },
-			"note": "vetted at Lemonade ctx_size 65536"
+			"note": "vetted at Lemonade ctx_size 65536; removed from Lemonade on 2026-10-10, replaced by the QAT build gemma-4-31B-it-qat-q4_0-gguf-Q4_0"
+		},
+		{
+			"agent": "cline",
+			"provider": "lemonade",
+			"model": "gemma-4-31B-it-qat-q4_0-gguf-Q4_0",
+			"roles": {
+				"dev": {
+					"status": "vetted",
+					"at": "2026-10-10",
+					"cliVersion": "3.0.70",
+					"evidence": {
+						"run": "2026-10-10-dev-cline-2nhur",
+						"summary": "kanban models vet dev smoke test passed (file read, edit, tests untouched, test suite, shell command, commit) in 9 min, $0.00, 7 native tool call(s)"
+					}
+				},
+				"qa": {
+					"status": "vetted",
+					"at": "2026-10-10",
+					"cliVersion": "3.0.70",
+					"evidence": {
+						"run": "2026-10-10-qa-cline-qei3v",
+						"summary": "kanban models vet qa smoke test passed (verdict file, right verdict: FAIL with 1 blocking, file read, no code change) in 8 min, $0.00, 4 native tool call(s)"
+					}
+				}
+			},
+			"capabilities": { "toolUse": true, "turnEnd": true },
+			"note": "Lemonade checkpoint google/gemma-4-31B-it-qat-q4_0-gguf:Q4_0, vetted at Lemonade ctx_size 65536; replaces gemma-4-31B-it-GGUF-Q4_K_M (removed from Lemonade on 2026-10-10)"
 		},
 		{
 			"agent": "cline",
