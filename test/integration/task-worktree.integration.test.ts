@@ -4,7 +4,9 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { updateWorkspacePipelineEntry } from "../../src/config/pipeline-config";
 import { getKanbanHomePath } from "../../src/state/kanban-home";
+import { loadWorkspaceContext } from "../../src/state/workspace-state";
 import {
 	deleteTaskWorktree,
 	ensureTaskWorktreeIfDoesntExist,
@@ -165,14 +167,12 @@ describe.sequential("task-worktree integration", () => {
 				const localConfigPath = join(ensured.path, ".local-config");
 				const nodeModulesPath = join(ensured.path, "node_modules");
 				expectMirroredPathBehavior(localConfigPath);
-				expectMirroredPathBehavior(nodeModulesPath);
+				// Installed packages are never linked by default (issue #19): a card's npm ci would empty them.
+				expect(existsSync(nodeModulesPath)).toBe(false);
 				expect(runGit(ensured.path, ["status", "--porcelain", "--", ".local-config"])).toBe("");
 				expect(runGit(ensured.path, ["status", "--porcelain", "--", "node_modules"])).toBe("");
 				if (existsSync(localConfigPath)) {
 					expect(runGit(ensured.path, ["check-ignore", "-v", ".local-config"])).toContain("info/exclude");
-				}
-				if (existsSync(nodeModulesPath)) {
-					expect(runGit(ensured.path, ["check-ignore", "-v", "node_modules"])).toContain("info/exclude");
 				}
 			} finally {
 				cleanup();
@@ -229,7 +229,7 @@ describe.sequential("task-worktree integration", () => {
 		});
 	});
 
-	it("skips only nested Turbopack app node_modules while keeping root node_modules symlinked", async () => {
+	it("skips a nested Turbopack app's node_modules even where the project includes node_modules", async () => {
 		await withTemporaryKanbanHome(async () => {
 			const { path: sandboxRoot, cleanup } = createTempDir("kanban-task-worktree-nested-turbopack-");
 			try {
@@ -256,6 +256,11 @@ describe.sequential("task-worktree integration", () => {
 
 				runGit(repoPath, ["add", "README.md", "package.json", "apps/web/package.json", ".gitignore"]);
 				runGit(repoPath, ["commit", "-m", "init"]);
+				const { workspaceId } = await loadWorkspaceContext(repoPath);
+				await updateWorkspacePipelineEntry(workspaceId, (entry) => ({
+					...entry,
+					kit: { name: "default", overrides: { "worktrees.symlinkIgnored.include": ["node_modules"] } },
+				}));
 
 				const ensured = await ensureTaskWorktreeIfDoesntExist({
 					cwd: repoPath,

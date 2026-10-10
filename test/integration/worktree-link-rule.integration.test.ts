@@ -99,16 +99,22 @@ function processIn(cwd: string): ProcessEntry {
 }
 
 describe.skipIf(process.platform === "win32").sequential("worktree link rule (issue #19)", () => {
-	it("links node_modules and .env but no database or build output into a new worktree", async () => {
+	it("links .env but no node_modules, database or build output into a new worktree", async () => {
 		await withTemporaryKanbanHome(async () => {
 			const { path: sandboxRoot, cleanup } = createTempDir("kanban-worktree-links-");
 			try {
 				const repoPath = createFooLikeRepo(sandboxRoot);
 				const worktreePath = await ensureWorktree(repoPath, "task-a");
 
-				expect(isLink(join(worktreePath, "node_modules"))).toBe(true);
 				expect(isLink(join(worktreePath, ".env"))).toBe(true);
-				for (const path of ["prisma/dev.db", "prisma/test.db", ".next", "server/dist", "tsconfig.tsbuildinfo"]) {
+				for (const path of [
+					"node_modules",
+					"prisma/dev.db",
+					"prisma/test.db",
+					".next",
+					"server/dist",
+					"tsconfig.tsbuildinfo",
+				]) {
 					expect(existsSync(join(worktreePath, path)), path).toBe(false);
 				}
 				// Every candidate stays in the managed exclude block, so an old link never shows in a snapshot.
@@ -217,7 +223,7 @@ describe.skipIf(process.platform === "win32").sequential("worktree link rule (is
 				expect(readFileSync(join(repoPath, "prisma", "dev.db"), "utf8")).toBe("main dev data");
 				expect(runGit(idlePath, ["status", "--porcelain"])).toBe("");
 
-				// node_modules and .env are still the rule's links, so they are not reported.
+				// .env is still the rule's link, so it is not reported.
 				const after = await checkWorktreeLinks({ config, catalog: await loadKitCatalog(), entries });
 				expect(after[0]?.message).toContain("4 link(s) to the main checkout in 1 task worktree(s)");
 				expect(after[0]?.message).not.toContain("node_modules");

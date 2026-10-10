@@ -361,6 +361,40 @@ describe("checks runner", () => {
 		expect(results[0]?.error).toContain("git archive failed");
 	});
 
+	it("unlinks a committed node_modules symlink before an install and never deletes through it (issue #19)", async () => {
+		const temp = createTempDir("kanban-checks-links-");
+		temps.push(temp);
+		const shared = join(temp.path, "main", "tools", "preview", "node_modules");
+		mkdirSync(join(shared, "@axe-core", "playwright"), { recursive: true });
+		writeFileSync(join(shared, "@axe-core", "playwright", "index.js"), "axe\n");
+		const installs: string[] = [];
+		const runner = createChecksRunner({
+			readSettings: async () => ({
+				...parsePipelineConfig({}).config.pipeline.checks,
+				scratchRoot: join(temp.path, "scratch"),
+			}),
+			onResult: async () => {},
+			log: () => {},
+			exportSnapshot: async (_repo, _snapshot, dir) => {
+				mkdirSync(join(dir, "tools", "preview"), { recursive: true });
+				writeFileSync(join(dir, "package.json"), "{}");
+				writeFileSync(join(dir, "tools", "preview", "package.json"), "{}");
+				symlinkSync(shared, join(dir, "node_modules"));
+				symlinkSync(shared, join(dir, "tools", "preview", "node_modules"));
+			},
+			runStep: async (input) => {
+				installs.push(`${input.cwd}: ${existsSync(join(input.cwd, "node_modules"))}`);
+				return { ok: true };
+			},
+		});
+		runner.enqueue(request());
+		await runner.idle();
+
+		const dir = join(temp.path, "scratch", "foo", "dev-1");
+		expect(installs).toEqual([`${dir}: false`, `${join(dir, "tools", "preview")}: false`]);
+		expect(readFileSync(join(shared, "@axe-core", "playwright", "index.js"), "utf8")).toBe("axe\n");
+	});
+
 	it("close() drops the queue", async () => {
 		const harness = createHarness({ holdFirst: true });
 		harness.runner.enqueue(request({ taskId: "a" }));

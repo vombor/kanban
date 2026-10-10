@@ -1,5 +1,5 @@
 import { constants as fsConstants } from "node:fs";
-import { access, copyFile, lstat, mkdir, readdir, readFile, rm, stat, symlink } from "node:fs/promises";
+import { access, copyFile, lstat, mkdir, readdir, readFile, rm, rmdir, stat, symlink, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
 
 import type {
@@ -8,6 +8,7 @@ import type {
 	RuntimeWorktreeEnsureResponse,
 } from "../core/api-contract";
 import { type LockRequest, lockedFileSystem } from "../fs/locked-file-system";
+import { removeTreeWithoutFollowingLinks } from "../fs/remove-tree";
 import { getLegacyTaskWorktreeRootPaths, getTaskWorktreeSearchRootPaths } from "../state/kanban-home";
 import { getRuntimeHomePath, getTaskWorktreesHomePath, loadWorkspaceContext } from "../state/workspace-state";
 import { getGitCommandErrorMessage, getGitStdout, readGitHeadInfo, runGit } from "./git-utils";
@@ -499,15 +500,37 @@ async function prepareNewTaskWorktree(
 	}
 }
 
+/**
+ * Unlinks the links Kanban mirrored into a worktree (the managed exclude block's paths that are symlinks) and checks
+ * each is gone, so nothing that deletes the worktree afterwards can reach the main checkout through one (issue #19).
+ * Throws when a link stays: the worktree is then left alone.
+ */
+async function unlinkMirroredIgnoredPaths(worktreePath: string): Promise<void> {
+	for (const relativePath of await readSymlinkedIgnoredPaths(worktreePath)) {
+		const linkPath = join(worktreePath, relativePath);
+		if (!(await lstat(linkPath).catch(() => null))?.isSymbolicLink()) {
+			continue;
+		}
+		await unlink(linkPath).catch(() => undefined);
+		if (await lstat(linkPath).catch(() => null)) {
+			throw new Error(`Could not unlink ${linkPath} before removing the worktree; the worktree was left in place.`);
+		}
+	}
+}
+
 async function removeTaskWorktreeInternal(repoPath: string, worktreePath: string): Promise<boolean> {
 	const existed = await pathExists(worktreePath);
+	if (existed) {
+		await unlinkMirroredIgnoredPaths(worktreePath);
+	}
 	const removeResult = await runGit(repoPath, ["worktree", "remove", "--force", worktreePath]);
 	if (!removeResult.ok) {
 		// If remove failed (e.g. worktree in bad state), prune stale registrations
 		// so git doesn't think the path is still registered after we rm it.
 		await runGit(repoPath, ["worktree", "prune"]);
 	}
-	await rm(worktreePath, { recursive: true, force: true });
+	// Any other symlink (one the agent made, or one a broken worktree's git can't name) is unlinked, never followed.
+	await removeTreeWithoutFollowingLinks(worktreePath);
 	return existed;
 }
 
@@ -519,7 +542,8 @@ async function pruneEmptyParents(rootPath: string, fromPath: string): Promise<vo
 			if (entries.length > 0) {
 				return;
 			}
-			await rm(current, { recursive: true, force: true });
+			// rmdir, not rm -rf: something that appeared since the readdir stays.
+			await rmdir(current);
 			current = dirname(current);
 		} catch {
 			return;

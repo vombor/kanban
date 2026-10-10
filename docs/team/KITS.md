@@ -316,10 +316,17 @@ Now every ignored path is linked **unless** it matches the default exclude list 
 | `.turbo`, `.cache`, `.parcel-cache`, `.vite`, `.eslintcache`, `__pycache__`, `.pytest_cache` | caches the tools write while a card works |
 | `coverage`, `.nyc_output`, `test-results`, `playwright-report` | test output |
 | `*.log`, `logs`, `tmp`, `.tmp` | logs and scratch files |
+| `node_modules`, `bower_components`, `.venv`, `venv` | installed packages: an install in a card deletes the main checkout's packages through the link |
 
-Still linked by default, because cards read them and an install or setup per card would be needed otherwise:
-`node_modules` (Kanban has no per-worktree install step; a project whose cards run their own install excludes it),
-`.env*` files and other local config (`.cline` is made per card before a Cline launch, `ensureCardOwnedClineDir`).
+Installed packages were linked until 2026-10-10, and that emptied foo's main checkout: `npm ci` in a card first
+deletes every entry of its `node_modules`, *through* the link, and only then replaces the link with a directory of
+its own, so the card's install looks fine while the main checkout's `tools/preview/node_modules` is left empty (25
+cards that day, each from its own `npm ci --prefix tools/preview`). Cards install their own packages now. A project
+can `include` `node_modules` again only if no card ever installs there. Removing a worktree never deletes through a
+link: Kanban unlinks its own links first and deletes the rest without following any symlink.
+
+Still linked by default, because cards read them: `.env*` files and other local config (`.cline` is made per card
+before a Cline launch, `ensureCardOwnedClineDir`).
 Kanban's own rules hold whatever the project says: `.git`, `.DS_Store` and the like are never linked, and a
 Next/Turbopack package's `node_modules` isn't either (Turbopack refuses a symlinked `node_modules` outside the
 project root).
@@ -349,7 +356,7 @@ skipped; `--dry-run` lists what would change. Code: `src/workspace/worktree-link
 `src/workspace/worktree-link-audit.ts`.
 
 ```sh
-kanban kit set worktrees.symlinkIgnored.exclude '["node_modules", "uploads"]' --project /projects/foo
+kanban kit set worktrees.symlinkIgnored.exclude '["uploads"]' --project /projects/foo
 kanban kit set worktrees.symlinkIgnored.include '[".cache"]' --project /projects/foo
 kanban project unlink-ignored /projects/foo --dry-run
 ```

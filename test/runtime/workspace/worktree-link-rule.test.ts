@@ -41,16 +41,15 @@ describe("worktree link rule", () => {
 	});
 
 	it("links what cards only read by default", () => {
-		for (const path of [
-			"node_modules",
-			"web-ui/node_modules",
-			".env",
-			".env.local",
-			".husky/_",
-			".cline",
-			".npmrc",
-		]) {
+		for (const path of [".env", ".env.local", ".husky/_", ".cline", ".npmrc"]) {
 			expect(action(path), path).toBe("link");
+		}
+	});
+
+	it("doesn't link installed packages: an install in a card would empty the main checkout's", () => {
+		for (const path of ["node_modules", "web-ui/node_modules", "tools/preview/node_modules", ".venv", "venv"]) {
+			const decision = decideIgnoredPathLink(path, DEFAULT_WORKTREE_LINK_RULE);
+			expect(decision, path).toEqual({ action: "skip", reason: expect.stringContaining("installed packages") });
 		}
 	});
 

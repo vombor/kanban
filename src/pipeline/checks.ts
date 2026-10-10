@@ -24,12 +24,13 @@
 // installDirs, writeChecksNpmrc, prismaSchemas, the harness-failure patterns and the report).
 import { type ChildProcess, spawn } from "node:child_process";
 import { closeSync, existsSync, lstatSync, openSync, readdirSync, readFileSync } from "node:fs";
-import { mkdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, relative } from "node:path";
 
 import type { PipelineConfig, WorkspacePipelineSettings } from "../config/pipeline-config";
 import { createGitProcessEnv } from "../core/git-process-env";
+import { removeTreeWithoutFollowingLinks } from "../fs/remove-tree";
 import type { KitChecks } from "../kits/kit-schema";
 import { DEFAULT_KIT_NAME } from "../kits/resolve-kit";
 import { runGit } from "../workspace/git-utils";
@@ -275,7 +276,8 @@ const EXPORT_STDERR_TAIL_CHARS = 2000;
 
 /** `git archive <snapshot> | tar -x -C <dir>` into a fresh dir. */
 export async function exportSnapshotToDir(repoPath: string, snapshot: string, dir: string): Promise<void> {
-	await rm(dir, { recursive: true, force: true });
+	// The last export may hold symlinks the snapshot committed: drop them, never what they point to.
+	await removeTreeWithoutFollowingLinks(dir);
 	await mkdir(dir, { recursive: true });
 	const archive = spawn("git", ["archive", "--format=tar", snapshot], {
 		cwd: repoPath,
@@ -547,7 +549,7 @@ export function createChecksRunner(options: CreateChecksRunnerOptions): ChecksRu
 			await projectEnv?.cleanup().catch(() => {});
 			// The exported source and the logs stay for people to read; node_modules is most of the disk.
 			for (const installDir of installDirs) {
-				await rm(join(dir, installDir, "node_modules"), { recursive: true, force: true }).catch(() => {});
+				await removeTreeWithoutFollowingLinks(join(dir, installDir, "node_modules")).catch(() => {});
 			}
 		}
 	};

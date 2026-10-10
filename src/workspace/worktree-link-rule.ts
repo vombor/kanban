@@ -3,7 +3,10 @@
 // its local config. A link shares one file or directory between the checkout and every card, so only what cards
 // read is safe to link: a card that writes through a link writes the main checkout's copy and every other card's.
 // foo's cards shared `prisma/dev.db`, `prisma/test.db`, `.next` and `server/dist` that way (2026-10-09, sol 7c059,
-// f3b47, f0ba7 replaced the test-database link before their tests ran reliably).
+// f3b47, f0ba7 replaced the test-database link before their tests ran reliably). Installed packages aren't linked
+// either: `npm ci` in a card deletes every entry of its `node_modules` through the link before it replaces the link
+// with a directory of its own, so each card's install emptied the main checkout's `tools/preview/node_modules`
+// (foo, 25 cards on 2026-10-10 from 09:42Z; the card's own install looked fine).
 //
 // The rule: every ignored path is linked unless it matches the default exclude list below or the project's
 // `worktrees.symlinkIgnored.exclude` (a kit project fact); the project's `include` links a default-excluded path
@@ -26,9 +29,15 @@ const BUILD_OUTPUT = "build output: a card's build would overwrite the main chec
 const CACHE = "a cache cards write";
 const TEST_OUTPUT = "test output cards write";
 const LOG = "logs or scratch files cards write";
+const PACKAGES =
+	"installed packages: an install in a card (npm ci, a venv rebuild) deletes the main checkout's packages through the link";
 
 /** What a new worktree never links unless the project includes it. Every entry is something cards write. */
 export const DEFAULT_WORKTREE_LINK_EXCLUDES: readonly DefaultWorktreeLinkExclude[] = [
+	{ pattern: "node_modules", why: PACKAGES },
+	{ pattern: "bower_components", why: PACKAGES },
+	{ pattern: ".venv", why: PACKAGES },
+	{ pattern: "venv", why: PACKAGES },
 	{ pattern: "*.db", why: DATABASE },
 	{ pattern: "*.db3", why: DATABASE },
 	{ pattern: "*.sqlite*", why: DATABASE },
