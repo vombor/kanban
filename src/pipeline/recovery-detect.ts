@@ -6,16 +6,24 @@
 // prematureStop, finalProviderError, overflowCulprit, hungRequest). The incident behind each rule is in
 // docs/team/HISTORY.md ("Pipeline: recovery").
 import type { ClineSessionDetail, ClineSessionDetailMessage } from "../terminal/cline-session-files";
-import { getClineImageRejection, getClineProviderErrorText } from "../terminal/cline-turn-outcome";
+import {
+	CLINE_CONTEXT_OVERFLOW_PATTERN,
+	getClineImageRejection,
+	getClineProviderErrorText,
+} from "../terminal/cline-turn-outcome";
 
 // An API error that stays in the conversation and fails every later request: "continue" can't help, only a new
 // conversation (/clear) with the card prompt resent (c09cd4b: `ls -R` over node_modules overflowed a 131k context
-// and "continue" re-sent it). llama.cpp (Lemonade) says "Context size has been exceeded." (issue #25) or "the request
-// exceeds the available context size".
-const POISONED_PATTERN =
-	/ValidationException|failed to satisfy constraint|validation error|invalid.*tool.?use|messages\.\d+|context length|context window|context size has been exceeded|exceeds the available context size|input length|prompt is too long|too many tokens/i;
-const OVERFLOW_PATTERN =
-	/context length|context window|context size has been exceeded|exceeds the available context size|input length|prompt is too long|too many tokens/i;
+// and "continue" re-sent it). Overflows include llama.cpp's (Lemonade) "Context size has been exceeded." and "the
+// request exceeds the available context size" (CLINE_CONTEXT_OVERFLOW_PATTERN; issues #25, #26).
+const OVERFLOW_PATTERN = new RegExp(
+	`context length|context window|input length|prompt is too long|too many tokens|${CLINE_CONTEXT_OVERFLOW_PATTERN.source}`,
+	"i",
+);
+const POISONED_PATTERN = new RegExp(
+	`ValidationException|failed to satisfy constraint|validation error|invalid.*tool.?use|messages\\.\\d+|${OVERFLOW_PATTERN.source}`,
+	"i",
+);
 // Provider errors worth a backoff retry rather than a nudge (daf86a5: three 5xx in 25 s escalated 0789a; 519d05f:
 // stream timeouts; 6698365: "connection refused" from a restarting Lemonade).
 const TRANSIENT_PATTERN =
@@ -168,6 +176,8 @@ export function detectHungRequest(
 export type AgentRunError =
 	| { kind: "image_rejected"; tooLarge: boolean; text: string }
 	| { kind: "empty_reply"; text: string }
+	/** The conversation outgrew the model's context: resending it overflows again (issue #26). */
+	| { kind: "context_overflow"; text: string }
 	| { kind: "provider_error"; text: string }
 	| { kind: "session_failed"; text: string };
 
@@ -190,7 +200,7 @@ export function detectRunError(detail: ClineSessionDetail): AgentRunError | null
 	}
 	const error = detectFinalProviderError(detail.messages);
 	if (error) {
-		return { kind: "provider_error", text: error.slice(0, 300) };
+		return { kind: isContextOverflowError(error) ? "context_overflow" : "provider_error", text: error.slice(0, 300) };
 	}
 	return detail.snapshot.status === "failed" ? { kind: "session_failed", text: "the Cline session failed" } : null;
 }

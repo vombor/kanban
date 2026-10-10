@@ -100,8 +100,15 @@ const IMAGE_TOO_LARGE_PATTERN =
 
 // A provider/transport error shown as the whole final assistant text (a2cbb 10/06 20:29Z: "The operation timed
 // out.", session idle, no STATUS line, no hook event, so the card sat In Progress for 80 min).
-const PROVIDER_ERROR_PATTERN =
-	/operation timed out|stream timeout|request timeout|service (temporarily )?unavailable|temporarily unavailable|internal server error|bad gateway|gateway time-?out|overloaded|too many requests|throttl|ECONNRESET|ECONNREFUSED|connection ?refused|ETIMEDOUT|socket hang up|unable to connect/i;
+// A context overflow from a local server (issue #26, notes c92da/9e059 2026-10-10: Cline's whole reply was "Context
+// size has been exceeded." for llama.cpp's exceed_context_size_error, "the request exceeds the available context
+// size"), which the cloud providers' wordings in recovery-detect.ts didn't cover.
+export const CLINE_CONTEXT_OVERFLOW_PATTERN =
+	/context size (has been |was |is )?exceeded|exceeds? the available context size|exceed_context_size/i;
+const PROVIDER_ERROR_PATTERN = new RegExp(
+	`operation timed out|stream timeout|request timeout|service (temporarily )?unavailable|temporarily unavailable|internal server error|bad gateway|gateway time-?out|overloaded|too many requests|throttl|ECONNRESET|ECONNREFUSED|connection ?refused|ETIMEDOUT|socket hang up|unable to connect|${CLINE_CONTEXT_OVERFLOW_PATTERN.source}`,
+	"i",
+);
 const PROVIDER_ERROR_MAX_LENGTH = 300;
 
 // The QA prompt's last instruction: reply with one line "QA <devId> round <n>: PASS|FAIL|STALLED, report in …".

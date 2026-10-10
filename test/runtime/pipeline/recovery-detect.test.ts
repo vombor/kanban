@@ -183,3 +183,33 @@ describe("detectHungRequest (0261b20)", () => {
 		);
 	});
 });
+
+describe("context overflow from a local server (issue #26)", () => {
+	const CLINE_OVERFLOW = "Context size has been exceeded.";
+
+	it("reads Cline's and llama.cpp's overflow texts as a poisoned overflow, never as transient", () => {
+		for (const error of [
+			CLINE_OVERFLOW,
+			"the request exceeds the available context size, try increasing it",
+			'{"type":"exceed_context_size_error","n_prompt_tokens":70112,"n_ctx":65536}',
+		]) {
+			expect(isContextOverflowError(error)).toBe(true);
+			expect(isPoisonedHistoryError(error)).toBe(true);
+			expect(isTransientProviderError(error)).toBe(false);
+		}
+		expect(isContextOverflowError("I checked the context size setting in the config.")).toBe(false);
+	});
+
+	it("calls a QA run that ended on the overflow a context_overflow run error (notes c92da, 9e059)", () => {
+		expect(detectFinalProviderError([text("user", "go"), toolCall, text("assistant", CLINE_OVERFLOW)])).toBe(
+			CLINE_OVERFLOW,
+		);
+		expect(detectRunError(detailOf([text("user", "go"), toolCall, text("assistant", CLINE_OVERFLOW)]))).toEqual({
+			kind: "context_overflow",
+			text: CLINE_OVERFLOW,
+		});
+		expect(detectRunError(detailOf([text("assistant", "prompt is too long: 140000 tokens")]))?.kind).toBe(
+			"context_overflow",
+		);
+	});
+});

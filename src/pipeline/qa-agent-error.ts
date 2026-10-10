@@ -3,7 +3,9 @@
 // keeps failing: foo QA ebeb2's 8000 px screenshot, 2026-10-09), it replaces it with a fresh QA card for the same
 // snapshot up to QA_AGENT_ERROR_RETRIES times, then records a STALLED that carries the error (`qaAgentError`),
 // which the rework stage escalates to the orchestrator instead of asking the kit's onFail (a takeover of the dev
-// card onto `escalate.to` punished the dev card for the harness).
+// card onto `escalate.to` punished the dev card for the harness). A context overflow is one too (`context_overflow`,
+// issue #26: notes c92da/9e059 ended on "Context size has been exceeded.", got two verdict nudges into the overflowing
+// conversation, then a STALLED that escalated their dev cards).
 import type { PipelineSessionView } from "./engine";
 import type { PipelineCardState } from "./pipeline-state";
 import type { AgentRunError } from "./recovery-detect";
@@ -137,6 +139,9 @@ export function buildQaAgentErrorNote(error: QaAgentError): string {
 	}
 	if (error.kind === "image_rejected") {
 		return `${base} Your model doesn't accept images: never read image files (.png/.jpg/.gif/.webp); check screenshots through the screenshot tool's text report (status, console, outline) instead.`;
+	}
+	if (error.kind === "context_overflow") {
+		return `${base} That run outgrew the model's context window: keep every tool output small (read files in ranges, filter test and log output with grep/tail, never print a whole diff, lockfile or generated report), and write verdict.json as soon as you have judged each requirement.`;
 	}
 	return base;
 }

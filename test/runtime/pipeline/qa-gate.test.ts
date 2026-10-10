@@ -992,6 +992,26 @@ describe("QA gate", () => {
 			expect(harness.actions.some((action) => action.kind === "blockTask" && action.taskId === "d1111")).toBe(true);
 		});
 
+		it("replaces a QA card that overflowed its context instead of nudging it (issue #26)", async () => {
+			const harness = createHarness({ config });
+			await startQa(harness);
+			harness.setRunError("qa001", { kind: "context_overflow", text: "Context size has been exceeded." });
+
+			await endInReview(harness, "qa001", T0 + 60_000);
+			expect(harness.actions.filter((action) => action.kind === "deliverInput")).toEqual([]);
+			const state = await harness.store.load("foo");
+			expect(readQaGateEntry(state.cards.qa001)).toMatchObject({ status: "superseded" });
+			expect(readQaVerdictRecords(state.cards.d1111)).toEqual([]);
+			expect(state.cards.d1111?.qaAgentErrors).toMatchObject([{ qaTaskId: "qa001", kind: "context_overflow" }]);
+			expect(harness.readCardDecisions("foo", "qa_ingest").at(-1)?.note).toContain(
+				"the QA agent's own run failed (context overflow: Context size has been exceeded.)",
+			);
+
+			await replace(harness, "qa001", "qa002");
+			const [replacement] = createdTasks(harness.actions);
+			expect(replacement?.prompt).toContain("outgrew the model's context window: keep every tool output small");
+		});
+
 		it("still nudges a QA card that just stopped without a verdict", async () => {
 			const harness = createHarness({ config });
 			await startQa(harness);

@@ -281,6 +281,14 @@ describe("decideRecovery: Review cards", () => {
 		);
 	});
 
+	it("clears llama.cpp's overflow as Cline shows it and resends the card prompt (issue #26)", () => {
+		const overflow = detail([message("user", "go"), message("assistant", "Context size has been exceeded.")]);
+		const nudge = expectKind(decideRecovery(input({ detail: overflow })), "nudge");
+		expect(nudge).toMatchObject({ cause: "poisoned", clear: "/clear" });
+		expect(nudge.overflow?.error).toBe("Context size has been exceeded.");
+		expect(nudge.text.startsWith("Implement the thing.")).toBe(true);
+	});
+
 	it("clears an image over the size limits with the image note, not the poisoned-history one (issue #12)", () => {
 		const oversized = detail([
 			message("user", "go"),

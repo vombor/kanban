@@ -79,6 +79,8 @@ describe("reply classifiers", () => {
 		expect(getClineProviderErrorText("The operation timed out.")).toBe("The operation timed out.");
 		expect(getClineProviderErrorText("The operation timed out. ".repeat(20))).toBeNull();
 		expect(getClineProviderErrorText("Everything fine.")).toBeNull();
+		// issue #26: llama.cpp's exceed_context_size_error as Cline shows it.
+		expect(getClineProviderErrorText("Context size has been exceeded.")).toBe("Context size has been exceeded.");
 	});
 });
 
