@@ -124,6 +124,20 @@ function readMessagesArray(parsed: unknown): unknown[] {
 	return Array.isArray(messages) ? messages : [];
 }
 
+/** A session whose own `<id>.json` still says "running". */
+export interface ClineRunningSession {
+	sessionId: string;
+	startedAt: number | null;
+}
+
+export interface ClineRunningSessionReader {
+	/**
+	 * Every cline 3.x session whose cwd or workspace root is one of `workspacePaths` (or inside one) and whose
+	 * `<id>.json` says "running" right now: the runs a card's worktree still has in Cline's hub (issue #28).
+	 */
+	readRunningSessions: (sessionsPath: string, workspacePaths: readonly string[]) => Promise<ClineRunningSession[]>;
+}
+
 export interface ClineSessionDetailReader {
 	/** The same session as readLatestSession, with all its messages and the dir's last write, or null. */
 	readLatestSessionDetail: (sessionsPath: string, workspacePath: string) => Promise<ClineSessionDetail | null>;
@@ -207,7 +221,9 @@ async function readNewestWrite(dir: string): Promise<number | null> {
  * A session's cwd and start time never change, so they are cached per session dir (only once its `<id>.json`
  * could be read). A tick then reads one `<id>.json` and one messages file per watched card.
  */
-export function createClineSessionFileReader(): ClineSessionFileReader & ClineSessionDetailReader {
+export function createClineSessionFileReader(): ClineSessionFileReader &
+	ClineSessionDetailReader &
+	ClineRunningSessionReader {
 	const metaCache = new Map<string, SessionMeta>();
 
 	const readMeta = async (sessionsPath: string, sessionId: string): Promise<SessionMeta | null> => {
@@ -228,13 +244,16 @@ export function createClineSessionFileReader(): ClineSessionFileReader & ClineSe
 		return meta;
 	};
 
-	const findLatestSessionId = async (sessionsPath: string, workspacePath: string): Promise<string | null> => {
-		let names: string[];
+	const listSessionIds = async (sessionsPath: string): Promise<string[]> => {
 		try {
-			names = (await readdir(sessionsPath)).filter((name) => CLI_SESSION_DIR_PATTERN.test(name));
+			return (await readdir(sessionsPath)).filter((name) => CLI_SESSION_DIR_PATTERN.test(name));
 		} catch {
-			return null;
+			return [];
 		}
+	};
+
+	const findLatestSessionId = async (sessionsPath: string, workspacePath: string): Promise<string | null> => {
+		const names = await listSessionIds(sessionsPath);
 		const target = normalizePath(workspacePath);
 		let best: { sessionId: string; startedAt: number } | null = null;
 		for (const sessionId of names) {
@@ -279,6 +298,22 @@ export function createClineSessionFileReader(): ClineSessionFileReader & ClineSe
 	};
 
 	return {
+		readRunningSessions: async (sessionsPath, workspacePaths) => {
+			const targets = workspacePaths.map(normalizePath);
+			const isInside = (path: string) => targets.some((target) => path === target || path.startsWith(`${target}/`));
+			const running: ClineRunningSession[] = [];
+			for (const sessionId of await listSessionIds(sessionsPath)) {
+				const meta = await readMeta(sessionsPath, sessionId);
+				if (!meta?.paths.some(isInside)) {
+					continue;
+				}
+				const file = await readJsonObject(join(sessionsPath, sessionId, `${sessionId}.json`));
+				if (file?.status === "running") {
+					running.push({ sessionId, startedAt: meta.startedAt });
+				}
+			}
+			return running;
+		},
 		readLatestSession: async (sessionsPath, workspacePath) => {
 			const sessionId = await findLatestSessionId(sessionsPath, workspacePath);
 			return sessionId ? (await readSession(sessionsPath, sessionId)).snapshot : null;

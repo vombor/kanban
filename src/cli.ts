@@ -324,6 +324,8 @@ async function startServer(): Promise<{
 		{ resolveProjectInputPath },
 		{ pickDirectoryPathFromSystemDialog },
 		{ createAutoReviewReconciler },
+		{ createClineHubRunFollower },
+		{ createClineHubRunCanceller },
 		{ createPipelineWorkerHost },
 		{ readServerStartRecord, writeServerStartRecord },
 		{ createRestartManifestWriter },
@@ -343,6 +345,8 @@ async function startServer(): Promise<{
 		import("./projects/project-path.js"),
 		import("./server/directory-picker.js"),
 		import("./server/auto-review-reconciler.js"),
+		import("./server/cline-hub-run-follower.js"),
+		import("./terminal/cline-hub-runs.js"),
 		import("./pipeline/worker-host.js"),
 		import("./pipeline/restart-recovery.js"),
 		import("./server/restart-manifest-writer.js"),
@@ -374,6 +378,21 @@ async function startServer(): Promise<{
 			console.warn(`[kanban] ${message}`);
 		},
 	});
+	// A Cline card's run lives in Cline's shared hub and outlives its TUI (issue #28): Done/delete end the worktree's
+	// runs (the server's prepareTaskProcessReap), the follower ends a run whose TUI exited or died with the old server.
+	const loadClineSettings = createClineTurnDetectorSettingsLoader(() => {});
+	const clineHubRuns = createClineHubRunCanceller({
+		loadClineDataDir: async () => (await loadClineSettings()).dataDir,
+		log: (message) => {
+			console.warn(`[kanban] ${message}`);
+		},
+	});
+	const clineHubRunFollower = createClineHubRunFollower({
+		canceller: clineHubRuns,
+		log: (message) => {
+			console.warn(`[kanban] ${message}`);
+		},
+	});
 	// A "running" summary loaded at startup has no process in this server (its PTY died with the old one): it is marked
 	// interrupted and persisted at once. Only once this process has bound the server: one that loses the port to a
 	// running server must not mark that server's live sessions. Not with session sync off: the browser then makes the
@@ -387,6 +406,7 @@ async function startServer(): Promise<{
 		if (summaries.length === 0) {
 			return;
 		}
+		clineHubRunFollower.endOrphanedRuns(workspaceId, summaries);
 		void persistWorkspaceSessionSummaries(
 			workspaceId,
 			Object.fromEntries(summaries.map((summary) => [summary.taskId, summary])),
@@ -415,6 +435,7 @@ async function startServer(): Promise<{
 		onTerminalManagerReady: (workspaceId, manager) => {
 			runtimeStateHub?.trackTerminalManager(workspaceId, manager);
 			sessionSummaryPersister.trackWorkspace(workspaceId, manager);
+			clineHubRunFollower.trackWorkspace(workspaceId, manager);
 			sessionColumnSync?.trackWorkspace(workspaceId, manager);
 			autoReviewReconciler?.trackWorkspace(workspaceId);
 		},
@@ -426,6 +447,7 @@ async function startServer(): Promise<{
 	for (const { workspaceId, terminalManager } of workspaceRegistry.listManagedWorkspaces()) {
 		runtimeHub.trackTerminalManager(workspaceId, terminalManager);
 		sessionSummaryPersister.trackWorkspace(workspaceId, terminalManager);
+		clineHubRunFollower.trackWorkspace(workspaceId, terminalManager);
 	}
 	const disposeTrackedWorkspace = (
 		workspaceId: string,
@@ -439,6 +461,7 @@ async function startServer(): Promise<{
 		runtimeHub.disposeWorkspace(workspaceId);
 		sessionColumnSync?.untrackWorkspace(workspaceId);
 		sessionSummaryPersister.untrackWorkspace(workspaceId);
+		clineHubRunFollower.untrackWorkspace(workspaceId);
 		autoReviewReconciler?.untrackWorkspace(workspaceId);
 		pipelineWorkerHost?.forgetWorkspace(workspaceId);
 		restartManifestWriter?.forgetWorkspace(workspaceId);
@@ -450,6 +473,7 @@ async function startServer(): Promise<{
 		sessionSyncEnabled: sessionSyncSetting.enabled,
 		reviewSettleMs: sessionSyncSetting.reviewSettleMs,
 		onTaskLanded: (event) => pipelineWorkerHost?.notifyLanded(event),
+		cancelClineHubRuns: clineHubRuns.cancelRuns,
 		requestPipelineSnapshot: (workspaceId) => pipelineWorkerHost?.requestSnapshot(workspaceId),
 		runtimeStateHub: runtimeHub,
 		warn: (message) => {

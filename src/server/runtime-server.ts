@@ -53,6 +53,7 @@ import {
 	loadWorkspaceStateById,
 	mutateWorkspaceState,
 } from "../state/workspace-state";
+import type { ClineHubRunCanceller } from "../terminal/cline-hub-runs";
 import { createClineTurnMonitor } from "../terminal/cline-turn-monitor";
 import { deliverTaskInput } from "../terminal/deliver-task-input";
 import { DEFAULT_REVIEW_SETTLE_MS } from "../terminal/review-settle";
@@ -118,6 +119,11 @@ export interface CreateRuntimeServerDependencies {
 	runUpdateNow: () => Promise<RuntimeRunUpdateResponse>;
 	/** The `sessionSync` setting read at startup; reported to the browser in the runtime config. */
 	sessionSyncEnabled: boolean;
+	/**
+	 * Ends a card's runs in Cline's shared hub (src/terminal/cline-hub-runs.ts); Done, task delete and project removal
+	 * call it before the card's processes are reaped (issue #28).
+	 */
+	cancelClineHubRuns?: ClineHubRunCanceller["cancelRuns"];
 	/** Kanban landed a card (the `qa` landing step); the pipeline worker host passes it to the worker. */
 	onTaskLanded?: (event: PipelineEventMap["landed"]) => void;
 	/** Project isolation's state (src/isolation/isolation-service.ts); the server makes one when absent. */
@@ -284,7 +290,10 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			}),
 		log: deps.warn,
 	});
-	/** Task delete, project removal and Done reap a card's processes before its worktree is deleted. */
+	/**
+	 * Task delete, project removal and Done reap a card's processes before its worktree is deleted. First its runs in
+	 * Cline's shared hub end: the reaper never signals the hub, and a run there outlives the card's TUI (issue #28).
+	 */
 	const prepareTaskProcessReap = async (
 		scope: RuntimeTrpcWorkspaceScope,
 		taskId: string,
@@ -293,19 +302,31 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		const sessionPids = [taskId, getDetailTerminalTaskId(taskId)]
 			.map((sessionId) => terminalManager?.getSummary(sessionId)?.pid)
 			.filter((pid): pid is number => typeof pid === "number" && pid > 0);
-		const prepared = await processReaper.prepareWorktreeReap({
-			taskId,
-			worktreePaths: getTaskWorktreeCandidatePaths(scope.workspacePath, taskId),
-			sessionPids,
-		});
+		const worktreePaths = getTaskWorktreeCandidatePaths(scope.workspacePath, taskId);
+		const prepared = await processReaper.prepareWorktreeReap({ taskId, worktreePaths, sessionPids });
+		const cancelHubRuns = async () =>
+			await deps
+				.cancelClineHubRuns?.({
+					workspaceId: scope.workspaceId,
+					taskId,
+					worktreePaths,
+					reason: "Kanban ended this run: its card is done or deleted",
+				})
+				.catch((error: unknown) => {
+					deps.warn(
+						`Could not end the Cline hub runs of task ${taskId}: ${error instanceof Error ? error.message : String(error)}`,
+					);
+				});
 		return {
-			reap: async () =>
-				await prepared.reap().catch((error: unknown) => {
+			reap: async () => {
+				await cancelHubRuns();
+				return await prepared.reap().catch((error: unknown) => {
 					deps.warn(
 						`Could not reap processes of task ${taskId}: ${error instanceof Error ? error.message : String(error)}`,
 					);
 					return [];
-				}),
+				});
+			},
 		};
 	};
 
