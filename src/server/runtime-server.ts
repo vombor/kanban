@@ -28,6 +28,7 @@ import { getSharedGitHubAppTokenSource } from "../github-app/installation-tokens
 import { createIsolationService, type IsolationService } from "../isolation/isolation-service";
 import { createMessageNoticeQueue } from "../isolation/message-notices";
 import { applyIssueSync } from "../issues/issue-apply";
+import { readAgentDefaultModels } from "../models/cline-providers";
 import type { PipelineActionRequest, PipelineActionResult } from "../pipeline/actions";
 import type { PipelineEventMap } from "../pipeline/events";
 import type { WatchdogActionRequest } from "../pipeline/watchdog/actions";
@@ -65,6 +66,7 @@ import { createKitSettingsApi } from "../trpc/kit-settings-api";
 import { createPipelineResubmitApi } from "../trpc/pipeline-resubmit-api";
 import { createPlansApi } from "../trpc/plans-api";
 import { createProjectsApi } from "../trpc/projects-api";
+import { createProviderCapacityApi } from "../trpc/provider-capacity-api";
 import { createRuntimeApi } from "../trpc/runtime-api";
 import { createShortcutsApi } from "../trpc/shortcuts-api";
 import { createWorkspaceApi } from "../trpc/workspace-api";
@@ -364,6 +366,29 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			deps.workspaceRegistry.getTerminalManagerForWorkspace(workspaceId)?.getSummary(taskId) ?? null,
 		requestSnapshot: (workspaceId) => deps.requestPipelineSnapshot?.(workspaceId),
 	});
+	const providerCapacityApi = createProviderCapacityApi({
+		listWorkspaceIds: () => deps.workspaceRegistry.listManagedWorkspaces().map((workspace) => workspace.workspaceId),
+		loadWorkspace: async (workspaceId) => {
+			const state = await loadWorkspaceStateById(workspaceId);
+			if (!state) {
+				return null;
+			}
+			const live = deps.workspaceRegistry.getTerminalManagerForWorkspace(workspaceId)?.listSummaries() ?? [];
+			const config = await deps.workspaceRegistry.loadScopedRuntimeConfig({
+				workspaceId,
+				workspacePath: state.repoPath,
+			});
+			return {
+				board: state.board,
+				sessions: Object.values({
+					...state.sessions,
+					...Object.fromEntries(live.map((summary) => [summary.taskId, summary])),
+				}),
+				selectedAgentId: config.selectedAgentId,
+			};
+		},
+		loadAgentDefaultModels: async (config) => await readAgentDefaultModels(config.config.agents.cline.dataDir),
+	});
 	// Shortcut runs that ask for a port, and the proxy the browser reaches those ports through (shortcut-ports.ts).
 	const shortcutPorts = createShortcutPortRegistry();
 	const handleShortcutPortProxyRequest = createShortcutPortProxyHandler({
@@ -482,6 +507,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			plansApi,
 			kitSettingsApi,
 			pipelineResubmitApi,
+			providerCapacityApi,
 			shortcutsApi,
 			githubApi,
 			runtimeApi,

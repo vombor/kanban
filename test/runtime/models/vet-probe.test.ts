@@ -136,6 +136,48 @@ describe("kanban models vet: the probe", () => {
 		});
 	});
 
+	it("takes a turn that ends on a provider or transport error for the environment's, not the model's (issue #25)", async () => {
+		const notice = (text: string) => ({
+			...message("assistant", [{ type: "text", text }], START + 5 * MIN),
+			displayError: true,
+		});
+		// Lemonade evicted the model for another project's card; Cline shows the error in place of a reply.
+		const evicted = await probeWith(session("idle", [prompt, notice("No model loaded: Devstral-Small-2507-GGUF")]))(
+			input({ model: "Devstral-Small-2507-GGUF" }),
+		);
+		expect(evicted?.failure).toEqual({
+			kind: "provider_error",
+			detail: "No model loaded: Devstral-Small-2507-GGUF",
+			harness: true,
+		});
+		const cut = await probeWith(session("idle", [prompt, notice("Response stream ended without a finish reason.")]))(
+			input(),
+		);
+		expect(cut?.failure).toMatchObject({ kind: "provider_error", harness: true });
+		// llama.cpp's overflow, on a model instance shared with another project's QA card.
+		const overflow = await probeWith(session("idle", [prompt, notice("Context size has been exceeded.")]))(
+			input({ model: "Gemma-4-12B-it-GGUF" }),
+		);
+		expect(overflow?.failure).toEqual({
+			kind: "context_overflow",
+			detail: "Context size has been exceeded.",
+			harness: true,
+		});
+		// A rejected request over the model's own malformed tool call stays the model's.
+		const invalid = await probeWith(session("idle", [prompt, notice("ValidationException: invalid tool use block")]))(
+			input({ providerId: "bedrock" }),
+		);
+		expect(invalid?.failure).toMatchObject({ kind: "provider_error", harness: false });
+		// The same text written by the model itself is its reply, not an error notice.
+		const reply = await probeWith(
+			session("idle", [
+				prompt,
+				message("assistant", [{ type: "text", text: "No model loaded: I can't help." }], START + 5 * MIN),
+			]),
+		)(input());
+		expect(reply?.failure ?? null).toBeNull();
+	});
+
 	it("answers null for an agent whose session files it can't read", async () => {
 		expect(await probeWith(null)(input({ agentId: "codex" }))).toBeNull();
 	});

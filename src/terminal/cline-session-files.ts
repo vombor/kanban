@@ -96,6 +96,12 @@ export interface ClineSessionDetailMessage {
 	outputTokens: number | null;
 	/** `ts` of the message (epoch ms), when Cline recorded it. */
 	ts: number | null;
+	/**
+	 * Cline's own error notice (`metadata.displayRole: "error"`): a provider or transport error Cline shows as an
+	 * assistant message ("No model loaded: <model>", "Response stream ended without a finish reason."), not the
+	 * model's reply.
+	 */
+	displayError?: boolean;
 }
 
 /** Everything recovery reads from a card's newest session (premature stops, hung requests, overflow culprits). */
@@ -148,11 +154,12 @@ function toDetailMessage(value: unknown): ClineSessionDetailMessage | null {
 	if (!value || typeof value !== "object") {
 		return null;
 	}
-	const { role, content, metrics, ts } = value as {
+	const { role, content, metrics, ts, metadata } = value as {
 		role?: unknown;
 		content?: unknown;
 		metrics?: unknown;
 		ts?: unknown;
+		metadata?: unknown;
 	};
 	if (typeof role !== "string") {
 		return null;
@@ -173,6 +180,9 @@ function toDetailMessage(value: unknown): ClineSessionDetailMessage | null {
 		content: blocks,
 		outputTokens: typeof outputTokens === "number" ? outputTokens : null,
 		ts: Number.isFinite(time) ? time : null,
+		...(metadata && typeof metadata === "object" && (metadata as { displayRole?: unknown }).displayRole === "error"
+			? { displayError: true }
+			: {}),
 	};
 }
 

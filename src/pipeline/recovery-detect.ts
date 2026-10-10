@@ -10,10 +10,12 @@ import { getClineImageRejection, getClineProviderErrorText } from "../terminal/c
 
 // An API error that stays in the conversation and fails every later request: "continue" can't help, only a new
 // conversation (/clear) with the card prompt resent (c09cd4b: `ls -R` over node_modules overflowed a 131k context
-// and "continue" re-sent it).
+// and "continue" re-sent it). llama.cpp (Lemonade) says "Context size has been exceeded." (issue #25) or "the request
+// exceeds the available context size".
 const POISONED_PATTERN =
-	/ValidationException|failed to satisfy constraint|validation error|invalid.*tool.?use|messages\.\d+|context length|context window|input length|prompt is too long|too many tokens/i;
-const OVERFLOW_PATTERN = /context length|context window|input length|prompt is too long|too many tokens/i;
+	/ValidationException|failed to satisfy constraint|validation error|invalid.*tool.?use|messages\.\d+|context length|context window|context size has been exceeded|exceeds the available context size|input length|prompt is too long|too many tokens/i;
+const OVERFLOW_PATTERN =
+	/context length|context window|context size has been exceeded|exceeds the available context size|input length|prompt is too long|too many tokens/i;
 // Provider errors worth a backoff retry rather than a nudge (daf86a5: three 5xx in 25 s escalated 0789a; 519d05f:
 // stream timeouts; 6698365: "connection refused" from a restarting Lemonade).
 const TRANSIENT_PATTERN =

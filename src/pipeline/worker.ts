@@ -28,15 +28,14 @@
 // (`request` → `response` over IPC), never on the board or a PTY itself.
 import { getWorkspacePipelineSettings, type ParsedPipelineConfig, readPipelineConfig } from "../config/pipeline-config";
 import type { RuntimeTaskTrashResponse } from "../core/api-contract";
-import { type EffectiveModelConfig, readClineDefaultModel } from "../core/effective-agent";
+import type { EffectiveModelConfig } from "../core/effective-agent";
 import { createIssueSyncJobs, takeWorkspaceIssueWakeNotes } from "../issues/issue-job";
 import type { IssueSyncDependencies } from "../issues/issue-sync";
 import { createRoutingPolicy } from "../kits/policy";
 import { type KitCatalog, loadKitCatalog, resolveWorkspaceKit } from "../kits/resolve-kit";
 import { getWorkspaceRoutingVetting } from "../kits/routing-vetting";
 import { registerTeamKitFeatures } from "../kits/team/features";
-import { readClineProvidersFile } from "../models/cline-providers";
-import { getClineProvidersSettingsPath } from "../state/kanban-home";
+import { readAgentDefaultModels } from "../models/cline-providers";
 import { getAgentClearCommand, readAgentSessionSize } from "../terminal/orchestrator-agents";
 import type { PipelineActionResult, PipelineActions } from "./actions";
 import {
@@ -148,8 +147,7 @@ interface WorkspaceQueue {
 async function loadDefaultAgentModels(
 	config: ParsedPipelineConfig,
 ): Promise<EffectiveModelConfig["agentDefaultModels"]> {
-	const providers = await readClineProvidersFile(getClineProvidersSettingsPath(config.config.agents.cline.dataDir));
-	return providers ? { cline: readClineDefaultModel(providers) } : {};
+	return await readAgentDefaultModels(config.config.agents.cline.dataDir);
 }
 
 function createDefaultFeatureRegistry(

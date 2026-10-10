@@ -260,6 +260,7 @@ interface VetOptions {
 	project?: string;
 	maxMin?: string;
 	maxCost?: string;
+	capacityWaitMin?: string;
 	json?: boolean;
 }
 
@@ -286,6 +287,11 @@ async function runVetCommand(options: VetOptions): Promise<number> {
 		...DEFAULT_VET_LIMITS,
 		maxMin: parsePositive(options.maxMin, DEFAULT_VET_LIMITS.maxMin, "--max-min"),
 		maxCostUSD: parsePositive(options.maxCost, DEFAULT_VET_LIMITS.maxCostUSD, "--max-cost"),
+		capacityWaitMin: parsePositive(
+			options.capacityWaitMin,
+			DEFAULT_VET_LIMITS.capacityWaitMin,
+			"--capacity-wait-min",
+		),
 	};
 	const target = await resolveWorkspaceTarget(options.project, { allowUnregistered: false });
 	const repoPathOfProject = target.repoPath;
@@ -313,6 +319,7 @@ async function runVetCommand(options: VetOptions): Promise<number> {
 	const runtimeClient = createRuntimeTrpcClient(target.workspaceId);
 	const signals = createAgentRunSignals();
 	const projectArgs = { cwd: repoPathOfProject, projectPath: repoPathOfProject };
+	let capacityUnknown = false;
 	const result = await runVet(
 		{ runId, combination, role, task, repoPath, limits },
 		{
@@ -362,6 +369,21 @@ async function runVetCommand(options: VetOptions): Promise<number> {
 				countToolUse: (id, path) => signals.countToolUse(id, path),
 				findToolCallLoop: (id, path, last) => signals.findToolCallLoop(id, path, last),
 			},
+			findCapacityHold: async ({ provider, model }) => {
+				if (!provider || !model || capacityUnknown) {
+					return null;
+				}
+				try {
+					return (await runtimeClient.models.capacity.query({ provider, model })).hold;
+				} catch (error) {
+					// A server without the route (an older build): the run goes ahead as before, said once.
+					capacityUnknown = true;
+					log(
+						`vet ${runId}: the server can't tell ${provider}'s capacity (${toErrorMessage(error)}); not waiting for it`,
+					);
+					return null;
+				}
+			},
 			probe: createVetProbe({
 				clineDataDir: config.agents.cline.dataDir,
 				hungMin: config.pipeline.recovery.hungMin,
@@ -408,11 +430,14 @@ async function runVetCommand(options: VetOptions): Promise<number> {
 	if (options.json) {
 		printJson({ ok: true, runDir, result, proposal });
 	} else {
+		const proposed = proposal.unchanged
+			? "Nothing to commit: the run was inconclusive (not the model's doing), so the registry entry stays as it is."
+			: `Proposed entry for models/vetted.json (the Kanban orchestrator commits it; nothing was changed):\n${JSON.stringify(proposal.entry, null, "\t")}`;
 		process.stdout.write(
-			`${result.outcome.toUpperCase()}: ${describeCombination(combination)} for ${role}${result.failure ? ` (${result.failure.kind}: ${result.failure.detail})` : ""}\nReport: ${join(runDir, "report.md")}\nProposed entry for models/vetted.json (the Kanban orchestrator commits it; nothing was changed):\n${JSON.stringify(proposal.entry, null, "\t")}\n`,
+			`${result.outcome.toUpperCase()}: ${describeCombination(combination)} for ${role}${result.failure ? ` (${result.failure.kind}: ${result.failure.detail})` : ""}\nReport: ${join(runDir, "report.md")}\n${proposed}\n`,
 		);
 	}
-	return result.outcome === "passed" ? 0 : 1;
+	return result.outcome === "passed" ? 0 : result.outcome === "inconclusive" ? 2 : 1;
 }
 
 export function registerModelsRegistryCommands(models: Command): void {
@@ -433,7 +458,7 @@ export function registerModelsRegistryCommands(models: Command): void {
 	models
 		.command("vet")
 		.description(
-			"Run a throwaway smoke-test card (scratch repo in a temp dir, never landed) for one agent + provider + model and role, and write a report plus a proposed registry entry. Exit 0 when it passed.",
+			"Run a throwaway smoke-test card (scratch repo in a temp dir, never landed) for one agent + provider + model and role, and write a report plus a proposed registry entry. Waits first for the provider's capacity (models.providerCapacity). Exit 0 when it passed, 1 when it failed, 2 when it was inconclusive (a harness or environment cause).",
 		)
 		.requiredOption("--agent <agent>", "The agent CLI.")
 		.option("--provider <provider>", "The provider (none: the agent's own).")
@@ -442,6 +467,10 @@ export function registerModelsRegistryCommands(models: Command): void {
 		.option("--project <project>", "The project whose board hosts the card (default: this directory's).")
 		.option("--max-min <minutes>", `Time cap (default ${DEFAULT_VET_LIMITS.maxMin}).`)
 		.option("--max-cost <usd>", `Cost cap in USD (default ${DEFAULT_VET_LIMITS.maxCostUSD}).`)
+		.option(
+			"--capacity-wait-min <minutes>",
+			`How long to wait for the provider's capacity before giving up (default ${DEFAULT_VET_LIMITS.capacityWaitMin}).`,
+		)
 		.option("--json", "Print JSON.")
 		.action(async (options: VetOptions) => {
 			try {

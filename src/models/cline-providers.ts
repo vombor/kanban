@@ -18,6 +18,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { PipelineConfig } from "../config/pipeline-config";
+import { type EffectiveModelConfig, readClineDefaultModel } from "../core/effective-agent";
 import { getClineModelsSettingsPath, getClineProvidersSettingsPath } from "../state/kanban-home";
 import { getCodexConfigFilePath } from "../terminal/codex-workspace-trust";
 
@@ -111,6 +112,14 @@ async function readJsonFile(path: string): Promise<ReadJsonFile> {
 /** Cline's providers.json as a parsed object, or null when it is missing or unreadable. */
 export async function readClineProvidersFile(providersPath: string): Promise<JsonObject | null> {
 	return (await readJsonFile(providersPath)).document;
+}
+
+/** Each agent's own default model where Kanban can read it: Cline's `lastUsedProvider` model (providers.json). */
+export async function readAgentDefaultModels(
+	clineDataDir: string | null,
+): Promise<EffectiveModelConfig["agentDefaultModels"]> {
+	const providers = await readClineProvidersFile(getClineProvidersSettingsPath(clineDataDir));
+	return providers ? { cline: readClineDefaultModel(providers) } : {};
 }
 
 function providersOf(document: JsonObject | null): JsonObject {

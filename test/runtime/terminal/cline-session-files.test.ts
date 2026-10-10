@@ -155,6 +155,28 @@ describe("cline session file reader", () => {
 		expect(detail?.lastWriteAt).toBeGreaterThan(0);
 		expect(await createClineSessionFileReader().readLatestSessionDetail(sessionsPath, "/elsewhere")).toBeNull();
 	});
+
+	it("marks Cline's own error notice, which it writes as an assistant message (issue #25)", async () => {
+		const sessionsPath = createSessionsDir([
+			{
+				id: "1791628928553_8a85f",
+				meta: { status: "idle", started_at: "2026-10-10T10:02:00.000Z", workspace_root: WORKTREE },
+				messages: {
+					messages: [
+						{ role: "user", content: "go" },
+						{
+							id: "error_b8fd377f",
+							role: "assistant",
+							content: [{ type: "text", text: "No model loaded: Devstral-Small-2507-GGUF" }],
+							metadata: { displayOnly: true, displayRole: "error" },
+						},
+					],
+				},
+			},
+		]);
+		const detail = await createClineSessionFileReader().readLatestSessionDetail(sessionsPath, WORKTREE);
+		expect(detail?.messages.map((message) => message.displayError ?? false)).toEqual([false, true]);
+	});
 });
 
 describe("cline session messages", () => {

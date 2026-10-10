@@ -118,7 +118,7 @@ show` prints the same per route.
 ## Vetting
 
 ```sh
-kanban models vet --agent cline --provider lemonade --model GLM-4.7-Flash-GGUF --role dev [--project <p>] [--max-min 30] [--max-cost 2]
+kanban models vet --agent cline --provider lemonade --model GLM-4.7-Flash-GGUF --role dev [--project <p>] [--max-min 30] [--max-cost 2] [--capacity-wait-min 30]
 ```
 
 It runs one fixed, throwaway smoke test in a scratch git repo in a temp dir (never a project repo, never landed):
@@ -132,7 +132,11 @@ It runs one fixed, throwaway smoke test in a scratch git repo in a temp dir (nev
 
 The card runs on the given project's board (default: this directory's) with role `calibration`, so the pipeline,
 auto-review and the watchdog leave it alone, through the running server like `bench calibrate` (create, start,
-discard). It is watched with Kanban's failure detectors, and the first one that fires ends the run: not signed in,
+discard). Before it creates the card it waits for the provider's capacity (`models.providerCapacity`), counted over
+every project's In Progress cards as the QA gate counts them (the server's `models.capacity` route; other projects'
+cards are only counted): a third Lemonade model would evict another project's, whose next request then evicts the vet
+model (issue #25, 2026-10-10: five of 17 runs got only "No model loaded"). After `--capacity-wait-min` it gives up
+with the holders as the reason, and no card. It is watched with Kanban's failure detectors, and the first one that fires ends the run: not signed in,
 no turn started (`no_session`: a sign-in or trust screen takes the prompt as input), image rejection, tool calls
 written as text, a tool-call loop (one finished call filling 3 of the last 4; a call still waiting for its result
 never counts), Cline's silent stall, hung request, context overflow or final provider error, a failed session, no
@@ -142,12 +146,17 @@ not the model's silence: a model Lemonade is still loading (`/api/v1/health` doe
 first reply (10 min on top, `CLINE_FIRST_REPLY_LOAD_ALLOWANCE_MS`, the same allowance recovery's silent-stall
 reader gives a slow-first-call provider), a model request in flight (the hung check's, twice as long for a local
 first call) and a shell tool whose command still runs. A timeout on a local provider is retried twice
-(`provider_timeout`) before it counts.
+(`provider_timeout`) before it counts. A turn that ends on a provider or transport error is the environment's, not
+the model's: a context overflow (llama.cpp's "Context size has been exceeded." included) and any error notice Cline
+writes in place of a reply (its session message has `metadata.displayRole: "error"`: "No model loaded: <model>",
+"Response stream ended without a finish reason."); a rejected request over a malformed tool call stays the model's.
 
 It writes `<home>/data/models/vetting/<run>/report.md`, `result.json` (the run and the proposal) and `run.log`, and
-prints the proposed entry: the combination's entry with this role's vetting set to `vetted` (passed), `rejected`
-with the failure as the reason, or `provisional` with the reason when the harness or the environment caused the
-failure (sign-in, `no_session`, a transient provider error or timeout, a hung request, a failed session), and the
-capabilities seen (a harness failure records no `toolUse` from a run with no tool calls). It exits 0 only when the run passed. It never edits the
+prints the proposed entry: the combination's entry with this role's vetting set to `vetted` (passed) or `rejected`
+with the failure as the reason (failed), and the capabilities seen. A run the harness or the environment cut short
+is **inconclusive** (sign-in, `no_session`, no capacity, a provider or transport error or timeout, a context
+overflow, a hung request, a failed session): it never proposes a rejection. A role that already has a vetting keeps
+it (nothing to commit), a role without one gets `provisional` with the reason, and no `toolUse` is recorded from a
+run with no tool calls. It exits 0 when the run passed, 1 when it failed and 2 when it was inconclusive. It never edits the
 registry. One failed run may be bad luck: the orchestrator decides what to commit. The run lasts minutes, so an
 orchestrator starts it in the background of its own session (it must stay in the session's process tree).

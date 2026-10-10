@@ -123,6 +123,7 @@ function createHarness(agent: FakeAgent, options: { signedIn?: boolean | null; s
 				fake.textualToolCalls ? { native: 0, textual: 4, turns: 2 } : { native: 6, textual: 0, turns: 3 },
 			findToolCallLoop: async () => null,
 		},
+		findCapacityHold: async () => null,
 		probe: async () => null,
 		findWorktreePath: async () => "/worktrees/v0001",
 		measureCostUSD: async () => fake.cost,
@@ -196,7 +197,7 @@ describe("kanban models vet: the runner", () => {
 	it("stops at the first failure detector, and always discards the card", async () => {
 		const notSignedIn = createHarness(goodDevAgent, { signedIn: false });
 		expect(await runVet(notSignedIn.input, notSignedIn.deps)).toMatchObject({
-			outcome: "failed",
+			outcome: "inconclusive",
 			failure: { kind: "sign_in" },
 			taskId: null,
 		});
@@ -304,6 +305,7 @@ describe("kanban models vet: harness failures (the first runs, 2026-10-09)", () 
 		const result = await runVet(input, deps);
 		expect(calls.filter((call) => call.startsWith("deliver"))).toHaveLength(PROVIDER_TIMEOUT_RETRIES);
 		expect(calls.at(-1)).toBe("discard v0001");
+		expect(result.outcome).toBe("inconclusive");
 		expect(result.failure).toMatchObject({
 			kind: "provider_timeout",
 			harness: true,
@@ -341,6 +343,110 @@ describe("kanban models vet: harness failures (the first runs, 2026-10-09)", () 
 		// One retry for the error, then (the same error 2 min later) a second one, then the failure.
 		expect(calls.filter((call) => call.startsWith("deliver"))).toHaveLength(2);
 		expect(result.finishedAt - result.startedAt).toBeGreaterThanOrEqual(4 * 60_000);
+	});
+});
+
+describe("kanban models vet: provider capacity and provider errors (issue #25)", () => {
+	const HOLD = { provider: "lemonade", maxLoadedModels: 2, loadedModels: 2, holders: [], otherWorkspaceHolders: 3 };
+
+	/** goodDevAgent, timed from the card's start instead of the clock's. */
+	function startTimed(): { agent: FakeAgent; markStart: (at: number) => void } {
+		let startAt: number | null = null;
+		return {
+			agent: (fake, at) => {
+				if (startAt !== null) {
+					goodDevAgent(fake, at - startAt);
+				}
+			},
+			markStart: (at) => {
+				startAt = at;
+			},
+		};
+	}
+
+	it("waits for the provider's capacity before it creates the card, and times the run from the card's start", async () => {
+		const timed = startTimed();
+		const { deps, calls, input } = createHarness(timed.agent);
+		const logs: string[] = [];
+		deps.log = (line) => logs.push(line);
+		let asked = 0;
+		deps.findCapacityHold = async (combination) => {
+			asked += 1;
+			calls.push(`capacity ${combination.provider} ${combination.model}`);
+			return asked <= 3 ? HOLD : null;
+		};
+		const start = deps.board.startTask;
+		deps.board.startTask = async (taskId) => {
+			timed.markStart(deps.now());
+			await start(taskId);
+		};
+		const result = await runVet(input, deps);
+		expect(result.outcome).toBe("passed");
+		expect(calls.slice(0, 5)).toEqual([
+			"capacity lemonade GLM-4.7-Flash-GGUF",
+			"capacity lemonade GLM-4.7-Flash-GGUF",
+			"capacity lemonade GLM-4.7-Flash-GGUF",
+			"capacity lemonade GLM-4.7-Flash-GGUF",
+			'create cline {"providerId":"lemonade","modelId":"GLM-4.7-Flash-GGUF"}',
+		]);
+		// The same hold is logged once.
+		expect(logs.filter((line) => line.includes("waiting for capacity"))).toEqual([
+			"vet r1: waiting for capacity: lemonade holds 2 of 2 model(s): 3 card(s) of other projects",
+		]);
+		expect(result.startedAt).toBe(30_000);
+	});
+
+	it("gives up after capacityWaitMin with an inconclusive result and no card", async () => {
+		const { deps, calls, input } = createHarness(goodDevAgent);
+		deps.findCapacityHold = async () => ({
+			...HOLD,
+			holders: ["d2222 (GLM-4.7-Flash-GGUF)"],
+			otherWorkspaceHolders: 0,
+		});
+		const result = await runVet({ ...input, limits: { ...input.limits, capacityWaitMin: 5 } }, deps);
+		expect(result).toMatchObject({
+			outcome: "inconclusive",
+			taskId: null,
+			failure: {
+				kind: "capacity",
+				harness: true,
+				detail:
+					"still no room after 5 min (models.providerCapacity): lemonade holds 2 of 2 model(s): d2222 (GLM-4.7-Flash-GGUF)",
+			},
+		});
+		expect(calls).toEqual([]);
+		// GLM's dev role is vetted: an inconclusive run leaves it as it is.
+		const proposal = buildVetProposal(getVettedRegistry(), result, null);
+		expect(proposal.unchanged).toBe(true);
+		expect(proposal.entry).toBe(proposal.replaces);
+		expect(proposal.entry.roles.dev?.status).toBe("vetted");
+		const report = formatVetReport(result, proposal, { repoPath: REPO });
+		expect(report).toContain("Outcome: **INCONCLUSIVE**");
+		expect(report).toContain("Nothing to commit");
+	});
+
+	it("never proposes a rejection for a run whose turn ended on a provider error", async () => {
+		const { deps, input } = createHarness((fake, at) => {
+			if (at === 10_000) {
+				fake.column = "review";
+				fake.session = summary("awaiting_review", at);
+			}
+		});
+		deps.probe = async () => ({
+			failure: { kind: "provider_error", detail: "No model loaded: Devstral-Small-2507-GGUF", harness: true },
+			hold: null,
+		});
+		const devstral = { ...COMBINATION, model: "Devstral-Small-2507-GGUF" };
+		const result = await runVet({ ...input, combination: devstral, role: "plan" }, deps);
+		expect(result).toMatchObject({ outcome: "inconclusive", failure: { kind: "provider_error" }, checks: [] });
+		// No recorded plan vetting for Devstral: provisional with the reason, never rejected.
+		const proposal = buildVetProposal(getVettedRegistry(), result, null);
+		expect(proposal.unchanged).toBe(false);
+		expect(proposal.entry.roles.plan).toMatchObject({
+			status: "provisional",
+			reason: "provider_error: No model loaded: Devstral-Small-2507-GGUF",
+			evidence: { summary: expect.stringContaining("inconclusive") },
+		});
 	});
 });
 

@@ -10,9 +10,16 @@
 // timeout on a local provider is retried PROVIDER_TIMEOUT_RETRIES times before it counts. A turn that ends (Review,
 // settled) is then checked against the task (vet-tasks.ts). The card is always discarded, never landed.
 //
+// Before the card is created, the run waits for its provider's capacity (`models.providerCapacity`, counted over every
+// project's In Progress cards like the QA gate's, src/pipeline/provider-capacity.ts) for up to `capacityWaitMin`:
+// a third Lemonade model would evict another project's, and that project's next request evicts the vet model (issue
+// #25: five of 17 runs got only "No model loaded"). A run that ends on a harness or environment failure, the
+// capacity wait included, is `inconclusive`: it says nothing about the model.
+//
 // The result is a report and a proposed registry entry (vet-report.ts). It never edits the registry: the Kanban
 // orchestrator commits the proposal to models/vetted.json.
 import type { RuntimeAgentId, RuntimeTaskAgentSettings, RuntimeTaskSessionSummary } from "../../core/api-contract";
+import type { ProviderCapacityHold } from "../../pipeline/provider-capacity";
 import { buildProviderRetryPrompt } from "../../pipeline/recovery-prompts";
 import { isReviewSettled } from "../../terminal/review-settle";
 import type { ModelCombination, VettingRole } from "../vetted-registry";
@@ -31,6 +38,8 @@ export interface VetLimits {
 	pollSec: number;
 	/** A finished turn must stay finished this long (Review settles, src/terminal/review-settle.ts). */
 	reviewSettleMs: number;
+	/** How long the run waits for its provider's capacity before it gives up (inconclusive). */
+	capacityWaitMin: number;
 }
 
 export const DEFAULT_VET_LIMITS: VetLimits = {
@@ -40,6 +49,7 @@ export const DEFAULT_VET_LIMITS: VetLimits = {
 	startMin: 4,
 	pollSec: 10,
 	reviewSettleMs: 12_000,
+	capacityWaitMin: 30,
 };
 
 export interface VetBoardState {
@@ -77,6 +87,11 @@ export interface VetRunnerDeps {
 			last: number,
 		) => Promise<{ count: number; of: number; call: string } | null>;
 	};
+	/**
+	 * Who holds the combination's provider at its `models.providerCapacity` limit (every project's In Progress
+	 * cards), null when the model may run now. Asked before the card is created.
+	 */
+	findCapacityHold: (combination: ModelCombination) => Promise<ProviderCapacityHold | null>;
 	/** The agent-specific failure detectors (vet-probe.ts); null where they can't read the agent. */
 	probe: (input: VetProbeInput) => Promise<VetProbeVerdict | null>;
 	findWorktreePath: (taskId: string) => Promise<string | null>;
@@ -99,7 +114,8 @@ export interface VetRunInput {
 	limits: VetLimits;
 }
 
-export type VetOutcome = "passed" | "failed";
+/** `inconclusive`: a harness or environment failure (`failure.harness`), which says nothing about the model. */
+export type VetOutcome = "passed" | "failed" | "inconclusive";
 
 export interface VetRunResult {
 	runId: string;
@@ -144,10 +160,23 @@ function minutes(ms: number): number {
 	return Math.round(ms / 6_000) / 10;
 }
 
+/** "lemonade holds 2 of 2 model(s): d2222 (GLM-4.7-Flash-GGUF), 1 card(s) of other projects". */
+export function describeCapacityHold(hold: ProviderCapacityHold): string {
+	const others = hold.otherWorkspaceHolders > 0 ? [`${hold.otherWorkspaceHolders} card(s) of other projects`] : [];
+	return `${hold.provider} holds ${hold.loadedModels} of ${hold.maxLoadedModels} model(s): ${[...hold.holders, ...others].join(", ")}`;
+}
+
+function toOutcome(failure: VetFailure | null, checks: VetCheck[]): VetOutcome {
+	if (failure?.harness) {
+		return "inconclusive";
+	}
+	return failure === null && checks.every((check) => check.ok) ? "passed" : "failed";
+}
+
 export async function runVet(input: VetRunInput, deps: VetRunnerDeps): Promise<VetRunResult> {
 	const { combination, limits } = input;
 	const agentId = combination.agentId;
-	const startedAt = deps.now();
+	let startedAt = deps.now();
 	const base = { runId: input.runId, combination, role: input.role };
 	let taskId: string | null = null;
 	let costUSD: number | null = null;
@@ -156,7 +185,7 @@ export async function runVet(input: VetRunInput, deps: VetRunnerDeps): Promise<V
 	let sawImageRejection = false;
 	const finish = (failure: VetFailure | null, checks: VetCheck[] = []): VetRunResult => ({
 		...base,
-		outcome: failure === null && checks.every((check) => check.ok) ? "passed" : "failed",
+		outcome: toOutcome(failure, checks),
 		failure:
 			failure ??
 			(checks.some((check) => !check.ok)
@@ -180,6 +209,31 @@ export async function runVet(input: VetRunInput, deps: VetRunnerDeps): Promise<V
 
 	if ((await deps.signals.isSignedIn(agentId)) === false) {
 		return finish({ kind: "sign_in", detail: `${agentId} has no login it can start a run with`, harness: true });
+	}
+	let lastCapacityHold: string | null = null;
+	for (;;) {
+		const hold = await deps.findCapacityHold(combination);
+		if (!hold) {
+			break;
+		}
+		const holders = describeCapacityHold(hold);
+		if (deps.now() - startedAt >= limits.capacityWaitMin * 60_000) {
+			return finish({
+				kind: "capacity",
+				detail: `still no room after ${limits.capacityWaitMin} min (models.providerCapacity): ${holders}`,
+				harness: true,
+			});
+		}
+		if (holders !== lastCapacityHold) {
+			lastCapacityHold = holders;
+			deps.log(`vet ${input.runId}: waiting for capacity: ${holders}`);
+		}
+		await deps.sleep(limits.pollSec * 1000);
+	}
+	if (lastCapacityHold !== null) {
+		deps.log(`vet ${input.runId}: ${combination.provider} has room now`);
+		// The run's time is the card's, not the wait's.
+		startedAt = deps.now();
 	}
 	taskId = await deps.board.createTask({
 		title: `VET ${input.role}: ${agentId} ${combination.model ?? "(default model)"} (${input.runId})`,

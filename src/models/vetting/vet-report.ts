@@ -1,9 +1,10 @@
 // What `kanban models vet` leaves behind: `report.md` (people) and `result.json` (the run and the proposed registry
 // entry) in `<home>/data/models/vetting/<run>/`. The proposal is the combination's current entry with this role's
 // vetting replaced: `vetted` after a passed run, `rejected` with the failure as the reason after a failed one (one
-// failure may be bad luck; the orchestrator decides what to commit), and `provisional` with the reason after a failure
-// the harness or the environment caused (`failure.harness`: sign-in, provider, Kanban), which says nothing about the
-// model, so no false rejection is ever proposed. Capabilities the run saw are merged in.
+// failure may be bad luck; the orchestrator decides what to commit). An `inconclusive` run (`failure.harness`: sign-in,
+// provider and transport errors, a context overflow, no capacity, Kanban) says nothing about the model, so no false
+// rejection is ever proposed: a role already vetted, provisional or rejected keeps its vetting (nothing to commit),
+// and a role without one gets `provisional` with the reason. Capabilities the run saw are merged in.
 import {
 	describeCombination,
 	lookupVetting,
@@ -19,6 +20,8 @@ export interface VetProposal {
 	entry: VettedEntry;
 	/** The entry it replaces, or null for a new one. */
 	replaces: VettedEntry | null;
+	/** An inconclusive run left the role's recorded vetting as it was: there is nothing to commit. */
+	unchanged: boolean;
 }
 
 function isoDay(ms: number): string {
@@ -29,6 +32,9 @@ function describeEvidence(result: VetRunResult): string {
 	const duration = Math.round((result.finishedAt - result.startedAt) / 60_000);
 	const cost = result.costUSD === null ? "cost unknown" : `$${result.costUSD.toFixed(2)}`;
 	const tools = result.toolUse ? `, ${result.toolUse.native} native tool call(s)` : "";
+	if (result.outcome === "inconclusive") {
+		return `kanban models vet ${result.role} smoke test inconclusive after ${duration} min (${cost}${tools}), for a harness or environment reason (not the model's): ${result.failure?.kind}: ${result.failure?.detail}`;
+	}
 	if (result.outcome === "passed") {
 		return `kanban models vet ${result.role} smoke test passed (${result.checks.map((check) => check.name).join(", ")}) in ${duration} min, ${cost}${tools}`;
 	}
@@ -51,7 +57,12 @@ export function buildVetProposal(
 		verdict.entry.model === combination.model
 			? verdict.entry
 			: null;
-	const status = result.outcome === "passed" ? "vetted" : result.failure?.harness ? "provisional" : "rejected";
+	const recorded = current?.roles[result.role];
+	if (result.outcome === "inconclusive" && current && recorded) {
+		return { entry: current, replaces: current, unchanged: true };
+	}
+	const status =
+		result.outcome === "passed" ? "vetted" : result.outcome === "inconclusive" ? "provisional" : "rejected";
 	const vetting: RoleVetting = {
 		status,
 		at: isoDay(result.finishedAt),
@@ -77,7 +88,7 @@ export function buildVetProposal(
 		...(Object.keys(capabilities).length > 0 ? { capabilities } : {}),
 		...(current?.note ? { note: current.note } : {}),
 	});
-	return { entry, replaces: current };
+	return { entry, replaces: current, unchanged: false };
 }
 
 export function formatVetReport(result: VetRunResult, proposal: VetProposal, paths: { repoPath: string }): string {
@@ -86,9 +97,11 @@ export function formatVetReport(result: VetRunResult, proposal: VetProposal, pat
 		"",
 		`Outcome: **${result.outcome.toUpperCase()}**${result.failure ? ` (${result.failure.kind}: ${result.failure.detail})` : ""}`,
 		"",
-		...(result.failure?.harness
+		...(result.outcome === "inconclusive"
 			? [
-					"The harness or the environment caused this failure, not the model: the proposal keeps the role provisional.",
+					proposal.unchanged
+						? "The harness or the environment caused this failure, not the model: the role keeps its recorded vetting. Run it again once the cause is gone."
+						: "The harness or the environment caused this failure, not the model: the proposal keeps the role provisional. Run it again once the cause is gone.",
 					"",
 				]
 			: []),
@@ -111,9 +124,11 @@ export function formatVetReport(result: VetRunResult, proposal: VetProposal, pat
 	lines.push(
 		"## Proposed registry entry",
 		"",
-		proposal.replaces
-			? "Replaces the combination's entry in models/vetted.json:"
-			: "A new entry for models/vetted.json:",
+		proposal.unchanged
+			? "Nothing to commit: the combination's entry in models/vetted.json stays as it is:"
+			: proposal.replaces
+				? "Replaces the combination's entry in models/vetted.json:"
+				: "A new entry for models/vetted.json:",
 		"",
 		"```json",
 		JSON.stringify(proposal.entry, null, "\t"),

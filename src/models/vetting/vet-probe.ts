@@ -10,6 +10,13 @@
 // reply of a slow-first-call provider (CLINE_FIRST_REPLY_LOAD_ALLOWANCE_MS), a model request in flight before the
 // hung check's limit, and a shell tool whose command still runs (findAgentToolProcess). A provider timeout on a local
 // provider is `provider_timeout`, which the runner retries; it and the other environment failures are `harness`.
+//
+// A turn that ends on a provider or transport error says nothing about the model (issue #25, 2026-10-10: five runs
+// got only Lemonade's "No model loaded: <model>" after another project's card evicted the model, two a "Context size
+// has been exceeded." from an instance shared with notes' QA): a context overflow, and any error notice Cline shows in
+// place of a reply (`displayError`: "No model loaded", "Response stream ended without a finish reason."), are
+// `harness` too, so the run is inconclusive, never a rejection. A rejected request (a validation error over a
+// malformed tool call in the history) stays the model's.
 
 import type { RuntimeAgentId } from "../../core/api-contract";
 import { isLocalProvider } from "../../kits/team/bench/prices";
@@ -17,12 +24,14 @@ import {
 	detectFinalProviderError,
 	detectHungRequest,
 	isContextOverflowError,
+	isPoisonedHistoryError,
 	isTransientProviderError,
 } from "../../pipeline/recovery-detect";
 import type { AgentToolProcessFinder } from "../../server/process-reaper";
 import { getClineDataDirPath } from "../../state/kanban-home";
 import { getAgentTurnEndSource } from "../../terminal/agent-session-adapters";
 import {
+	type ClineSessionDetailMessage,
 	type ClineSessionDetailReader,
 	createClineSessionFileReader,
 	getClineSessionsPath,
@@ -48,6 +57,8 @@ export type VetFailureKind =
 	| "session_failed"
 	| "time_cap"
 	| "cost_cap"
+	/** The provider stayed at its `models.providerCapacity` limit for the whole wait: no card was created. */
+	| "capacity"
 	| "task";
 
 export interface VetFailure {
@@ -97,6 +108,20 @@ export function isProviderTimeoutError(text: string): boolean {
 	return TIMEOUT_PATTERN.test(text);
 }
 
+/** The text of the session's last message when it is Cline's own error notice in place of a reply, else null. */
+export function readFinalClineErrorNotice(messages: readonly ClineSessionDetailMessage[]): string | null {
+	const last = messages.at(-1);
+	if (!last?.displayError || last.role !== "assistant" || last.content.some((block) => block.type === "tool_use")) {
+		return null;
+	}
+	const text = last.content
+		.filter((block) => block.type === "text")
+		.map((block) => block.text ?? "")
+		.join(" ")
+		.trim();
+	return text || null;
+}
+
 export function createVetProbe(
 	options: VetProbeOptions = {},
 ): (input: VetProbeInput) => Promise<VetProbeVerdict | null> {
@@ -114,11 +139,12 @@ export function createVetProbe(
 				: null;
 		const loading = modelLoaded === false;
 		if (detail) {
-			const providerError = detectFinalProviderError(detail.messages);
+			const notice = readFinalClineErrorNotice(detail.messages);
+			const providerError = detectFinalProviderError(detail.messages) ?? notice;
 			if (providerError) {
 				const text = providerError.slice(0, 300);
 				if (isContextOverflowError(providerError)) {
-					return { failure: { kind: "context_overflow", detail: text }, hold: null };
+					return { failure: { kind: "context_overflow", detail: text, harness: true }, hold: null };
 				}
 				if (isLocalProvider(input.providerId) && isProviderTimeoutError(providerError)) {
 					return {
@@ -132,7 +158,14 @@ export function createVetProbe(
 					};
 				}
 				return {
-					failure: { kind: "provider_error", detail: text, harness: isTransientProviderError(providerError) },
+					failure: {
+						kind: "provider_error",
+						detail: text,
+						// A rejected request (validation, a malformed tool call in the history) may be the model's doing.
+						harness:
+							isTransientProviderError(providerError) ||
+							(notice !== null && !isPoisonedHistoryError(providerError)),
+					},
 					hold: null,
 				};
 			}

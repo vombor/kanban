@@ -186,6 +186,11 @@ import {
 	type RuntimePlansApi,
 } from "./plans-api";
 import {
+	providerCapacityRequestSchema,
+	providerCapacityResponseSchema,
+	type RuntimeProviderCapacityApi,
+} from "./provider-capacity-api";
+import {
 	type RuntimeShortcutsApi,
 	shortcutAddRequestSchema,
 	shortcutChangeResponseSchema,
@@ -233,6 +238,8 @@ export interface RuntimeTrpcContext {
 	githubApi?: RuntimeGitHubApi;
 	/** `kanban task resubmit` (src/trpc/pipeline-resubmit-api.ts); absent = not available. */
 	pipelineResubmitApi?: RuntimePipelineResubmitApi;
+	/** `kanban models vet`'s provider capacity wait (src/trpc/provider-capacity-api.ts); absent = not available. */
+	providerCapacityApi?: RuntimeProviderCapacityApi;
 	runtimeApi: {
 		loadConfig: (scope: RuntimeTrpcWorkspaceScope | null) => Promise<RuntimeConfigResponse>;
 		saveConfig: (
@@ -916,6 +923,19 @@ export const runtimeAppRouter = t.router({
 					workspaceId: ctx.workspaceScope.workspaceId,
 					request: input,
 				});
+			}),
+	}),
+	// Whether a model may run on its provider now (`models.providerCapacity`, every project's In Progress cards),
+	// for `kanban models vet` (src/trpc/provider-capacity-api.ts). Other projects' cards are only counted.
+	models: t.router({
+		capacity: workspaceProcedure
+			.input(providerCapacityRequestSchema)
+			.output(providerCapacityResponseSchema)
+			.query(async ({ ctx, input }) => {
+				if (!ctx.providerCapacityApi) {
+					throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Provider capacity is not available here." });
+				}
+				return await ctx.providerCapacityApi.check({ workspaceId: ctx.workspaceScope.workspaceId, request: input });
 			}),
 	}),
 	// A project's shortcuts (src/trpc/shortcuts-api.ts, the shortcut store's only writer): changed by the user (the
