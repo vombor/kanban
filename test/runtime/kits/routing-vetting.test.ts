@@ -64,9 +64,9 @@ describe("checkRouting", () => {
 			model: "qwen.qwen3-next-80b-a3b",
 		});
 		expect(!rejected.ok && rejected.message).toMatch(/rejected for dev work .*broke large TSX files/u);
-		const devstral = { agentId: "cline" as const, provider: "lemonade", model: "Devstral-Small-2507-GGUF" };
-		expect(checkRouting(strict, "dev", devstral).ok).toBe(false);
-		expect(checkRouting(PROVISIONAL_ALLOWED, "dev", devstral).ok).toBe(true);
+		const deepseek = { agentId: "cline" as const, provider: "lemonade", model: "DeepSeek-V4-Flash-0731-GGUF-BF16" };
+		expect(checkRouting(strict, "dev", deepseek).ok).toBe(false);
+		expect(checkRouting(PROVISIONAL_ALLOWED, "dev", deepseek).ok).toBe(true);
 		const config = parsePipelineConfig({ workspaces: { local: { models: { allowProvisional: true } } } }).config;
 		expect(getWorkspaceRoutingVetting(config, "local").allowProvisional).toBe(true);
 		expect(getWorkspaceRoutingVetting(config, "other").allowProvisional).toBe(false);

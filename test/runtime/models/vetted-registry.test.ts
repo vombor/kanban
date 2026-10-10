@@ -43,13 +43,20 @@ describe("the vetted model registry (models/vetted.json)", () => {
 		// Vetted per role: Haiku is not vetted for dev, Opus only provisional for dev.
 		expect(status("cline", "bedrock", "us.anthropic.claude-haiku-5-5", "dev")).toBe("unknown");
 		expect(status("cline", "bedrock", "us.anthropic.claude-opus-5-5", "dev")).toBe("provisional");
-		// team-local's routes, vetted by kanban models vet (2026-10-09); Devstral stays provisional.
+		// team-local's routes and the other Lemonade models, vetted by kanban models vet (2026-10-09/10).
 		expect(status("cline", "lemonade", "GLM-4.7-Flash-GGUF", "dev")).toBe("vetted");
 		expect(status("cline", "lemonade", "GLM-4.7-Flash-GGUF", "plan")).toBe("vetted");
-		expect(status("cline", "lemonade", "GLM-4.7-Flash-GGUF", "qa")).toBe("provisional");
+		expect(status("cline", "lemonade", "GLM-4.7-Flash-GGUF", "qa")).toBe("vetted");
 		expect(status("cline", "lemonade", "Gemma-4-12B-it-GGUF", "qa")).toBe("vetted");
+		expect(status("cline", "lemonade", "Gemma-4-12B-it-GGUF", "dev")).toBe("vetted");
+		expect(status("cline", "lemonade", "Gemma-4-12B-it-GGUF", "plan")).toBe("vetted");
 		expect(status("cline", "lemonade", "Qwen3.6-35B-A3B-MTP-GGUF", "dev")).toBe("vetted");
-		expect(status("cline", "lemonade", "Devstral-Small-2507-GGUF", "qa")).toBe("provisional");
+		expect(status("cline", "lemonade", "Devstral-Small-2507-GGUF", "qa")).toBe("rejected");
+		expect(status("cline", "lemonade", "Devstral-Small-2507-GGUF", "dev")).toBe("rejected");
+		expect(status("cline", "lemonade", "Qwen3-Coder-Next-GGUF-Q4_K_M", "plan")).toBe("rejected");
+		expect(status("cline", "lemonade", "Laguna-S-2.1-GGUF-UD-Q4_K_XL", "plan")).toBe("vetted");
+		expect(status("cline", "lemonade", "gemma-4-31B-it-GGUF-Q4_K_M", "qa")).toBe("vetted");
+		expect(status("cline", "lemonade", "gemma-4-31B-it-GGUF-Q4_K_M", "dev")).toBe("provisional");
 		// Another provider is another combination.
 		expect(status("cline", "lemonade", "us.anthropic.claude-haiku-5-5", "qa")).toBe("unknown");
 	});

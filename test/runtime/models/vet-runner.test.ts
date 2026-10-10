@@ -172,7 +172,7 @@ describe("kanban models vet: the runner", () => {
 		});
 		// Other roles' vettings and the capabilities already recorded stay.
 		expect(proposal.entry.roles.plan?.status).toBe("vetted");
-		expect(proposal.entry.roles.qa?.status).toBe("provisional");
+		expect(proposal.entry.roles.qa?.status).toBe("vetted");
 		expect(proposal.entry.capabilities).toMatchObject({ toolUse: true, turnEnd: true, contextWindow: 131072 });
 		expect(formatVetReport(result, proposal, { repoPath: REPO })).toContain("Outcome: **PASSED**");
 	});
@@ -433,18 +433,22 @@ describe("kanban models vet: provider capacity and provider errors (issue #25)",
 			}
 		});
 		deps.probe = async () => ({
-			failure: { kind: "provider_error", detail: "No model loaded: Devstral-Small-2507-GGUF", harness: true },
+			failure: {
+				kind: "provider_error",
+				detail: "No model loaded: DeepSeek-V4-Flash-0731-GGUF-BF16",
+				harness: true,
+			},
 			hold: null,
 		});
-		const devstral = { ...COMBINATION, model: "Devstral-Small-2507-GGUF" };
-		const result = await runVet({ ...input, combination: devstral, role: "plan" }, deps);
+		const deepseek = { ...COMBINATION, model: "DeepSeek-V4-Flash-0731-GGUF-BF16" };
+		const result = await runVet({ ...input, combination: deepseek, role: "plan" }, deps);
 		expect(result).toMatchObject({ outcome: "inconclusive", failure: { kind: "provider_error" }, checks: [] });
-		// No recorded plan vetting for Devstral: provisional with the reason, never rejected.
+		// No recorded plan vetting for DeepSeek: provisional with the reason, never rejected.
 		const proposal = buildVetProposal(getVettedRegistry(), result, null);
 		expect(proposal.unchanged).toBe(false);
 		expect(proposal.entry.roles.plan).toMatchObject({
 			status: "provisional",
-			reason: "provider_error: No model loaded: Devstral-Small-2507-GGUF",
+			reason: "provider_error: No model loaded: DeepSeek-V4-Flash-0731-GGUF-BF16",
 			evidence: { summary: expect.stringContaining("inconclusive") },
 		});
 	});

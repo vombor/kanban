@@ -212,12 +212,12 @@
 					}
 				},
 				"qa": {
-					"status": "provisional",
-					"at": "2026-10-09",
-					"cliVersion": null,
+					"status": "vetted",
+					"at": "2026-10-10",
+					"cliVersion": "3.0.70",
 					"evidence": {
-						"run": null,
-						"summary": "was team-local's QA for Mistral-built cards (qa.routes) until Gemma-4-12B took QA (2026-10-09); not vetted for qa"
+						"run": "2026-10-10-qa-cline-ru204",
+						"summary": "kanban models vet qa smoke test passed (verdict file, right verdict, file read, no code change) in 12 min, $0.00, 7 native tool call(s)"
 					}
 				}
 			},
@@ -230,25 +230,37 @@
 			"model": "Devstral-Small-2507-GGUF",
 			"roles": {
 				"qa": {
-					"status": "provisional",
-					"at": "2026-10-09",
-					"cliVersion": null,
+					"status": "rejected",
+					"at": "2026-10-10",
+					"cliVersion": "3.0.70",
 					"evidence": {
-						"run": null,
-						"summary": "stalled twice as notes' QA (2026-10-09, no output); not re-vetted"
-					}
+						"run": "2026-10-10-qa-cline-absyv",
+						"summary": "kanban models vet qa smoke test failed after 5 min ($0.00, 0 native tool call(s)): task: verdict file: missing; right verdict: no verdict; file read: notes quote the review id; its one reply wrote its shell commands as text"
+					},
+					"reason": "task: verdict file: missing; right verdict: no verdict; file read: notes quote the review id"
 				},
 				"dev": {
-					"status": "provisional",
-					"at": "2026-10-09",
-					"cliVersion": null,
+					"status": "rejected",
+					"at": "2026-10-10",
+					"cliVersion": "3.0.70",
 					"evidence": {
-						"run": "calibration v11",
-						"summary": "dev candidate; calibration v11 saw it answer with <run_commands> text instead of native tool calls"
-					}
+						"run": "2026-10-10-dev-cline-sn2vh",
+						"summary": "kanban models vet dev smoke test failed after 3 min ($0.00, 0 native tool call(s)): text_tool_calls: 1 tool call(s) written as text, none native (as calibration v11 saw)"
+					},
+					"reason": "text_tool_calls: 1 tool call(s) written as text, none native"
+				},
+				"plan": {
+					"status": "rejected",
+					"at": "2026-10-10",
+					"cliVersion": "3.0.70",
+					"evidence": {
+						"run": "2026-10-10-plan-cline-5yl59",
+						"summary": "kanban models vet plan smoke test failed after 6 min ($0.00, 0 native tool call(s)): task: plan written: no PLAN.md; steps: at least three numbered steps; names files: steps name the files they change; file read: the title has the ticket id; its one reply wrote a run_commands call as text"
+					},
+					"reason": "task: plan written: no PLAN.md; steps: at least three numbered steps; names files: steps name the files they change; file read: the title has the ticket id"
 				}
 			},
-			"capabilities": { "images": false, "contextWindow": 65536, "turnEnd": false },
+			"capabilities": { "toolUse": false, "images": false, "contextWindow": 65536, "turnEnd": true },
 			"note": "text-only; the memory budget assumes Lemonade loads it at 65536"
 		},
 		{
@@ -293,6 +305,24 @@
 						"run": "2026-10-09-qa-cline-pop2i",
 						"summary": "kanban models vet qa smoke test passed (verdict file parses, right verdict: FAIL with 1 blocking, file read, no code change) in 5 min, $0.00, 7 native tool calls; team-local's QA"
 					}
+				},
+				"dev": {
+					"status": "vetted",
+					"at": "2026-10-10",
+					"cliVersion": "3.0.70",
+					"evidence": {
+						"run": "2026-10-10-dev-cline-0zx97",
+						"summary": "kanban models vet dev smoke test passed (file read, edit, tests untouched, test suite, shell command, commit) in 6 min, $0.00, 17 native tool call(s)"
+					}
+				},
+				"plan": {
+					"status": "vetted",
+					"at": "2026-10-10",
+					"cliVersion": "3.0.70",
+					"evidence": {
+						"run": "2026-10-10-plan-cline-20xr2",
+						"summary": "kanban models vet plan smoke test passed (plan written, steps, names files, file read, no code change) in 3 min, $0.00, 5 native tool call(s)"
+					}
 				}
 			},
 			"capabilities": { "toolUse": true, "images": true, "contextWindow": 131072, "turnEnd": true }
@@ -313,6 +343,177 @@
 				}
 			},
 			"capabilities": { "turnEnd": false }
+		},
+		{
+			"agent": "cline",
+			"provider": "lemonade",
+			"model": "Qwen3.8-27B-GGUF-UD-Q4_K_XL",
+			"roles": {
+				"dev": {
+					"status": "vetted",
+					"at": "2026-10-10",
+					"cliVersion": "3.0.70",
+					"evidence": {
+						"run": "2026-10-10-dev-cline-7gbx8",
+						"summary": "kanban models vet dev smoke test passed (file read, edit, tests untouched, test suite, shell command, commit) in 13 min, $0.00, 7 native tool call(s)"
+					}
+				},
+				"qa": {
+					"status": "vetted",
+					"at": "2026-10-10",
+					"cliVersion": "3.0.70",
+					"evidence": {
+						"run": "2026-10-10-qa-cline-0w9e6",
+						"summary": "kanban models vet qa smoke test passed (verdict file, right verdict, file read, no code change) in 9 min, $0.00, 7 native tool call(s)"
+					}
+				},
+				"plan": {
+					"status": "vetted",
+					"at": "2026-10-10",
+					"cliVersion": "3.0.70",
+					"evidence": {
+						"run": "2026-10-10-plan-cline-e5y1g",
+						"summary": "kanban models vet plan smoke test passed (plan written, steps, names files, file read, no code change) in 5 min, $0.00, 4 native tool call(s); the run before it (2026-10-10-plan-cline-990zx) only got \"No model loaded\" from Lemonade (a provider error, not counted)"
+					}
+				}
+			},
+			"capabilities": { "toolUse": true, "turnEnd": true }
+		},
+		{
+			"agent": "cline",
+			"provider": "lemonade",
+			"model": "Laguna-S-2.1-GGUF-UD-Q4_K_XL",
+			"roles": {
+				"dev": {
+					"status": "vetted",
+					"at": "2026-10-10",
+					"cliVersion": "3.0.70",
+					"evidence": {
+						"run": "2026-10-10-dev-cline-me1n2",
+						"summary": "kanban models vet dev smoke test passed (file read, edit, tests untouched, test suite, shell command, commit) in 5 min, $0.00, 9 native tool call(s)"
+					}
+				},
+				"qa": {
+					"status": "vetted",
+					"at": "2026-10-10",
+					"cliVersion": "3.0.70",
+					"evidence": {
+						"run": "2026-10-10-qa-cline-edupe",
+						"summary": "kanban models vet qa smoke test passed (verdict file, right verdict, file read, no code change) in 6 min, $0.00, 9 native tool call(s)"
+					}
+				},
+				"plan": {
+					"status": "vetted",
+					"at": "2026-10-10",
+					"cliVersion": "3.0.70",
+					"evidence": {
+						"run": "2026-10-10-plan-cline-i9xuu",
+						"summary": "kanban models vet plan smoke test passed (plan written, steps, names files, file read, no code change) in 5 min, $0.00, 5 native tool call(s)"
+					}
+				}
+			},
+			"capabilities": { "toolUse": true, "turnEnd": true }
+		},
+		{
+			"agent": "cline",
+			"provider": "lemonade",
+			"model": "Qwen3-Coder-Next-GGUF-Q4_K_M",
+			"roles": {
+				"dev": {
+					"status": "vetted",
+					"at": "2026-10-10",
+					"cliVersion": "3.0.70",
+					"evidence": {
+						"run": "2026-10-10-dev-cline-qdk48",
+						"summary": "kanban models vet dev smoke test passed (file read, edit, tests untouched, test suite, shell command, commit) in 3 min, $0.00, 16 native tool call(s)"
+					}
+				},
+				"qa": {
+					"status": "vetted",
+					"at": "2026-10-10",
+					"cliVersion": "3.0.70",
+					"evidence": {
+						"run": "2026-10-10-qa-cline-kbu26",
+						"summary": "kanban models vet qa smoke test passed (verdict file, right verdict, file read, no code change) in 2 min, $0.00, 9 native tool call(s)"
+					}
+				},
+				"plan": {
+					"status": "rejected",
+					"at": "2026-10-10",
+					"cliVersion": "3.0.70",
+					"evidence": {
+						"run": "2026-10-10-plan-cline-gg7a3",
+						"summary": "kanban models vet plan smoke test failed after 2 min ($0.00, 7 native tool call(s)): task: steps: at least three numbered steps"
+					},
+					"reason": "task: steps: at least three numbered steps"
+				}
+			},
+			"capabilities": { "toolUse": true, "turnEnd": true }
+		},
+		{
+			"agent": "cline",
+			"provider": "lemonade",
+			"model": "Mellum2-12B-A2.5B-Instruct-GGUF-Q4_K_M-Q4_K_M",
+			"roles": {
+				"dev": {
+					"status": "vetted",
+					"at": "2026-10-10",
+					"cliVersion": "3.0.70",
+					"evidence": {
+						"run": "2026-10-10-dev-cline-ksu2w",
+						"summary": "kanban models vet dev smoke test passed (file read, edit, tests untouched, test suite, shell command, commit) in 1 min, $0.00, 11 native tool call(s)"
+					}
+				},
+				"qa": {
+					"status": "rejected",
+					"at": "2026-10-10",
+					"cliVersion": "3.0.70",
+					"evidence": {
+						"run": "2026-10-10-qa-cline-qwunn",
+						"summary": "kanban models vet qa smoke test failed after 1 min ($0.00, 5 native tool call(s)): task: right verdict: PASS, 0 blocking"
+					},
+					"reason": "task: right verdict: PASS, 0 blocking"
+				},
+				"plan": {
+					"status": "rejected",
+					"at": "2026-10-10",
+					"cliVersion": "3.0.70",
+					"evidence": {
+						"run": "2026-10-10-plan-cline-1i9w5",
+						"summary": "kanban models vet plan smoke test failed after 1 min ($0.00, 6 native tool call(s)): task: plan written: no PLAN.md; steps: at least three numbered steps; names files: steps name the files they change; file read: the title has the ticket id"
+					},
+					"reason": "task: plan written: no PLAN.md; steps: at least three numbered steps; names files: steps name the files they change; file read: the title has the ticket id"
+				}
+			},
+			"capabilities": { "toolUse": true, "turnEnd": true }
+		},
+		{
+			"agent": "cline",
+			"provider": "lemonade",
+			"model": "gemma-4-31B-it-GGUF-Q4_K_M",
+			"roles": {
+				"qa": {
+					"status": "vetted",
+					"at": "2026-10-10",
+					"cliVersion": "3.0.70",
+					"evidence": {
+						"run": "2026-10-10-qa-cline-3us3r",
+						"summary": "kanban models vet qa smoke test passed (verdict file, right verdict, file read, no code change) in 8 min, $0.00, 2 native tool call(s), at Lemonade ctx_size 65536; an earlier run passed too (2026-10-10-qa-cline-5ipxw, 8 min, 4 native tool calls)"
+					}
+				},
+				"dev": {
+					"status": "provisional",
+					"at": "2026-10-10",
+					"cliVersion": "3.0.70",
+					"evidence": {
+						"run": "2026-10-10-dev-cline-hfbtx",
+						"summary": "kanban models vet dev smoke test passed in 2026-10-10-dev-cline-1jj93 (file read, edit, tests untouched, test suite, shell command, commit; 9 min, $0.00, 6 native tool calls), but the rerun 2026-10-10-dev-cline-hfbtx at Lemonade ctx_size 65536 failed after 5 min with 0 native tool calls: the model wrote its first run_commands call as a JSON code block instead of a native tool call"
+					},
+					"reason": "inconsistent native tool calls: 2026-10-10-dev-cline-1jj93 passed with 6 native tool calls, the rerun 2026-10-10-dev-cline-hfbtx (ctx_size 65536) wrote its first run_commands call as a JSON code block instead of a native tool call"
+				}
+			},
+			"capabilities": { "toolUse": true, "turnEnd": true },
+			"note": "vetted at Lemonade ctx_size 65536"
 		},
 		{
 			"agent": "cline",
