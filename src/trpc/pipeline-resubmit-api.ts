@@ -17,8 +17,7 @@ import type { IsolationService } from "../isolation/isolation-service";
 import { describeCaller, type RuntimeCaller } from "../isolation/session-identity";
 import { type KitCatalog, loadKitCatalog, resolveWorkspaceKit } from "../kits/resolve-kit";
 import { createPipelineDecisionLog, type PipelineDecisionLog } from "../pipeline/decision-log";
-import { readEscalatedAt } from "../pipeline/engine";
-import { createPipelineStateStore, type PipelineStateStore } from "../pipeline/pipeline-state";
+import { createPipelineStateStore, type PipelineStateStore, readEscalatedAt } from "../pipeline/pipeline-state";
 import { recordResubmitRequest } from "../pipeline/resubmit";
 
 export const taskResubmitRequestSchema = z.object({ taskId: z.string().min(1) });

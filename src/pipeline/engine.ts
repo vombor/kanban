@@ -32,7 +32,7 @@ import {
 import type { CardHistory, EffectiveCard, QaPolicyAnswer, RoutingPolicy } from "../kits/policy";
 import { isReviewSettled } from "../terminal/review-settle";
 import type { PipelineDecisionOutcome, PipelineDecisionRecord } from "./decision-log";
-import type { PipelineCardState, PipelineWorkspaceState } from "./pipeline-state";
+import { type PipelineCardState, type PipelineWorkspaceState, readEscalatedAt } from "./pipeline-state";
 import { recoveryHoldReason, recoveryRedoReason } from "./recovery";
 import { lostToRestart } from "./restart-recovery";
 import type { SubmissionCardInput, SubmissionInspection } from "./submission-stage";
@@ -204,20 +204,6 @@ export function describeUnsettledReview(session: PipelineSessionView | null): st
 	return session?.state === "running"
 		? "the session is still running; QA waits for the turn to end"
 		: "the turn ended moments ago; QA waits for the Review to settle";
-}
-
-/** When the card was escalated (`qaflow.escalated.at`, written by the rework loop), or null; a handback clears it. */
-export function readEscalatedAt(entry: PipelineCardState | undefined): string | null {
-	const qaflow = entry?.qaflow;
-	if (!qaflow || typeof qaflow !== "object" || Array.isArray(qaflow)) {
-		return null;
-	}
-	const escalated = (qaflow as Record<string, unknown>).escalated;
-	if (!escalated) {
-		return null;
-	}
-	const at = typeof escalated === "object" ? (escalated as { at?: unknown }).at : undefined;
-	return typeof at === "string" ? at : "(unknown time)";
 }
 
 function describeQaAnswer(answer: QaPolicyAnswer): string {

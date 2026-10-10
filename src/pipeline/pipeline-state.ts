@@ -22,6 +22,20 @@ export const PIPELINE_STATE_VERSION = 1;
 export const pipelineCardStateSchema = z.record(z.string(), z.unknown());
 export type PipelineCardState = z.infer<typeof pipelineCardStateSchema>;
 
+/** When the card was escalated (`qaflow.escalated.at`, written by the rework loop), or null; a handback clears it. */
+export function readEscalatedAt(entry: PipelineCardState | undefined): string | null {
+	const qaflow = entry?.qaflow;
+	if (!qaflow || typeof qaflow !== "object" || Array.isArray(qaflow)) {
+		return null;
+	}
+	const escalated = (qaflow as Record<string, unknown>).escalated;
+	if (!escalated) {
+		return null;
+	}
+	const at = typeof escalated === "object" ? (escalated as { at?: unknown }).at : undefined;
+	return typeof at === "string" ? at : "(unknown time)";
+}
+
 export const pipelineWorkspaceStateSchema = z
 	.object({
 		version: z.literal(PIPELINE_STATE_VERSION),

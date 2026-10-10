@@ -81,12 +81,16 @@ import {
 	describeUnsettledReview,
 	type PipelineSessionView,
 	type PipelineWorkspaceSnapshot,
-	readEscalatedAt,
 	toEffectiveCard,
 } from "./engine";
 import type { PipelineEventBus } from "./events";
 import { decideOnPass, readPipelineHold } from "./hold";
-import type { PipelineCardState, PipelineStateStore, PipelineWorkspaceState } from "./pipeline-state";
+import {
+	type PipelineCardState,
+	type PipelineStateStore,
+	type PipelineWorkspaceState,
+	readEscalatedAt,
+} from "./pipeline-state";
 import { type CapacityCard, findProviderCapacityHold, type ProviderCapacityHold } from "./provider-capacity";
 import {
 	buildQaAgentErrorNote,
@@ -1073,7 +1077,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 				continue;
 			}
 			const session = sessions.get(card.id) ?? null;
-			// An escalated card never lands on a PASS: a sibling may have taken its task over (engine.ts readEscalatedAt).
+			// An escalated card never lands on a PASS: a sibling may have taken its task over (pipeline-state.ts readEscalatedAt).
 			// A held card is not skipped: a newer PASS refreshes its hold (below), so the runoff compares the PASS of its
 			// current snapshot.
 			if (
