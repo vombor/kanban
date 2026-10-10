@@ -5,6 +5,7 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
+import { COARSE_POINTER_QUERY } from "@/hooks/use-is-touch-device";
 import { getTerminalThemeColors, type ThemeTerminalColors } from "@/hooks/use-theme";
 import { estimateTaskSessionGeometry } from "@/runtime/task-session-geometry";
 import { getRuntimeTrpcClient } from "@/runtime/trpc-client";
@@ -16,6 +17,7 @@ import type {
 import { type AppliedRestore, shouldSkipWarmRestore } from "@/terminal/restore-generation";
 import { splitRestoreSnapshot } from "@/terminal/restore-snapshot-chunks";
 import { clearTerminalGeometry, reportTerminalGeometry } from "@/terminal/terminal-geometry-registry";
+import { attachTerminalImeInput } from "@/terminal/terminal-ime-input";
 import { createKanbanTerminalOptions } from "@/terminal/terminal-options";
 import {
 	appendTerminalHeuristicText,
@@ -203,6 +205,7 @@ class PersistentTerminal {
 	private readiness: TerminalReadiness = { state: "loading", phase: "connecting" };
 	private isScrolledUp = false;
 	private readonly disposeTouchScroll: () => void;
+	private readonly disposeImeInput: () => void;
 	private disposed = false;
 
 	constructor(
@@ -288,6 +291,18 @@ class PersistentTerminal {
 				this.sendWheelNotch(direction, point, target);
 			},
 		});
+
+		// Phone keyboards and dictation rewrite text xterm has already sent (terminal-ime-input.ts).
+		const textarea = this.terminal.textarea;
+		this.disposeImeInput = textarea
+			? attachTerminalImeInput(this.hostElement, textarea, {
+					isEnabled: () => window.matchMedia?.(COARSE_POINTER_QUERY).matches === true,
+					canSend: () => this.isAcceptingUserInput(),
+					send: (data) => {
+						this.terminal.input(data, true);
+					},
+				})
+			: () => {};
 
 		// Paste reaches xterm through its textarea's paste event, not the key handler.
 		this.hostElement.addEventListener(
@@ -976,6 +991,7 @@ class PersistentTerminal {
 		this.disposed = true;
 		this.clearLoadingTimer();
 		this.disposeTouchScroll();
+		this.disposeImeInput();
 		this.reconnect.dispose();
 		this.unmount(this.visibleContainer);
 		this.closeSockets();

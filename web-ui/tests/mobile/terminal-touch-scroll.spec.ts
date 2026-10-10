@@ -1,8 +1,9 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { type CDPSession, expect, type Locator, type Page, test } from "@playwright/test";
+import { type CDPSession, expect, type Locator, test } from "@playwright/test";
 
 import { type DevInstance, startDevInstance } from "./dev-instance";
+import { isTerminalFocused, openShellTerminal, type Point, tapToFocus } from "./terminal-page";
 
 // Swipe scrolling in the shared agent terminal panel on a phone (Pixel 7
 // profile: touch, coarse pointer). The home shell terminal uses the same panel
@@ -19,11 +20,6 @@ test.afterAll(async () => {
 	await instance?.stop();
 });
 
-interface Point {
-	x: number;
-	y: number;
-}
-
 // Real touch events through Chrome's input pipeline (touch-action, passive
 // listeners and native scrolling all apply), unlike synthetic DOM events.
 async function swipe(cdp: CDPSession, from: Point, to: Point, { steps = 12, stepMs = 16, restMs = 120 } = {}) {
@@ -39,65 +35,14 @@ async function swipe(cdp: CDPSession, from: Point, to: Point, { steps = 12, step
 	await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
 }
 
-async function tap(cdp: CDPSession, point: Point) {
-	await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
-	await new Promise((resolve) => setTimeout(resolve, 50));
-	await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-}
-
-async function openShellTerminal(page: Page): Promise<{ cdp: CDPSession; terminal: Locator }> {
-	// No "Get started" dialog over the board.
-	await page.addInitScript(() => {
-		window.localStorage.setItem("kanban.onboarding.dialog.shown", "true");
-	});
-	await page.goto(instance.baseUrl);
-	// The sidebar agent's terminal may be mounted too, but hidden on a phone.
-	const terminal = page.locator(".kb-terminal-container").filter({ visible: true }).first();
-	// The top bar re-renders while the project loads, and the terminal may
-	// still be open from the previous test.
-	await expect(async () => {
-		const open = page.getByRole("button", { name: "Open terminal" });
-		if (await open.isEnabled({ timeout: 1_000 }).catch(() => false)) {
-			await open.click({ timeout: 1_000 });
-		}
-		await expect(terminal).toBeVisible({ timeout: 2_000 });
-	}).toPass({ timeout: 30_000 });
-	return { cdp: await page.context().newCDPSession(page), terminal };
-}
-
-// Taps until the terminal takes focus: the loading overlay covers it (and
-// takes the taps) until the shell has drawn its prompt.
-// The pane may still be settling, so this returns the terminal's centre once it focused.
-async function tapToFocus(page: Page, cdp: CDPSession, terminal: Locator): Promise<Point> {
-	let center: Point = { x: 0, y: 0 };
-	await expect(async () => {
-		center = await terminalCenter(terminal);
-		await tap(cdp, center);
-		expect(await isTerminalFocused(page)).toBe(true);
-	}).toPass({ timeout: 30_000 });
-	return center;
-}
-
-async function terminalCenter(terminal: Locator): Promise<Point> {
-	const box = await terminal.boundingBox();
-	if (!box) {
-		throw new Error("The terminal has no box.");
-	}
-	return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-}
-
 async function sliderTop(terminal: Locator): Promise<number> {
 	return await terminal
 		.locator(".xterm-scrollable-element > .scrollbar.vertical > .slider")
 		.evaluate((slider) => slider.getBoundingClientRect().top);
 }
 
-async function isTerminalFocused(page: Page): Promise<boolean> {
-	return await page.evaluate(() => document.activeElement?.classList.contains("xterm-helper-textarea") ?? false);
-}
-
 test("a swipe scrolls the scrollback, a fling keeps going, and Jump to bottom returns", async ({ page }) => {
-	const { cdp, terminal } = await openShellTerminal(page);
+	const { cdp, terminal } = await openShellTerminal(page, instance);
 
 	// A tap still focuses the terminal (which opens the on-screen keyboard).
 	// Once ready (the panel's autoFocus has run), blur it and tap it again.
@@ -146,7 +91,7 @@ test("a swipe scrolls the scrollback, a fling keeps going, and Jump to bottom re
 });
 
 test("a long-press is left alone, and so are horizontal swipes", async ({ page }) => {
-	const { cdp, terminal } = await openShellTerminal(page);
+	const { cdp, terminal } = await openShellTerminal(page, instance);
 	const center = await tapToFocus(page, cdp, terminal);
 	await page.keyboard.type("seq 1 600\n");
 	await page.waitForTimeout(1_000);
@@ -200,7 +145,7 @@ test("on a full-screen TUI with mouse reporting a swipe sends wheel reports", as
 	const outPath = join(instance.rootDir, "wheel-probe.out");
 	writeFileSync(probePath, WHEEL_PROBE);
 	writeFileSync(outPath, "");
-	const { cdp, terminal } = await openShellTerminal(page);
+	const { cdp, terminal } = await openShellTerminal(page, instance);
 	const center = await tapToFocus(page, cdp, terminal);
 	await page.keyboard.type(`node ${probePath} ${outPath}\n`);
 	// xterm marks the terminal once the app turned mouse reporting on.
