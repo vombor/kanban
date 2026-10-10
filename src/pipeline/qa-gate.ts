@@ -12,7 +12,8 @@
 //    pipeline state, the `verdictRecorded` event), its scratch servers are stopped, and it goes to Done through the
 //    Done workflow (`finishTask`, never landed). A QA card that stopped without a usable verdict is nudged, then
 //    recorded STALLED. One whose last turn is its own agent's error (an image rejection, a provider error) is not
-//    nudged but replaced, then recorded STALLED with `qaAgentError` (qa-agent-error.ts, issue #12).
+//    nudged but replaced, then recorded STALLED with `qaAgentError` (qa-agent-error.ts, issue #12); so is one whose
+//    agent process is gone or whose nudge can't be delivered (issue #24: a TUI that exited mid tool call).
 // 4. PASS: the kit's `onPass` (decideOnPass, hold.ts) may hold the card; otherwise the Done workflow lands it
 //    (src/server/task-landing-gate.ts, trigger `pipeline`). FAIL, STALLED and a land conflict are the rework stage's
 //    (rework.ts): the gate records them (the verdict, `qaPass.landing`) and does nothing more.
@@ -102,6 +103,7 @@ import {
 	readLastHandbackAt,
 	readQaAgentErrors,
 	resolveQaAgentError,
+	resolveQaProcessExit,
 } from "./qa-agent-error";
 import {
 	buildQaChecksReport,
@@ -1026,6 +1028,13 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		if (agentError) {
 			return await replaceAfterAgentError(context, qaTaskId, entry, agentError);
 		}
+		// No process, no nudge: a STALLED here would blame the dev card for the harness (issue #24).
+		const exited = resolveQaProcessExit(
+			context.snapshot.sessions.find((candidate) => candidate.taskId === qaTaskId) ?? null,
+		);
+		if (exited) {
+			return await replaceAfterAgentError(context, qaTaskId, entry, exited);
+		}
 		if (entry.nudges < context.qa.maxNudges) {
 			const nudges = entry.nudges + 1;
 			const sent = await deps.deliverInput({
@@ -1037,7 +1046,12 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 				await updateQaEntry(workspaceId, qaTaskId, { nudges, reviewSeenAt: null });
 				return `no usable verdict.json${read.kind === "invalid" ? ` (${read.error})` : ""}; nudged (${nudges}/${context.qa.maxNudges})`;
 			}
-			deps.log(`qa-ingest ${qaTaskId}: nudge ${nudges} not delivered (${sent.error}); recording STALLED`);
+			// An undelivered nudge is the harness's failure too: never a STALLED with nudges left (issue #24).
+			deps.log(`qa-ingest ${qaTaskId}: nudge ${nudges} not delivered (${sent.error}); replacing the QA card`);
+			return await replaceAfterAgentError(context, qaTaskId, entry, {
+				kind: "nudge_undelivered",
+				text: `verdict nudge ${nudges}/${context.qa.maxNudges} could not be delivered (${sent.error ?? "no reason given"})`,
+			});
 		}
 		const reason =
 			read.kind === "invalid"

@@ -18,8 +18,12 @@ export interface QaAgentErrorRecord {
 	snapshot: string;
 	round: number;
 	at: number;
-	/** `silent_stall`: its Cline session made no progress for recovery's `hungMin` (the QA gate's replaceSilentQaCards). */
-	kind: AgentRunError["kind"] | "agent_error" | "silent_stall";
+	/**
+	 * `silent_stall`: its Cline session made no progress for recovery's `hungMin` (the QA gate's replaceSilentQaCards).
+	 * `process_exited`: its agent process was gone when the gate would nudge it, so a nudge has nothing to type into
+	 * (foo 33288, 2026-10-10: the Cline TUI exited mid tool call, issue #24). `nudge_undelivered`: a nudge failed.
+	 */
+	kind: AgentRunError["kind"] | "agent_error" | "silent_stall" | "process_exited" | "nudge_undelivered";
 	text: string;
 	/** For `image_rejected`: an image over the size limits rather than a text-only model. */
 	tooLarge?: boolean;
@@ -80,6 +84,26 @@ export function resolveQaAgentError(
 		};
 	}
 	return null;
+}
+
+/**
+ * The QA card's agent process is gone (a summary with `live: false`, e.g. an exit mid tool call): no nudge can reach
+ * it, and its missing verdict says nothing about the dev card's work. Null while it has a process, or the snapshot
+ * doesn't say (`live` unset).
+ */
+export function resolveQaProcessExit(session: PipelineSessionView | null): QaAgentError | null {
+	if (!session || session.live !== false) {
+		return null;
+	}
+	const how =
+		session.reviewReason === "exit"
+			? `exited${typeof session.exitCode === "number" ? ` with code ${session.exitCode}` : ""}`
+			: `is gone (session ${session.state}${session.reviewReason ? `, ${session.reviewReason}` : ""})`;
+	const tool =
+		session.latestHookActivity?.hookEventName === "PreToolUse" && session.latestHookActivity.toolName
+			? `; its last hook was the start of ${session.latestHookActivity.toolName}`
+			: "";
+	return { kind: "process_exited", text: `the QA agent's process ${how} before it wrote a verdict${tool}` };
 }
 
 export function describeQaAgentError(error: QaAgentError): string {

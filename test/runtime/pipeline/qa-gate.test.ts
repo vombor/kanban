@@ -1018,6 +1018,83 @@ describe("QA gate", () => {
 			expect(kinds(harness.actions)).toEqual(["finishTask:qa001"]);
 			expect(readQaGateEntry((await harness.store.load("foo")).cards.qa001)).toMatchObject({ status: "superseded" });
 		});
+
+		it("replaces a QA card whose process exited mid tool call instead of recording STALLED with no nudge (issue #24)", async () => {
+			const harness = createHarness({ config });
+			await startQa(harness);
+			// foo 33288, 2026-10-10: the Cline TUI exited with code 0 right after a run_commands started.
+			const sessions = (taskId: string, stateChangedAt: number) => [
+				{
+					taskId,
+					state: "awaiting_review" as const,
+					reviewReason: "exit" as const,
+					exitCode: 0,
+					stateChangedAt,
+					latestHookActivity: {
+						activityText: "Agent active",
+						toolName: "run_commands",
+						toolInputSummary: null,
+						finalMessage: null,
+						hookEventName: "PreToolUse",
+						notificationType: null,
+						source: "cline-cli",
+					},
+					live: false,
+				},
+			];
+			const exitInReview = async (qaTaskId: string, at: number) => {
+				harness.setNow(at);
+				await send(harness, { review: [dev(), qaCard(qaTaskId)] }, { sessions: sessions(qaTaskId, at - 20_000) });
+				harness.setNow(at + 21_000);
+				await send(harness, { review: [dev(), qaCard(qaTaskId)] }, { sessions: sessions(qaTaskId, at - 20_000) });
+			};
+
+			await exitInReview("qa001", T0 + 60_000);
+			expect(harness.actions.filter((action) => action.kind === "deliverInput")).toEqual([]);
+			expect(kinds(harness.actions)).toEqual(["finishTask:qa001"]);
+			let state = await harness.store.load("foo");
+			expect(readQaGateEntry(state.cards.qa001)).toMatchObject({ status: "superseded" });
+			expect(readQaVerdictRecords(state.cards.d1111)).toEqual([]);
+			expect(state.cards.d1111?.qaAgentErrors).toMatchObject([
+				{
+					qaTaskId: "qa001",
+					kind: "process_exited",
+					text: "the QA agent's process exited with code 0 before it wrote a verdict; its last hook was the start of run_commands",
+				},
+			]);
+
+			await replace(harness, "qa001", "qa002");
+			await exitInReview("qa002", T0 + 5 * 60_000);
+			await replace(harness, "qa002", "qa003");
+			harness.actions.length = 0;
+			await exitInReview("qa003", T0 + 10 * 60_000);
+
+			state = await harness.store.load("foo");
+			expect(readQaVerdictRecords(state.cards.d1111)).toMatchObject([
+				{ qaTaskId: "qa003", verdict: "STALLED", qaAgentError: expect.stringContaining("process exited") },
+			]);
+			// The harness failed, not the dev card: the orchestrator gets it, no fallback sibling takes the card over.
+			const escalated = (state.cards.d1111?.qaflow as Record<string, unknown> | undefined)?.escalated;
+			expect(escalated).toMatchObject({ to: "orchestrator", cause: "qa_agent_error" });
+			expect(createdTasks(harness.actions)).toEqual([]);
+		});
+
+		it("replaces a QA card whose nudge can't be delivered instead of recording STALLED", async () => {
+			const harness = createHarness({
+				config,
+				actionResult: (action) =>
+					action.kind === "deliverInput" ? { ok: false, error: "no live session" } : { ok: true },
+			});
+			await startQa(harness);
+			await endInReview(harness, "qa001", T0 + 60_000);
+			expect(kinds(harness.actions)).toEqual(["deliverInput:qa001", "finishTask:qa001"]);
+			const state = await harness.store.load("foo");
+			expect(readQaGateEntry(state.cards.qa001)).toMatchObject({ status: "superseded", nudges: 0 });
+			expect(readQaVerdictRecords(state.cards.d1111)).toEqual([]);
+			expect(state.cards.d1111?.qaAgentErrors).toMatchObject([
+				{ kind: "nudge_undelivered", text: "verdict nudge 1/2 could not be delivered (no live session)" },
+			]);
+		});
 	});
 
 	it("a QA card moved to Done without a verdict does not block QA: it is superseded and the snapshot gets a new one", async () => {
