@@ -6,6 +6,7 @@ import { useMemo } from "react";
 
 import { TerminalConnectionStatusIndicator } from "@/components/detail-panels/terminal-connection-status";
 import { TerminalLoadingOverlay } from "@/components/detail-panels/terminal-loading-overlay";
+import { VoiceChatBar } from "@/components/detail-panels/voice-chat-bar";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -64,6 +65,8 @@ export interface AgentTerminalPanelProps {
 	onSendAgentCommand?: () => void;
 	isExpanded?: boolean;
 	onToggleExpand?: () => void;
+	/** Shows the voice chat bar (agent sessions only: the card agent and the sidebar orchestrator). */
+	voiceChat?: boolean;
 }
 
 function describeState(summary: RuntimeTaskSessionSummary | null): string {
@@ -158,6 +161,7 @@ function AgentTerminalReviewActions({
 
 function AgentTerminalPanelLayout({
 	taskId,
+	workspaceId,
 	summary,
 	onSummary: _onSummary,
 	onCommit,
@@ -186,6 +190,7 @@ function AgentTerminalPanelLayout({
 	onSendAgentCommand,
 	isExpanded = false,
 	onToggleExpand,
+	voiceChat = false,
 	sessionControls,
 }: AgentTerminalPanelProps & { sessionControls: AgentTerminalSessionControls }): ReactElement {
 	const {
@@ -368,6 +373,7 @@ function AgentTerminalPanelLayout({
 				) : null}
 				<TerminalLoadingOverlay readiness={readiness} />
 			</div>
+			{voiceChat ? <VoiceChatBar taskId={taskId} workspaceId={workspaceId} summary={summary} /> : null}
 			{lastError ? (
 				<div className="flex gap-2 rounded-none border-t border-status-red/30 bg-status-red/10 p-3 text-[13px] text-status-red">
 					{lastError}

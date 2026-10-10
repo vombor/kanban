@@ -12,7 +12,7 @@
 // The hook fields of a summary are merged (session-manager.ts applyHookActivity keeps a field the newest hook didn't
 // send), so a field is read only together with the hook event that sends it: a notification type only for a
 // Notification hook (or a hook without an event name), a tool name only for a pre-tool event, a final message only
-// for a turn end in Review. Clearing follows from the same summary: the user's answer (PostToolUse, UserPromptSubmit)
+// for a turn end in Review (readTurnFinalMessage, src/core/turn-final-message.ts). Clearing follows from the same summary: the user's answer (PostToolUse, UserPromptSubmit)
 // changes the latest hook or the state, a stopped or failed session never waits, and `answeredAt` (the viewer's last
 // Enter in the session's terminal, session-manager.ts) clears a wait for agents that report no hook on the answer.
 //
@@ -24,6 +24,7 @@ import type {
 	RuntimeTaskSessionSummary,
 	RuntimeUserInputWaitKind,
 } from "../core/api-contract";
+import { readTurnFinalMessage } from "../core/turn-final-message";
 import { CLINE_CLI_ASK_TOOL_PATTERN } from "./agent-session-adapters";
 
 export interface UserInputWait {
@@ -50,7 +51,6 @@ export type UserInputWaitSession = Pick<RuntimeTaskSessionSummary, "state"> &
 const PERMISSION_NOTIFICATION_TYPES = new Set(["permission_prompt", "permission.asked"]);
 const PERMISSION_HOOK_EVENTS = new Set(["permissionrequest"]);
 const PRE_TOOL_HOOK_EVENTS = new Set(["pretooluse", "beforetool", "permissionrequest"]);
-const TURN_END_HOOK_EVENTS = new Set(["stop", "taskcomplete", "agent_end", "afteragent", "agentstop"]);
 const USER_QUESTION_TOOL = new RegExp(`^(?:AskUserQuestion|${CLINE_CLI_ASK_TOOL_PATTERN})$`, "iu");
 const MAX_TEXT_LENGTH = 200;
 
@@ -139,13 +139,9 @@ export function describeUserInputWait(
 			text: oneLine(readActivityDetail(activity, { dropToolName: false }) || "Permission request"),
 		};
 	}
-	if (session.state === "awaiting_review" && session.reviewReason === "hook") {
-		const event = hookEvent(activity);
-		const question =
-			event === "" || TURN_END_HOOK_EVENTS.has(event) ? readClosingQuestion(activity?.finalMessage) : null;
-		if (question) {
-			return { kind: "question", since, text: oneLine(question) };
-		}
+	const question = readClosingQuestion(readTurnFinalMessage(session));
+	if (question) {
+		return { kind: "question", since, text: oneLine(question) };
 	}
 	return null;
 }
