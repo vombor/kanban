@@ -8,6 +8,7 @@ import type { PipelineSessionView } from "./engine";
 import type { PipelineCardState } from "./pipeline-state";
 import type { AgentRunError } from "./recovery-detect";
 import { SMALL_IMAGES_ONLY } from "./recovery-prompts";
+import { readResubmitRequestAt } from "./resubmit";
 
 /** Fresh QA cards for one snapshot after QA agent errors, before the gate records STALLED. */
 export const QA_AGENT_ERROR_RETRIES = 2;
@@ -56,9 +57,17 @@ export function readLastHandbackAt(entry: PipelineCardState | undefined): number
 	return Number.isFinite(at) ? at : 0;
 }
 
-/** The QA agent errors on `snapshot` since the dev card's last handback, oldest first. */
+/**
+ * When the dev card last asked for a new QA round of its snapshot: its last handback or `kanban task resubmit`
+ * (resubmit.ts). Earlier QA agent errors and STALLED verdicts no longer count.
+ */
+export function readQaRequeuedAt(entry: PipelineCardState | undefined): number {
+	return Math.max(readLastHandbackAt(entry), readResubmitRequestAt(entry));
+}
+
+/** The QA agent errors on `snapshot` since the dev card last asked for a new QA round, oldest first. */
 export function listQaAgentErrors(entry: PipelineCardState | undefined, snapshot: string): QaAgentErrorRecord[] {
-	const since = readLastHandbackAt(entry);
+	const since = readQaRequeuedAt(entry);
 	return readQaAgentErrors(entry).filter((record) => record.snapshot === snapshot && record.at > since);
 }
 

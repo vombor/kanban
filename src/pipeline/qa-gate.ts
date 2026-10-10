@@ -100,8 +100,8 @@ import {
 	QA_AGENT_ERROR_RETRIES,
 	type QaAgentError,
 	type QaAgentErrorRecord,
-	readLastHandbackAt,
 	readQaAgentErrors,
+	readQaRequeuedAt,
 	resolveQaAgentError,
 	resolveQaProcessExit,
 } from "./qa-agent-error";
@@ -127,6 +127,7 @@ import {
 import { type RecoveryFlowState, readRecoveryFlow } from "./recovery";
 import type { AgentRunError } from "./recovery-detect";
 import { lostToRestart } from "./restart-recovery";
+import { readResubmitRequestAt } from "./resubmit";
 import { getSnapshotRef, readTaskSnapshot } from "./snapshots";
 import type { PipelineFinishTaskRequest } from "./worker-protocol";
 
@@ -687,17 +688,24 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		const short = qaSnapshot.commit.slice(0, 8);
 		const state = await deps.store.load(workspaceId);
 		const devEntry = state.cards[card.id];
+		// `kanban task resubmit` asks for a new QA round of the card's current snapshot (resubmit.ts, issue #20: 59d13's
+		// only QA card had STALLED on a harness problem, and its resubmit was answered "already has QA card"): a finished
+		// QA card created before the request no longer counts as the snapshot's one. Its verdict still does, below.
 		if (devEntry?.qaCreated === qaSnapshot.commit) {
 			const qaTaskId = String(devEntry.qaCard ?? "?");
-			return { outcome: "none", note: describeExisting(qaTaskId, readQaGateEntry(state.cards[qaTaskId]), short) };
+			const existing = readQaGateEntry(state.cards[qaTaskId]);
+			if (!(existing?.status === "ingested" && existing.createdAt < readResubmitRequestAt(devEntry))) {
+				return { outcome: "none", note: describeExisting(qaTaskId, existing, short) };
+			}
 		}
-		// A STALLED (no verdict, or the QA agent's own errors) doesn't count once the card was handed back: it never
-		// judged the work, and the handback asks for a new QA round of the snapshot (handback.ts, issue #16).
-		const handbackAt = readLastHandbackAt(devEntry);
+		// A STALLED (no verdict, or the QA agent's own errors) doesn't count once the card was handed back or resubmitted:
+		// it never judged the work, and the handback or resubmit asks for a new QA round of the snapshot (handback.ts,
+		// issue #16). A PASS or FAIL still does.
+		const requeuedAt = readQaRequeuedAt(devEntry);
 		if (
 			readQaVerdictRecords(devEntry).some(
 				(verdict) =>
-					verdict.snapshot === qaSnapshot.commit && !(verdict.verdict === "STALLED" && verdict.at < handbackAt),
+					verdict.snapshot === qaSnapshot.commit && !(verdict.verdict === "STALLED" && verdict.at < requeuedAt),
 			)
 		) {
 			return { outcome: "none", note: `snapshot ${short} already has a QA verdict` };

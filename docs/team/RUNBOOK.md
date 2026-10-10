@@ -217,7 +217,11 @@ their CLI's own refusal. The orchestrator does the landing. A workspace can only
 reached Review without work, or the agent committed onto the base itself. Check the worktree (`git -C <worktree>
 status`, `log -3`) and `git log <base> -15`. A turn that ends later while the card is still in Review is
 snapshotted again once its Review settles (issue #20). If the work is real and no new snapshot came (work without a
-hook, or done by hand), `kanban task resubmit --task-id <id>` re-snapshots it and submits it to the QA gate.
+hook, or done by hand), `kanban task resubmit --task-id <id>` re-snapshots it and submits it to the QA gate. A
+resubmit also gives an unchanged snapshot whose QA card STALLED (or whose QA agent failed) a new QA round; a PASS or
+FAIL of that snapshot still stands, and a QA card still queued or running for it is not doubled. The evaluation after
+a resubmit logs all of the card's decisions, even ones that repeat earlier lines, so the decision log always says what
+it led to (issue #20).
 
 **Board wiped** (Kanban removes a workspace's state when a `git rev-parse` fails, e.g. at the pids limit):
 `kanban board restore <ws> [backup]` (default: the newest `board-latest.json`; it refuses unless the state dir is

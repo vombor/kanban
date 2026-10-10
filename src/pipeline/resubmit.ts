@@ -5,8 +5,11 @@
 // The request is a record on the card's pipeline-state entry (`resubmit`), written under the state's file lock by
 // the server's route (src/trpc/pipeline-resubmit-api.ts). The submission stage keys its cached inspection on it, so
 // the next evaluation takes a new snapshot (with its checks) and the engine asks the QA gate as for any submission:
-// a snapshot with changes gets QA, one without is recorded as `emptyDiff` again. Nothing else reads it, and it is
-// never removed: a later request replaces it.
+// a snapshot with changes gets QA, one without is recorded as `emptyDiff` again. The QA gate counts a QA card made
+// before the request, and a STALLED verdict before it, as no QA of the snapshot (so an unchanged snapshot whose QA
+// STALLED gets a new QA round; a PASS or FAIL still stands), and the worker logs the card's decisions after a new
+// request even when they repeat earlier ones, so the request's outcome is always in the decision log (issue #20). It
+// is never removed: a later request replaces it.
 import type { PipelineCardState, PipelineStateStore } from "./pipeline-state";
 
 /** The pipeline-state field the resubmit route writes. */
@@ -30,6 +33,12 @@ export function readResubmitRequest(entry: PipelineCardState | undefined): Resub
 		return null;
 	}
 	return { at: value.at, by: typeof value.by === "string" ? value.by : "" };
+}
+
+/** When the card was last resubmitted (epoch ms), or 0. */
+export function readResubmitRequestAt(entry: PipelineCardState | undefined): number {
+	const at = Date.parse(readResubmitRequest(entry)?.at ?? "");
+	return Number.isFinite(at) ? at : 0;
 }
 
 /** Records a resubmit request on the card's entry (creating the entry if the pipeline has none for it yet). */

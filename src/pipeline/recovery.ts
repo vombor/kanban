@@ -564,7 +564,7 @@ function decidePendingHold(input: RecoveryCardInput, clearHold: RecoveryFlowPatc
 }
 
 function decideReview(input: RecoveryCardInput): RecoveryDecision {
-	const { flow, now, settings } = input;
+	const { flow, now } = input;
 	if (isWorking(input)) {
 		const dir = input.detail?.snapshot.sessionId ?? "session";
 		return {
@@ -579,6 +579,19 @@ function decideReview(input: RecoveryCardInput): RecoveryDecision {
 	if (input.session?.state === "awaiting_review" && !isReviewSettled(input.session, now, input.reviewSettleMs)) {
 		return { kind: "wait", reason: "the turn ended moments ago; waiting for the Review to settle" };
 	}
+	const decision = decideSettledReview(input);
+	// The hold is for a running session, and this one's Review has settled, so it ends whatever recovery decides. A
+	// "none" carries no patch, and the engine, the QA gate and the rework stage skip a held card without a word
+	// (issue #20: codex f0ba7, whose turn outcome recovery can't read, kept the hold of a turn that ran in Review and
+	// was never snapshotted again, `kanban task resubmit` included).
+	return decision.kind === "none" && flow.liveHold
+		? { kind: "wait", reason: `${decision.reason}; the running session's hold ends`, patch: { liveHold: null } }
+		: decision;
+}
+
+/** decideReview for a Review that has settled and a session that isn't working. */
+function decideSettledReview(input: RecoveryCardInput): RecoveryDecision {
+	const { flow, now, settings } = input;
 	const clearHold: RecoveryFlowPatch = flow.liveHold ? { liveHold: null } : {};
 	const pending = decidePendingHold(input, clearHold);
 	if (pending) {

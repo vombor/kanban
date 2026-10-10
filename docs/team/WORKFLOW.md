@@ -243,7 +243,9 @@ The watchdog (`src/pipeline/watchdog/`, in the pipeline worker) is LLM-free and 
   starts its linked Backlog cards. With no turn on record (it likely never ran) recovery gets 10 min first. A later
   turn that ends while the card is still in Review (its hooks move the Review's clock, issue #20) gets a new snapshot
   once it settles: with changes it goes to the QA gate and the record goes. `kanban task resubmit --task-id <id>`
-  asks for one by hand.
+  asks for one by hand, and also gets a snapshot whose QA STALLED a new QA round. Recovery's hold on a session that
+  ran in Review (`liveHold`) ends once that Review settles, for every agent: a hold left in place made the pipeline
+  skip the card without a word (foo f0ba7, issue #20).
 - **Prompts:** a Claude Code or Codex card stuck on a trust, startup or permission dialog (3 min), on every
   workspace. It is flagged, never answered: the trust dialog defaults to "No, exit". Every workspace's main repo
   root is pre-trusted to prevent it.

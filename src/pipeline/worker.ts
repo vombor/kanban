@@ -70,6 +70,7 @@ import { createQaPreviewController } from "./qa-preview";
 import { readQaVerdictFile } from "./qa-verdict";
 import { createQaRunErrorReader, createQaSilentStallReader, createWorkerRecoveryStage } from "./recovery-runtime";
 import type { RecoveryStage, RecoveryStageDependencies } from "./recovery-stage";
+import { readResubmitRequest } from "./resubmit";
 import { createReworkStage, type ReworkStage } from "./rework";
 import { stopScratchProcesses } from "./scratch-processes";
 import { createSubmissionStage, type SubmissionInspector } from "./submission-stage";
@@ -455,6 +456,8 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 	const lastDecisionKeys = new Map<string, string>();
 	// workspaceId → the settings/kit line last logged for it.
 	const lastWatchKeys = new Map<string, string>();
+	// "<workspaceId>:<taskId>" → the card's last `kanban task resubmit` request this worker has acted on.
+	const lastResubmits = new Map<string, string>();
 	const reportedIssues = new Set<string>();
 	let closed = false;
 
@@ -477,9 +480,11 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 		if (lastWatchKeys.delete(workspaceId)) {
 			log(`pipeline ${workspaceId}: not watched any more`);
 		}
-		for (const key of [...lastDecisionKeys.keys()]) {
-			if (key.startsWith(`${workspaceId}:`)) {
-				lastDecisionKeys.delete(key);
+		for (const map of [lastDecisionKeys, lastResubmits]) {
+			for (const key of [...map.keys()]) {
+				if (key.startsWith(`${workspaceId}:`)) {
+					map.delete(key);
+				}
 			}
 		}
 	};
@@ -604,6 +609,21 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 					now: gateContext.now,
 				});
 		const decisions = [...gateDecisions, ...recoveryDecisions];
+		// A card resubmitted since the last evaluation has its decisions logged even where they repeat earlier ones, so
+		// the decision log says what the request led to (issue #20: 59d13's "already has QA card" after its resubmit was
+		// the line logged at 09:12, so nothing showed it).
+		for (const [taskId, entry] of Object.entries(gateState.cards)) {
+			const requestedAt = readResubmitRequest(entry)?.at;
+			const cardKey = `${workspaceId}:${taskId}`;
+			if (requestedAt && lastResubmits.get(cardKey) !== requestedAt) {
+				lastResubmits.set(cardKey, requestedAt);
+				for (const key of [...lastDecisionKeys.keys()]) {
+					if (key.startsWith(`${cardKey}:`)) {
+						lastDecisionKeys.delete(key);
+					}
+				}
+			}
+		}
 		const seen = new Set<string>();
 		for (const decision of decisions) {
 			const cardKey = `${workspaceId}:${decision.taskId}:${decision.stage}`;
