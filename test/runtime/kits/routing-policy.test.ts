@@ -246,6 +246,7 @@ describe("getModelVendor", () => {
 	it("tells local (Lemonade GGUF) model families apart, named like their Bedrock vendors", () => {
 		expect(getModelVendor("GLM-4.7-Flash-GGUF")).toBe("zai");
 		expect(getModelVendor("Devstral-Small-2507-GGUF")).toBe("mistral");
+		expect(getModelVendor("Devstral-Small-2-24B-Instruct-2512-GGUF-Q4_K_M")).toBe("mistral");
 		expect(getModelVendor("Qwen3.6-35B-A3B-MTP-GGUF")).toBe("qwen");
 		expect(getModelVendor("qwen.qwen3-next-80b-a3b")).toBe(getModelVendor("Qwen3.6-35B-A3B-MTP-GGUF"));
 		expect(getModelVendor("Gemma-4-12B-it-GGUF")).toBe("google");

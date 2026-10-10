@@ -548,6 +548,42 @@
 		{
 			"agent": "cline",
 			"provider": "lemonade",
+			"model": "Devstral-Small-2-24B-Instruct-2512-GGUF-Q4_K_M",
+			"roles": {
+				"dev": {
+					"status": "vetted",
+					"at": "2026-10-10",
+					"cliVersion": "3.0.70",
+					"evidence": {
+						"run": "2026-10-10-dev-cline-z4zck",
+						"summary": "kanban models vet dev smoke test passed (file read, edit, tests untouched, test suite, shell command, commit) in 6 min, $0.00, 11 native tool call(s)"
+					}
+				},
+				"qa": {
+					"status": "vetted",
+					"at": "2026-10-10",
+					"cliVersion": "3.0.70",
+					"evidence": {
+						"run": "2026-10-10-qa-cline-so531",
+						"summary": "kanban models vet qa smoke test passed (verdict file, right verdict, file read, no code change) in 5 min, $0.00, 4 native tool call(s)"
+					}
+				},
+				"plan": {
+					"status": "vetted",
+					"at": "2026-10-10",
+					"cliVersion": "3.0.70",
+					"evidence": {
+						"run": "2026-10-10-plan-cline-m4wx8",
+						"summary": "kanban models vet plan smoke test passed (plan written, steps, names files, file read, no code change) in 6 min, $0.00, 7 native tool call(s)"
+					}
+				}
+			},
+			"capabilities": { "toolUse": true, "turnEnd": true },
+			"note": "Lemonade checkpoint unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF:Q4_K_M, vetted at Lemonade ctx_size 65536"
+		},
+		{
+			"agent": "cline",
+			"provider": "lemonade",
 			"model": "LMX-Omni-52B-Halo",
 			"rejected": {
 				"at": "2026-10-09",
