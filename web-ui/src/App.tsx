@@ -805,6 +805,7 @@ export default function App(): ReactElement {
 							onToggleSidebar={!selectedCard ? handleToggleSidebar : undefined}
 							onBack={selectedCard ? handleBack : undefined}
 							orchestratorWaitCount={orchestratorWaitAlerts.waitingCount}
+							qaPaused={projects.find((project) => project.id === currentProjectId)?.pipelinePaused === true}
 							workspacePath={navbarWorkspacePath}
 							isWorkspacePathLoading={shouldShowProjectLoadingState}
 							workspaceHint={navbarWorkspaceHint}

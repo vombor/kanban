@@ -525,6 +525,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 		const watchKey = JSON.stringify([
 			settings.landing.mode,
 			settings.pipeline.shadow,
+			settings.pipeline.paused,
 			resolution.kitName,
 			recoveryMode,
 		]);
@@ -543,7 +544,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 				role: null,
 				answer: null,
 				outcome: "none",
-				note: `watching: landing ${settings.landing.mode}, kit ${resolution.kitName}${settings.pipeline.shadow ? ", shadow" : ""}, recovery ${recoveryMode}${recoveryScope.evaluate && !recoveryScope.act ? " (report only)" : ""}; acting on verdicts since ${state.since}`,
+				note: `watching: landing ${settings.landing.mode}, kit ${resolution.kitName}${settings.pipeline.shadow ? ", shadow" : ""}${settings.pipeline.paused ? ", QA paused" : ""}, recovery ${recoveryMode}${recoveryScope.evaluate && !recoveryScope.act ? " (report only)" : ""}; acting on verdicts since ${state.since}`,
 			});
 		}
 
@@ -639,25 +640,28 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			}
 		}
 		// QA card starts and ingests, reworks and escalations are events, logged each time. A shadow workspace acts
-		// on nothing.
+		// on nothing. A paused one (workspace-pause.ts) gets the QA gate's tick, which holds its queued QA cards, its
+		// nudges and its PASSes itself; the rework stage and the features wait for the resume.
 		if (!shadow && pipelineOn) {
 			records.push(...(await qaGate.tick({ ...gateContext, now: now() })));
 			wakeSlotWaiters();
-			records.push(
-				...(await reworkStage.tick({
-					snapshot,
-					settings,
-					rework: parsed.config.pipeline.rework,
-					kitName: resolution.kitName,
-					policy,
-					agentDefaultModels,
-					clineDataDir: parsed.config.agents.cline.dataDir,
-					recoveryNudgeCheckMs: parsed.config.pipeline.recovery.nudgeCheckSec * 1000,
-					now: now(),
-				})),
-			);
-			// Features acting on held cards (the team kit's runoffs) see the state the QA gate and the rework stage just wrote.
-			await features.tick(workspaceId, { snapshot, state: await store.load(workspaceId), now: now() });
+			if (!settings.pipeline.paused) {
+				records.push(
+					...(await reworkStage.tick({
+						snapshot,
+						settings,
+						rework: parsed.config.pipeline.rework,
+						kitName: resolution.kitName,
+						policy,
+						agentDefaultModels,
+						clineDataDir: parsed.config.agents.cline.dataDir,
+						recoveryNudgeCheckMs: parsed.config.pipeline.recovery.nudgeCheckSec * 1000,
+						now: now(),
+					})),
+				);
+				// Features acting on held cards (the team kit's runoffs) see the state the QA gate and the rework stage just wrote.
+				await features.tick(workspaceId, { snapshot, state: await store.load(workspaceId), now: now() });
+			}
 		} else {
 			// No QA here, but its In Progress cards still hold their local provider for other projects' QA cards.
 			qaGate.observe?.({ snapshot, agentDefaultModels });

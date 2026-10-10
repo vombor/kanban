@@ -146,6 +146,28 @@ describe("ProjectSwitcher", () => {
 		expect(getOption("gamma-docs").querySelector('[data-testid="orchestrator-wait-badge"]')).toBeNull();
 	});
 
+	it("tags a project whose QA pipeline is paused, and only in the list", async () => {
+		const projects = PROJECTS.map((project) =>
+			project.id === "beta" ? { ...project, pipelinePaused: true } : project,
+		);
+		act(() => {
+			root.render(
+				<ProjectSwitcher
+					projects={projects}
+					currentProjectId="beta"
+					isLoading={false}
+					onSelectProject={() => {}}
+				/>,
+			);
+		});
+		expect(getTrigger().textContent).toBe("beta-web");
+
+		pressKey(getTrigger(), "Enter");
+		await flushTimers();
+		expect(getOption("beta-web").querySelector('[data-testid="qa-paused-tag"]')?.textContent).toBe("QA paused");
+		expect(getOption("alpha-api").querySelector('[data-testid="qa-paused-tag"]')).toBeNull();
+	});
+
 	it("shows the selected project's name on the trigger", () => {
 		renderSwitcher();
 		expect(getTrigger().textContent).toContain("alpha-api");

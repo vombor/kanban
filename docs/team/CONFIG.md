@@ -57,6 +57,7 @@ Nothing is inherited from another workspace.
 | `defaultBaseRef` | null (detected) | the branch cards land on; a card's own `baseRef` wins |
 | `landing.mode` | `off` | `off`: the orchestrator or the user lands. `commit` / `pr`: upstream auto-review (the agent commits or opens a PR). `qa`: the pipeline QA-gates the card and Kanban squash-lands it before Done |
 | `pipeline.shadow` | `false` | decide and log everything, act on nothing (decision log `shadow`), not even dev assignment. The cutover's shadow day uses it |
+| `pipeline.paused`, `pipeline.pausedAt` | `false`, null | this project's QA pipeline is paused: QA cards are queued in Backlog but none starts, no PASS lands, no rework is sent (WORKFLOW.md §4). Set with `kanban pipeline pause\|resume`, not by hand |
 | `checks.enabled` | null | scripted checks on each submitted snapshot. null = on only with landing `qa` on a kit other than `default` |
 | `checks.scripts` | `typecheck`, `lint`, `test`, `build` | the project's npm scripts to run (missing ones are skipped) |
 | `recovery.enabled` | `true` | recovery (nudges, outage holds, restart resumes) for this workspace, once `pipeline.recovery.mode` is `on` |
@@ -111,7 +112,7 @@ switching a workspace to landing `qa` starts the worker without a Kanban restart
 
 | Key | Default | What |
 |---|---|---|
-| `paused` | `false` | stops the worker for landing and recovery (the watchdog still runs if `watchdog.mode` is not `off`) |
+| `paused` | `false` | stops the worker for landing and recovery on every project (the watchdog still runs if `watchdog.mode` is not `off`). One project: `kanban pipeline pause` (`workspaces.<id>.pipeline.paused`) |
 | `workerEntry` | null | another build's `dist/cli.js` for the worker (the dev pod's "fix it live" loop); the host runs `<entry> pipeline worker` |
 | `qa.slots` | 2 | cloud QA cards running at once, machine-wide; a QA card on a local provider (Lemonade) takes no slot and waits only for `models.providerCapacity` |
 | `qa.timeoutMin` | 60 | a running QA card's slot is freed after this |

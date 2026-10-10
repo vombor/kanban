@@ -97,6 +97,8 @@ export interface StallInput {
 	resumed: Readonly<Record<string, string>>;
 	pidPressure: boolean;
 	pidBrownout: boolean;
+	/** The workspace's QA pipeline is paused (workspace-pause.ts): its queued QA cards and its Review cards wait. */
+	pipelinePaused?: boolean;
 	settings: StallSettings;
 	/** The snapshot's `reviewSettleMs` (isReviewSettled); absent: the default. */
 	reviewSettleMs?: number;
@@ -234,10 +236,10 @@ export function detectStalls(input: StallInput): StallResult {
 	const columnOf = new Map(cards.map(({ column, card }) => [card.id, column]));
 
 	// Dev card id → a QA card working on it. A QA card idling in Backlog doesn't count (c1e30 10/05), unless PID
-	// pressure holds it (bfb20 10/05).
+	// pressure (bfb20 10/05) or the workspace's pause holds it.
 	const hasQaCard = new Set<string>();
 	const qaCardCounts = (column: RuntimeBoardColumnId | undefined) =>
-		column === "in_progress" || (column === "backlog" && input.pidPressure);
+		column === "in_progress" || (column === "backlog" && (input.pidPressure || Boolean(input.pipelinePaused)));
 	for (const { column, card } of cards) {
 		const role = input.roles.get(card.id);
 		if (role?.role === "qa" && role.reviewsTaskId && qaCardCounts(column)) {
@@ -286,9 +288,11 @@ export function detectStalls(input: StallInput): StallResult {
 			}
 			// The safety net: nothing pending for the card (no QA card working on it, no hold, no rework waiting to
 			// start, no checks QA waits for, settled) since its newest activity (a move, its session, a verdict acted on,
-			// recovery's last send, a rework).
+			// recovery's last send, a rework). While the pipeline is paused its verdict, PASS or rework waits on purpose
+			// (the paused item in ATTENTION.md says so).
 			const quietSince = Math.max(since, ...readPipelineActivityTimes(entry));
 			if (
+				input.pipelinePaused ||
 				!input.qaGated(card) ||
 				recoveryHoldReason(entry) ||
 				isReworkAwaitingStart(readOpenRework(qaflow), now) ||

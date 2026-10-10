@@ -23,6 +23,8 @@ const DECISION_LOG_MAX_BYTES = 5 * 1024 * 1024;
  * or the core's own escalation at the `maxFailRounds` cap), and checking that a rework started. `issues`: the issue
  * import (src/issues/issue-sync.ts), what it imported, updated or skipped and each sync's summary. `resubmit`:
  * `kanban task resubmit` asked for a Review card's new snapshot (src/trpc/pipeline-resubmit-api.ts), written by the server.
+ * `pause`: `kanban pipeline pause|resume` paused or resumed the workspace's QA pipeline (src/pipeline/workspace-pause.ts),
+ * written by the server.
  */
 export type PipelineStage =
 	| "issues"
@@ -37,7 +39,8 @@ export type PipelineStage =
 	| "land"
 	| "recovery"
 	| "restart"
-	| "resubmit";
+	| "resubmit"
+	| "pause";
 
 /**
  * What the pipeline did with a decision. `none`: nothing to do. `shadow`: it would act, but the workspace is in

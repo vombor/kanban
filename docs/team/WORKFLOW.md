@@ -172,6 +172,17 @@ dev card stops ─▶ Review (settled) ─▶ snapshot refs/kanban/snapshots/<id
   --land`; release-hold and a column `--land` refuse before anything changes), handback refuses it, and a PASS it
   still gets is held, never landed. The decision is final, even if the winner is discarded later: nothing lands the
   runner-up. To use a loser's work, start a new card from its `preserve/<id>-<model>` tag.
+- **Pausing one project** (issue #23): `kanban pipeline pause [--workspace <id>] [--reason …]` and
+  `kanban pipeline resume`, run by the user or that project's own orchestrator (never a card; the server checks).
+  While paused, the gate still creates QA cards, queued in Backlog, but starts none. It nudges no QA card for its
+  verdict, lands no PASS, and the rework stage and kit features (runoffs) do nothing. Snapshots, checks, recording a
+  verdict a QA card already wrote, and recovery go on. A running QA card finishes. `kanban task done` on it makes the
+  gate queue a replacement, which waits too. A paused project's QA card in Review holds no cloud slot, so other
+  projects' QA goes on. On resume everything held acts at once: queued QA cards start (oldest first, within slots and
+  provider capacity), PASSes land, reworks are sent. The pause is `workspaces.<id>.pipeline.paused` (with
+  `pausedAt`), logged as stage `pause` in the decision log. It shows as "QA paused" on the board and in the project
+  list, and as a line in ATTENTION.md that wakes no one. The machine-wide `pipeline.paused` is different: it stops
+  the worker for every project, recovery included.
 
 ## 5. "Review" means the agent stopped, not that the work is done
 

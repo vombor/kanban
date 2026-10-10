@@ -7,6 +7,8 @@ import { formatLegacyImportReport, runLegacyImport } from "../pipeline/legacy-im
 import { runPipelineWorkerProcess } from "../pipeline/worker";
 import { getPipelineDecisionLogPath } from "../state/kanban-home";
 import { listWorkspaceIndexEntries, loadWorkspaceBoardById } from "../state/workspace-state";
+import type { PipelinePauseResponse } from "../trpc/pipeline-pause-api";
+import { createRuntimeTrpcClient } from "./runtime-trpc-client";
 import { resolveWorkspaceTarget } from "./workspace-target";
 
 function toErrorMessage(error: unknown): string {
@@ -39,6 +41,35 @@ async function readLastDecisions(workspaceId: string, count: number): Promise<un
 		});
 }
 
+/**
+ * `pipeline pause|resume` go through the running server, which decides who is asking (the user, the project's own
+ * orchestrator; src/trpc/pipeline-pause-api.ts) and tells the worker at once.
+ */
+async function setWorkspacePause(options: { workspace?: string; reason?: string }, paused: boolean): Promise<void> {
+	const label = paused ? "Pipeline pause" : "Pipeline resume";
+	try {
+		const target = await resolveWorkspaceTarget(options.workspace, { allowUnregistered: false });
+		let response: PipelinePauseResponse;
+		try {
+			response = await createRuntimeTrpcClient(target.workspaceId).pipeline.setPaused.mutate({
+				paused,
+				...(options.reason ? { reason: options.reason } : {}),
+			});
+		} catch (error) {
+			throw new Error(
+				`the running Kanban server didn't answer (${toErrorMessage(error)}); a pause changes only through it, because it checks who is asking`,
+			);
+		}
+		if (!response.ok) {
+			throw new Error(response.error ?? "refused");
+		}
+		process.stdout.write(`${JSON.stringify({ workspaceId: target.workspaceId, ...response }, null, 2)}\n`);
+	} catch (error) {
+		process.stderr.write(`${label} failed: ${toErrorMessage(error)}\n`);
+		process.exitCode = 1;
+	}
+}
+
 function parseCount(value: string): number {
 	const count = Number(value);
 	if (!Number.isInteger(count) || count < 0) {
@@ -53,7 +84,7 @@ export function registerPipelineCommand(program: Command): void {
 	pipeline
 		.command("status")
 		.description(
-			"Print each workspace's landing mode, shadow flag and kit, whether the pipeline runs for it, and its latest decisions (data/<workspace>/pipeline-decisions.jsonl).",
+			"Print each workspace's landing mode, shadow and pause flags and kit, whether the pipeline runs for it, and its latest decisions (data/<workspace>/pipeline-decisions.jsonl).",
 		)
 		.option("--workspace <workspace>", "Only this workspace (workspace id or project path).")
 		.option("--decisions <count>", "How many of the latest decisions to print per workspace.", parseCount, 10)
@@ -71,6 +102,8 @@ export function registerPipelineCommand(program: Command): void {
 							workspaceId,
 							landingMode: settings.landing.mode,
 							shadow: settings.pipeline.shadow,
+							paused: settings.pipeline.paused,
+							pausedAt: settings.pipeline.pausedAt,
 							kit: settings.kit?.name ?? "default",
 							pipeline: !config.pipeline.paused && isPipelineWorkspace(settings),
 							decisions: await readLastDecisions(workspaceId, options.decisions),
@@ -84,6 +117,34 @@ export function registerPipelineCommand(program: Command): void {
 				process.stderr.write(`Pipeline status failed: ${toErrorMessage(error)}\n`);
 				process.exitCode = 1;
 			}
+		});
+
+	pipeline
+		.command("pause")
+		.description(
+			"Pause one project's QA pipeline: new QA cards are queued in Backlog and none starts, no QA card is nudged, no PASS lands and no rework is sent until resume. Running QA cards go on; a finished one's verdict is still recorded. Recovery and other projects are unaffected. Only the user and the project's own orchestrator.",
+		)
+		.option(
+			"--workspace <workspace>",
+			"Workspace id or project path. Defaults to the project of the current directory.",
+		)
+		.option("--reason <text>", "Why, for the decision log.")
+		.action(async (options: { workspace?: string; reason?: string }) => {
+			await setWorkspacePause(options, true);
+		});
+
+	pipeline
+		.command("resume")
+		.description(
+			"Resume a paused project's QA pipeline: its queued QA cards start (oldest first, within the QA slots and provider capacity), PASSes land and reworks are sent. Only the user and the project's own orchestrator.",
+		)
+		.option(
+			"--workspace <workspace>",
+			"Workspace id or project path. Defaults to the project of the current directory.",
+		)
+		.option("--reason <text>", "Why, for the decision log.")
+		.action(async (options: { workspace?: string; reason?: string }) => {
+			await setWorkspacePause(options, false);
 		});
 
 	pipeline

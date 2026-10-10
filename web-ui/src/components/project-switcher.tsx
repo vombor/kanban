@@ -2,6 +2,7 @@ import * as RadixSelect from "@radix-ui/react-select";
 import { Check, ChevronDown } from "lucide-react";
 import { OrchestratorWaitBadge } from "@/components/orchestrator-wait-badge";
 import { ProjectTaskCountBadges } from "@/components/project-task-count-badges";
+import { QaPausedTag } from "@/components/qa-paused-tag";
 import { cn } from "@/components/ui/cn";
 import type { RuntimeProjectSummary } from "@/runtime/types";
 import { formatPathForDisplay } from "@/utils/path-display";
@@ -111,6 +112,7 @@ function ProjectOptionCard({
 				<span className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
 					<RadixSelect.ItemText>{project.name}</RadixSelect.ItemText>
 				</span>
+				{project.pipelinePaused ? <QaPausedTag tooltip={false} className="px-1 py-0 text-[10px]" /> : null}
 				{project.orchestratorWait ? (
 					<OrchestratorWaitBadge kind={project.orchestratorWait.kind} flashing={flashing} />
 				) : null}

@@ -82,6 +82,18 @@ describe("detectStalls", () => {
 		expect(detectStalls(input(board, { pidPressure: true })).items).toHaveLength(0);
 	});
 
+	it("flags no Review card and counts a backlog QA card while the workspace's QA pipeline is paused", () => {
+		const board = createBoard({
+			review: [old("d0001"), old("d0002")],
+			backlog: [old("qa001", { prompt: "You are the QA reviewer (round 1) for Kanban dev card d0001." })],
+		});
+		expect(detectStalls(input(board)).items.map((item) => item.key)).toEqual([
+			"d0001:review-stall",
+			"d0002:review-stall",
+		]);
+		expect(detectStalls(input(board, { pipelinePaused: true })).items).toEqual([]);
+	});
+
 	it("counts the QA card recorded in pipeline-state (qaCard)", () => {
 		const board = createBoard({ review: [old("d0001")], in_progress: [old("q0001", { role: "qa" })] });
 		const result = detectStalls(input(board, { pipelineCards: { d0001: { qaCard: "q0001" } } }));

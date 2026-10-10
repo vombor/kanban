@@ -105,10 +105,17 @@ export const workspacePipelineSettingsSchema = z
 			.object({ mode: landingModeSchema.default("off") })
 			.strict()
 			.default({ mode: "off" }),
+		// `paused`: this workspace's QA pipeline is held (`kanban pipeline pause|resume`, src/pipeline/workspace-pause.ts):
+		// QA cards are still created and queued in Backlog, but none starts, no PASS lands and no rework is sent until
+		// it resumes. `pausedAt`: when the command paused it (null when set by hand).
 		pipeline: z
-			.object({ shadow: z.boolean().default(false) })
+			.object({
+				shadow: z.boolean().default(false),
+				paused: z.boolean().default(false),
+				pausedAt: z.string().nullable().default(null),
+			})
 			.strict()
-			.default({ shadow: false }),
+			.default({ shadow: false, paused: false, pausedAt: null }),
 		checks: z
 			.object({
 				// null: on only when landing is `qa`.

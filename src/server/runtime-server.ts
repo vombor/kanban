@@ -63,6 +63,7 @@ import { createGitHubApi } from "../trpc/github-api";
 import { createHooksApi } from "../trpc/hooks-api";
 import { createIsolationApi } from "../trpc/isolation-api";
 import { createKitSettingsApi } from "../trpc/kit-settings-api";
+import { createPipelinePauseApi } from "../trpc/pipeline-pause-api";
 import { createPipelineResubmitApi } from "../trpc/pipeline-resubmit-api";
 import { createPlansApi } from "../trpc/plans-api";
 import { createProjectsApi } from "../trpc/projects-api";
@@ -123,7 +124,7 @@ export interface CreateRuntimeServerDependencies {
 	isolation?: IsolationService;
 	/** `sessionSync.reviewSettleSec` in ms: orchestrator message notices wait for a settled Review. */
 	reviewSettleMs?: number;
-	/** Asks the pipeline worker host for a workspace's snapshot now (`kanban task resubmit`). */
+	/** Asks the pipeline worker host for a workspace's snapshot now (`kanban task resubmit`, `kanban pipeline resume`). */
 	requestPipelineSnapshot?: (workspaceId: string) => void;
 }
 
@@ -389,6 +390,11 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		},
 		loadAgentDefaultModels: async (config) => await readAgentDefaultModels(config.config.agents.cline.dataDir),
 	});
+	const pipelinePauseApi = createPipelinePauseApi({
+		log: isolation.log,
+		requestSnapshot: (workspaceId) => deps.requestPipelineSnapshot?.(workspaceId),
+		broadcastProjects: (workspaceId) => void deps.runtimeStateHub.broadcastRuntimeProjectsUpdated(workspaceId),
+	});
 	// Shortcut runs that ask for a port, and the proxy the browser reaches those ports through (shortcut-ports.ts).
 	const shortcutPorts = createShortcutPortRegistry();
 	const handleShortcutPortProxyRequest = createShortcutPortProxyHandler({
@@ -508,6 +514,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			kitSettingsApi,
 			pipelineResubmitApi,
 			providerCapacityApi,
+			pipelinePauseApi,
 			shortcutsApi,
 			githubApi,
 			runtimeApi,

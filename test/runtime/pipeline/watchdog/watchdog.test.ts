@@ -409,6 +409,67 @@ describe("watchdog on", () => {
 		expect(existsSync(flags.brownout)).toBe(false);
 	});
 
+	it("a paused QA pipeline: one ATTENTION line with the held QA cards, no review stall, no wake for it", async () => {
+		const harness = harnessWith({
+			watchdog: { mode: "on" },
+			orchestrator: { wake: { mode: "sidebar" } },
+			workspaces: { foo: { ...QA_FOO.foo, pipeline: { paused: true, pausedAt: "2026-10-07T09:00:00.000Z" } } },
+		});
+		const paths = harness.paths("foo");
+		mkdirSync(paths.dataDir, { recursive: true });
+		writeFileSync(
+			`${paths.dataDir}/pipeline-state.json`,
+			JSON.stringify({
+				version: 1,
+				since: "2026-10-01T00:00:00.000Z",
+				importedFrom: null,
+				cards: {
+					d0001: { qaCard: "qa001" },
+					qa001: {
+						qaGate: {
+							status: "queued",
+							reviewsTaskId: "d0001",
+							round: 1,
+							snapshot: "snap-d0001",
+							snapshotRef: "refs/kanban/snapshots/d0001",
+							outboxDir: "/tmp/kanban-qa-out/qa001",
+							scratchDir: "/tmp/kanban-qa/d0001",
+							baseRef: "main",
+							agentId: "cline",
+							model: null,
+							devAgentId: "cline",
+							devModel: null,
+							route: null,
+							createdAt: WATCHDOG_NOW - 60 * MIN,
+						},
+					},
+				},
+			}),
+		);
+		harness.observe({
+			workspaceId: "foo",
+			board: createBoard({
+				review: [
+					createCard({ id: "d0001", updatedAt: WATCHDOG_NOW - 60 * MIN }),
+					createCard({ id: "d0002", updatedAt: WATCHDOG_NOW - 60 * MIN }),
+				],
+				backlog: [
+					createCard({ id: "qa001", role: "qa", reviewsTaskId: "d0001", updatedAt: WATCHDOG_NOW - 60 * MIN }),
+				],
+			}),
+			sessions: [],
+		});
+		await harness.watchdog.tick();
+
+		const attention = readFileSync(paths.attention, "utf8");
+		expect(attention).toContain(
+			"- **QA paused**: the QA pipeline is paused since 2026-10-07T09:00:00.000Z: 1 QA card(s) wait in Backlog (qa001); no PASS lands and no rework is sent until `kanban pipeline resume`.",
+		);
+		expect(attention).not.toContain("review-stall");
+		expect(readDecisions(paths.decisions).filter((decision) => decision.kind === "stall")).toEqual([]);
+		expect(harness.requests.map((request) => request.kind)).not.toContain("startOrchestratorSession");
+	});
+
 	it("wake requests: immediate, and --when-card-done once the card is Done", async () => {
 		const harness = harnessWith({ watchdog: { mode: "on" }, orchestrator: { wake: { mode: "sidebar" } } });
 		const paths = harness.paths("plain");

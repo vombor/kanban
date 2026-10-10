@@ -50,6 +50,10 @@
 //   is superseded like a resent turn's, and the dev card gets a new QA card for the same snapshot. After the
 //   23:02:56Z restart on 2026-10-07 the gate trusted the column and the dead "running" summaries of a5e91 and 257a4,
 //   and their dev cards sat in Review without QA until the watchdog flagged them.
+// New since the legacy kit (issue #23, 2026-10-10): a paused workspace (`workspaces.<id>.pipeline.paused`,
+// workspace-pause.ts) still gets QA cards, queued in Backlog, but none starts (one record per hold), no QA card is
+// nudged for its verdict, no PASS lands, and its QA cards whose turn is over hold no cloud slot; a verdict already
+// written is still ingested. Everything held acts on the first tick after the resume.
 // New since the legacy kit (user's choice "D", 2026-10-07): the QA card is created only once the scripted checks of
 // its snapshot have finished, or after `checksWaitMin`, and its prompt gets their report (qa-checks-report.ts).
 import { randomUUID } from "node:crypto";
@@ -464,6 +468,8 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 	const inProgressByWorkspace = new Map<string, CapacityCard[]>();
 	/** Workspaces whose queued QA cards are held for PID pressure (already logged). */
 	const pressureHolds = new Set<string>();
+	/** Workspace → the note of its queued QA cards held by its pause (recorded once per change). */
+	const pauseHolds = new Map<string, string>();
 	/** "<workspace>:<provider>" → the note of its queued QA cards' wait for that provider (recorded once per change). */
 	const capacityWaits = new Map<string, string>();
 	/** workspaceId → the dead QA cards retired since the last tick (submit and the sweep), for one summary line. */
@@ -1043,6 +1049,10 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		if (exited) {
 			return await replaceAfterAgentError(context, qaTaskId, entry, exited);
 		}
+		// A paused workspace starts no agent turn: the nudge (or STALLED) waits in Review for the resume.
+		if (context.settings.pipeline.paused) {
+			return null;
+		}
 		if (entry.nudges < context.qa.maxNudges) {
 			const nudges = entry.nudges + 1;
 			const sent = await deps.deliverInput({
@@ -1392,8 +1402,11 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		// A running QA card whose session went silent can't give a verdict: replaced, so it frees its slot.
 		records.push(...(await replaceSilentQaCards(context, sessions)));
 
-		// PASS: the kit's onPass (decideOnPass records a hold), then land through the Done workflow.
-		records.push(...(await actOnPasses(context, sessions)));
+		// PASS: the kit's onPass (decideOnPass records a hold), then land through the Done workflow. Not while paused.
+		const paused = context.settings.pipeline.paused;
+		if (!paused) {
+			records.push(...(await actOnPasses(context, sessions)));
+		}
 
 		// Slots: running cloud QA cards (In Progress, or in Review and not ingested yet), unless timed out. A local QA
 		// card holds its provider through its In Progress card instead (listInProgressCapacityCards), never a slot.
@@ -1409,7 +1422,9 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 				continue;
 			}
 			const column = findColumn(snapshot, qaTaskId);
-			if (column !== "in_progress" && column !== "review") {
+			// A paused workspace's QA card in Review waits for the resume to be nudged: its turn is over, so it runs
+			// nothing and holds no other project's slot meanwhile.
+			if (column !== "in_progress" && (column !== "review" || paused)) {
 				continue;
 			}
 			if (entry.startedAt !== null && context.now - entry.startedAt > qa.timeoutMin * 60_000) {
@@ -1448,6 +1463,17 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 				outcome: "none",
 			});
 		}
+		// Paused (workspace-pause.ts): every queued QA card waits for the resume, recorded once per change.
+		const pauseNote =
+			paused && waiting.length > 0
+				? `QA pipeline paused${context.settings.pipeline.pausedAt ? ` since ${context.settings.pipeline.pausedAt}` : ""}: holding ${waiting.length} queued QA card(s) (${waiting.map(({ qaTaskId }) => qaTaskId).join(", ")}) until \`kanban pipeline resume\``
+				: null;
+		if (!pauseNote) {
+			pauseHolds.delete(workspaceId);
+		} else if (pauseHolds.get(workspaceId) !== pauseNote) {
+			pauseHolds.set(workspaceId, pauseNote);
+			records.push({ ...record(context, null, "qa_start", pauseNote), outcome: "none" });
+		}
 		const capacity = context.providerCapacity ?? {};
 		// This project's In Progress cards (its running QA cards included, so a local QA card is counted once, like a
 		// dev card on its model), then every other project's: one machine, one Lemonade.
@@ -1457,7 +1483,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		const slotWaiting: string[] = [];
 		// provider → the hold and the queued local QA cards that wait for it.
 		const capacityWaiting = new Map<string, { hold: ProviderCapacityHold; taskIds: string[] }>();
-		for (const { qaTaskId, entry } of pressureHeld ? [] : queued) {
+		for (const { qaTaskId, entry } of pressureHeld || paused ? [] : queued) {
 			const column = findColumn(snapshot, qaTaskId);
 			if (column !== "backlog") {
 				// Not created on the board yet (the snapshot predates it), or moved by hand: leave it alone.
@@ -1552,9 +1578,10 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			capacityWaits.set(key, note);
 		}
 
+		// Queued QA cards a pause holds don't keep the preview up: it starts again before the first one after the resume.
 		const qaActive = entries.some(
 			({ qaTaskId, entry }) =>
-				(entry.status === "queued" && findColumn(snapshot, qaTaskId) === "backlog") ||
+				(!paused && entry.status === "queued" && findColumn(snapshot, qaTaskId) === "backlog") ||
 				(entry.status === "running" && entry.timedOutAt === null),
 		);
 		await deps.preview.stopIfIdle({
@@ -1574,6 +1601,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			const before = runningByWorkspace.get(workspaceId) ?? 0;
 			runningByWorkspace.delete(workspaceId);
 			pressureHolds.delete(workspaceId);
+			pauseHolds.delete(workspaceId);
 			retiredByWorkspace.delete(workspaceId);
 			slotWaits.delete(workspaceId);
 			for (const key of [...capacityWaits.keys()]) {

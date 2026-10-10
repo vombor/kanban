@@ -16,6 +16,19 @@ const ESCALATED_ITEM = /^- \*\*([0-9a-f]{5})\*\* \(\w+\): (?:escalated|stopped) 
 
 export const PID_PRESSURE_ITEM_MARKER = "**PID pressure**";
 export const PIPELINE_IDLE_ITEM_MARKER = "**pipeline idle**";
+export const QA_PAUSED_ITEM_MARKER = "**QA paused**";
+
+/**
+ * The line a paused workspace's ATTENTION.md carries every tick (`kanban pipeline pause`, issue #23), so a forgotten
+ * pause shows. It never wakes anyone: the user or the orchestrator paused it on purpose.
+ */
+export function formatQaPausedItem(input: { pausedAt: string | null; heldQaCardIds: readonly string[] }): string {
+	const held =
+		input.heldQaCardIds.length > 0
+			? `${input.heldQaCardIds.length} QA card(s) wait in Backlog (${input.heldQaCardIds.join(", ")})`
+			: "no QA card waits yet";
+	return `- ${QA_PAUSED_ITEM_MARKER}: the QA pipeline is paused${input.pausedAt ? ` since ${input.pausedAt}` : ""}: ${held}; no PASS lands and no rework is sent until \`kanban pipeline resume\`.`;
+}
 
 /**
  * Card ids in open (not struck-through) bullets of "## Orchestrator: needs the user": the orchestrator handed them to

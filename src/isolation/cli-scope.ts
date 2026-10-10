@@ -89,13 +89,16 @@ function planApprovalRefusal(taskId: string | undefined): string {
  * Commands only the user and a project's orchestrator may run, whatever the isolation mode: a card session is
  * refused. `issues sync` calls GitHub with the user's own token (the `gh` login or `GH_TOKEN`); `kit set|unset`
  * change the project's settings on its kit (the server checks the caller again, src/trpc/kit-settings-api.ts), and
- * `shortcut add|remove` its top-bar shortcuts (src/trpc/shortcuts-api.ts checks again).
+ * `shortcut add|remove` its top-bar shortcuts (src/trpc/shortcuts-api.ts checks again), and `pipeline pause|resume`
+ * its QA pipeline (src/trpc/pipeline-pause-api.ts checks again).
  */
 export const ORCHESTRATOR_OR_USER_COMMANDS = [
 	"issues sync",
 	"kit set",
 	"kit unset",
 	"models vet",
+	"pipeline pause",
+	"pipeline resume",
 	"shortcut add",
 	"shortcut remove",
 ] as const;
@@ -108,7 +111,9 @@ function orchestratorOrUserRefusal(commandPath: string): string {
 				? "starts a smoke-test card on another agent and model"
 				: commandPath.startsWith("shortcut ")
 					? "changes the project's shortcuts"
-					: "changes the project's settings on its kit (role models, project facts)";
+					: commandPath.startsWith("pipeline ")
+						? "pauses or resumes the project's QA pipeline"
+						: "changes the project's settings on its kit (role models, project facts)";
 	return `\`kanban ${commandPath}\` ${why}, so only the user or the project's orchestrator runs it, never a card session. Tell your orchestrator what you need.`;
 }
 

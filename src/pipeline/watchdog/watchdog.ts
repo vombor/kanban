@@ -86,10 +86,12 @@ import type { PipelineStateStore } from "../pipeline-state";
 import { readQaGateEntry } from "../qa-gate";
 import type { WatchdogActions } from "./actions";
 import {
+	formatQaPausedItem,
 	isHandedOver,
 	PID_PRESSURE_ITEM_MARKER,
 	PIPELINE_IDLE_ITEM_MARKER,
 	planHasOpenSteps,
+	QA_PAUSED_ITEM_MARKER,
 	readPlanHeldIds,
 	readTriageVerdict,
 	readUserItemIds,
@@ -508,6 +510,7 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 				resumed: state.resumed,
 				pidPressure: context.pidLevel !== "none",
 				pidBrownout: context.pidLevel === "brownout",
+				pipelinePaused: settings.pipeline.paused,
 				settings: config.watchdog.stall,
 				reviewSettleMs: snapshot.reviewSettleMs,
 				now: context.now,
@@ -707,6 +710,15 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 		}
 
 		if (full) {
+			if (settings.pipeline.paused) {
+				const pipelineState = await deps.store.load(workspaceId);
+				const heldQaCardIds = cards.flatMap(({ column, card }) =>
+					column === "backlog" && readQaGateEntry(pipelineState.cards[card.id])?.status === "queued"
+						? [card.id]
+						: [],
+				);
+				attention.push(formatQaPausedItem({ pausedAt: settings.pipeline.pausedAt, heldQaCardIds }));
+			}
 			if (context.pidUsage && context.pidLevel !== "none") {
 				attention.push(formatPidPressureItem(context.pidUsage, context.pidLevel, context.pressureSweep));
 				if (context.pidLevel === "brownout") {
@@ -800,6 +812,7 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 			...attention.filter(
 				(item) =>
 					!item.includes(PID_PRESSURE_ITEM_MARKER) &&
+					!item.includes(QA_PAUSED_ITEM_MARKER) &&
 					!(context.pidLevel !== "none" && item.includes(PIPELINE_IDLE_ITEM_MARKER)) &&
 					!isHandedOver(item, userItemIds, planHeldIds),
 			),

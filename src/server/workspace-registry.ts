@@ -1,3 +1,4 @@
+import { getWorkspacePipelineSettings, readPipelineConfig } from "../config/pipeline-config";
 import type { RuntimeConfigState } from "../config/runtime-config";
 import type {
 	RuntimeBoardColumnId,
@@ -194,6 +195,7 @@ function toProjectSummary(project: {
 	repoPath: string;
 	taskCounts: RuntimeProjectTaskCounts;
 	orchestratorWait?: RuntimeOrchestratorWait | null;
+	pipelinePaused?: boolean;
 }): RuntimeProjectSummary {
 	const normalized = project.repoPath.replaceAll("\\", "/").replace(/\/+$/g, "");
 	const segments = normalized.split("/").filter((segment) => segment.length > 0);
@@ -204,6 +206,7 @@ function toProjectSummary(project: {
 		name,
 		taskCounts: project.taskCounts,
 		...(project.orchestratorWait !== undefined ? { orchestratorWait: project.orchestratorWait } : {}),
+		...(project.pipelinePaused !== undefined ? { pipelinePaused: project.pipelinePaused } : {}),
 	};
 }
 
@@ -382,6 +385,10 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 				projects.some((project) => project.workspaceId === preferredCurrentProjectId) &&
 				preferredCurrentProjectId) ||
 			fallbackProjectId;
+		// One read for every project's QA pause flag; an unreadable config shows no project as paused.
+		const pipelineConfig = await readPipelineConfig()
+			.then((parsed) => parsed.config)
+			.catch(() => null);
 		const projectSummaries = await Promise.all(
 			projects.map(async (project) => {
 				const taskCounts = await summarizeProjectTaskCounts(project.workspaceId, project.repoPath);
@@ -391,6 +398,9 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 					repoPath: project.repoPath,
 					taskCounts,
 					orchestratorWait: wait ? { kind: wait.kind, since: wait.since } : null,
+					pipelinePaused: pipelineConfig
+						? getWorkspacePipelineSettings(pipelineConfig, project.workspaceId).pipeline.paused
+						: false,
 				});
 			}),
 		);

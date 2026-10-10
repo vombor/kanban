@@ -431,6 +431,8 @@ export const runtimeProjectSummarySchema = z.object({
 	name: z.string(),
 	taskCounts: runtimeProjectTaskCountsSchema,
 	orchestratorWait: runtimeOrchestratorWaitSchema.nullable().optional(),
+	/** The project's QA pipeline is paused (`kanban pipeline pause`, `workspaces.<id>.pipeline.paused`). */
+	pipelinePaused: z.boolean().optional(),
 });
 export type RuntimeProjectSummary = z.infer<typeof runtimeProjectSummarySchema>;
 

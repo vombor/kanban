@@ -93,8 +93,10 @@ off, then run `kanban doctor`.
 The server re-reads config.json every 30 s. A landing-mode, recovery or watchdog change starts or stops the
 pipeline worker without a Kanban restart. `sessionSync.*` is read only at server start.
 
-**Pause the pipeline:** set `pipeline.paused: true` (landing and recovery stop; the watchdog keeps running if it is
-on). There is no `pause` command.
+**Pause one project's QA:** `kanban pipeline pause --workspace <id> [--reason …]`, then `kanban pipeline resume`
+(the user or that project's orchestrator). QA cards queue in Backlog unstarted, nothing lands, no rework is sent;
+the board shows "QA paused" (WORKFLOW.md §4). **Pause the whole pipeline** (every project): set `pipeline.paused:
+true` (landing and recovery stop; the watchdog keeps running if it is on).
 
 **Worker on a newer build** (the dev pod's live-fix loop): set `pipeline.workerEntry` to that build's
 `dist/cli.js`. The host restarts a worker that exits, after a growing delay.
@@ -106,6 +108,7 @@ on). There is no `pause` command.
 | Approve & land without QA (landing `qa`) | the card's Approve & land button, or `kanban task approve --task-id <id>` |
 | Done on a card with unlanded work | `kanban task done --task-id <id> --land` or `--discard` (the browser asks "land or discard?"; a Done with no choice is refused). On landing `off`/`commit`/`pr` there is nothing to land: commit it (Commit / Open PR) or `--discard` (the browser asks "discard uncommitted work?"); pushed work passes |
 | Hand an escalated card back | `kanban task handback --task-id <id> --note "<why>" [--extra-rounds N] [--by NAME]`; after a STALLED QA round it goes to Review for a new QA round with the kit's current QA model (no `--extra-rounds` there) |
+| Pause / resume one project's QA | `kanban pipeline pause\|resume [--workspace <id>] [--reason …]` (the user and the project's orchestrator; QA cards queue in Backlog unstarted, nothing lands; logged as stage `pause`) |
 | Snapshot a Review card again and QA it | `kanban task resubmit --task-id <id>` (landing qa; the user and the project's orchestrator, never a card; logged as stage `resubmit`) |
 | Release a held PASS (runoff) | `kanban task release-hold --task-id <id> --land` or `--discard [--tag preserve/<id>-<model>] [--note …]` |
 | Who moved a card to Done, or deleted it | `kanban task history [<id>] [--limit N]`: every Done (also refused or skipped ones) and every delete from `data/<ws>/task-history.jsonl`, with trigger (`cli`, `browser`, `approve`, `auto_review`, `pipeline`, `hold_release`, `watchdog`), caller (user, card or orchestrator session, unknown; `null` for in-process triggers), from-column, landing choice and outcome, sessions stopped, worktree deleted |

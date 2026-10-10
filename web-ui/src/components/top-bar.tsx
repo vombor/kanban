@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { OrchestratorWaitBadge } from "@/components/orchestrator-wait-badge";
+import { QaPausedTag } from "@/components/qa-paused-tag";
 import { HEADER_ROW_HEIGHT_CLASS } from "@/components/shared/header-row";
 import {
 	getRuntimeShortcutIconComponent,
@@ -310,6 +311,7 @@ export function TopBar({
 	hideProjectDependentActions = false,
 	showAgentHints = false,
 	orchestratorWaitCount = 0,
+	qaPaused = false,
 }: {
 	onToggleSidebar?: () => void;
 	onBack?: () => void;
@@ -346,6 +348,8 @@ export function TopBar({
 	 * menu, the detail view's back button), where the sidebar's own badges are hidden.
 	 */
 	orchestratorWaitCount?: number;
+	/** The current project's QA pipeline is paused (`kanban pipeline pause`). */
+	qaPaused?: boolean;
 }): React.ReactElement {
 	const isMobile = useIsMobile();
 	const displayWorkspacePath = workspacePath ? formatPathForDisplay(workspacePath) : null;
@@ -487,6 +491,7 @@ export function TopBar({
 									{workspaceHint}
 								</span>
 							) : null}
+							{!hideProjectDependentActions && qaPaused ? <QaPausedTag /> : null}
 							{!hideProjectDependentActions && runtimeHint ? (
 								onOpenSettings ? (
 									<button

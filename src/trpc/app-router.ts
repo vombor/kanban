@@ -174,6 +174,11 @@ import {
 	type RuntimeKitSettingsApi,
 } from "./kit-settings-api";
 import {
+	pipelinePauseRequestSchema,
+	pipelinePauseResponseSchema,
+	type RuntimePipelinePauseApi,
+} from "./pipeline-pause-api";
+import {
 	type RuntimePipelineResubmitApi,
 	taskResubmitRequestSchema,
 	taskResubmitResponseSchema,
@@ -240,6 +245,8 @@ export interface RuntimeTrpcContext {
 	pipelineResubmitApi?: RuntimePipelineResubmitApi;
 	/** `kanban models vet`'s provider capacity wait (src/trpc/provider-capacity-api.ts); absent = not available. */
 	providerCapacityApi?: RuntimeProviderCapacityApi;
+	/** `kanban pipeline pause|resume` (src/trpc/pipeline-pause-api.ts); absent = not available. */
+	pipelinePauseApi?: RuntimePipelinePauseApi;
 	runtimeApi: {
 		loadConfig: (scope: RuntimeTrpcWorkspaceScope | null) => Promise<RuntimeConfigResponse>;
 		saveConfig: (
@@ -907,9 +914,30 @@ export const runtimeAppRouter = t.router({
 				});
 			}),
 	}),
-	// A Review dev card snapshotted again and sent to the QA gate (src/trpc/pipeline-resubmit-api.ts): the user's and
-	// that project's orchestrator's.
+	// A Review dev card snapshotted again and sent to the QA gate (src/trpc/pipeline-resubmit-api.ts), and the
+	// workspace's QA pipeline paused or resumed (src/trpc/pipeline-pause-api.ts): the user's and that project's
+	// orchestrator's.
 	pipeline: t.router({
+		setPaused: workspaceProcedure
+			.input(pipelinePauseRequestSchema)
+			.output(pipelinePauseResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.pipelinePauseApi) {
+					return {
+						ok: false,
+						paused: false,
+						changed: false,
+						pausedAt: null,
+						error: "Pausing the pipeline is not available here.",
+					};
+				}
+				// In every isolation mode: a session without its credential is traced to its process tree.
+				return await ctx.pipelinePauseApi.setPaused({
+					caller: await readStrictCaller(ctx),
+					workspaceId: ctx.workspaceScope.workspaceId,
+					request: input,
+				});
+			}),
 		resubmit: workspaceProcedure
 			.input(taskResubmitRequestSchema)
 			.output(taskResubmitResponseSchema)
