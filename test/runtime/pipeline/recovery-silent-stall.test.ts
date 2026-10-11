@@ -112,6 +112,7 @@ describe("recovery: silent stalls of Cline cards", () => {
 			},
 			cleanGeneratedReports: async () => [],
 			tagRestartWip: async () => null,
+			repairWorktreeIndex: async () => null,
 			hasTrackedChanges: async () => false,
 			readManifest: async () => null,
 			removeManifest: async () => {},

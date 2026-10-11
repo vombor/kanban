@@ -2,9 +2,9 @@
 // the one write Kanban makes on its own (issue #31; otherwise nothing under ~/.cline, user rule 2026-10-07): copy the file as read into the Kanban home's backups (`<home>/backups/cline/`, never next to
 // Cline's files; Cline's settings can hold API keys, so the copy is 0600), then replace the file atomically with its
 // own mode. Used by apply-lemonade-models and the context sync (models.json) and store-bedrock-key (providers.json).
-import { chmod, mkdir, rename, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, stat, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
-
+import { renameDurably, writeFileSynced } from "../fs/durable-file";
 import { getKanbanBackupsPath } from "../state/kanban-home";
 
 const BACKUP_MODE = 0o600;
@@ -53,8 +53,8 @@ export async function backupClineFile(input: {
 export async function replaceClineFileAtomically(path: string, content: string): Promise<void> {
 	const mode = (await stat(path)).mode & 0o7777;
 	const tempPath = `${path}.tmp.${process.pid}.${Date.now()}`;
-	await writeFile(tempPath, content, { encoding: "utf8", mode });
+	await writeFileSynced(tempPath, content, { encoding: "utf8", mode });
 	// writeFile's mode is masked by the umask; the replacement keeps the original's mode exactly.
 	await chmod(tempPath, mode);
-	await rename(tempPath, path);
+	await renameDurably(tempPath, path);
 }

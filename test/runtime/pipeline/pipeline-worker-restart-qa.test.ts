@@ -100,6 +100,7 @@ describe("pipeline worker: QA cards orphaned by a restart", () => {
 					},
 					cleanGeneratedReports: async () => [],
 					tagRestartWip: async () => null,
+					repairWorktreeIndex: async () => null,
 					hasTrackedChanges: async () => false,
 					readManifest: async () => null,
 					removeManifest: async () => {},

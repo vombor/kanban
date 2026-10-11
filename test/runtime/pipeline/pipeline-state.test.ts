@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -81,6 +81,62 @@ describe("pipeline state store", () => {
 		await expect(store.load("foo")).rejects.toThrow(/not a version 1 pipeline state/u);
 		await expect(store.update("foo", (state) => state)).rejects.toThrow(/not a version 1 pipeline state/u);
 		expect(JSON.parse(readFileSync(path, "utf8")).version).toBe(2);
+	});
+
+	it("reads a file an unclean stop left empty as no state and replaces it on the first write, without the legacy import", async () => {
+		const root = tempRoot();
+		const path = join(root, "foo", "pipeline-state.json");
+		const legacyPath = join(root, "legacy", "checks-state.json");
+		mkdirSync(dirname(legacyPath), { recursive: true });
+		writeFileSync(legacyPath, JSON.stringify({ "old-card": { snapshot: "stale" } }));
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(path, "");
+		const logs: string[] = [];
+		const store = createPipelineStateStore({
+			now: () => NOW,
+			getStatePath: () => path,
+			getLegacyChecksStatePaths: () => [legacyPath],
+			log: (message) => logs.push(message),
+		});
+
+		await expect(store.peek("foo")).resolves.toBeNull();
+		await expect(store.peek("foo")).resolves.toBeNull();
+		expect(readFileSync(path, "utf8")).toBe("");
+		expect(logs).toHaveLength(1);
+		expect(logs[0]).toMatch(/is empty \(0 bytes\), probably left by an unclean stop/u);
+
+		const state = await store.update("foo", (current) => ({ ...current, cards: { "dev-1": { snapshot: "x" } } }));
+		expect(state).toEqual({
+			version: 1,
+			since: new Date(NOW).toISOString(),
+			importedFrom: null,
+			cards: { "dev-1": { snapshot: "x" } },
+		});
+		expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(state);
+		expect(logs[1]).toMatch(/was empty \(0 bytes\); started a new pipeline state/u);
+		expect(readdirSync(dirname(path))).toEqual(["pipeline-state.json"]);
+	});
+
+	it("keeps a cut-short state file next to the new one and loads past it", async () => {
+		const root = tempRoot();
+		const path = join(root, "foo", "pipeline-state.json");
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(path, '{"version":1,"since":"2026-10-01T00:00:00.000Z","cards":{"a":');
+		const logs: string[] = [];
+		const store = createPipelineStateStore({
+			now: () => NOW,
+			getStatePath: () => path,
+			getLegacyChecksStatePaths: () => [],
+			log: (message) => logs.push(message),
+		});
+
+		const state = await store.load("foo");
+		expect(state.cards).toEqual({});
+		expect(state.since).toBe(new Date(NOW).toISOString());
+		const copy = join(dirname(path), "pipeline-state.json.damaged-20261007T100000Z");
+		expect(readFileSync(copy, "utf8")).toContain('"cards":{"a":');
+		expect(logs.at(-1)).toContain(`the damaged file is kept as ${copy}`);
+		await expect(store.peek("foo")).resolves.toEqual(state);
 	});
 
 	it("keeps its files under <home>/data/<workspace> and looks for the legacy kit's state there and in ~/.kanban/data", async () => {

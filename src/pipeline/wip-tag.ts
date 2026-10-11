@@ -12,6 +12,7 @@ import { join } from "node:path";
 
 import { createGitProcessEnv } from "../core/git-process-env";
 import { runGit } from "../workspace/git-utils";
+import { isUnreadableIndexError } from "../workspace/worktree-index-health";
 
 export const KANBAN_GIT_IDENTITY = {
 	GIT_AUTHOR_NAME: "Kanban",
@@ -58,7 +59,14 @@ export async function commitWorktreeState(worktreePath: string, message: string)
 			await copyFile(realIndex.stdout, indexFile).catch(() => {});
 		}
 		const env = createGitProcessEnv({ GIT_INDEX_FILE: indexFile, ...KANBAN_GIT_IDENTITY });
-		if (!(await runGit(worktreePath, ["add", "-A"], { env })).ok) {
+		let added = await runGit(worktreePath, ["add", "-A"], { env });
+		if (!added.ok && isUnreadableIndexError(added.stderr)) {
+			// An unclean stop left the real index unreadable (issue #36): the worktree's files are all there, so the tag
+			// starts from an empty index (tracked files that are git-ignored are left out, nothing else).
+			await rm(indexFile, { force: true });
+			added = await runGit(worktreePath, ["add", "-A"], { env });
+		}
+		if (!added.ok) {
 			return null;
 		}
 		const tree = await runGit(worktreePath, ["write-tree"], { env });

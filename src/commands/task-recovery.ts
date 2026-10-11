@@ -35,6 +35,11 @@ import { loadWorkspaceContext, mutateWorkspaceState } from "../state/workspace-s
 import { runGit } from "../workspace/git-utils";
 import { getTaskWorkspacePathInfo } from "../workspace/task-worktree";
 import {
+	describeWorktreeIndexRepair,
+	findUnreadableWorktreeIndex,
+	repairUnreadableWorktreeIndex,
+} from "../workspace/worktree-index-health";
+import {
 	createRuntimeTrpcClient,
 	notifyRuntimeWorkspaceStateUpdated,
 	type RuntimeTrpcClient,
@@ -197,12 +202,24 @@ async function resumeOne(workspace: TaskWorkspace, taskId: string, dryRun: boole
 		return { taskId, ok: false, error: "its session is still running; use kanban task send" };
 	}
 	const worktree = await locateWorktree(workspace.repoPath, card);
-	const hasWip = worktree ? await hasTrackedChanges(worktree) : false;
 	const wipTag = worktree
 		? dryRun
 			? await nextRestartWipTag(worktree, taskId, new Date())
 			: await tagRestartWip(worktree, taskId)
 		: null;
+	// After the tag, as restart recovery does: an unclean stop can leave the index unreadable (issue #36).
+	const unreadableIndex = worktree && dryRun ? await findUnreadableWorktreeIndex(worktree) : null;
+	const indexRepair = worktree && !dryRun ? await repairUnreadableWorktreeIndex(worktree) : null;
+	if (indexRepair && !indexRepair.repaired) {
+		return {
+			taskId,
+			ok: false,
+			wipTag,
+			worktree,
+			error: `not resumed: ${describeWorktreeIndexRepair(indexRepair)}; rebuild it (git -C ${worktree} read-tree HEAD) and resume again`,
+		};
+	}
+	const hasWip = worktree ? await hasTrackedChanges(worktree) : false;
 	const agentId = await resolveCardAgent(workspace, card);
 	const launch = buildRestartResumeLaunch(agentId, card.prompt, hasWip);
 	const result: JsonRecord = {
@@ -215,6 +232,8 @@ async function resumeOne(workspace: TaskWorkspace, taskId: string, dryRun: boole
 		workInProgress: hasWip,
 		continuesConversation: launch.continueConversation,
 		worktree,
+		...(unreadableIndex ? { indexUnreadable: unreadableIndex.error } : {}),
+		...(indexRepair ? { indexRepaired: describeWorktreeIndexRepair(indexRepair) } : {}),
 	};
 	if (dryRun) {
 		return { ...result, ok: true, dryRun: true };
@@ -226,15 +245,20 @@ async function resumeOne(workspace: TaskWorkspace, taskId: string, dryRun: boole
 		requireNewTurn: true,
 	});
 	// A card restart recovery marked as orphaned is no longer one, and a resume by hand ends a recovery escalation.
-	await updateTrackedPipelineCardFlow(workspace.workspaceId, taskId, (qaflow) => ({
+	// The session runs by now, so a failure here is a warning, not a failed resume.
+	const flowWarning = await updateTrackedPipelineCardFlow(workspace.workspaceId, taskId, (qaflow) => ({
 		...qaflow,
 		orphan: null,
 		escalated: null,
 		liveHold: null,
 		capacityStop: null,
 		retryAt: null,
-	}));
-	return { ...result, ok: true, sessionState: started.state };
+	})).then(
+		() => null,
+		(error: unknown) =>
+			`resumed, but its pipeline state was not updated (orphan mark, escalation and holds not cleared): ${error instanceof Error ? error.message : String(error)}`,
+	);
+	return { ...result, ok: true, sessionState: started.state, ...(flowWarning ? { warning: flowWarning } : {}) };
 }
 
 export async function resumeTasks(input: {

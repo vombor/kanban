@@ -8,12 +8,13 @@
 // models.json (Lemonade) steps only check: the Lemonade ones print the `kanban cline apply-lemonade-models` line the
 // user runs (user's choice, 2026-10-07), the providers one checks that providers.json stores the Bedrock key and
 // region Cline's TUI needs and prints `kanban cline store-bedrock-key` (issue #9, 2026-10-08).
-import { chmod, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { type LemonadeModelListSettings, readLemonadeModelListSettings } from "../config/model-lists-config";
 import type { PipelineConfig } from "../config/pipeline-config";
+import { renameDurably, writeFileSynced } from "../fs/durable-file";
 import { getClineModelsSettingsPath, getClineProvidersSettingsPath } from "../state/kanban-home";
 import {
 	CLAUDE_MD_SECTION,
@@ -121,9 +122,9 @@ async function writeFileKeepingMode(path: string, content: string, newMode = 0o6
 		await mkdir(dirname(path), { recursive: true });
 	}
 	const tempPath = `${path}.tmp.${process.pid}.${Date.now()}`;
-	await writeFile(tempPath, content, { encoding: "utf8", mode });
+	await writeFileSynced(tempPath, content, { encoding: "utf8", mode });
 	await chmod(tempPath, mode);
-	await rename(tempPath, path);
+	await renameDurably(tempPath, path);
 }
 
 // Quiet npm (user request 2026-10-05): hide "npm notice" lines and npm run banners; warnings and errors still show.

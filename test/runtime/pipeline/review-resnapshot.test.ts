@@ -71,6 +71,7 @@ describe("a turn that ends while the card is already in Review (issue #20)", () 
 								act: async () => ({ ok: true, status: "delivered", evidence: "output" }),
 								cleanGeneratedReports: async () => [],
 								tagRestartWip: async () => null,
+								repairWorktreeIndex: async () => null,
 								hasTrackedChanges: async () => false,
 								readManifest: async () => null,
 								removeManifest: async () => {},

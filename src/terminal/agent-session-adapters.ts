@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { access, mkdir, readdir, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -14,6 +14,7 @@ import type {
 import { isHomeAgentSessionId } from "../core/home-agent-session";
 import { buildKanbanCommandParts } from "../core/kanban-command";
 import { quoteShellArg } from "../core/shell";
+import { renameDurably, writeFileSynced } from "../fs/durable-file";
 import { lockedFileSystem } from "../fs/locked-file-system";
 import {
 	buildGuardrailPromptNote,
@@ -1985,8 +1986,11 @@ async function addCopilotTrustedFolder(folderPath: string): Promise<string | nul
 			await mkdir(copilotHome, { recursive: true });
 			// Temp file + rename, so Copilot never reads a half-written config.
 			const tempPath = `${configPath}.kanban-${process.pid}.tmp`;
-			await writeFile(tempPath, `${header}${JSON.stringify(config, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-			await rename(tempPath, configPath);
+			await writeFileSynced(tempPath, `${header}${JSON.stringify(config, null, 2)}\n`, {
+				encoding: "utf8",
+				mode: 0o600,
+			});
+			await renameDurably(tempPath, configPath);
 		}
 		return null;
 	} catch (error) {

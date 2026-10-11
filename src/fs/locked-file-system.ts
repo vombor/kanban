@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { LockOptions } from "proper-lockfile";
 import * as lockfile from "proper-lockfile";
+
+import { renameDurably, writeFileSynced } from "./durable-file";
 
 const DEFAULT_LOCK_STALE_MS = 10_000;
 const DEFAULT_LOCK_RETRIES: NonNullable<LockOptions["retries"]> = {
@@ -153,8 +155,8 @@ export class LockedFileSystem {
 			}
 			await mkdir(dirname(path), { recursive: true });
 			const tempPath = `${path}.tmp.${process.pid}.${Date.now()}.${randomUUID()}`;
-			await writeFile(tempPath, content, "utf8");
-			await rename(tempPath, path);
+			await writeFileSynced(tempPath, content, { encoding: "utf8" });
+			await renameDurably(tempPath, path);
 			if (options.executable) {
 				await chmod(path, 0o755);
 			}

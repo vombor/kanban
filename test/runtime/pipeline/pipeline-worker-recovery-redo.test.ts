@@ -85,6 +85,7 @@ describe("pipeline worker: a turn recovery redoes", () => {
 					},
 					cleanGeneratedReports: async () => [],
 					tagRestartWip: async () => null,
+					repairWorktreeIndex: async () => null,
 					hasTrackedChanges: async () => false,
 					readManifest: async () => null,
 					removeManifest: async () => {},

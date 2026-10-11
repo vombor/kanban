@@ -4,11 +4,11 @@
 // is only ever read by the server process to sign app JWTs (app-jwt.ts): never logged, never in config.json, a
 // project repo, an error message or an agent's env or prompt. `describeGitHubApp` is the key-free view everything
 // else gets.
-import { chmod, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import { z } from "zod";
-
+import { renameDurably, writeFileSynced } from "../fs/durable-file";
 import { getGitHubAppCredentialsPath } from "../state/kanban-home";
 
 export const GITHUB_APP_CREDENTIALS_VERSION = 1;
@@ -113,12 +113,12 @@ export async function writeGitHubAppCredentials(
 	await mkdir(dir, { recursive: true, mode: DIR_MODE });
 	await chmod(dir, DIR_MODE);
 	const temp = `${path}.${process.pid}.${Date.now()}.tmp`;
-	await writeFile(temp, `${JSON.stringify(githubAppCredentialsSchema.parse(credentials), null, "\t")}\n`, {
+	await writeFileSynced(temp, `${JSON.stringify(githubAppCredentialsSchema.parse(credentials), null, "\t")}\n`, {
 		mode: FILE_MODE,
 		flag: "wx",
 	});
 	await chmod(temp, FILE_MODE);
-	await rename(temp, path);
+	await renameDurably(temp, path);
 }
 
 export interface GitHubAppFileModes {

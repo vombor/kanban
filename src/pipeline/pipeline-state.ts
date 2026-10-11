@@ -10,7 +10,13 @@
 // pipeline-state.json. Ported from archive/devteam-kit:services/kanban-autoland.mjs@6da71597 (updateState: a bare
 // string entry predates CHECKS_VERSION and is just the checked snapshot; initQaflowSince: `_qaflow.since` is the
 // go-live time, and verdicts older than it are never acted on, so a restart or an import doesn't act on old ones).
-import { readFile } from "node:fs/promises";
+//
+// A file a crash left empty or cut short (notes, 2026-10-11 ~17:14Z: 0 bytes after an unclean stop, and every
+// evaluation of the workspace, restart recovery included, failed on "Unexpected end of JSON input"; issue #36) is
+// read as no state: `peek` answers null, and the first write sets the damaged copy aside and starts a new state from
+// now, without the legacy import (Kanban's state was the newer one) and with `since` now, so no verdict written
+// before the loss is acted on again. A file that parses but isn't this version still refuses (never overwritten).
+import { readFile, rename } from "node:fs/promises";
 import { z } from "zod";
 
 import { lockedFileSystem } from "../fs/locked-file-system";
@@ -80,6 +86,37 @@ async function readJsonIfExists(path: string): Promise<unknown> {
 		}
 		throw error;
 	}
+}
+
+async function readTextIfExists(path: string): Promise<string | null> {
+	try {
+		return await readFile(path, "utf8");
+	} catch (error) {
+		if (isMissingFileError(error)) {
+			return null;
+		}
+		throw error;
+	}
+}
+
+/** Why a state file is damaged (empty, or not JSON at all), or null when it is JSON. */
+export function describeDamagedStateText(text: string): string | null {
+	if (text.trim() === "") {
+		return `empty (${Buffer.byteLength(text)} bytes)`;
+	}
+	try {
+		JSON.parse(text);
+		return null;
+	} catch (error) {
+		return `not JSON (${error instanceof Error ? error.message : String(error)})`;
+	}
+}
+
+function damagedCopyStamp(at: number): string {
+	return new Date(at)
+		.toISOString()
+		.replace(/[-:]/g, "")
+		.replace(/\.\d+Z$/, "Z");
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -187,18 +224,56 @@ export function createPipelineStateStore(options: CreatePipelineStateStoreOption
 	const getLegacyPaths =
 		options.getLegacyChecksStatePaths ?? ((workspaceId: string) => getLegacyKitChecksStatePaths(workspaceId));
 
-	const readState = async (workspaceId: string): Promise<PipelineWorkspaceState | null> => {
+	// path → the damage last logged for it, so a damaged file read on every evaluation is logged once.
+	const loggedDamage = new Map<string, string>();
+
+	type ReadResult = { state: PipelineWorkspaceState } | { damaged: string } | null;
+
+	const readStateFile = async (workspaceId: string): Promise<ReadResult> => {
 		const path = getStatePath(workspaceId);
-		const raw = await readJsonIfExists(path);
-		if (raw === undefined) {
+		const text = await readTextIfExists(path);
+		if (text === null) {
 			return null;
 		}
-		const parsed = pipelineWorkspaceStateSchema.safeParse(raw);
+		const damaged = describeDamagedStateText(text);
+		if (damaged) {
+			if (loggedDamage.get(path) !== damaged) {
+				loggedDamage.set(path, damaged);
+				options.log?.(
+					`pipeline ${workspaceId}: ${path} is ${damaged}, probably left by an unclean stop; read as no state until the next write replaces it`,
+				);
+			}
+			return { damaged };
+		}
+		loggedDamage.delete(path);
+		const parsed = pipelineWorkspaceStateSchema.safeParse(JSON.parse(text));
 		if (!parsed.success) {
 			// Never overwrite a file we can't read: a newer version or a hand edit would be lost.
 			throw new Error(`${path} is not a version ${PIPELINE_STATE_VERSION} pipeline state: ${parsed.error.message}`);
 		}
-		return parsed.data;
+		return { state: parsed.data };
+	};
+
+	const readState = async (workspaceId: string): Promise<PipelineWorkspaceState | null> => {
+		const result = await readStateFile(workspaceId);
+		return result && "state" in result ? result.state : null;
+	};
+
+	/** A new state in place of a damaged file, which is kept next to it (an empty one is just replaced). */
+	const replaceDamagedState = async (workspaceId: string, damaged: string): Promise<PipelineWorkspaceState> => {
+		const path = getStatePath(workspaceId);
+		const at = now();
+		let kept = "";
+		if (!damaged.startsWith("empty")) {
+			const copy = `${path}.damaged-${damagedCopyStamp(at)}`;
+			await rename(path, copy);
+			kept = `; the damaged file is kept as ${copy}`;
+		}
+		const since = new Date(at).toISOString();
+		options.log?.(
+			`pipeline ${workspaceId}: ${path} was ${damaged}; started a new pipeline state (since ${since}, no legacy import): card history from before is gone, and verdicts written before now are not acted on${kept}`,
+		);
+		return { version: PIPELINE_STATE_VERSION, since, importedFrom: null, cards: {} };
 	};
 
 	const createInitialState = async (workspaceId: string): Promise<PipelineWorkspaceState> => {
@@ -227,7 +302,13 @@ export function createPipelineStateStore(options: CreatePipelineStateStoreOption
 	const update: PipelineStateStore["update"] = async (workspaceId, mutate) => {
 		const path = getStatePath(workspaceId);
 		return await lockedFileSystem.withLock({ path, type: "file" }, async () => {
-			const current = (await readState(workspaceId)) ?? (await createInitialState(workspaceId));
+			const read = await readStateFile(workspaceId);
+			const current =
+				read === null
+					? await createInitialState(workspaceId)
+					: "damaged" in read
+						? await replaceDamagedState(workspaceId, read.damaged)
+						: read.state;
 			const next = pipelineWorkspaceStateSchema.parse(mutate(structuredClone(current)));
 			await lockedFileSystem.writeJsonFileAtomic(path, next, { lock: null });
 			return next;

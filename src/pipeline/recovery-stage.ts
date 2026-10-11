@@ -24,6 +24,7 @@ import { getAgentRecoveryProfile, getAgentTurnEndSource } from "../terminal/agen
 import type { ClineSessionDetail } from "../terminal/cline-session-files";
 import { isClineSessionOfRun, isClineShellToolPending } from "../terminal/cline-turn-check";
 import { evaluateClineTurnEnd } from "../terminal/cline-turn-outcome";
+import { describeWorktreeIndexRepair, type WorktreeIndexRepair } from "../workspace/worktree-index-health";
 import type { PipelineDecisionRecord } from "./decision-log";
 import { getRecoveryScope, type PipelineSessionView, type PipelineWorkspaceSnapshot, toEffectiveCard } from "./engine";
 import type { PipelineWorkspaceState } from "./pipeline-state";
@@ -97,6 +98,11 @@ export interface RecoveryStageDependencies {
 	/** Deletes gitignored generated report dirs from a worktree; returns the dirs removed. */
 	cleanGeneratedReports: (worktreePath: string) => Promise<string[]>;
 	tagRestartWip: (worktreePath: string, taskId: string) => Promise<string | null>;
+	/**
+	 * Rebuilds a worktree index git can't read (an unclean stop, issue #36) after the WIP tag, or null when it is
+	 * readable (repairUnreadableWorktreeIndex).
+	 */
+	repairWorktreeIndex: (worktreePath: string) => Promise<WorktreeIndexRepair | null>;
 	hasTrackedChanges: (worktreePath: string) => Promise<boolean>;
 	readManifest: (workspaceId: string) => Promise<RestartManifest | null>;
 	/** Deletes the manifest recovery planned with, unless the file has been replaced since (removeRestartManifest). */
@@ -572,6 +578,19 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 			}
 			const worktree = await deps.locateWorktree(current.snapshot.workspacePath, context.card);
 			const wipTag = orphan.wipTag ?? (worktree ? await deps.tagRestartWip(worktree, orphan.taskId) : null);
+			// After the tag, which keeps what was only staged; the agent's own git commands fail on an unreadable index.
+			const indexRepair = worktree ? await deps.repairWorktreeIndex(worktree) : null;
+			if (indexRepair && !indexRepair.repaired) {
+				// The orphan mark stays, so the watchdog reports the card after its restart grace.
+				await deps.appendRecords([
+					record(
+						"failed",
+						`not resumed: ${describeWorktreeIndexRepair(indexRepair)}${wipTag ? `; WIP tag ${wipTag}` : ""}; by hand: rebuild the index (git -C ${worktree} read-tree HEAD), then kanban task resume ${orphan.taskId}`,
+						context,
+					),
+				]);
+				continue;
+			}
 			const hasWip = worktree ? await deps.hasTrackedChanges(worktree) : false;
 			const agentId = context.effective.effective.agentId;
 			const launch = buildRestartResumeLaunch(agentId, context.card.prompt, hasWip);
@@ -609,7 +628,7 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 			await deps.appendRecords([
 				record(
 					"acted",
-					`resumed on ${model} (${wipTag ? `WIP tag ${wipTag}` : "no WIP tag"}${orphan.earlierWipTag ? `; the manifest's earlier tag ${orphan.earlierWipTag} not reused` : ""}${launch.continueConversation ? ", conversation continued" : hasWip ? ", WIP note" : ", fresh"}); no FAIL round, nudge or escalation counted`,
+					`resumed on ${model} (${wipTag ? `WIP tag ${wipTag}` : "no WIP tag"}${indexRepair ? `; ${describeWorktreeIndexRepair(indexRepair)}` : ""}${orphan.earlierWipTag ? `; the manifest's earlier tag ${orphan.earlierWipTag} not reused` : ""}${launch.continueConversation ? ", conversation continued" : hasWip ? ", WIP note" : ", fresh"}); no FAIL round, nudge or escalation counted`,
 					context,
 				),
 			]);

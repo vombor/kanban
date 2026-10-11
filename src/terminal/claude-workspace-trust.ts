@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { Stats } from "node:fs";
-import { readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { readFile, realpath, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import type { RuntimeAgentId } from "../core/api-contract";
+import { renameDurably, writeFileSynced } from "../fs/durable-file";
 import { getTaskWorktreeSearchRootPaths } from "../state/kanban-home";
 import {
 	type AgentWorkspaceTrustResult,
@@ -138,7 +139,7 @@ async function writeClaudeProjectTrust(
 		};
 		const tempPath = `${realConfigFilePath}.kanban-${process.pid}-${randomUUID()}.tmp`;
 		try {
-			await writeFile(tempPath, JSON.stringify(config, null, 2), { mode: before.mode & 0o777 });
+			await writeFileSynced(tempPath, JSON.stringify(config, null, 2), { mode: before.mode & 0o777 });
 			const now = await stat(realConfigFilePath);
 			if (
 				now.mtimeMs !== before.mtimeMs ||
@@ -148,7 +149,7 @@ async function writeClaudeProjectTrust(
 				lastError = "file changed while editing";
 				continue;
 			}
-			await rename(tempPath, realConfigFilePath);
+			await renameDurably(tempPath, realConfigFilePath);
 		} catch (error) {
 			lastError = `write: ${error instanceof Error ? error.message : String(error)}`;
 			continue;

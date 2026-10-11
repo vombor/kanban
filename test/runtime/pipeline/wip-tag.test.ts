@@ -6,6 +6,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stripReworkSections } from "../../../src/commands/task-recovery";
 import { cleanGeneratedReports } from "../../../src/pipeline/recovery-runtime";
 import { hasTrackedChanges, nextRestartWipTag, preserveWorktree, tagRestartWip } from "../../../src/pipeline/wip-tag";
+import {
+	findUnreadableWorktreeIndex,
+	repairUnreadableWorktreeIndex,
+} from "../../../src/workspace/worktree-index-health";
 import { createGitTestEnv } from "../../utilities/git-env";
 import { createTempDir } from "../../utilities/temp-dir";
 
@@ -57,6 +61,32 @@ describe("WIP tags (archive/devteam-kit:lib/resume.mjs tagWip)", () => {
 			"preserve/abc12-luna",
 		);
 		expect(git(repo, ["show", "preserve/abc12-luna:a.txt"])).toBe("three");
+	});
+
+	it("tags the work of a worktree whose index an unclean stop left empty, then the repair rebuilds the index (issue #36)", async () => {
+		writeFileSync(join(repo, "a.txt"), "two\n");
+		writeFileSync(join(repo, "staged.txt"), "staged\n");
+		git(repo, ["add", "staged.txt"]);
+		const indexPath = join(repo, ".git", "index");
+		writeFileSync(indexPath, "");
+		expect(await findUnreadableWorktreeIndex(repo)).toEqual({
+			indexPath,
+			error: expect.stringContaining("index file smaller than expected"),
+		});
+
+		const tag = await tagRestartWip(repo, "abc12", new Date("2026-10-11T17:58:00.000Z"));
+		expect(tag).toBe("preserve/abc12-wip-20261011T1758-restart");
+		expect(git(repo, ["show", `${tag}:a.txt`])).toBe("two");
+		expect(git(repo, ["show", `${tag}:staged.txt`])).toBe("staged");
+		expect(readFileSync(indexPath, "utf8")).toBe("");
+
+		const repair = await repairUnreadableWorktreeIndex(repo, new Date("2026-10-11T17:58:30.000Z"));
+		expect(repair).toMatchObject({ repaired: true, indexPath, keptAs: `${indexPath}.damaged-20261011T175830Z` });
+		expect(readFileSync(`${indexPath}.damaged-20261011T175830Z`, "utf8")).toBe("");
+		expect(git(repo, ["status", "--porcelain"])).toBe("M a.txt\n?? staged.txt");
+		expect(await findUnreadableWorktreeIndex(repo)).toBeNull();
+		expect(await repairUnreadableWorktreeIndex(repo)).toBeNull();
+		expect(await hasTrackedChanges(repo)).toBe(true);
 	});
 
 	it("cleans only gitignored generated reports (0a3d1fc)", async () => {

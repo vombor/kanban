@@ -4,9 +4,9 @@
 // prune-done may delete its cards (the legacy kit read that from results.md plus its log).
 //
 // Ported from archive/devteam-kit:qa/calibrate.mjs@94247a7 (st.runs, finish, writeResults).
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
-
+import { renameDurably, writeFileSynced } from "../../../fs/durable-file";
 import type { CalibrationPaths } from "../../../state/kanban-home";
 import type { CalibrationRunPlan, CalibrationSpec } from "./calibration-spec";
 
@@ -58,8 +58,8 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 async function writeFileAtomic(path: string, text: string): Promise<void> {
 	await mkdir(dirname(path), { recursive: true });
 	const temporary = `${path}.${process.pid}.tmp`;
-	await writeFile(temporary, text);
-	await rename(temporary, path);
+	await writeFileSynced(temporary, text);
+	await renameDurably(temporary, path);
 }
 
 /** The state file, or an empty state. A file that exists but can't be read is an error (never overwrite a run). */

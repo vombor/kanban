@@ -1,11 +1,12 @@
 // Records scoreboard lines for a workspace and rebuilds its scoreboard.md: the one writer behind the `scoreboard`
 // feature (pipeline events) and `kanban bench record-verdict` (humans, backfills).
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { basename, dirname } from "node:path";
 
 import type { PipelineConfig } from "../../../config/pipeline-config";
 import type { RuntimeAgentId, RuntimeTaskRole } from "../../../core/api-contract";
 import { type CardRoleInput, resolveCardRole } from "../../../core/card-role";
+import { renameDurably, writeFileSynced } from "../../../fs/durable-file";
 import {
 	getClineDataDirPath,
 	getCodexSessionsPath,
@@ -87,8 +88,8 @@ export async function measureCard(input: MeasureCardInput): Promise<MeasuredCard
 async function writeFileAtomic(path: string, text: string): Promise<void> {
 	await mkdir(dirname(path), { recursive: true });
 	const temporary = `${path}.${process.pid}.tmp`;
-	await writeFile(temporary, text);
-	await rename(temporary, path);
+	await writeFileSynced(temporary, text);
+	await renameDurably(temporary, path);
 }
 
 /** The scoreboard title: the workspace's configured name, else its repo dir name, else its id. */

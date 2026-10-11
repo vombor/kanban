@@ -10,12 +10,12 @@ import {
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
-import type * as FsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 
+import type * as DurableFile from "../../../src/fs/durable-file";
 import {
 	ensureClaudeWorkspaceTrusted,
 	getClaudeConfigFilePath,
@@ -35,16 +35,16 @@ const fsHooks = vi.hoisted(() => ({
 	afterRename: null as ((to: string) => Promise<void>) | null,
 }));
 
-vi.mock("node:fs/promises", async (importOriginal) => {
-	const actual = await importOriginal<typeof FsPromises>();
+vi.mock("../../../src/fs/durable-file", async (importOriginal) => {
+	const actual = await importOriginal<typeof DurableFile>();
 	return {
 		...actual,
-		writeFile: async (...args: Parameters<typeof actual.writeFile>) => {
+		writeFileSynced: async (...args: Parameters<typeof actual.writeFileSynced>) => {
 			await fsHooks.beforeWriteFile?.(String(args[0]));
-			return await actual.writeFile(...args);
+			return await actual.writeFileSynced(...args);
 		},
-		rename: async (...args: Parameters<typeof actual.rename>) => {
-			await actual.rename(...args);
+		renameDurably: async (...args: Parameters<typeof actual.renameDurably>) => {
+			await actual.renameDurably(...args);
 			await fsHooks.afterRename?.(String(args[1]));
 		},
 	};

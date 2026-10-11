@@ -89,4 +89,21 @@ describe("kanban task resume", () => {
 			expect.objectContaining({ prompt: RESTART_RESUME_NOTE, agentId: "claude", resumeFromTrash: true }),
 		);
 	});
+
+	it("reports a resume whose session started as resumed when only its pipeline state could not be updated (issue #36)", async () => {
+		mocks.state = { board: createBoard({ in_progress: [createCard({ id: "dev01" })] }), sessions: {} };
+		mocks.updateTrackedPipelineCardFlow.mockRejectedValueOnce(new Error("Unexpected end of JSON input"));
+		const result = await resumeTasks({ cwd: "/repos/foo", taskIds: ["dev01"], dryRun: false });
+		expect(mocks.startTaskSession).toHaveBeenCalledTimes(1);
+		expect(result).toMatchObject({
+			ok: true,
+			results: [
+				{
+					ok: true,
+					sessionState: "running",
+					warning: expect.stringContaining("its pipeline state was not updated"),
+				},
+			],
+		});
+	});
 });

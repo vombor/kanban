@@ -119,6 +119,7 @@ function createHarness(options: HarnessOptions = {}) {
 		},
 		cleanGeneratedReports: async () => [],
 		tagRestartWip: async (_worktree, taskId) => `preserve/${taskId}-wip-20261007T1200-restart`,
+		repairWorktreeIndex: async () => null,
 		hasTrackedChanges: async () => options.trackedChanges ?? true,
 		readManifest: async () => options.manifest ?? null,
 		removeManifest: async (workspaceId) => {
@@ -495,6 +496,50 @@ describe("recovery stage", () => {
 	});
 	const dead = (taskId: string, extra: Partial<PipelineSessionView> = {}) =>
 		session(taskId, { state: "running", live: false, startedAt: SERVER_START - 60_000, ...extra });
+
+	it("rebuilds an orphan's unreadable git index after its WIP tag, and resumes it only once the index is readable (issue #36)", async () => {
+		const harness = createHarness();
+		const order: string[] = [];
+		harness.deps.tagRestartWip = async (_worktree, taskId) => {
+			order.push("tag");
+			return `preserve/${taskId}-wip-20261007T1200-restart`;
+		};
+		harness.deps.repairWorktreeIndex = async (worktree) => {
+			order.push("repair");
+			return {
+				repaired: true,
+				indexPath: `${worktree}/.git/index`,
+				keptAs: `${worktree}/.git/index.damaged-x`,
+				error: "index file smaller than expected",
+			};
+		};
+		harness.deps.hasTrackedChanges = async () => {
+			order.push("wip?");
+			return true;
+		};
+		const records = await harness.evaluate(orphanSnapshot([dead("dev1")]));
+		expect(order).toEqual(["tag", "repair", "wip?"]);
+		expect(harness.actions.filter((action) => action.kind === "resume")).toHaveLength(1);
+		expect(records.at(-1)?.note).toContain(
+			"rebuilt its unreadable git index from HEAD (index file smaller than expected; the damaged one is kept as /wt/dev1/.git/index.damaged-x)",
+		);
+
+		const broken = createHarness();
+		broken.deps.repairWorktreeIndex = async (worktree) => ({
+			repaired: false,
+			indexPath: `${worktree}/.git/index`,
+			error: "fatal: not a tree object",
+		});
+		const failed = await broken.evaluate(orphanSnapshot([dead("dev1")]));
+		expect(broken.actions.filter((action) => action.kind === "resume")).toEqual([]);
+		expect(failed.at(-1)).toMatchObject({ taskId: "dev1", outcome: "failed" });
+		expect(failed.at(-1)?.note).toContain(
+			"its git index is unreadable and could not be rebuilt (fatal: not a tree object)",
+		);
+		expect(failed.at(-1)?.note).toContain("kanban task resume dev1");
+		// The mark stays, so the watchdog reports the card after its restart grace.
+		expect((broken.getCards().dev1?.qaflow as Record<string, unknown>).orphan).toMatchObject({ kind: "dev" });
+	});
 
 	it("clears the orphan mark of a card whose resume failed once the user restarts it by hand", async () => {
 		const harness = createHarness({

@@ -212,6 +212,7 @@ describe("restart recovery at server startup (issue #29)", () => {
 					},
 					cleanGeneratedReports: async () => [],
 					tagRestartWip: async () => "preserve/66ddd-wip-fresh",
+					repairWorktreeIndex: async () => null,
 					hasTrackedChanges: async () => false,
 					readManifest: readRestartManifest,
 					removeManifest: removeRestartManifest,

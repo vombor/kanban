@@ -8,8 +8,9 @@
 //   - xAI / Grok models are never probed (hard rule).
 // The legacy callers (autoland's outage hold, wake-when --model-up) matched /\tTOOL / in the probe's text output,
 // which prints " | "-separated lines, so a Bedrock probe never counted as up. Callers here get `toolCall`.
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { renameDurably, writeFileSynced } from "../fs/durable-file";
 
 export const BEDROCK_PROVIDER_ID = "bedrock";
 export const BEDROCK_API_KEY_ENV = "BEDROCK_API_KEY";
@@ -128,8 +129,8 @@ export async function loadBedrockInferenceProfiles(
 	};
 	await mkdir(dirname(options.cachePath), { recursive: true });
 	const tempPath = `${options.cachePath}.tmp.${process.pid}`;
-	await writeFile(tempPath, `${JSON.stringify(cache, null, 2)}\n`, "utf8");
-	await rename(tempPath, options.cachePath);
+	await writeFileSynced(tempPath, `${JSON.stringify(cache, null, 2)}\n`, { encoding: "utf8" });
+	await renameDurably(tempPath, options.cachePath);
 	return { profiles: listing.profiles, source: "bedrock", warning: null };
 }
 

@@ -16,9 +16,9 @@
 // apply to global.* profiles and get their own "^global\." entries.
 //
 // Ported from archive/devteam-kit:bench/sync-prices.mjs@a3a92b0e.
-import { appendFile, mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
-
+import { renameDurably, writeFileSynced } from "../../../fs/durable-file";
 import type { PricesDataPaths } from "../../../state/kanban-home";
 import {
 	type AwsOfferFile,
@@ -108,8 +108,8 @@ async function readJsonFile<T>(path: string): Promise<T | null> {
 
 async function writeFileAtomic(path: string, text: string): Promise<void> {
 	await mkdir(dirname(path), { recursive: true });
-	await writeFile(`${path}.tmp`, text);
-	await rename(`${path}.tmp`, path);
+	await writeFileSynced(`${path}.tmp`, text);
+	await renameDurably(`${path}.tmp`, path);
 }
 
 async function writeJsonAtomic(path: string, value: unknown): Promise<void> {

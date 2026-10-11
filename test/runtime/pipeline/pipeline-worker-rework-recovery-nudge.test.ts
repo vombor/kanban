@@ -87,6 +87,7 @@ describe("pipeline worker: a rework recovery nudges", () => {
 					},
 					cleanGeneratedReports: async () => [],
 					tagRestartWip: async () => null,
+					repairWorktreeIndex: async () => null,
 					hasTrackedChanges: async () => false,
 					readManifest: async () => null,
 					removeManifest: async () => {},

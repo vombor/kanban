@@ -19,6 +19,7 @@ import {
 } from "../terminal/cline-turn-check";
 import { runGit } from "../workspace/git-utils";
 import { getTaskWorkspacePathInfo } from "../workspace/task-worktree";
+import { repairUnreadableWorktreeIndex } from "../workspace/worktree-index-health";
 import type { PipelineDecisionLog } from "./decision-log";
 import { createPipelineStateStore, type PipelineStateStore } from "./pipeline-state";
 import type { QaGateDependencies } from "./qa-gate";
@@ -175,6 +176,7 @@ export function createWorkerRecoveryStage(options: {
 		act: options.act,
 		cleanGeneratedReports,
 		tagRestartWip: async (worktreePath, taskId) => await tagRestartWip(worktreePath, taskId),
+		repairWorktreeIndex: async (worktreePath) => await repairUnreadableWorktreeIndex(worktreePath),
 		hasTrackedChanges,
 		readManifest: readRestartManifest,
 		removeManifest: removeRestartManifest,
