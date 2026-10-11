@@ -4,10 +4,12 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BoardCard } from "@/components/board-card";
+import { formatPipelineStageDeadline } from "@/components/board-card-pipeline-stage";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import { setKanbanPaths } from "@/stores/kanban-paths-store";
 import { setLandingMode } from "@/stores/landing-mode-store";
+import { setPipelineCardStages } from "@/stores/pipeline-card-stage-store";
 import type { ReviewTaskWorkspaceSnapshot } from "@/types";
 
 let mockWorkspaceSnapshot: ReviewTaskWorkspaceSnapshot | undefined;
@@ -187,6 +189,7 @@ describe("BoardCard", () => {
 		});
 		setKanbanPaths(null);
 		setLandingMode(null);
+		setPipelineCardStages([]);
 		vi.restoreAllMocks();
 		container.remove();
 		if (previousActEnvironment === undefined) {
@@ -401,6 +404,64 @@ describe("BoardCard", () => {
 		expect(buttonLabels()).toContain("Commit");
 		await render(createCard({ title: "QA1 bbbbb: check the form" }));
 		expect(buttonLabels()).not.toContain("Approve & land");
+	});
+
+	it("shows the card's pipeline stage on Review and In Progress cards (issue #30)", async () => {
+		const deadline = Date.parse("2026-10-11T07:03:23.000Z");
+		const stageBadge = () => container.querySelector('[data-testid="board-card-pipeline-stage"]');
+		const render = async (columnId: "backlog" | "in_progress" | "review") => {
+			await act(async () => {
+				renderWithTooltips(<BoardCard card={createCard()} index={0} columnId={columnId} />);
+			});
+		};
+
+		await render("review");
+		expect(stageBadge()).toBeNull();
+
+		await act(async () => {
+			setPipelineCardStages([
+				{
+					taskId: "task-1",
+					kind: "checks_running",
+					label: "Checks running (test)",
+					next: "QA next",
+					qaTaskId: null,
+					deadline,
+					detail: null,
+					inFlight: true,
+				},
+			]);
+		});
+		expect(stageBadge()?.textContent).toBe(
+			`Checks running (test) · QA next · until ${formatPipelineStageDeadline(deadline)}`,
+		);
+		expect(stageBadge()?.getAttribute("data-stage-kind")).toBe("checks_running");
+
+		await act(async () => {
+			setPipelineCardStages([
+				{
+					taskId: "task-1",
+					kind: "qa_running",
+					label: "QA r2 running",
+					next: null,
+					qaTaskId: "12ab6",
+					deadline: null,
+					detail: null,
+					inFlight: true,
+				},
+			]);
+		});
+		expect(stageBadge()?.textContent).toBe("QA r2 running (12ab6)");
+		await render("in_progress");
+		expect(stageBadge()?.textContent).toBe("QA r2 running (12ab6)");
+		await render("backlog");
+		expect(stageBadge()).toBeNull();
+
+		await render("review");
+		await act(async () => {
+			setPipelineCardStages([]);
+		});
+		expect(stageBadge()).toBeNull();
 	});
 
 	it("shows a role badge on QA, TRIAGE and calibration cards and none on dev cards", async () => {

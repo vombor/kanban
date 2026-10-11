@@ -458,12 +458,55 @@ export const runtimeWorkspaceMetadataSchema = z.object({
 });
 export type RuntimeWorkspaceMetadata = z.infer<typeof runtimeWorkspaceMetadataSchema>;
 
+/**
+ * Where the pipeline is with a dev card on a landing-mode-`qa` board: computed by the pipeline worker
+ * (src/pipeline/card-stage.ts) and sent only to that workspace's board clients, so a Review card that waits for
+ * checks or QA doesn't look idle (issue #30).
+ */
+export const runtimePipelineCardStageKindSchema = z.enum([
+	"settling",
+	"checks_queued",
+	"checks_running",
+	"qa_waiting_checks",
+	"qa_next",
+	"qa_queued",
+	"qa_running",
+	"qa_verdict",
+	"no_qa",
+	"rework_sent",
+	"recovery",
+	"held",
+	"escalated",
+	"stopped",
+]);
+export type RuntimePipelineCardStageKind = z.infer<typeof runtimePipelineCardStageKindSchema>;
+
+export const runtimePipelineCardStageSchema = z.object({
+	taskId: z.string(),
+	kind: runtimePipelineCardStageKindSchema,
+	/** Short enough for a phone: "Checks running (test)", "QA r2 running". */
+	label: z.string(),
+	/** What follows, when the pipeline knows: "QA next", "rework next". */
+	next: z.string().nullable(),
+	/** The QA card that reviews (or will review) the card's snapshot, when there is one. */
+	qaTaskId: z.string().nullable(),
+	/** When the stage ends at the latest (epoch ms), e.g. QA starts without the checks then. */
+	deadline: z.number().nullable(),
+	/** The longer reason (a hold's, a wait's), for a tooltip. */
+	detail: z.string().nullable(),
+	/** Checks or QA are queued or running for the card: Approve & land would skip them, so the browser asks first. */
+	inFlight: z.boolean(),
+});
+export type RuntimePipelineCardStage = z.infer<typeof runtimePipelineCardStageSchema>;
+
 export const runtimeStateStreamSnapshotMessageSchema = z.object({
 	type: z.literal("snapshot"),
 	currentProjectId: z.string().nullable(),
 	projects: z.array(runtimeProjectSummarySchema),
 	workspaceState: runtimeWorkspaceStateResponseSchema.nullable(),
 	workspaceMetadata: runtimeWorkspaceMetadataSchema.nullable(),
+	/** The workspace's pipeline card stages (absent or empty: none, as on every board not on landing mode qa). */
+	pipelineCardStages: z.array(runtimePipelineCardStageSchema).optional(),
 });
 export type RuntimeStateStreamSnapshotMessage = z.infer<typeof runtimeStateStreamSnapshotMessageSchema>;
 
@@ -515,6 +558,16 @@ export const runtimeStateStreamProjectShortcutsMessageSchema = z.object({
 });
 export type RuntimeStateStreamProjectShortcutsMessage = z.infer<typeof runtimeStateStreamProjectShortcutsMessageSchema>;
 
+/** A workspace's pipeline card stages changed: the whole list (empty: none). Sent to that workspace's clients only. */
+export const runtimeStateStreamPipelineCardStagesMessageSchema = z.object({
+	type: z.literal("pipeline_card_stages_updated"),
+	workspaceId: z.string(),
+	stages: z.array(runtimePipelineCardStageSchema),
+});
+export type RuntimeStateStreamPipelineCardStagesMessage = z.infer<
+	typeof runtimeStateStreamPipelineCardStagesMessageSchema
+>;
+
 export const runtimeStateStreamErrorMessageSchema = z.object({
 	type: z.literal("error"),
 	message: z.string(),
@@ -529,6 +582,7 @@ export const runtimeStateStreamMessageSchema = z.discriminatedUnion("type", [
 	runtimeStateStreamWorkspaceMetadataMessageSchema,
 	runtimeStateStreamTaskReadyForReviewMessageSchema,
 	runtimeStateStreamProjectShortcutsMessageSchema,
+	runtimeStateStreamPipelineCardStagesMessageSchema,
 	runtimeStateStreamErrorMessageSchema,
 ]);
 export type RuntimeStateStreamMessage = z.infer<typeof runtimeStateStreamMessageSchema>;

@@ -2,7 +2,9 @@ import { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { RuntimePipelineCardStage } from "@/runtime/types";
 import { type UseRuntimeStateStreamResult, useRuntimeStateStream } from "@/runtime/use-runtime-state-stream";
+import { getPipelineCardStage, setPipelineCardStages } from "@/stores/pipeline-card-stage-store";
 
 class FakeWebSocket {
 	static readonly CONNECTING = 0;
@@ -40,6 +42,10 @@ class FakeWebSocket {
 				workspaceMetadata: null,
 			}),
 		});
+	}
+
+	send(message: unknown) {
+		this.onmessage?.({ data: JSON.stringify(message) });
 	}
 
 	// A socket a tunnel dropped silently: no close event reaches the page.
@@ -92,6 +98,7 @@ describe("useRuntimeStateStream reconnect", () => {
 		});
 		container.remove();
 		globalThis.WebSocket = originalWebSocket;
+		setPipelineCardStages([]);
 		Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
 		vi.useRealTimers();
 	});
@@ -150,5 +157,44 @@ describe("useRuntimeStateStream reconnect", () => {
 			window.dispatchEvent(new Event("online"));
 		});
 		expect(FakeWebSocket.instances).toHaveLength(2);
+	});
+	it("keeps the pipeline card stage store on the current project's stages (issue #30)", () => {
+		const stage: RuntimePipelineCardStage = {
+			taskId: "8c28e",
+			kind: "checks_running",
+			label: "Checks running (test)",
+			next: "QA next",
+			qaTaskId: null,
+			deadline: null,
+			detail: null,
+			inFlight: true,
+		};
+		act(() => {
+			current().open();
+			current().send({
+				type: "snapshot",
+				currentProjectId: "project-1",
+				projects: [],
+				workspaceState: null,
+				workspaceMetadata: null,
+				pipelineCardStages: [stage],
+			});
+		});
+		expect(getPipelineCardStage("8c28e")).toEqual(stage);
+
+		const running: RuntimePipelineCardStage = { ...stage, kind: "qa_running", label: "QA r1 running", next: null };
+		act(() => {
+			// Another project's stages are not this board's.
+			current().send({ type: "pipeline_card_stages_updated", workspaceId: "project-2", stages: [] });
+		});
+		expect(getPipelineCardStage("8c28e")).toEqual(stage);
+		act(() => {
+			current().send({ type: "pipeline_card_stages_updated", workspaceId: "project-1", stages: [running] });
+		});
+		expect(getPipelineCardStage("8c28e")).toEqual(running);
+		act(() => {
+			current().send({ type: "pipeline_card_stages_updated", workspaceId: "project-1", stages: [] });
+		});
+		expect(getPipelineCardStage("8c28e")).toBeNull();
 	});
 });

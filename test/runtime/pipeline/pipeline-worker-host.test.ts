@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { parsePipelineConfig } from "../../../src/config/pipeline-config";
-import type { RuntimeTaskSessionSummary } from "../../../src/core/api-contract";
+import type { RuntimePipelineCardStage, RuntimeTaskSessionSummary } from "../../../src/core/api-contract";
 import type { PipelineActionRequest, PipelineActionResult } from "../../../src/pipeline/actions";
 import type { WatchdogActionRequest } from "../../../src/pipeline/watchdog/actions";
 import { createPipelineWorkerHost, type PipelineWorkerChild } from "../../../src/pipeline/worker-host";
@@ -56,6 +56,7 @@ function createHostHarness(
 		reviewSettleMs?: number;
 		readPidPressure?: () => Promise<{ pressure: boolean; brownout: boolean }>;
 		runAction?: (request: PipelineActionRequest) => Promise<PipelineActionResult>;
+		onCardStages?: (workspaceId: string, stages: RuntimePipelineCardStage[]) => void;
 	} = {},
 ) {
 	let rawConfig = initialConfig;
@@ -82,6 +83,7 @@ function createHostHarness(
 		restartDelaysMs: [1_000, 5_000],
 		handleWatchdogRequest: options.handleWatchdogRequest,
 		runAction: options.runAction,
+		onCardStages: options.onCardStages,
 		reviewSettleMs: options.reviewSettleMs,
 		readPidPressure: options.readPidPressure ?? (async () => ({ pressure: false, brownout: false })),
 		log,
@@ -400,6 +402,45 @@ describe("pipeline worker host: the watchdog", () => {
 			{ type: "response", id: 1, ok: true, result: { ok: true } },
 			{ type: "response", id: 2, ok: false, error: "workspace kanban-2uge does not run the pipeline" },
 		]);
+		await harness.host.close();
+	});
+
+	it("passes a QA workspace's card stages to the server, and clears them when the worker exits or the workspace leaves", async () => {
+		const received: Array<{ workspaceId: string; stages: RuntimePipelineCardStage[] }> = [];
+		const harness = createHostHarness(QA_FOO, {
+			onCardStages: (workspaceId, stages) => received.push({ workspaceId, stages }),
+		});
+		await harness.startReady();
+		const stage: RuntimePipelineCardStage = {
+			taskId: "8c28e",
+			kind: "checks_running",
+			label: "Checks running (test)",
+			next: "QA next",
+			qaTaskId: null,
+			deadline: null,
+			detail: null,
+			inFlight: true,
+		};
+		const child = harness.children[0];
+		child?.emitMessage({ type: "cardStages", workspaceId: "foo", stages: [stage] });
+		// kanban-2uge isn't on landing qa: its cards have no pipeline stage.
+		child?.emitMessage({ type: "cardStages", workspaceId: "kanban-2uge", stages: [stage] });
+		expect(received).toEqual([{ workspaceId: "foo", stages: [stage] }]);
+
+		child?.exit(1);
+		expect(received.at(-1)).toEqual({ workspaceId: "foo", stages: [] });
+
+		await vi.advanceTimersByTimeAsync(1_000);
+		const restarted = harness.children[1];
+		restarted?.emitMessage({ type: "ready", pid: 2 });
+		restarted?.emitMessage({ type: "cardStages", workspaceId: "foo", stages: [stage] });
+		// A message from the old worker after the restart is dropped.
+		child?.emitMessage({ type: "cardStages", workspaceId: "foo", stages: [] });
+		expect(received.at(-1)).toEqual({ workspaceId: "foo", stages: [stage] });
+
+		harness.host.forgetWorkspace("foo");
+		expect(received.at(-1)).toEqual({ workspaceId: "foo", stages: [] });
+		expect(received).toHaveLength(4);
 		await harness.host.close();
 	});
 });

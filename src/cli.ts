@@ -719,6 +719,7 @@ async function startServer(): Promise<{
 			});
 		},
 		runAction: runtimeServer.runPipelineAction,
+		onCardStages: (workspaceId, stages) => runtimeHub.setPipelineCardStages(workspaceId, stages),
 		reviewSettleMs: sessionSyncSetting.reviewSettleMs,
 		log: (message) => {
 			console.warn(`[kanban] ${message}`);

@@ -121,7 +121,22 @@ export interface ChecksQueue {
 	enqueue: (request: ChecksRequest) => ChecksEnqueueStatus;
 }
 
+/** A card's checks the runner has: running (with the step it is on) or queued. */
+export interface ChecksRunnerCard {
+	workspaceId: string;
+	taskId: string;
+	snapshot: string;
+}
+
+/** What the runner does now (the board's card stages, card-stage.ts). `queued` is in run order. */
+export interface ChecksRunnerStatus {
+	running: (ChecksRunnerCard & { step: string | null; startedAt: number }) | null;
+	queued: ChecksRunnerCard[];
+}
+
 export interface ChecksRunner extends ChecksQueue {
+	/** What runs and what waits; absent on test fakes that don't track it. */
+	status?: () => ChecksRunnerStatus;
 	/** Resolves once the queue is empty and nothing runs. */
 	idle: () => Promise<void>;
 	/** Drops the queue and kills the running step. */
@@ -142,6 +157,8 @@ export interface RunCheckStepInput {
 export interface CreateChecksRunnerOptions {
 	readSettings: () => Promise<ChecksSettings>;
 	onResult: (result: ChecksResult) => Promise<void>;
+	/** Called after the status changed (a run or a step started, the queue changed); for the board's card stages. */
+	onStatusChange?: () => void;
 	log: (message: string) => void;
 	runStep?: (input: RunCheckStepInput) => Promise<Omit<CheckStepResult, "name">>;
 	exportSnapshot?: (repoPath: string, snapshot: string, dir: string) => Promise<void>;
@@ -400,7 +417,20 @@ export function createChecksRunner(options: CreateChecksRunnerOptions): ChecksRu
 	const now = options.now ?? Date.now;
 	const queue: ChecksRequest[] = [];
 	let current: ChecksRequest | null = null;
+	let currentStep: string | null = null;
+	let currentStartedAt = 0;
 	let currentChild: ChildProcess | null = null;
+	const notifyStatus = (): void => {
+		try {
+			options.onStatusChange?.();
+		} catch {
+			// The card stages are a view; they never stop a run.
+		}
+	};
+	const setStep = (name: string | null): void => {
+		currentStep = name;
+		notifyStatus();
+	};
 	/** The running request was superseded by a newer snapshot of its card: stop it and drop its result. */
 	let currentSuperseded = false;
 	let pumping: Promise<void> | null = null;
@@ -430,6 +460,7 @@ export function createChecksRunner(options: CreateChecksRunnerOptions): ChecksRu
 		let installDirs: string[] = [];
 		let projectEnv: ChecksProjectEnv | null = null;
 		try {
+			setStep("export");
 			await exportSnapshot(request.repoPath, request.snapshot, dir);
 			await mkdir(logsDir, { recursive: true });
 			await writeChecksNpmrc(npmrcPath, settings.allowScripts);
@@ -445,6 +476,7 @@ export function createChecksRunner(options: CreateChecksRunnerOptions): ChecksRu
 			const env = createCheckStepEnv(settings, npmrcPath, projectEnv.env);
 			const step = async (name: string, command: string, cwd: string, logFile: string) => {
 				const logPath = join(logsDir, logFile);
+				setStep(name);
 				const stepResult = await runStep({
 					command,
 					cwd,
@@ -562,10 +594,15 @@ export function createChecksRunner(options: CreateChecksRunnerOptions): ChecksRu
 			while (queue.length > 0 && !closed) {
 				const request = queue.shift() as ChecksRequest;
 				current = request;
+				currentStep = null;
+				currentStartedAt = now();
 				currentSuperseded = false;
 				options.log(`checks ${request.taskId}: started on ${request.snapshot.slice(0, 8)}`);
+				notifyStatus();
 				const result = await run(request);
 				current = null;
+				currentStep = null;
+				notifyStatus();
 				if (closed) {
 					break;
 				}
@@ -617,8 +654,22 @@ export function createChecksRunner(options: CreateChecksRunnerOptions): ChecksRu
 				queue.push(request);
 			}
 			void pump();
+			notifyStatus();
 			return status;
 		},
+		status: () => ({
+			running:
+				current && !currentSuperseded
+					? {
+							workspaceId: current.workspaceId,
+							taskId: current.taskId,
+							snapshot: current.snapshot,
+							step: currentStep,
+							startedAt: currentStartedAt,
+						}
+					: null,
+			queued: queue.map(({ workspaceId, taskId, snapshot }) => ({ workspaceId, taskId, snapshot })),
+		}),
 		idle: async () => {
 			while (pumping) {
 				await pumping;

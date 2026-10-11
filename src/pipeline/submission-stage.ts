@@ -45,6 +45,8 @@ export interface SubmissionInspection {
 	/** Whether the card has work to submit; the QA gate asks the kit only about cards that do. */
 	hasWork: boolean;
 	records: PipelineStageRecord[];
+	/** The snapshot commit submitted (a dev card with work), for the board's card stage. */
+	snapshot?: string;
 }
 
 export interface SubmissionContext {
@@ -217,7 +219,7 @@ export function createSubmissionStage(options: CreateSubmissionStageOptions): Su
 				});
 			}
 		}
-		return { inspection: { hasWork: true, records }, cache: true };
+		return { inspection: { hasWork: true, records, snapshot: snapshot.commit }, cache: true };
 	};
 
 	return {

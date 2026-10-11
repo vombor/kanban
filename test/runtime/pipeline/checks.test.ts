@@ -216,6 +216,26 @@ describe("checks runner", () => {
 		return { runner, settings, steps, results, exported, hold, getMaxActive: () => maxActive };
 	}
 
+	it("reports the running card with its step and the queue in run order (the board's card stages)", async () => {
+		const harness = createHarness({ holdFirst: true });
+		harness.runner.enqueue(request());
+		harness.runner.enqueue(request({ taskId: "dev-2", snapshot: "bbbbbbbb22222222" }));
+		await vi.waitFor(() => expect(harness.steps).toHaveLength(1));
+		expect(harness.runner.status?.()).toEqual({
+			running: {
+				workspaceId: "foo",
+				taskId: "dev-1",
+				snapshot: "aaaaaaaa11111111",
+				step: "install",
+				startedAt: expect.any(Number),
+			},
+			queued: [{ workspaceId: "foo", taskId: "dev-2", snapshot: "bbbbbbbb22222222" }],
+		});
+		harness.hold.resolve();
+		await harness.runner.idle();
+		expect(harness.runner.status?.()).toEqual({ running: null, queued: [] });
+	});
+
 	it("installs, runs the configured scripts that exist, niced and capped, and reports PASS", async () => {
 		const harness = createHarness();
 		expect(harness.runner.enqueue(request())).toBe("queued");

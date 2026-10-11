@@ -8,6 +8,7 @@ import { AlertCircle, AlertTriangle, Bot, GitBranch, Link2, Pencil, Play, Rotate
 import type { KeyboardEvent, MouseEvent } from "react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { BoardCardPipelineStage } from "@/components/board-card-pipeline-stage";
 import { BoardCardTaskId } from "@/components/board-card-task-id";
 import { PlanApprovalButton } from "@/components/plan-approval-button";
 import { Button } from "@/components/ui/button";
@@ -792,6 +793,9 @@ export const BoardCard = memo(function BoardCard({
 								) : null}
 								<BoardCardTaskId taskId={card.id} />
 							</div>
+							{columnId === "review" || columnId === "in_progress" ? (
+								<BoardCardPipelineStage taskId={card.id} />
+							) : null}
 							{sessionActivity ? (
 								<div
 									className="flex gap-1.5 items-start mt-[6px]"

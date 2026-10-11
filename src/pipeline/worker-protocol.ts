@@ -3,7 +3,11 @@
 // stage acts, the worker asks the server, so the server stays the only writer of the board: `finishTask` (the
 // Done workflow, landing included) or a `request` (the watchdog's actions, src/pipeline/watchdog/actions.ts, and
 // the pipeline's card actions, src/pipeline/actions.ts). The server answers with `finishTaskResult` / `response`.
-import type { RuntimeTaskLandingChoice, RuntimeTaskTrashResponse } from "../core/api-contract";
+import type {
+	RuntimePipelineCardStage,
+	RuntimeTaskLandingChoice,
+	RuntimeTaskTrashResponse,
+} from "../core/api-contract";
 import type { PipelineActionRequest } from "./actions";
 import type { PipelineWorkspaceSnapshot } from "./engine";
 import type { PipelineEventMap } from "./events";
@@ -39,6 +43,8 @@ export type PipelineWorkerMessage =
 	| { type: "ready"; pid: number }
 	| { type: "evaluated"; workspaceId: string; decisions: number; logged: number }
 	| { type: "log"; message: string }
+	/** The workspace's card stages changed (card-stage.ts): the whole list, empty for none. Only shown, never acted on. */
+	| { type: "cardStages"; workspaceId: string; stages: RuntimePipelineCardStage[] }
 	| { type: "finishTask"; requestId: number; request: PipelineFinishTaskRequest }
 	/** The worker asks the server to act; the server answers with a `response` carrying the same id. */
 	| { type: "request"; id: number; request: PipelineServerRequest };
@@ -48,7 +54,7 @@ function hasType(value: unknown): value is { type: unknown } {
 }
 
 const HOST_MESSAGE_TYPES = new Set(["snapshot", "forget", "landed", "finishTaskResult", "response", "shutdown"]);
-const WORKER_MESSAGE_TYPES = new Set(["ready", "evaluated", "log", "finishTask", "request"]);
+const WORKER_MESSAGE_TYPES = new Set(["ready", "evaluated", "log", "cardStages", "finishTask", "request"]);
 
 export function isPipelineHostMessage(value: unknown): value is PipelineHostMessage {
 	return hasType(value) && typeof value.type === "string" && HOST_MESSAGE_TYPES.has(value.type);

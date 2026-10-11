@@ -4,8 +4,10 @@
 import type { IncomingMessage } from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
 import type {
+	RuntimePipelineCardStage,
 	RuntimeStateStreamErrorMessage,
 	RuntimeStateStreamMessage,
+	RuntimeStateStreamPipelineCardStagesMessage,
 	RuntimeStateStreamProjectShortcutsMessage,
 	RuntimeStateStreamProjectsMessage,
 	RuntimeStateStreamSnapshotMessage,
@@ -63,6 +65,11 @@ export interface RuntimeStateHub {
 	broadcastRuntimeProjectsUpdated: (preferredCurrentProjectId: string | null) => Promise<void>;
 	broadcastTaskReadyForReview: (workspaceId: string, taskId: string) => void;
 	broadcastProjectShortcutsUpdated: (workspaceId: string) => void;
+	/**
+	 * The pipeline worker's card stages of a workspace (src/pipeline/card-stage.ts; empty: none): kept for the snapshot of
+	 * a client that connects later, and sent to that workspace's clients only, since they carry its cards' text.
+	 */
+	setPipelineCardStages: (workspaceId: string, stages: RuntimePipelineCardStage[]) => void;
 	close: () => Promise<void>;
 }
 
@@ -72,6 +79,7 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 	const taskSessionBroadcastTimersByWorkspaceId = new Map<string, NodeJS.Timeout>();
 	const runtimeStateClientsByWorkspaceId = new Map<string, Set<WebSocket>>();
 	const runtimeStateClients = new Set<WebSocket>();
+	const pipelineCardStagesByWorkspaceId = new Map<string, RuntimePipelineCardStage[]>();
 	const activityListeners = new Set<(activity: RuntimeWorkspaceActivity) => void>();
 	const notifyActivity = (activity: RuntimeWorkspaceActivity): void => {
 		for (const listener of activityListeners) {
@@ -208,6 +216,7 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 		}
 		terminalSummaryUnsubscribeByWorkspaceId.delete(workspaceId);
 		disposeTaskSessionSummaryBroadcast(workspaceId);
+		pipelineCardStagesByWorkspaceId.delete(workspaceId);
 		workspaceMetadataMonitor.disposeWorkspace(workspaceId);
 
 		if (!options?.disconnectClients) {
@@ -284,6 +293,22 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 			type: "project_shortcuts_updated",
 			workspaceId,
 			updatedAt: Date.now(),
+		};
+		for (const client of runtimeStateClientsByWorkspaceId.get(workspaceId) ?? []) {
+			sendRuntimeStateMessage(client, payload);
+		}
+	};
+
+	const setPipelineCardStages = (workspaceId: string, stages: RuntimePipelineCardStage[]) => {
+		if (stages.length === 0) {
+			pipelineCardStagesByWorkspaceId.delete(workspaceId);
+		} else {
+			pipelineCardStagesByWorkspaceId.set(workspaceId, stages);
+		}
+		const payload: RuntimeStateStreamPipelineCardStagesMessage = {
+			type: "pipeline_card_stages_updated",
+			workspaceId,
+			stages,
 		};
 		for (const client of runtimeStateClientsByWorkspaceId.get(workspaceId) ?? []) {
 			sendRuntimeStateMessage(client, payload);
@@ -389,6 +414,9 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 					projects: projectsPayload.projects,
 					workspaceState,
 					workspaceMetadata,
+					pipelineCardStages: monitorWorkspaceId
+						? (pipelineCardStagesByWorkspaceId.get(monitorWorkspaceId) ?? [])
+						: [],
 				} satisfies RuntimeStateStreamSnapshotMessage);
 				if (client.readyState !== WebSocket.OPEN) {
 					if (monitorWorkspaceId) {
@@ -476,6 +504,7 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 		broadcastRuntimeProjectsUpdated,
 		broadcastTaskReadyForReview,
 		broadcastProjectShortcutsUpdated,
+		setPipelineCardStages,
 		close: async () => {
 			stopKeepalive();
 			activityListeners.clear();

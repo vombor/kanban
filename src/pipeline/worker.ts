@@ -38,6 +38,7 @@ import { registerTeamKitFeatures } from "../kits/team/features";
 import { readAgentDefaultModels } from "../models/cline-providers";
 import { getAgentClearCommand, readAgentSessionSize } from "../terminal/orchestrator-agents";
 import type { PipelineActionResult, PipelineActions } from "./actions";
+import { describePipelineCardStages } from "./card-stage";
 import {
 	CHECKS_VERSION,
 	type ChecksResult,
@@ -52,6 +53,7 @@ import {
 	evaluatePipelineWorkspace,
 	getRecoveryScope,
 	isPipelineWorkspace,
+	type PipelineCardOutcome,
 	type PipelineWorkspaceSnapshot,
 } from "./engine";
 import { createPipelineEventBus, type PipelineEventBus } from "./events";
@@ -94,7 +96,7 @@ export interface PipelineWorkerDependencies {
 	/** The submission stage (snapshot + checks). Default: the real one, with `checks`. */
 	inspectSubmission?: SubmissionInspector;
 	/** Factory for the checks runner; gets the result recorder. */
-	createChecks?: (onResult: (result: ChecksResult) => Promise<void>) => ChecksRunner;
+	createChecks?: (onResult: (result: ChecksResult) => Promise<void>, onStatusChange: () => void) => ChecksRunner;
 	appendQaLog?: AppendQaLog;
 	loadAgentDefaultModels?: (config: ParsedPipelineConfig) => Promise<EffectiveModelConfig["agentDefaultModels"]>;
 	/** Tags a card's work for releaseHold (preserveTaskWork in src/pipeline/hold.ts). */
@@ -269,10 +271,11 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 		reevaluate(request.workspaceId);
 	};
 	const checks =
-		deps.createChecks?.(recordChecksResult) ??
+		deps.createChecks?.(recordChecksResult, () => publishAllCardStages()) ??
 		createChecksRunner({
 			readSettings: async () => (await readConfig()).config.pipeline.checks,
 			onResult: recordChecksResult,
+			onStatusChange: () => publishAllCardStages(),
 			log,
 		});
 	const submissionStage = createSubmissionStage({
@@ -457,6 +460,20 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 	// "<workspaceId>:<taskId>" → the card's last `kanban task resubmit` request this worker has acted on.
 	const lastResubmits = new Map<string, string>();
 	const reportedIssues = new Set<string>();
+	// workspaceId → what its last evaluation left for the board's card stages (card-stage.ts); only QA workspaces outside shadow.
+	const stageContexts = new Map<
+		string,
+		{
+			snapshot: PipelineWorkspaceSnapshot;
+			outcomes: ReadonlyMap<string, PipelineCardOutcome>;
+			checksWaitMin: number;
+			recoveryNudgeCheckMs: number;
+		}
+	>();
+	// workspaceId → the card stages last sent, so an unchanged list is sent once.
+	const lastCardStages = new Map<string, string>();
+	// workspaceId → its running publish, so the server gets each workspace's lists in order.
+	const cardStageChains = new Map<string, Promise<void>>();
 	let closed = false;
 
 	const clearWake = (workspaceId: string): void => {
@@ -469,6 +486,9 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 
 	const forget = (workspaceId: string): void => {
 		clearWake(workspaceId);
+		if (stageContexts.delete(workspaceId)) {
+			void publishCardStages(workspaceId);
+		}
 		features.removeWorkspace(workspaceId);
 		submissionStage.forgetWorkspace(workspaceId);
 		workspacePaths.delete(workspaceId);
@@ -579,6 +599,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			hungMs: parsed.config.pipeline.recovery.hungMin * 60_000,
 			now: now(),
 		};
+		const outcomes = new Map<string, PipelineCardOutcome>();
 		// A workspace watched only for recovery (landing off/commit/pr) gets no QA-gate decisions.
 		const gateDecisions = !pipelineOn
 			? []
@@ -606,6 +627,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 						),
 					submitQa: shadow ? undefined : async (input) => await qaGate.submit({ context: gateContext, ...input }),
 					now: gateContext.now,
+					onCardOutcome: (taskId, outcome) => outcomes.set(taskId, outcome),
 				});
 		const decisions = [...gateDecisions, ...recoveryDecisions];
 		// A card resubmitted since the last evaluation has its decisions logged even where they repeat earlier ones, so
@@ -670,8 +692,71 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 		if (records.length > 0) {
 			await decisionLog.append(records);
 		}
+		// The board shows card stages only where the pipeline acts: a QA workspace outside shadow.
+		if (pipelineOn && !shadow) {
+			stageContexts.set(workspaceId, {
+				snapshot,
+				outcomes,
+				checksWaitMin: parsed.config.pipeline.qa.checksWaitMin,
+				recoveryNudgeCheckMs: parsed.config.pipeline.recovery.nudgeCheckSec * 1000,
+			});
+		} else {
+			stageContexts.delete(workspaceId);
+		}
+		await publishCardStages(workspaceId);
 		deps.send({ type: "evaluated", workspaceId, decisions: decisions.length, logged: records.length });
 	};
+
+	/** Sends the workspace's card stages to the server when they changed (an empty list once they are gone). */
+	function publishCardStages(workspaceId: string): Promise<void> {
+		const publish = async (): Promise<void> => {
+			const context = stageContexts.get(workspaceId);
+			const state = context ? await store.peek(workspaceId) : null;
+			const stages =
+				context && state
+					? describePipelineCardStages({
+							columns: context.snapshot.board.columns,
+							sessions: context.snapshot.sessions,
+							state,
+							outcomes: context.outcomes,
+							checks: checks.status?.() ?? null,
+							workspaceId,
+							queueWaits: qaGate.describeQueueWaits?.(workspaceId) ?? new Map(),
+							checksWaitMin: context.checksWaitMin,
+							recoveryNudgeCheckMs: context.recoveryNudgeCheckMs,
+							pidPressure: Boolean(context.snapshot.pidPressure),
+							now: now(),
+						})
+					: [];
+			const key = JSON.stringify(stages);
+			if (closed || (lastCardStages.get(workspaceId) ?? "[]") === key) {
+				return;
+			}
+			if (stages.length === 0) {
+				lastCardStages.delete(workspaceId);
+			} else {
+				lastCardStages.set(workspaceId, key);
+			}
+			deps.send({ type: "cardStages", workspaceId, stages });
+		};
+		const next = (cardStageChains.get(workspaceId) ?? Promise.resolve()).then(publish).catch((error: unknown) => {
+			log(`pipeline ${workspaceId}: card stages failed: ${error instanceof Error ? error.message : String(error)}`);
+		});
+		cardStageChains.set(workspaceId, next);
+		void next.finally(() => {
+			if (cardStageChains.get(workspaceId) === next) {
+				cardStageChains.delete(workspaceId);
+			}
+		});
+		return next;
+	}
+
+	/** The checks runner moved on (a run or a step started, the queue changed): every staged workspace may show it. */
+	function publishAllCardStages(): void {
+		for (const workspaceId of stageContexts.keys()) {
+			void publishCardStages(workspaceId);
+		}
+	}
 
 	/** Workspaces whose queued QA cards wait for a machine-wide slot that was just freed elsewhere: evaluated again. */
 	function wakeSlotWaiters(): void {
@@ -772,6 +857,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			}
 			await watchdogRunning;
 			await recovery.idle();
+			await Promise.all(cardStageChains.values());
 		},
 		tickWatchdog,
 		startWatchdog: () => {

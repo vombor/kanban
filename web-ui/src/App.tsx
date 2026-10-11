@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AddProjectDialog } from "@/components/add-project-dialog";
 import { notifyError, showAppToast } from "@/components/app-toaster";
+import { ApproveAndLandWarningDialog } from "@/components/approve-and-land-warning-dialog";
 import { BetaFooter } from "@/components/beta-footer";
 import { CardDetailView } from "@/components/card-detail-view";
 import { ClearTrashDialog } from "@/components/clear-trash-dialog";
@@ -37,6 +38,7 @@ import { createInitialBoardData } from "@/data/board-data";
 import { createIdleTaskSession } from "@/hooks/app-utils";
 import { RuntimeDisconnectedFallback } from "@/hooks/runtime-disconnected-fallback";
 import { useAppHotkeys } from "@/hooks/use-app-hotkeys";
+import { useApproveAndLandConfirmation } from "@/hooks/use-approve-and-land-confirmation";
 import { useBoardInteractions } from "@/hooks/use-board-interactions";
 import { useDebugTools } from "@/hooks/use-debug-tools";
 import { useDetailTaskNavigation } from "@/hooks/use-detail-task-navigation";
@@ -590,17 +592,19 @@ export default function App(): ReactElement {
 		sessionSyncEnabled,
 	});
 
+	const { pendingApproveAndLand, requestApproveAndLand, resolveApproveAndLand } =
+		useApproveAndLandConfirmation(approveAndLandTask);
 	// Landing mode qa: a card Kanban lands itself shows Approve & land in place of Commit (src/core/card-role.ts).
 	const handleCommitOrApproveTask = useCallback(
 		(taskId: string) => {
 			const selection = findCardSelection(board, taskId);
 			if (selection && isKanbanLandedCard(selection.card, runtimeProjectConfig?.landingMode)) {
-				void approveAndLandTask(taskId);
+				requestApproveAndLand(selection.card);
 				return;
 			}
 			handleCommitTask(taskId);
 		},
-		[approveAndLandTask, board, handleCommitTask, runtimeProjectConfig?.landingMode],
+		[board, handleCommitTask, requestApproveAndLand, runtimeProjectConfig?.landingMode],
 	);
 
 	const {
@@ -1099,6 +1103,12 @@ export default function App(): ReactElement {
 						baseRef={landingDecisionRequest?.baseRef ?? ""}
 						canLand={landingDecisionRequest?.canLand ?? false}
 						onChoose={resolveLandingDecision}
+					/>
+					<ApproveAndLandWarningDialog
+						open={pendingApproveAndLand !== null}
+						taskTitle={pendingApproveAndLand?.taskTitle ?? ""}
+						stage={pendingApproveAndLand?.stage ?? null}
+						onResolve={resolveApproveAndLand}
 					/>
 					<StartupOnboardingDialog
 						open={isStartupOnboardingDialogOpen}

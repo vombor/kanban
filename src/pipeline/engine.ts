@@ -106,7 +106,20 @@ export interface PipelineEvaluationInput {
 		answer: Extract<QaPolicyAnswer, { kind: "qa" }>;
 	}) => Promise<{ outcome: PipelineDecisionOutcome; note: string }>;
 	now: number;
+	/** Told what the evaluation found for each Review card it decided on (the board's card stages, card-stage.ts). */
+	onCardOutcome?: (taskId: string, outcome: PipelineCardOutcome) => void;
 }
+
+/**
+ * Where the engine left a Review card. Cards recovery holds or redoes, and those the auto-review reconciler owns, get
+ * none. `submitted`: the snapshot it submitted and whether the kit wants QA for it.
+ */
+export type PipelineCardOutcome =
+	| { kind: "escalated"; at: string }
+	| { kind: "interrupted" }
+	| { kind: "unsettled"; running: boolean }
+	| { kind: "no_work" }
+	| { kind: "submitted"; snapshot: string | null; qa: boolean; reason: string | null };
 
 /** The pipeline runs for a workspace only with landing mode `qa` (shadow or not). */
 export function isPipelineWorkspace(settings: WorkspacePipelineSettings): boolean {
@@ -270,6 +283,7 @@ export async function evaluatePipelineWorkspace(input: PipelineEvaluationInput):
 		// by hand, or by a board link), it is never QA'd or landed: a sibling may have taken its task over.
 		const escalatedAt = readEscalatedAt(input.state.cards[card.id]);
 		if (escalatedAt) {
+			input.onCardOutcome?.(card.id, { kind: "escalated", at: escalatedAt });
 			decisions.push({
 				...common,
 				stage: "qa_gate",
@@ -283,6 +297,7 @@ export async function evaluatePipelineWorkspace(input: PipelineEvaluationInput):
 		// settle rule counts interrupted as settled. Before that mark the summary said running and never settled, so a
 		// turn the restart cut off was never QA'd; without restart recovery acting it still isn't.
 		if (effective.role === "dev" && !input.restartRecoveryActs && isRestartInterrupted(session, snapshot)) {
+			input.onCardOutcome?.(card.id, { kind: "interrupted" });
 			decisions.push({
 				...common,
 				stage: "qa_gate",
@@ -295,6 +310,7 @@ export async function evaluatePipelineWorkspace(input: PipelineEvaluationInput):
 		// A Review that hasn't settled may still resume (src/terminal/review-settle.ts): no snapshot, no QA yet. The
 		// worker host sends a snapshot once it has settled.
 		if (!isReviewSettled(session, input.now, snapshot.reviewSettleMs)) {
+			input.onCardOutcome?.(card.id, { kind: "unsettled", running: session?.state === "running" });
 			decisions.push({
 				...common,
 				stage: "qa_gate",
@@ -309,10 +325,17 @@ export async function evaluatePipelineWorkspace(input: PipelineEvaluationInput):
 			decisions.push({ ...common, ...record, answer: null });
 		}
 		if (!submission.hasWork) {
+			input.onCardOutcome?.(card.id, { kind: "no_work" });
 			continue;
 		}
 		const { history, round } = readCardHistory(input.state.cards[card.id]);
 		const answer = input.policy.qaPolicy({ dev: effective, round, history });
+		input.onCardOutcome?.(card.id, {
+			kind: "submitted",
+			snapshot: submission.snapshot ?? null,
+			qa: answer.kind === "qa",
+			reason: answer.kind === "none" ? answer.reason : null,
+		});
 		let outcome: PipelineDecisionOutcome = answer.kind === "none" ? "none" : shadow ? "shadow" : "not_implemented";
 		let note = `round ${round}: ${describeQaAnswer(answer)}`;
 		if (answer.kind === "qa" && !shadow && input.submitQa) {

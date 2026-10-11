@@ -2,6 +2,7 @@ import { useEffect, useReducer } from "react";
 
 import { getReconnectDelayMs } from "@/runtime/reconnect-backoff";
 import type {
+	RuntimePipelineCardStage,
 	RuntimeProjectSummary,
 	RuntimeStateStreamMessage,
 	RuntimeStateStreamProjectsMessage,
@@ -11,6 +12,7 @@ import type {
 	RuntimeWorkspaceMetadata,
 	RuntimeWorkspaceStateResponse,
 } from "@/runtime/types";
+import { setPipelineCardStages } from "@/stores/pipeline-card-stage-store";
 
 // After this long hidden (a backgrounded phone tab), treat an "open" socket as possibly dead and reconnect.
 const STREAM_STALE_AFTER_HIDDEN_MS = 30_000;
@@ -62,6 +64,8 @@ interface RuntimeStateStreamStore {
 	latestTaskReadyForReview: RuntimeStateStreamTaskReadyForReviewMessage | null;
 	/** When the current project's shortcuts last changed outside the settings dialog (`kanban shortcut`). */
 	shortcutsUpdatedAt: number | null;
+	/** The current project's pipeline card stages; the board reads them from the pipeline card stage store. */
+	pipelineCardStages: RuntimePipelineCardStage[];
 	streamError: string | null;
 	isRuntimeDisconnected: boolean;
 	hasReceivedSnapshot: boolean;
@@ -79,6 +83,7 @@ type RuntimeStateStreamAction =
 	| { type: "workspace_metadata_updated"; workspaceMetadata: RuntimeWorkspaceMetadata }
 	| { type: "task_ready_for_review"; payload: RuntimeStateStreamTaskReadyForReviewMessage }
 	| { type: "project_shortcuts_updated"; updatedAt: number }
+	| { type: "pipeline_card_stages_updated"; stages: RuntimePipelineCardStage[] }
 	| { type: "workspace_state_updated"; workspaceState: RuntimeWorkspaceStateResponse }
 	| { type: "task_sessions_updated"; summaries: RuntimeTaskSessionSummary[] }
 	| { type: "stream_error"; message: string }
@@ -92,6 +97,7 @@ function createInitialRuntimeStateStreamStore(requestedWorkspaceId: string | nul
 		workspaceMetadata: null,
 		latestTaskReadyForReview: null,
 		shortcutsUpdatedAt: null,
+		pipelineCardStages: [],
 		streamError: null,
 		isRuntimeDisconnected: false,
 		hasReceivedSnapshot: false,
@@ -117,6 +123,7 @@ function runtimeStateStreamReducer(
 			...state,
 			workspaceState: null,
 			workspaceMetadata: null,
+			pipelineCardStages: [],
 			streamError: null,
 			isRuntimeDisconnected: false,
 			hasReceivedSnapshot: false,
@@ -146,6 +153,7 @@ function runtimeStateStreamReducer(
 			workspaceMetadata: action.payload.workspaceMetadata,
 			latestTaskReadyForReview: state.latestTaskReadyForReview,
 			shortcutsUpdatedAt: state.shortcutsUpdatedAt,
+			pipelineCardStages: action.payload.pipelineCardStages ?? [],
 			streamError: null,
 			isRuntimeDisconnected: false,
 			hasReceivedSnapshot: true,
@@ -160,6 +168,7 @@ function runtimeStateStreamReducer(
 			workspaceState: didProjectChange ? null : state.workspaceState,
 			workspaceMetadata: didProjectChange ? null : state.workspaceMetadata,
 			latestTaskReadyForReview: didProjectChange ? null : state.latestTaskReadyForReview,
+			pipelineCardStages: didProjectChange ? [] : state.pipelineCardStages,
 			hasReceivedSnapshot: true,
 		};
 	}
@@ -173,6 +182,12 @@ function runtimeStateStreamReducer(
 		return {
 			...state,
 			latestTaskReadyForReview: action.payload,
+		};
+	}
+	if (action.type === "pipeline_card_stages_updated") {
+		return {
+			...state,
+			pipelineCardStages: action.stages,
 		};
 	}
 	if (action.type === "project_shortcuts_updated") {
@@ -348,6 +363,13 @@ export function useRuntimeStateStream(requestedWorkspaceId: string | null): UseR
 						dispatch({ type: "project_shortcuts_updated", updatedAt: payload.updatedAt });
 						return;
 					}
+					if (payload.type === "pipeline_card_stages_updated") {
+						if (payload.workspaceId !== activeWorkspaceId) {
+							return;
+						}
+						dispatch({ type: "pipeline_card_stages_updated", stages: payload.stages });
+						return;
+					}
 					if (payload.type === "task_ready_for_review") {
 						if (payload.workspaceId !== activeWorkspaceId) {
 							return;
@@ -436,6 +458,10 @@ export function useRuntimeStateStream(requestedWorkspaceId: string | null): UseR
 			cleanupSocket();
 		};
 	}, [requestedWorkspaceId]);
+
+	useEffect(() => {
+		setPipelineCardStages(state.pipelineCardStages);
+	}, [state.pipelineCardStages]);
 
 	return {
 		currentProjectId: state.currentProjectId,

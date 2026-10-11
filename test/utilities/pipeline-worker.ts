@@ -48,7 +48,7 @@ export interface PipelineWorkerHarnessOptions {
 	hasWork?: (card: RuntimeBoardCard) => boolean;
 	/** Replaces the fake submission stage built from `hasWork`. */
 	inspectSubmission?: SubmissionInspector;
-	createChecks?: (onResult: (result: ChecksResult) => Promise<void>) => ChecksRunner;
+	createChecks?: (onResult: (result: ChecksResult) => Promise<void>, onStatusChange: () => void) => ChecksRunner;
 	appendQaLog?: AppendQaLog;
 	/** Legacy checks-state.json per workspace id, for the import. */
 	legacyChecksState?: Record<string, unknown>;
@@ -212,7 +212,10 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 		bus,
 		inspectSubmission:
 			options.inspectSubmission ??
-			(async (_context, { card }) => ({ hasWork: options.hasWork?.(card) ?? true, records: [] })),
+			(async (_context, { card }) => {
+				const snapshot = snapshotOf(card.id);
+				return { hasWork: options.hasWork?.(card) ?? true, records: [], ...(snapshot ? { snapshot } : {}) };
+			}),
 		createChecks: options.createChecks,
 		appendQaLog,
 		loadAgentDefaultModels: async () => ({}),

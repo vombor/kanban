@@ -315,6 +315,17 @@ export interface QaGate {
 	 * changes.
 	 */
 	takeSlotWakes?: () => string[];
+	/** Why each queued QA card of the workspace waited at its last tick (qaTaskId → wait); the board's card stages. */
+	describeQueueWaits?: (workspaceId: string) => ReadonlyMap<string, QaQueueWait>;
+}
+
+/** Why a queued QA card didn't start at the gate's last tick. */
+export interface QaQueueWait {
+	kind: "slot" | "capacity" | "paused" | "pid_pressure";
+	/** The provider a `capacity` wait is for. */
+	provider: string | null;
+	/** The wait's record note (other projects' cards are only counted in it). */
+	note: string;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -478,6 +489,8 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 	const slotWaits = new Map<string, string>();
 	/** Workspaces to evaluate again: a slot they wait for was freed elsewhere (takeSlotWakes). */
 	const slotWakes = new Set<string>();
+	/** workspaceId → qaTaskId → why that queued QA card waited at the workspace's last tick (describeQueueWaits). */
+	const queueWaits = new Map<string, Map<string, QaQueueWait>>();
 
 	const countCloudRunning = (): number => [...runningByWorkspace.values()].reduce((sum, count) => sum + count, 0);
 
@@ -1577,6 +1590,27 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			}
 			capacityWaits.set(key, note);
 		}
+		const waits = new Map<string, QaQueueWait>();
+		if (pressureHeld || pauseNote) {
+			const kind = pressureHeld ? "pid_pressure" : "paused";
+			const note = pressureHeld ? "PID pressure: no QA card starts until it clears" : (pauseNote ?? "");
+			for (const { qaTaskId } of waiting) {
+				waits.set(qaTaskId, { kind, provider: null, note });
+			}
+		}
+		for (const qaTaskId of slotWaiting) {
+			waits.set(qaTaskId, { kind: "slot", provider: null, note: slotWaits.get(workspaceId) ?? "" });
+		}
+		for (const [provider, { taskIds }] of capacityWaiting) {
+			for (const qaTaskId of taskIds) {
+				waits.set(qaTaskId, {
+					kind: "capacity",
+					provider,
+					note: capacityWaits.get(`${workspaceId}:${provider}`) ?? "",
+				});
+			}
+		}
+		queueWaits.set(workspaceId, waits);
 
 		// Queued QA cards a pause holds don't keep the preview up: it starts again before the first one after the resume.
 		const qaActive = entries.some(
@@ -1604,6 +1638,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			pauseHolds.delete(workspaceId);
 			retiredByWorkspace.delete(workspaceId);
 			slotWaits.delete(workspaceId);
+			queueWaits.delete(workspaceId);
 			for (const key of [...capacityWaits.keys()]) {
 				if (key.startsWith(`${workspaceId}:`)) {
 					capacityWaits.delete(key);
@@ -1622,5 +1657,6 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			slotWakes.clear();
 			return wakes;
 		},
+		describeQueueWaits: (workspaceId) => queueWaits.get(workspaceId) ?? new Map(),
 	};
 }

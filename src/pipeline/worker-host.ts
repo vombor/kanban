@@ -27,12 +27,16 @@
 //   other `request` (a watchdog action, `handleWatchdogRequest`) are
 //   accepted for any workspace the worker has. `applyIssues` (the issue import's sync job) only for a workspace the
 //   worker has whose `issues.mode` is `on` as of the last sweep.
+// - The worker's `cardStages` (the board's pipeline card stages, src/pipeline/card-stage.ts) go to `onCardStages`,
+//   only for a workspace on landing mode `qa` as of the last sweep; they are cleared (an empty list) when the worker
+//   exits or stops, or the workspace leaves the pipeline, since nothing keeps them current then.
 // - Every snapshot carries `pidPressure` (src/state/pid-pressure-flags.ts), read here when it is sent: the QA gate
 //   and restart recovery hold new work on it, and the sweep's snapshot tells them within 30 s that it cleared.
 import { type ChildProcess, fork } from "node:child_process";
 
 import { getWorkspacePipelineSettings, type ParsedPipelineConfig, readPipelineConfig } from "../config/pipeline-config";
 import type {
+	RuntimePipelineCardStage,
 	RuntimeTaskSessionState,
 	RuntimeTaskSessionSummary,
 	RuntimeTaskTrashResponse,
@@ -78,6 +82,11 @@ export interface CreatePipelineWorkerHostDependencies {
 	/** `entry`: `pipeline.workerEntry`, or null for this build. */
 	spawnWorker?: (entry: string | null) => PipelineWorkerChild;
 	onWorkerMessage?: (message: PipelineWorkerMessage) => void;
+	/**
+	 * A workspace's pipeline card stages changed (the worker's `cardStages`, only for a workspace on landing mode `qa`),
+	 * or are gone (empty: the workspace left the pipeline or the worker exited). For the board's clients.
+	 */
+	onCardStages?: (workspaceId: string, stages: RuntimePipelineCardStage[]) => void;
 	/** Runs the Done workflow for a worker `finishTask` request (in-process triggers `pipeline`/`hold_release`). */
 	finishTask?: (request: PipelineFinishTaskRequest) => Promise<RuntimeTaskTrashResponse>;
 	/** Carries out a watchdog action for the worker (src/server/watchdog-actions.ts). Without it requests fail. */
@@ -185,6 +194,24 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 	let cardActionWorkspaces = new Map<string, string>();
 	/** The subset of `pipelineWorkspaces` with `issues.mode: "on"`: the only ones `applyIssues` may write. */
 	let issueWorkspaces = new Map<string, string>();
+	// Workspaces whose last card stages sent to onCardStages were not empty.
+	const stagedWorkspaces = new Set<string>();
+	const setCardStages = (workspaceId: string, stages: RuntimePipelineCardStage[]): void => {
+		if (stages.length === 0 && !stagedWorkspaces.delete(workspaceId)) {
+			return;
+		}
+		if (stages.length > 0) {
+			stagedWorkspaces.add(workspaceId);
+		}
+		deps.onCardStages?.(workspaceId, stages);
+	};
+	const clearCardStages = (workspaceId?: string): void => {
+		for (const staged of [...stagedWorkspaces]) {
+			if (workspaceId === undefined || staged === workspaceId) {
+				setCardStages(staged, []);
+			}
+		}
+	};
 	const coalesceTimers = new Map<string, NodeJS.Timeout>();
 	/** `workspaceId:taskId` → the snapshot sent once that session's Review has settled. */
 	const settleTimers = new Map<string, NodeJS.Timeout>();
@@ -319,6 +346,11 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 			}
 			if (message.type === "log") {
 				deps.log(message.message);
+			} else if (message.type === "cardStages") {
+				// Only a landing-qa workspace's cards have pipeline stages; a stale worker's message about another is dropped.
+				if (child === started && (cardActionWorkspaces.has(message.workspaceId) || message.stages.length === 0)) {
+					setCardStages(message.workspaceId, message.stages);
+				}
 			} else if (message.type === "finishTask") {
 				void answerFinishTask(started, message.requestId, message.request);
 			} else if (message.type === "request") {
@@ -362,6 +394,8 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 				return;
 			}
 			child = null;
+			// Nothing keeps them current now; the restarted worker sends them again after its first evaluation.
+			clearCardStages();
 			if (closed || pipelineWorkspaces.size === 0) {
 				return;
 			}
@@ -389,6 +423,7 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 	const stopChild = (): void => {
 		const current = child;
 		child = null;
+		clearCardStages();
 		if (!current) {
 			return;
 		}
@@ -422,6 +457,11 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 		const previous = pipelineWorkspaces;
 		pipelineWorkspaces = next;
 		cardActionWorkspaces = nextCardActions;
+		for (const workspaceId of stagedWorkspaces) {
+			if (!nextCardActions.has(workspaceId)) {
+				clearCardStages(workspaceId);
+			}
+		}
 		issueWorkspaces = nextIssues;
 		if (next.size === 0) {
 			if (child) {
@@ -516,6 +556,7 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 			}
 			cardActionWorkspaces.delete(workspaceId);
 			issueWorkspaces.delete(workspaceId);
+			clearCardStages(workspaceId);
 			if (pipelineWorkspaces.delete(workspaceId)) {
 				child?.send({ type: "forget", workspaceId });
 			}
