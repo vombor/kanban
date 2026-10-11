@@ -162,6 +162,69 @@ describe("restart manifest writer", () => {
 		await second.close();
 	});
 
+	it("counts the handover from when it first sees the workspace, not from the server start (issue #29)", async () => {
+		// notes was first loaded 1 h 47 min after the start: its first write replaced the prepare manifest at once.
+		const harness = createHarness({ manifest: previousManifest(), now: SERVER_START + 107 * 60_000 });
+		const writer = createRestartManifestWriter(harness.deps);
+		await writer.writeAll("periodic");
+		expect(harness.writes).toEqual([]);
+		harness.setNow(SERVER_START + 118 * 60_000);
+		await writer.writeAll("periodic");
+		expect(harness.writes.map((write) => write.kanbanStart)).toEqual([new Date(SERVER_START).toISOString()]);
+		await writer.close();
+	});
+
+	it("keeps listing the previous server's interrupted cards until this server starts a session for them (issue #29)", async () => {
+		const prepared: RestartManifest = {
+			at: new Date(SERVER_START - 60_000).toISOString(),
+			kanbanStart: new Date(PREVIOUS_START).toISOString(),
+			source: "prepare",
+			plannedAt: new Date(SERVER_START + 30_000).toISOString(),
+			cards: [
+				{ id: "dev1", column: "in_progress", wipTag: "preserve/dev1-wip-20261008T0959-restart" },
+				{ id: "dev3", column: "in_progress", wipTag: "preserve/dev3-wip-20261008T0959-restart" },
+				{ id: "dev2", column: "review", wipTag: null },
+			],
+		};
+		const harness = createHarness({ manifest: prepared, now: SERVER_START + 60_000 });
+		const before = SERVER_START - 10 * 60_000;
+		const interrupted = { state: "interrupted" as const, modelId: null, startedAt: before };
+		harness.setView({
+			board: board({ in_progress: [card("dev1"), card("dev3")], review: [card("dev2")] }),
+			// The startup mark: no longer "running", so the plain listing would drop them before their resume.
+			sessions: {
+				dev1: interrupted,
+				dev3: interrupted,
+				dev2: { state: "awaiting_review", modelId: null, startedAt: before },
+			},
+		});
+		const writer = createRestartManifestWriter(harness.deps);
+		writer.start();
+		// Recovery planned (plannedAt): the hold is over, and this server's manifest still lists both orphans.
+		await writer.writeAll("periodic");
+		expect(harness.getManifest()).toMatchObject({
+			source: "periodic",
+			kanbanStart: new Date(SERVER_START).toISOString(),
+			cards: [
+				{ id: "dev1", column: "in_progress", wipTag: null },
+				{ id: "dev3", column: "in_progress", wipTag: null },
+			],
+		});
+
+		// dev1 resumed and runs (listed as running), dev3 resumed and finished (not listed any more).
+		harness.setView({
+			...harness.getView(),
+			sessions: {
+				...harness.getView().sessions,
+				dev1: { state: "running", modelId: null, startedAt: SERVER_START + 90_000 },
+				dev3: { state: "awaiting_review", modelId: null, startedAt: SERVER_START + 90_000 },
+			},
+		});
+		await writer.writeAll("periodic");
+		expect(harness.getManifest()?.cards.map((entry) => entry.id)).toEqual(["dev1"]);
+		await writer.close();
+	});
+
 	it("reads, checks and writes under the manifest's file lock", async () => {
 		const harness = createHarness();
 		const writer = createRestartManifestWriter({

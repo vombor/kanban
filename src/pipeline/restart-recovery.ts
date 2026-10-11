@@ -256,6 +256,11 @@ export interface RestartManifestCandidate {
 	notListed: string | null;
 }
 
+/** The roles a restart manifest lists at all: calibration and triage cards have their own runner, plan cards are resumed by hand. */
+export function isRestartManifestRole(role: RuntimeTaskRole): boolean {
+	return role !== "calibration" && role !== "triage" && role !== "plan";
+}
+
 /**
  * The In Progress / Review cards a restart manifest is about, and which of them it lists: only cards whose agent is
  * mid-work (a Review card whose turn ended waits for QA, nothing to resume; an In Progress card without a summary was
@@ -277,7 +282,7 @@ export function listRestartManifestCandidates(
 			let notListed: string | null = null;
 			if (session ? session.state !== "running" : column.id !== "in_progress") {
 				notListed = `session ${session?.state ?? "none"}, not running`;
-			} else if (role === "calibration" || role === "triage" || role === "plan") {
+			} else if (!isRestartManifestRole(role)) {
 				notListed =
 					role === "plan" ? "a plan card is resumed by hand (kanban task resume)" : "left to its own runner";
 			}

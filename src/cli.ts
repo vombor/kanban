@@ -547,6 +547,10 @@ async function startServer(): Promise<{
 		},
 	});
 
+	// Every registered project from the start, not from the first request about it: restart recovery, the restart
+	// manifest writer and session sync only see managed workspaces (issue #29). Bound, so their orphans get marked.
+	await workspaceRegistry.loadRegisteredWorkspaces();
+
 	// Session sync moves cards between In Progress and Review on session state changes, with or without a
 	// browser open (src/server/session-column-sync.ts). Like auto-review, only the process that bound the server
 	// runs it. With session sync off (`sessionSync.enabled: false`) it is never created and the browser makes the moves.

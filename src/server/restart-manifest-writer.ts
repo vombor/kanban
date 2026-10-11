@@ -14,15 +14,21 @@
 //
 // Two manifests are held back from periodic writes. The previous server's, while this start may still need it: until
 // restart recovery has planned with it (`plannedAt`, markRestartManifestPlanned) or removed it, the file no longer is
-// the one read at this server's start, or `handoverMs` have passed (nothing else will use it). And a
+// the one read at this server's start, or `handoverMs` have passed since this writer first saw the workspace (nothing
+// else will use it; counted from then, not from the server start, so a project loaded late keeps it too). And a
 // `kanban restart prepare` manifest of this server younger than `prepareHoldMs` (a planned restart is coming, and its
 // tags and listing are the ones to use; the shutdown write keeps it too). A shutdown write never waits for the
 // handover: this server's own state is then the one the next start needs.
+//
+// Once the previous server's manifest is replaced, its cards stay listed until this server starts a session for them
+// while they are still "interrupted" (issue #29): a card that died with the old server shows that, not "running", so
+// the plain listing would drop it before restart recovery has resumed it. A card whose turn had ended isn't carried.
 //
 // Read, hold checks and write run under the manifest's file lock, the one `kanban restart prepare` and recovery take.
 import type { RuntimeBoardData, RuntimeTaskSessionSummary } from "../core/api-contract";
 import {
 	isManifestForStart,
+	isRestartManifestRole,
 	listRestartManifestCandidates,
 	type RestartManifest,
 	type RestartManifestCard,
@@ -40,7 +46,10 @@ export const DEFAULT_PREPARE_MANIFEST_HOLD_MS = 30 * 60_000;
 export interface RestartManifestWorkspaceView {
 	board: RuntimeBoardData;
 	/** The newest summary per task: the session manager's live ones, else sessions.json. */
-	sessions: Record<string, Pick<RuntimeTaskSessionSummary, "state" | "modelId">>;
+	sessions: Record<
+		string,
+		Pick<RuntimeTaskSessionSummary, "state" | "modelId"> & Partial<Pick<RuntimeTaskSessionSummary, "startedAt">>
+	>;
 }
 
 export interface CreateRestartManifestWriterDependencies {
@@ -82,6 +91,8 @@ interface WorkspaceEntry {
 	states: Map<string, string>;
 	/** The manifest on disk when this writer first looked (undefined: not read yet). */
 	inherited: RestartManifest | null | undefined;
+	/** When this writer first read the workspace's manifest: the handover is counted from then. */
+	firstSeenAt: number | null;
 }
 
 function isSameFile(a: RestartManifest | null | undefined, b: RestartManifest | null): boolean {
@@ -107,10 +118,24 @@ export function createRestartManifestWriter(deps: CreateRestartManifestWriterDep
 	const entryOf = (workspaceId: string): WorkspaceEntry => {
 		let entry = workspaces.get(workspaceId);
 		if (!entry) {
-			entry = { timer: null, queue: Promise.resolve(), lastCards: null, states: new Map(), inherited: undefined };
+			entry = {
+				timer: null,
+				queue: Promise.resolve(),
+				lastCards: null,
+				states: new Map(),
+				inherited: undefined,
+				firstSeenAt: null,
+			};
 			workspaces.set(workspaceId, entry);
 		}
 		return entry;
+	};
+
+	const inherit = (entry: WorkspaceEntry, manifest: RestartManifest | null): void => {
+		if (entry.inherited === undefined) {
+			entry.inherited = manifest;
+			entry.firstSeenAt = now();
+		}
 	};
 
 	const writeWorkspace = async (
@@ -125,17 +150,22 @@ export function createRestartManifestWriter(deps: CreateRestartManifestWriterDep
 		}
 		await withManifestLock(workspaceId, async () => {
 			const existing = await readManifest(workspaceId);
-			if (entry.inherited === undefined) {
-				entry.inherited = existing;
-			}
+			inherit(entry, existing);
 			const at = now();
+			const previousServers = isManifestForStart(
+				entry.inherited ?? null,
+				deps.serverStartedAt,
+				deps.previousServerStartedAt,
+			)
+				? entry.inherited
+				: null;
 			if (
 				source !== "shutdown" &&
 				existing &&
 				!existing.plannedAt &&
 				isSameFile(entry.inherited, existing) &&
-				isManifestForStart(existing, deps.serverStartedAt, deps.previousServerStartedAt) &&
-				at - deps.serverStartedAt < handoverMs
+				previousServers &&
+				at - (entry.firstSeenAt ?? at) < handoverMs
 			) {
 				return; // the previous server's, for restart recovery of this start
 			}
@@ -149,11 +179,24 @@ export function createRestartManifestWriter(deps: CreateRestartManifestWriterDep
 			) {
 				return; // `kanban restart prepare` ran: its manifest is the one for the planned restart
 			}
+			// The previous server's cards still "interrupted" (the startup mark) with no session of this server: not resumed.
+			const notResumed = new Set(
+				(previousServers?.cards ?? [])
+					.filter((listed) => {
+						const session = view.sessions[listed.id];
+						return session?.state === "interrupted" && !((session.startedAt ?? 0) >= deps.serverStartedAt);
+					})
+					.map((listed) => listed.id),
+			);
 			const cards: RestartManifestCard[] = listRestartManifestCandidates(
 				view.board.columns,
 				(taskId) => view.sessions[taskId],
 			)
-				.filter((candidate) => candidate.notListed === null)
+				.filter(
+					(candidate) =>
+						candidate.notListed === null ||
+						(notResumed.has(candidate.card.id) && isRestartManifestRole(candidate.role)),
+				)
 				.map((candidate) => ({
 					id: candidate.card.id,
 					column: candidate.column,
@@ -232,7 +275,7 @@ export function createRestartManifestWriter(deps: CreateRestartManifestWriterDep
 				entry.queue = entry.queue
 					.then(async () => {
 						if (entry.inherited === undefined) {
-							entry.inherited = await readManifest(workspaceId);
+							inherit(entry, await readManifest(workspaceId));
 						}
 					})
 					.catch(() => {});
