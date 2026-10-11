@@ -342,6 +342,36 @@ export function readQaVerdictRecords(entry: PipelineCardState | undefined): QaVe
 	return Array.isArray(records) ? records.filter((record): record is QaVerdictRecord => isPlainObject(record)) : [];
 }
 
+/**
+ * The gate's QA card that is reviewing the dev card right now: the one its entry names (`qaCard`, made for `qaCreated`),
+ * started and not yet ingested or superseded, In Progress or in Review waiting for its verdict to be ingested. A slot
+ * freed after `qa.timeoutMin` (`timedOutAt`) is slot accounting only: the card still runs and is still ingested, so it
+ * still counts (issue #33: the watchdog called a dev card stranded while its QA card was still working on it). With
+ * `snapshot`, only a QA card of that snapshot counts. A dead one (describeDeadQaCard) is the tick's to supersede.
+ */
+export function findRunningQaCard(input: {
+	cards: Readonly<Record<string, PipelineCardState>>;
+	devTaskId: string;
+	columnOf: (taskId: string) => RuntimeBoardColumnId | null;
+	snapshot?: string | null;
+}): { qaTaskId: string; entry: QaGateEntry } | null {
+	const dev = input.cards[input.devTaskId];
+	const qaTaskId = typeof dev?.qaCard === "string" ? dev.qaCard : null;
+	const entry = qaTaskId ? readQaGateEntry(input.cards[qaTaskId]) : null;
+	if (
+		!qaTaskId ||
+		!entry ||
+		entry.status !== "running" ||
+		entry.reviewsTaskId !== input.devTaskId ||
+		entry.snapshot !== dev?.qaCreated ||
+		(input.snapshot !== undefined && entry.snapshot !== input.snapshot)
+	) {
+		return null;
+	}
+	const column = input.columnOf(qaTaskId);
+	return column === "in_progress" || column === "review" ? { qaTaskId, entry } : null;
+}
+
 function toAgentSettings(model: EffectiveModel | null): RuntimeTaskAgentSettings | undefined {
 	if (!model) {
 		return undefined;

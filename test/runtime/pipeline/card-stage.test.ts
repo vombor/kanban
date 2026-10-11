@@ -15,6 +15,7 @@ const SINCE = Date.parse("2026-10-11T06:43:23.000Z");
 const DEV = createCard({ id: "8c28e" });
 const SNAPSHOT = "885ac393aaaa";
 const SUBMITTED: PipelineCardOutcome = { kind: "submitted", snapshot: SNAPSHOT, qa: true, reason: null };
+const QA_CARD = createCard({ id: "12ab6", role: "qa" });
 
 function qaEntry(overrides: Partial<QaGateEntry> = {}): QaGateEntry {
 	return {
@@ -53,13 +54,17 @@ function describeStages(input: {
 	checks?: PipelineCardStagesInput["checks"];
 	queueWaits?: Map<string, QaQueueWait>;
 	pidPressure?: boolean;
+	/** Other cards on the board (a QA card), by column. */
+	others?: Partial<Record<RuntimeBoardColumnId, RuntimeBoardCard[]>>;
 }) {
 	const card = input.card ?? DEV;
+	const column = input.column ?? "review";
+	const columnIds: RuntimeBoardColumnId[] = ["backlog", "in_progress", "review", "trash"];
 	return describePipelineCardStages({
-		columns: [
-			{ id: "backlog", cards: [] },
-			{ id: input.column ?? "review", cards: [card] },
-		],
+		columns: columnIds.map((id) => ({
+			id,
+			cards: [...(id === column ? [card] : []), ...(input.others?.[id] ?? [])],
+		})),
 		sessions: [],
 		state: {
 			version: PIPELINE_STATE_VERSION,
@@ -157,8 +162,23 @@ describe("describePipelineCardStages", () => {
 				[DEV.id]: { qaCreated: SNAPSHOT, qaCard: "12ab6" },
 				"12ab6": { qaGate: qaEntry({ status: "running", startedAt: NOW - 30_000 }) },
 			},
+			others: { in_progress: [QA_CARD] },
 		});
 		expect(stage).toMatchObject({ kind: "qa_running", label: "QA r2 running", qaTaskId: "12ab6", inFlight: true });
+	});
+
+	it("keeps showing the QA card running after its slot was freed, and while it waits in Review for ingestion (issue #33)", () => {
+		const cards = {
+			[DEV.id]: { qaCreated: SNAPSHOT, qaCard: "12ab6" },
+			"12ab6": {
+				qaGate: qaEntry({ status: "running", startedAt: NOW - 70 * 60_000, timedOutAt: NOW - 10 * 60_000 }),
+			},
+		};
+		const running = { kind: "qa_running", label: "QA r2 running", qaTaskId: "12ab6", inFlight: true };
+		expect(describeStages({ cards, others: { in_progress: [QA_CARD] } })[0]).toMatchObject(running);
+		expect(describeStages({ cards, others: { review: [QA_CARD] } })[0]).toMatchObject(running);
+		// One that went to Done without its verdict is not running (the gate supersedes it).
+		expect(describeStages({ cards, others: { trash: [QA_CARD] } })[0]).toMatchObject({ kind: "qa_next" });
 	});
 
 	it("shows the snapshot's verdict and what follows it, not in flight", () => {

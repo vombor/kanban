@@ -15,7 +15,7 @@ import { isPipelineCandidate, type PipelineCardOutcome, type PipelineSessionView
 import { readPipelineHold } from "./hold";
 import { type PipelineCardState, type PipelineWorkspaceState, readEscalatedAt } from "./pipeline-state";
 import { readQaChecksWait } from "./qa-checks-report";
-import { type QaQueueWait, readQaGateEntry, readQaPassEntry, readQaVerdictRecords } from "./qa-gate";
+import { findRunningQaCard, type QaQueueWait, readQaGateEntry, readQaPassEntry, readQaVerdictRecords } from "./qa-gate";
 import { recoveryHoldReason, recoveryRedoReason } from "./recovery";
 import { readEscalationRecord, readQaflow, readReworks } from "./rework";
 import { readOpenRework } from "./rework-state";
@@ -121,8 +121,14 @@ function describeSubmitted(
 	if (qaTaskId && qaEntry?.status === "queued") {
 		return describeQueuedQa(qaTaskId, qaEntry.round, input.queueWaits.get(qaTaskId));
 	}
-	if (qaTaskId && qaEntry?.status === "running") {
-		return stage("qa_running", `QA r${qaEntry.round} running`, { qaTaskId, inFlight: true });
+	const running = findRunningQaCard({
+		cards: input.state.cards,
+		devTaskId: taskId,
+		columnOf: (id) => input.columns.find((column) => column.cards.some((card) => card.id === id))?.id ?? null,
+		snapshot,
+	});
+	if (running) {
+		return stage("qa_running", `QA r${running.entry.round} running`, { qaTaskId: running.qaTaskId, inFlight: true });
 	}
 	const verdict = describeVerdict(entry, snapshot);
 	if (verdict) {

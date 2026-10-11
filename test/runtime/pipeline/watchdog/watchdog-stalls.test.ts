@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { RuntimeBoardCard, RuntimeBoardData } from "../../../../src/core/api-contract";
 import type { PipelineSessionView } from "../../../../src/pipeline/engine";
 import type { PipelineCardState } from "../../../../src/pipeline/pipeline-state";
+import type { QaGateEntry } from "../../../../src/pipeline/qa-gate";
 import {
 	detectPipelineIdle,
 	detectStalls,
@@ -98,6 +99,68 @@ describe("detectStalls", () => {
 		const board = createBoard({ review: [old("d0001")], in_progress: [old("q0001", { role: "qa" })] });
 		const result = detectStalls(input(board, { pipelineCards: { d0001: { qaCard: "q0001" } } }));
 		expect(result.items.filter((item) => item.taskId === "d0001")).toEqual([]);
+	});
+
+	describe("the QA gate's running QA card (issue #33: notes 1a48e/3d45a and 66ddd/9ef37, 2026-10-11)", () => {
+		const SNAPSHOT = "6f1c2a9e0b7d";
+		const gateCards = (qaGate: Partial<QaGateEntry> = {}): Record<string, PipelineCardState> => ({
+			d0001: { snapshot: SNAPSHOT, qaCreated: SNAPSHOT, qaCard: "q0001" },
+			q0001: {
+				qaGate: {
+					reviewsTaskId: "d0001",
+					round: 1,
+					snapshot: SNAPSHOT,
+					snapshotRef: "refs/kanban/snapshots/d0001",
+					outboxDir: "/tmp/outbox/q0001",
+					scratchDir: "/tmp/scratch/d0001",
+					baseRef: "main",
+					agentId: "cline",
+					model: null,
+					devAgentId: "cline",
+					devModel: null,
+					route: null,
+					status: "running",
+					createdAt: NOW - 101 * MIN,
+					startedAt: NOW - 100 * MIN,
+					reviewSeenAt: null,
+					nudges: 0,
+					// Its slot was freed after qa.timeoutMin (60): slot accounting only.
+					timedOutAt: NOW - 40 * MIN,
+					ingestedAt: null,
+					verdict: null,
+					trashed: false,
+					supersededAt: null,
+					checks: null,
+					...qaGate,
+				},
+			},
+		});
+		const qaCard = old("q0001", { role: "qa" });
+
+		it("counts a QA card still running after its slot was freed", () => {
+			const board = createBoard({ review: [old("d0001")], in_progress: [qaCard] });
+			const sessions = new Map([["q0001", session("q0001", { state: "running" })]]);
+			expect(detectStalls(input(board, { pipelineCards: gateCards(), sessions })).items).toEqual([]);
+		});
+
+		it("counts a QA card whose turn ended and that waits in Review for its verdict to be ingested", () => {
+			const board = createBoard({ review: [old("d0001"), qaCard] });
+			const sessions = new Map([["q0001", session("q0001", { state: "awaiting_review", updatedAt: NOW - 1000 })]]);
+			expect(detectStalls(input(board, { pipelineCards: gateCards(), sessions })).items).toEqual([]);
+		});
+
+		it("still reports the dev card once its QA card was ingested, superseded or left the board", () => {
+			const report = [expect.objectContaining({ key: "d0001:review-stall" })];
+			const inReview = createBoard({ review: [old("d0001"), qaCard] });
+			expect(
+				detectStalls(input(inReview, { pipelineCards: gateCards({ status: "ingested", verdict: "FAIL" }) })).items,
+			).toEqual(report);
+			expect(detectStalls(input(inReview, { pipelineCards: gateCards({ status: "superseded" }) })).items).toEqual(
+				report,
+			);
+			const gone = createBoard({ review: [old("d0001")], trash: [qaCard] });
+			expect(detectStalls(input(gone, { pipelineCards: gateCards() })).items).toEqual(report);
+		});
 	});
 
 	it("skips a card whose newest handled verdict is fresh, and a parked runoff PASS", () => {

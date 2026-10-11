@@ -8,9 +8,9 @@
 //     made a stash entry (issue #22) or the agent ran → item at once ("Done or restart?"); no turn on record → item after stall.reviewMin unless recovery sent
 //     something since                                                                                       → item
 //   any other dev card in Review with nothing pending (the safety net): the kit QA-gates it (a card it doesn't
-//     waits for the user's Approve & land), no QA card, no recovery hold, no rework waiting to start, no checks
-//     wait, settled (isReviewSettled), not escalated or stopped (listed already), not an open user item, no
-//     runoff PASS parked for its snapshot, and nothing happened to it (a move, its session, a verdict acted on,
+//     waits for the user's Approve & land), no QA card (the gate's counts until ingested), no recovery hold, no rework
+//     waiting to start, no checks wait, settled (isReviewSettled), not escalated or stopped (listed already), not an
+//     open user item, no runoff PASS parked for its snapshot, and nothing happened to it (a move, its session, a verdict acted on,
 //     recovery's last send, a rework) for > stall.reviewMin                                                  → item
 //   QA/TRIAGE card in progress with its session not running > stall.qaMin                                  → item
 //   dev card in progress whose session is not running > stall.resumeIdleMin: one continue per dead session
@@ -33,7 +33,7 @@ import { type EmptyDiffRecord, readCurrentEmptyDiff } from "../empty-diff";
 import type { PipelineSessionView } from "../engine";
 import { readPipelineHold } from "../hold";
 import type { PipelineCardState } from "../pipeline-state";
-import { readQaPassEntry } from "../qa-gate";
+import { findRunningQaCard, readQaPassEntry } from "../qa-gate";
 import { recoveryHoldReason } from "../recovery";
 import { isReworkAwaitingStart, readOpenRework } from "../rework-state";
 import { describeWorktreeStashes } from "../worktree-stash";
@@ -235,8 +235,9 @@ export function detectStalls(input: StallInput): StallResult {
 	const cards = cardsByColumn(input.board);
 	const columnOf = new Map(cards.map(({ column, card }) => [card.id, column]));
 
-	// Dev card id → a QA card working on it. A QA card idling in Backlog doesn't count (c1e30 10/05), unless PID
-	// pressure (bfb20 10/05) or the workspace's pause holds it.
+	// Dev card id → a QA card working on it: the QA gate's running QA card (findRunningQaCard: In Progress, or in
+	// Review until its verdict is ingested, its slot freed or not; issue #33), or a legacy one In Progress. A QA card
+	// idling in Backlog doesn't count (c1e30 10/05), unless PID pressure (bfb20 10/05) or the workspace's pause holds it.
 	const hasQaCard = new Set<string>();
 	const qaCardCounts = (column: RuntimeBoardColumnId | undefined) =>
 		column === "in_progress" || (column === "backlog" && (input.pidPressure || Boolean(input.pipelinePaused)));
@@ -248,7 +249,12 @@ export function detectStalls(input: StallInput): StallResult {
 	}
 	for (const [devId, entry] of Object.entries(input.pipelineCards)) {
 		const qaCard = typeof entry.qaCard === "string" ? entry.qaCard : null;
-		if (qaCard && qaCardCounts(columnOf.get(qaCard))) {
+		const running = findRunningQaCard({
+			cards: input.pipelineCards,
+			devTaskId: devId,
+			columnOf: (taskId) => columnOf.get(taskId) ?? null,
+		});
+		if (running || (qaCard && qaCardCounts(columnOf.get(qaCard)))) {
 			hasQaCard.add(devId);
 		}
 	}
