@@ -111,6 +111,7 @@ export interface PipelineWorkerDependencies {
 		loadAgentDefaultModels: (config: ParsedPipelineConfig) => Promise<EffectiveModelConfig["agentDefaultModels"]>;
 		coreJobs: WatchdogDependencies["coreJobs"];
 		takeWakeNotes: WatchdogDependencies["takeWakeNotes"];
+		readChecksStatus: WatchdogDependencies["readChecksStatus"];
 		log: (message: string) => void;
 	}) => Watchdog;
 	/** The issue import's job dependencies (tests inject a fake GitHub). */
@@ -429,6 +430,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			sync: deps.issueSync,
 		}),
 		takeWakeNotes: takeWorkspaceIssueWakeNotes,
+		readChecksStatus: () => checks.status?.() ?? null,
 		log,
 	});
 	let watchdogTimer: NodeJS.Timeout | null = null;

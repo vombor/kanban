@@ -44,6 +44,22 @@ export function readQaChecksWait(entry: PipelineCardState | undefined): QaChecks
 }
 
 /**
+ * When the gate's checks wait ends (`since` + `checksWaitMin`), or null without a wait (with `snapshot`: without one
+ * for that snapshot). Past it the gate creates the QA card without the checks.
+ */
+export function readQaChecksWaitDeadline(
+	entry: PipelineCardState | undefined,
+	checksWaitMin: number,
+	snapshot?: string | null,
+): number | null {
+	const wait = readQaChecksWait(entry);
+	if (!wait || (snapshot !== undefined && wait.snapshot !== snapshot)) {
+		return null;
+	}
+	return wait.since + checksWaitMin * 60_000;
+}
+
+/**
  * The checks recorded for this snapshot by the current checker: the result, `null` when the record has no details
  * (a legacy-kit checks-state.json entry), or `undefined` when this snapshot hasn't been checked.
  */

@@ -71,6 +71,7 @@ import {
 	hasHeadlessOrchestratorRunner,
 	isAgentWorkspaceTrusted,
 } from "../../terminal/orchestrator-agents";
+import type { ChecksRunnerStatus } from "../checks";
 import { createWorkspaceJsonLinesLog, type WorkspaceJsonLinesLog } from "../decision-log";
 import {
 	getRecoveryScope,
@@ -199,6 +200,8 @@ export interface WatchdogDependencies {
 	readSilentStall?: (input: SilentStallReadInput) => Promise<ClineSilentStall | null>;
 	/** A process the agent started that still runs in the worktree (recovery asks the same, findAgentToolProcess). */
 	findRunningTool?: AgentToolProcessFinder;
+	/** The worker's checks runner status (`ChecksRunner.status`), so a card whose checks run is not reported idle. */
+	readChecksStatus?: () => ChecksRunnerStatus | null;
 	now?: () => number;
 	log: (message: string) => void;
 }
@@ -504,6 +507,9 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 				sessions,
 				roles,
 				pipelineCards: pipelineState.cards,
+				workspaceId,
+				checks: deps.readChecksStatus?.() ?? null,
+				checksWaitMin: config.pipeline.qa.checksWaitMin,
 				qaGated,
 				userItemIds,
 				openRunoffCardIds: await readUndecidedRunoffCardIds(paths.runoffs),

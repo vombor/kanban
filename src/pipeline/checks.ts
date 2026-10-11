@@ -134,6 +134,30 @@ export interface ChecksRunnerStatus {
 	queued: ChecksRunnerCard[];
 }
 
+/** A card's checks in the runner's status: running (with its step), or queued with the runs ahead of it. */
+export type ChecksRunnerCardStatus = { kind: "running"; step: string | null } | { kind: "queued"; ahead: number };
+
+/**
+ * Where the runner has the card's checks, or null when it has none: the one reading of `status()` for a card, which
+ * the board's card stage (card-stage.ts) and the watchdog's Review safety net (watchdog/stalls.ts, issue #34) share.
+ * A card has at most one snapshot in the runner (a newer one stops the older run), so any entry is its current work.
+ */
+export function findCardChecks(
+	status: ChecksRunnerStatus | null,
+	workspaceId: string,
+	taskId: string,
+): ChecksRunnerCardStatus | null {
+	if (!status) {
+		return null;
+	}
+	const { running } = status;
+	if (running && running.workspaceId === workspaceId && running.taskId === taskId) {
+		return { kind: "running", step: running.step };
+	}
+	const position = status.queued.findIndex((queued) => queued.workspaceId === workspaceId && queued.taskId === taskId);
+	return position < 0 ? null : { kind: "queued", ahead: position + (running ? 1 : 0) };
+}
+
 export interface ChecksRunner extends ChecksQueue {
 	/** What runs and what waits; absent on test fakes that don't track it. */
 	status?: () => ChecksRunnerStatus;

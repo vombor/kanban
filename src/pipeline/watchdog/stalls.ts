@@ -9,9 +9,10 @@
 //     something since                                                                                       → item
 //   any other dev card in Review with nothing pending (the safety net): the kit QA-gates it (a card it doesn't
 //     waits for the user's Approve & land), no QA card (the gate's counts until ingested), no recovery hold, no rework
-//     waiting to start, no checks wait, settled (isReviewSettled), not escalated or stopped (listed already), not an
-//     open user item, no runoff PASS parked for its snapshot, and nothing happened to it (a move, its session, a verdict acted on,
-//     recovery's last send, a rework) for > stall.reviewMin                                                  → item
+//     waiting to start, no checks running or queued for it and no checks wait before its deadline (issue #34),
+//     settled (isReviewSettled), not escalated or stopped (listed already), not an open user item, no runoff PASS
+//     parked for its snapshot, and nothing happened to it (a move, its session, a verdict acted on, recovery's last
+//     send, a rework, its checks finishing, the gate creating its QA card) for > stall.reviewMin             → item
 //   QA/TRIAGE card in progress with its session not running > stall.qaMin                                  → item
 //   dev card in progress whose session is not running > stall.resumeIdleMin: one continue per dead session
 //     (not during a PID brownout), then > stall.idleMin                                                     → item
@@ -29,11 +30,13 @@ import type {
 import { resolveCardRole } from "../../core/card-role";
 import { arePrerequisitesDone, getBoardPrerequisiteStatuses } from "../../core/task-prerequisites";
 import { isReviewSettled } from "../../terminal/review-settle";
+import { type ChecksRunnerStatus, findCardChecks } from "../checks";
 import { type EmptyDiffRecord, readCurrentEmptyDiff } from "../empty-diff";
 import type { PipelineSessionView } from "../engine";
 import { readPipelineHold } from "../hold";
 import type { PipelineCardState } from "../pipeline-state";
-import { findRunningQaCard, readQaPassEntry } from "../qa-gate";
+import { readQaChecksWaitDeadline } from "../qa-checks-report";
+import { findRunningQaCard, readQaGateEntry, readQaPassEntry } from "../qa-gate";
 import { recoveryHoldReason } from "../recovery";
 import { isReworkAwaitingStart, readOpenRework } from "../rework-state";
 import { describeWorktreeStashes } from "../worktree-stash";
@@ -89,6 +92,11 @@ export interface StallInput {
 	sessions: ReadonlyMap<string, PipelineSessionView>;
 	roles: ReadonlyMap<string, WatchdogCardRole>;
 	pipelineCards: Readonly<Record<string, PipelineCardState>>;
+	workspaceId: string;
+	/** The worker's checks runner status (machine-wide), or null when it has none. */
+	checks: ChecksRunnerStatus | null;
+	/** `pipeline.qa.checksWaitMin`: how long the QA gate waits for a snapshot's checks. */
+	checksWaitMin: number;
 	/** The kit QA-gates this dev card (qaPolicy answers `qa`); a card the kit doesn't gate waits for Approve & land. */
 	qaGated: (card: RuntimeBoardCard) => boolean;
 	userItemIds: ReadonlySet<string>;
@@ -166,14 +174,22 @@ function parseTimes(values: unknown[]): number[] {
 		.filter((at) => Number.isFinite(at));
 }
 
-/** When the pipeline last did something to the card: a verdict acted on, recovery's last send, its last rework. */
-function readPipelineActivityTimes(entry: PipelineCardState | undefined): number[] {
+/**
+ * When the pipeline last did something to the card: a verdict acted on, recovery's last send, its last rework, its
+ * checks finishing (recorded on the entry), the QA gate creating its QA card. The last two follow each other within a
+ * second, and the gate's write that creates the QA card also ends its checks wait (issue #34: e4b7c was reported in
+ * that second, its QA card queued in Backlog and its wait gone).
+ */
+function readPipelineActivityTimes(cards: Readonly<Record<string, PipelineCardState>>, taskId: string): number[] {
+	const entry = cards[taskId];
 	const qaflow = asRecord(entry?.qaflow);
 	const rework = asRecord(Array.isArray(qaflow.reworks) ? qaflow.reworks.at(-1) : undefined);
 	const verdictAt = readNewestHandledVerdictAt(entry);
+	const qaGate = typeof entry?.qaCard === "string" ? readQaGateEntry(cards[entry.qaCard]) : null;
 	return [
 		...(verdictAt === null ? [] : [verdictAt]),
-		...parseTimes([qaflow.recoverySentAt, rework.at, rework.startedAt, rework.restartAt]),
+		...(qaGate?.reviewsTaskId === taskId ? [qaGate.createdAt] : []),
+		...parseTimes([qaflow.recoverySentAt, rework.at, rework.startedAt, rework.restartAt, asRecord(entry?.checks).at]),
 	];
 }
 
@@ -293,16 +309,18 @@ export function detectStalls(input: StallInput): StallResult {
 				continue;
 			}
 			// The safety net: nothing pending for the card (no QA card working on it, no hold, no rework waiting to
-			// start, no checks QA waits for, settled) since its newest activity (a move, its session, a verdict acted on,
-			// recovery's last send, a rework). While the pipeline is paused its verdict, PASS or rework waits on purpose
-			// (the paused item in ATTENTION.md says so).
-			const quietSince = Math.max(since, ...readPipelineActivityTimes(entry));
+			// start, no checks running or queued, no checks wait before its deadline, settled) since its newest activity
+			// (readPipelineActivityTimes). While the pipeline is paused its verdict, PASS or rework waits on purpose (the
+			// paused item in ATTENTION.md says so). Past the checks wait's deadline with nothing running, it is reported.
+			const quietSince = Math.max(since, ...readPipelineActivityTimes(input.pipelineCards, card.id));
+			const checksWaitDeadline = readQaChecksWaitDeadline(entry, input.checksWaitMin);
 			if (
 				input.pipelinePaused ||
 				!input.qaGated(card) ||
 				recoveryHoldReason(entry) ||
 				isReworkAwaitingStart(readOpenRework(qaflow), now) ||
-				entry?.qaChecksWait ||
+				findCardChecks(input.checks, input.workspaceId, card.id) ||
+				(checksWaitDeadline !== null && now < checksWaitDeadline) ||
 				hasQaCard.has(card.id) ||
 				!isReviewSettled(session, now, input.reviewSettleMs) ||
 				now - quietSince < settings.reviewMin * MIN

@@ -10,11 +10,11 @@
 // (worker-protocol.ts `cardStages`), and the server to that workspace's board clients only.
 import type { RuntimeBoardCard, RuntimeBoardColumnId, RuntimePipelineCardStage } from "../core/api-contract";
 import { resolveCardRole } from "../core/card-role";
-import type { ChecksRunnerStatus } from "./checks";
+import { type ChecksRunnerStatus, findCardChecks } from "./checks";
 import { isPipelineCandidate, type PipelineCardOutcome, type PipelineSessionView } from "./engine";
 import { readPipelineHold } from "./hold";
 import { type PipelineCardState, type PipelineWorkspaceState, readEscalatedAt } from "./pipeline-state";
-import { readQaChecksWait } from "./qa-checks-report";
+import { readQaChecksWaitDeadline } from "./qa-checks-report";
 import { findRunningQaCard, type QaQueueWait, readQaGateEntry, readQaPassEntry, readQaVerdictRecords } from "./qa-gate";
 import { recoveryHoldReason, recoveryRedoReason } from "./recovery";
 import { readEscalationRecord, readQaflow, readReworks } from "./rework";
@@ -103,8 +103,7 @@ function describeSubmitted(
 ): Stage {
 	const entry = input.state.cards[taskId];
 	const { snapshot } = outcome;
-	const wait = readQaChecksWait(entry);
-	const deadline = snapshot && wait?.snapshot === snapshot ? wait.since + input.checksWaitMin * 60_000 : null;
+	const deadline = snapshot ? readQaChecksWaitDeadline(entry, input.checksWaitMin, snapshot) : null;
 	const next = outcome.qa ? "QA next" : "Approve & land";
 	const checks = describeChecks(input, taskId, { next, deadline });
 	if (checks) {
@@ -152,25 +151,19 @@ function describeChecks(
 	taskId: string,
 	fields: { next: string | null; deadline: number | null },
 ): Stage | null {
-	const { checks, workspaceId } = input;
+	const checks = findCardChecks(input.checks, input.workspaceId, taskId);
 	if (!checks) {
 		return null;
 	}
-	const running = checks.running;
-	if (running && running.workspaceId === workspaceId && running.taskId === taskId) {
-		return stage("checks_running", `Checks running${running.step ? ` (${running.step})` : ""}`, {
+	if (checks.kind === "running") {
+		return stage("checks_running", `Checks running${checks.step ? ` (${checks.step})` : ""}`, {
 			...fields,
 			inFlight: true,
 		});
 	}
-	const position = checks.queued.findIndex((queued) => queued.workspaceId === workspaceId && queued.taskId === taskId);
-	if (position < 0) {
-		return null;
-	}
-	const ahead = position + (running ? 1 : 0);
 	return stage("checks_queued", "Checks queued", {
 		...fields,
-		detail: ahead > 0 ? `${ahead} card(s) ahead in the machine-wide checks queue` : null,
+		detail: checks.ahead > 0 ? `${checks.ahead} card(s) ahead in the machine-wide checks queue` : null,
 		inFlight: true,
 	});
 }

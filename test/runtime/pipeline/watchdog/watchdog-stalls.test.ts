@@ -27,6 +27,9 @@ function input(board: RuntimeBoardData, overrides: Partial<StallInput> = {}): St
 		sessions: new Map(),
 		roles: new Map(cards.map((card) => [card.id, resolveWatchdogCardRole(card)])),
 		pipelineCards: {},
+		workspaceId: "ws1",
+		checks: null,
+		checksWaitMin: 20,
 		qaGated: () => true,
 		userItemIds: new Set(),
 		openRunoffCardIds: new Set(),
@@ -196,7 +199,7 @@ describe("detectStalls", () => {
 			hold1: { qaflow: { retryAt: iso(-5) } },
 			orph1: { qaflow: { orphan: { at: iso(30) } } },
 			rewo1: { qaflow: { reworks: [{ at: iso(1) }] } },
-			chec1: { qaChecksWait: { snapshot: "abc", since: iso(20) } },
+			chec1: { qaChecksWait: { snapshot: "abc", since: NOW - 15 * MIN } },
 			sent1: { qaflow: { recoverySentAt: iso(2) } },
 		};
 		const board = createBoard({ review: Object.keys(pipelineCards).map((id) => old(id)) });
@@ -212,6 +215,117 @@ describe("detectStalls", () => {
 		expect(detectStalls(input(fresh, { sessions: unsettled, reviewSettleMs: 12_000 })).items).toEqual([]);
 		// A card the kit doesn't QA-gate waits for the user's Approve & land.
 		expect(detectStalls(input(fresh, { qaGated: () => false })).items).toEqual([]);
+	});
+
+	describe("checks in flight (issue #34: foo e4b7c, 2026-10-11)", () => {
+		const SNAPSHOT = "7e47811c70f8";
+		// e4b7c: in Review since 11:05:54, checks queued 11:06:07 (wait until 11:26:07), the test step still writing at
+		// 11:19:26, and the watchdog reported it at 11:19:58, 14 min in.
+		const e4b7c = () => old("e4b7c", { updatedAt: NOW - 14 * MIN });
+		const settled = new Map([
+			["e4b7c", session("e4b7c", { state: "awaiting_review", reviewReason: "hook", updatedAt: NOW - 14 * MIN })],
+		]);
+		const waiting = (minutesAgo: number): Record<string, PipelineCardState> => ({
+			e4b7c: { qaChecksWait: { snapshot: SNAPSHOT, since: NOW - minutesAgo * MIN } },
+		});
+		const report = [expect.objectContaining({ key: "e4b7c:review-stall" })];
+
+		it("doesn't report a card whose checks are running, its QA due later", () => {
+			const board = createBoard({ review: [e4b7c()] });
+			const checks = {
+				running: {
+					workspaceId: "ws1",
+					taskId: "e4b7c",
+					snapshot: SNAPSHOT,
+					step: "test",
+					startedAt: NOW - 13 * MIN,
+				},
+				queued: [],
+			};
+			expect(detectStalls(input(board, { sessions: settled, pipelineCards: waiting(14), checks })).items).toEqual(
+				[],
+			);
+			// The runner's word counts on its own, a wait record or not.
+			expect(detectStalls(input(board, { sessions: settled, checks })).items).toEqual([]);
+		});
+
+		it("doesn't report a card whose checks are queued behind another card's", () => {
+			const board = createBoard({ review: [e4b7c()] });
+			const checks = {
+				running: { workspaceId: "ws2", taskId: "f0001", snapshot: "1234", step: "install", startedAt: NOW - MIN },
+				queued: [{ workspaceId: "ws1", taskId: "e4b7c", snapshot: SNAPSHOT }],
+			};
+			expect(detectStalls(input(board, { sessions: settled, checks })).items).toEqual([]);
+		});
+
+		it("doesn't report a card in its checks wait before the deadline", () => {
+			const board = createBoard({ review: [e4b7c()] });
+			expect(detectStalls(input(board, { sessions: settled, pipelineCards: waiting(14) })).items).toEqual([]);
+		});
+
+		it("doesn't report a card whose checks just finished and whose QA card was just created (queued in Backlog)", () => {
+			// 11:19:56 checks PASS, 11:19:57 QA card 675a1 created (the gate's write ends the wait), started 11:19:59.
+			const board = createBoard({ review: [e4b7c()], backlog: [old("675a1", { role: "qa" })] });
+			const checksDone = {
+				verdict: "PASS",
+				at: new Date(NOW - 2000).toISOString(),
+				logs: "",
+				steps: [],
+				error: null,
+			};
+			const qaGate: QaGateEntry = {
+				reviewsTaskId: "e4b7c",
+				round: 1,
+				snapshot: SNAPSHOT,
+				snapshotRef: "refs/kanban/snapshots/e4b7c",
+				outboxDir: "/tmp/outbox/675a1",
+				scratchDir: "/tmp/scratch/e4b7c",
+				baseRef: "main",
+				agentId: "cline",
+				model: null,
+				devAgentId: "codex",
+				devModel: null,
+				route: null,
+				status: "queued",
+				createdAt: NOW - 1000,
+				startedAt: null,
+				reviewSeenAt: null,
+				nudges: 0,
+				timedOutAt: null,
+				ingestedAt: null,
+				verdict: null,
+				trashed: false,
+				supersededAt: null,
+				checks: "PASS",
+			};
+			// Each counts as the pipeline's activity on its own: the checks finishing, the gate creating the QA card.
+			const checksOnly = { e4b7c: { snapshot: SNAPSHOT, checks: checksDone } };
+			const qaCardOnly = { e4b7c: { qaCreated: SNAPSHOT, qaCard: "675a1" }, "675a1": { qaGate } };
+			expect(detectStalls(input(board, { sessions: settled, pipelineCards: checksOnly })).items).toEqual([]);
+			expect(detectStalls(input(board, { sessions: settled, pipelineCards: qaCardOnly })).items).toEqual([]);
+			// The same queued QA card created 14 min ago and never started is reported, as before.
+			const stale = { ...qaCardOnly, "675a1": { qaGate: { ...qaGate, createdAt: NOW - 14 * MIN } } };
+			expect(detectStalls(input(board, { sessions: settled, pipelineCards: stale })).items).toEqual(report);
+		});
+
+		it("reports the card once the checks wait is past its deadline with nothing running", () => {
+			const board = createBoard({ review: [old("e4b7c", { updatedAt: NOW - 30 * MIN })] });
+			const quiet = new Map([["e4b7c", session("e4b7c", { state: "awaiting_review", updatedAt: NOW - 30 * MIN })]]);
+			const otherCard = {
+				running: { workspaceId: "ws1", taskId: "f0001", snapshot: "1234", step: "test", startedAt: NOW - MIN },
+				queued: [{ workspaceId: "ws2", taskId: "e4b7c", snapshot: SNAPSHOT }],
+			};
+			expect(
+				detectStalls(input(board, { sessions: quiet, pipelineCards: waiting(25), checks: otherCard })).items,
+			).toEqual(report);
+		});
+
+		it("reports a card with really nothing pending", () => {
+			const board = createBoard({ review: [e4b7c()] });
+			expect(detectStalls(input(board, { sessions: settled, checks: { running: null, queued: [] } })).items).toEqual(
+				report,
+			);
+		});
 	});
 
 	it("an empty diff whose agent ran is reported at once, instead of the generic Review stall", () => {
