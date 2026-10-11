@@ -34,10 +34,15 @@ function cleanItem(item: string): string {
 		.replace(/\s*\n\s*/gu, " ");
 }
 
-/** True when the orchestrator sidebar session can take typed input. */
+/**
+ * True when the orchestrator sidebar session can take typed input. `live: false` (the server's own answer: no
+ * process) wins over a pid: a summary hydrated after a restart keeps the dead process's pid in every state but
+ * "running" (only those are marked interrupted), so a wake would be typed into nothing, tick after tick.
+ */
 export function isOrchestratorSessionLive(session: PipelineSessionView | null | undefined): boolean {
 	return Boolean(
 		session &&
+			session.live !== false &&
 			session.pid !== null &&
 			session.pid !== undefined &&
 			session.state !== "failed" &&
@@ -131,6 +136,32 @@ export function keepForRetry(
 	}
 }
 
+/** Where a wake goes (wakeOrchestrator below): never zero orchestrators and never two. */
+export type WakeRoute =
+	/** A headless run is going: the items go into its queue. */
+	| "headless-queue"
+	/** The sidebar session is live: the text is typed into it. */
+	| "sidebar"
+	/** A new headless run. */
+	| "headless"
+	/** The sidebar session is started server-side with the text as its first input. */
+	| "start-sidebar";
+
+export function planWakeRoute(input: {
+	headlessPid: number;
+	session: PipelineSessionView | null;
+	mode: WakeMode;
+	hasHeadlessRunner: boolean;
+}): WakeRoute {
+	if (input.headlessPid) {
+		return "headless-queue";
+	}
+	if (isOrchestratorSessionLive(input.session)) {
+		return "sidebar";
+	}
+	return input.mode === "headless" && input.hasHeadlessRunner ? "headless" : "start-sidebar";
+}
+
 export interface WakeTarget {
 	workspaceId: string;
 	projectPath: string;
@@ -188,7 +219,13 @@ export async function wakeOrchestrator(input: WakeInput): Promise<WakeOutcome> {
 	}
 
 	const pid = deps.headlessPid();
-	if (pid) {
+	const route = planWakeRoute({
+		headlessPid: pid,
+		session: target.session,
+		mode: input.mode,
+		hasHeadlessRunner: deps.hasHeadlessRunner,
+	});
+	if (route === "headless-queue") {
 		if (fresh.length === 0) {
 			return {
 				path: "none",
@@ -207,7 +244,7 @@ export async function wakeOrchestrator(input: WakeInput): Promise<WakeOutcome> {
 		};
 	}
 
-	if (isOrchestratorSessionLive(target.session)) {
+	if (route === "sidebar") {
 		const pending = state.wakeEnter;
 		if (pending && (pending.taskId !== target.sessionId || now - Date.parse(pending.at) >= input.retryMs)) {
 			state.wakeEnter = null;
@@ -255,7 +292,7 @@ export async function wakeOrchestrator(input: WakeInput): Promise<WakeOutcome> {
 	if (fresh.length === 0) {
 		return { path: "none", ok: true, items: [], detail: "nothing due" };
 	}
-	if (input.mode === "headless" && deps.hasHeadlessRunner) {
+	if (route === "headless") {
 		const started = await deps.startHeadless(fresh);
 		if (started.ok) {
 			markWoken(state, fresh, now);

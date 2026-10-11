@@ -56,6 +56,12 @@ target won.
   orchestrator. The sidebar session is launched through `startTaskSession`, which gives it X's credential. Under
   `enforce`, wakes go to the sidebar session instead of a headless run, because a headless run has no isolation
   guardrails.
+- **The restart wake.** After a server start each workspace's own orchestrator gets one "Kanban restarted" item
+  (`watchdog.restartWake`, `src/pipeline/watchdog/restart-wake.ts`) built only from that workspace's restart
+  manifest and its own `restart` records in its pipeline-decisions.jsonl, routed like any other wake item (with its
+  wakes off, into its own ATTENTION.md). Only workspaces with an orchestrator get one: a sidebar summary in its
+  sessions.json or a wake in its watchdog state. "Sent" is `restartWake` in its own watchdog-state.json, keyed by
+  the server start.
 - **Machine-wide jobs stay machine-wide.** The PID pressure level, its flag files and the process sweep run once
   per tick for the machine, and their notices go to the server log (`watchdog: PID pressure, level ...` and the
   process-sweep lines). A workspace's ATTENTION.md carries a PID-pressure line only because its own new work is

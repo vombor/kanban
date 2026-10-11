@@ -26,6 +26,11 @@ export type WatchdogActionRequest =
 			prompt: string;
 			/** The workspace whose board needs the orchestrator (required; the server refuses another workspace's). */
 			fromWorkspaceId: string;
+			/**
+			 * Start with `resumeFromTrash`: the agent continues its last conversation in the project and `prompt` is its
+			 * next turn. Only for a sidebar a restart cut off, on an agent with agentContinuesConversationOnResume().
+			 */
+			continueConversation?: boolean;
 	  }
 	/** Deletes Done cards older than `days` after a backup (src/state/board-prune.ts). */
 	| { kind: "pruneDone"; workspaceId: string; days: number }

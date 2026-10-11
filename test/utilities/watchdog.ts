@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { vi } from "vitest";
 
@@ -8,10 +9,17 @@ import type { PipelineSessionView, PipelineWorkspaceSnapshot } from "../../src/p
 import { createPipelineEventBus } from "../../src/pipeline/events";
 import { createPipelineFeatureRegistry } from "../../src/pipeline/features";
 import { createPipelineStateStore } from "../../src/pipeline/pipeline-state";
+import type { RestartPassView } from "../../src/pipeline/recovery-stage";
+import { restartManifestSchema } from "../../src/pipeline/restart-recovery";
 import type { WatchdogActionRequest, WatchdogActionResults } from "../../src/pipeline/watchdog/actions";
 import type { PidUsage } from "../../src/pipeline/watchdog/pid-pressure";
 import { createWatchdog, type WatchdogDependencies } from "../../src/pipeline/watchdog/watchdog";
-import { getPidPressureFlagPaths, getWatchdogWorkspacePaths } from "../../src/state/kanban-home";
+import {
+	getPidPressureFlagPaths,
+	getPipelineDecisionLogPath,
+	getRestartManifestPath,
+	getWatchdogWorkspacePaths,
+} from "../../src/state/kanban-home";
 import { createTempDir } from "./temp-dir";
 
 export const WATCHDOG_NOW = Date.parse("2026-10-07T12:00:00.000Z");
@@ -28,7 +36,17 @@ export interface WatchdogHarnessOptions {
 	takeWakeNotes?: WatchdogDependencies["takeWakeNotes"];
 	/** Answers one request (undefined: the per-kind answer). */
 	respond?: (request: WatchdogActionRequest) => WatchdogActionResults[WatchdogActionRequest["kind"]] | undefined;
+	/** Answers one request asynchronously, e.g. through the server's real handler (undefined: as without it). */
+	handleRequest?: (
+		request: WatchdogActionRequest,
+	) => Promise<WatchdogActionResults[WatchdogActionRequest["kind"]] | undefined>;
+	/** Restart recovery's pass per workspace (the worker's RecoveryStage.restartPass). */
+	readRestartPass?: WatchdogDependencies["readRestartPass"];
+	/** Another harness's Kanban home: a second worker life on the same files (not removed by this one's cleanup). */
+	home?: string;
 }
+
+export type { RestartPassView };
 
 export function deliveryResult(status: RuntimeTaskInputDeliveryResponse["status"]): RuntimeTaskInputDeliveryResponse {
 	return {
@@ -42,8 +60,8 @@ export function deliveryResult(status: RuntimeTaskInputDeliveryResponse["status"
 
 /** A watchdog on a temp home: its files, a recorded action client, injected PID use, headless lock and clock. */
 export function createWatchdogHarness(options: WatchdogHarnessOptions = {}) {
-	const temp = createTempDir("kanban-watchdog-");
-	const home = temp.path;
+	const temp = options.home ? null : createTempDir("kanban-watchdog-");
+	const home = options.home ?? (temp as { path: string }).path;
 	let rawConfig: unknown = options.config ?? { watchdog: { mode: "on" } };
 	let now = WATCHDOG_NOW;
 	let pidUsage = options.pidUsage ?? null;
@@ -62,6 +80,10 @@ export function createWatchdogHarness(options: WatchdogHarnessOptions = {}) {
 			request: async (request) => {
 				requests.push(request);
 				const kind = request.kind;
+				const handled = await options.handleRequest?.(request);
+				if (handled !== undefined) {
+					return handled as never;
+				}
 				const fallback: { [Kind in WatchdogActionRequest["kind"]]: WatchdogActionResults[Kind] } = {
 					deliverInput: deliveryResult("delivered"),
 					interrupt: { ok: true },
@@ -90,6 +112,13 @@ export function createWatchdogHarness(options: WatchdogHarnessOptions = {}) {
 		probeModel: async () => false,
 		findRunningTool: async (worktreePath, agentPid) => options.findRunningTool?.(worktreePath, agentPid) ?? null,
 		isTrusted: async () => true,
+		readRestartPass: options.readRestartPass,
+		readRestartManifest: async (workspaceId) => {
+			const text = await readFile(getRestartManifestPath(workspaceId, home), "utf8").catch(() => null);
+			const parsed = text === null ? null : restartManifestSchema.safeParse(JSON.parse(text));
+			return parsed?.success ? parsed.data : null;
+		},
+		getPipelineDecisionsPath: (workspaceId) => getPipelineDecisionLogPath(workspaceId, home),
 		coreJobs: options.coreJobs,
 		takeWakeNotes: options.takeWakeNotes,
 		now: () => now,
@@ -122,6 +151,7 @@ export function createWatchdogHarness(options: WatchdogHarnessOptions = {}) {
 			selectedAgentId?: RuntimeAgentId;
 			workspacePath?: string;
 			serverStartedAt?: number;
+			previousServerStartedAt?: number | null;
 		}): PipelineWorkspaceSnapshot => {
 			const snapshot: PipelineWorkspaceSnapshot = {
 				workspaceId: input.workspaceId,
@@ -130,10 +160,13 @@ export function createWatchdogHarness(options: WatchdogHarnessOptions = {}) {
 				sessions: input.sessions ?? [],
 				selectedAgentId: input.selectedAgentId ?? "claude",
 				...(input.serverStartedAt === undefined ? {} : { serverStartedAt: input.serverStartedAt }),
+				...(input.previousServerStartedAt === undefined
+					? {}
+					: { previousServerStartedAt: input.previousServerStartedAt }),
 			};
 			watchdog.observe(snapshot);
 			return snapshot;
 		},
-		cleanup: temp.cleanup,
+		cleanup: temp?.cleanup ?? (() => {}),
 	};
 }

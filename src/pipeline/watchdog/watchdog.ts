@@ -33,13 +33,14 @@ import { dirname } from "node:path";
 
 import {
 	getWorkspacePipelineSettings,
+	isRestartWakeEnabled,
 	type ParsedPipelineConfig,
 	resolveWorkspaceWakeSettings,
 	type WatchdogMode,
 } from "../../config/pipeline-config";
 import type { RuntimeAgentId, RuntimeBoardCard, RuntimeBoardColumnId } from "../../core/api-contract";
 import type { EffectiveModelConfig } from "../../core/effective-agent";
-import { createHomeAgentSessionId } from "../../core/home-agent-session";
+import { createHomeAgentSessionId, isHomeAgentSessionIdForWorkspace } from "../../core/home-agent-session";
 import { resolveIsolationMode } from "../../isolation/isolation-settings";
 import { KANBAN_SESSION_CREDENTIAL_ENV, KANBAN_SESSION_WORKSPACE_ENV } from "../../isolation/session-identity";
 import { createRoutingPolicy, type RoutingPolicy } from "../../kits/policy";
@@ -66,6 +67,7 @@ import {
 	readClineSilentStall,
 } from "../../terminal/cline-turn-check";
 import {
+	agentContinuesConversationOnResume,
 	agentHooksOnPromptSubmit,
 	getAgentLabel,
 	hasHeadlessOrchestratorRunner,
@@ -85,6 +87,8 @@ import {
 import type { PipelineFeatureJob, PipelineFeatureRegistry } from "../features";
 import type { PipelineStateStore } from "../pipeline-state";
 import { readQaGateEntry } from "../qa-gate";
+import type { RestartPassView } from "../recovery-stage";
+import { lostToRestart, type RestartManifest, readRestartManifest } from "../restart-recovery";
 import type { WatchdogActions } from "./actions";
 import {
 	formatQaPausedItem,
@@ -114,6 +118,15 @@ import {
 import { findPromptWaits } from "./prompt-watch";
 import { detectRestartQaGaps } from "./restart-checks";
 import {
+	buildRestartWakeItem,
+	describePreviousStop,
+	isRestartWakeItem,
+	RESTART_WAKE_ATTENTION_KEEP_MS,
+	type RestartWakeSession,
+	readRestartRecords,
+	summarizeRestartRecords,
+} from "./restart-wake";
+import {
 	CONTINUE_TEXT,
 	detectPipelineIdle,
 	detectStalls,
@@ -123,7 +136,16 @@ import {
 	resolveWatchdogCardRole,
 	type WatchdogCardRole,
 } from "./stalls";
-import { buildWakeText, isOrchestratorSessionLive, type WakeOutcome, wakeKey, wakeOrchestrator } from "./wake";
+import {
+	buildWakeText,
+	isOrchestratorSessionLive,
+	planWakeRoute,
+	type WakeMode,
+	type WakeOutcome,
+	type WakeRoute,
+	wakeKey,
+	wakeOrchestrator,
+} from "./wake";
 import { checkWakeRequests, describeWakeRequestCondition, readWakeRequests, updateWakeRequests } from "./wake-requests";
 import { loadWatchdogState, saveWatchdogState, type WatchdogWorkspaceState } from "./watchdog-state";
 import { readCalibrationRunIds, readUndecidedRunoffCardIds } from "./workspace-data";
@@ -202,6 +224,14 @@ export interface WatchdogDependencies {
 	findRunningTool?: AgentToolProcessFinder;
 	/** The worker's checks runner status (`ChecksRunner.status`), so a card whose checks run is not reported idle. */
 	readChecksStatus?: () => ChecksRunnerStatus | null;
+	/** Restart recovery's pass over a workspace in this worker life (RecoveryStage.restartPass), for the restart wake. */
+	readRestartPass?: (workspaceId: string) => RestartPassView | null;
+	/** The workspace's restart manifest (default: readRestartManifest), read when a server start is first seen. */
+	readRestartManifest?: (workspaceId: string) => Promise<RestartManifest | null>;
+	/** The workspace's pipeline-decisions.jsonl, whose `restart` records the restart wake reports. */
+	getPipelineDecisionsPath?: (workspaceId: string) => string;
+	/** Whether a resume continues the agent's conversation (default: agentContinuesConversationOnResume). */
+	continuesConversationOnResume?: (agentId: RuntimeAgentId) => boolean;
 	now?: () => number;
 	log: (message: string) => void;
 }
@@ -257,6 +287,42 @@ function describeRecoveryNotActing(
 	return "the workspace is a shadow workspace (pipeline.shadow)";
 }
 
+/** Why restart recovery doesn't evaluate a workspace at all (the worker's evaluate and getRecoveryScope), or null. */
+function describeRecoveryNotRunning(
+	config: ParsedPipelineConfig["config"],
+	settings: ReturnType<typeof getWorkspacePipelineSettings>,
+): string | null {
+	if (config.pipeline.paused) {
+		return "pipeline.paused is on";
+	}
+	if (getRecoveryScope(config, settings).evaluate) {
+		return null;
+	}
+	const { mode } = config.pipeline.recovery;
+	if (mode === "off") {
+		return "pipeline.recovery.mode is off";
+	}
+	if (!settings.recovery.enabled) {
+		return "recovery is disabled for this workspace (workspaces.<id>.recovery.enabled)";
+	}
+	return `pipeline.recovery.mode is ${mode} and the workspace's landing mode is ${settings.landing.mode}, not qa`;
+}
+
+/** Who the orchestrator is for a wake of one workspace, and the route the wake takes (planWakeRoute). */
+interface ResolvedWakeTarget {
+	agentId: RuntimeAgentId;
+	sessionId: string;
+	/** The sidebar's summary as the snapshot has it. */
+	reportedSession: PipelineSessionView | null;
+	/** `reportedSession`, or a stand-in for a session the watchdog just started and the snapshot doesn't show yet. */
+	session: PipelineSessionView | null;
+	runningHeadlessPid: number;
+	wakeMode: WakeMode;
+	route: WakeRoute;
+	/** A sidebar start continues the conversation a restart cut off (resumeFromTrash). */
+	continueConversation: boolean;
+}
+
 function listCards(
 	snapshot: PipelineWorkspaceSnapshot,
 ): Array<{ column: RuntimeBoardColumnId; card: RuntimeBoardCard }> {
@@ -282,6 +348,10 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 	const hasHeadlessRunner = deps.hasHeadlessRunner ?? hasHeadlessOrchestratorRunner;
 	const clineReader = deps.readSilentStall ? null : createClineSessionFileReader();
 	const findRunningTool = deps.findRunningTool ?? createAgentToolProcessFinder();
+	const readManifest = deps.readRestartManifest ?? readRestartManifest;
+	const getDecisionsPath =
+		deps.getPipelineDecisionsPath ?? ((workspaceId: string) => getPipelineDecisionLogPath(workspaceId));
+	const continuesConversation = deps.continuesConversationOnResume ?? agentContinuesConversationOnResume;
 	const readSilentStall =
 		deps.readSilentStall ??
 		(async (input: SilentStallReadInput) =>
@@ -306,6 +376,10 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 	const justStarted = new Map<string, number>();
 	// workspaceId → when the post-restart check first saw a QA card gone (restart-checks.ts firstSeenGone).
 	const restartFirstSeenGone = new Map<string, Map<string, number>>();
+	// Sidebar sessions this worker life started continuing their earlier conversation (the restart wake's wording).
+	const continuedSessions = new Set<string>();
+	// `<ws>|<server start>`: the restart wake's "no orchestrator here" was logged.
+	const restartSkipLogged = new Set<string>();
 	let lastPressureSweepAt = 0;
 	let lastPressureSweep: { zombies: number; terminated: number } | null = null;
 	let pidFlagsSet = false;
@@ -789,6 +863,12 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 			}
 		}
 
+		// Once per server start (restart-wake.ts): with wakes off it is listed in ATTENTION.md instead, like the rest.
+		const restartItem = await planRestartWake(snapshot, state, context, wakesOn, records);
+		if (restartItem) {
+			(wakesOn ? queued : attention).push(restartItem);
+		}
+
 		for (const item of attention) {
 			record(records, context, {
 				workspaceId,
@@ -831,7 +911,11 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 			wakeItems.push(...notes);
 		}
 		if (wakeItems.length > 0 || state.wakeRetry.length > 0 || state.wakeEnter) {
-			await wake(snapshot, paths, state, wakeItems, queued, context, records);
+			const outcome = await wake(snapshot, paths, state, wakeItems, queued, context, records);
+			// Delivered (typed, held while the user types, queued for a headless run, or a sidebar started with it).
+			if (state.restartWake && outcome?.ok && outcome.items.some(isRestartWakeItem)) {
+				state.restartWake.sentAt = new Date(context.now).toISOString();
+			}
 		}
 
 		const jobs: PipelineFeatureJob[] = [];
@@ -915,6 +999,147 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 		return check.items;
 	};
 
+	const resolveWakeTarget = async (
+		snapshot: PipelineWorkspaceSnapshot,
+		context: TickContext,
+	): Promise<ResolvedWakeTarget> => {
+		const { workspaceId } = snapshot;
+		const wakeSettings = resolveWorkspaceWakeSettings(context.parsed.config, workspaceId);
+		// The orchestrator is the agent selected in Kanban settings (never a hard-coded id).
+		const agentId = snapshot.selectedAgentId;
+		const sessionId = createHomeAgentSessionId(workspaceId, agentId);
+		const startedAt = justStarted.get(sessionId);
+		const reportedSession = snapshot.sessions.find((session) => session.taskId === sessionId) ?? null;
+		const session: PipelineSessionView | null =
+			isOrchestratorSessionLive(reportedSession) ||
+			startedAt === undefined ||
+			context.now - startedAt > JUST_STARTED_MS
+				? reportedSession
+				: { taskId: sessionId, agentId, modelId: null, state: "running", pid: -1 };
+		const headlessStartedAt = justStarted.get(`headless:${workspaceId}`);
+		// A run that was just spawned may not have written its lock yet.
+		const runningHeadlessPid =
+			(await headlessPid(workspaceId)) ||
+			(headlessStartedAt !== undefined && context.now - headlessStartedAt <= JUST_STARTED_MS ? -1 : 0);
+		// A headless run carries no session credential and no isolation guardrails: under `enforce` the wake goes
+		// to the sidebar session, which startTaskSession launches with both.
+		const wakeMode =
+			resolveIsolationMode(context.parsed.config, workspaceId) === "enforce" ? "sidebar" : wakeSettings.mode;
+		const { serverStartedAt } = snapshot;
+		return {
+			agentId,
+			sessionId,
+			reportedSession,
+			session,
+			runningHeadlessPid,
+			wakeMode,
+			route: planWakeRoute({
+				headlessPid: runningHeadlessPid,
+				session,
+				mode: wakeMode,
+				hasHeadlessRunner: hasHeadlessRunner(agentId),
+			}),
+			// The sidebar's process died with the old server and nothing has started it since: its next start picks up
+			// the conversation where the restart cut it off, where the agent can (a browser start stays fresh).
+			continueConversation:
+				reportedSession !== null &&
+				serverStartedAt !== undefined &&
+				lostToRestart(reportedSession, serverStartedAt) &&
+				continuesConversation(agentId),
+		};
+	};
+
+	const describeRestartWakeSession = (target: ResolvedWakeTarget): RestartWakeSession => {
+		switch (target.route) {
+			case "headless-queue":
+			case "headless":
+				return "headless";
+			case "sidebar":
+				return continuedSessions.has(target.sessionId) ? "continued_live" : "fresh_live";
+			case "start-sidebar":
+				return target.continueConversation ? "start_continued" : "start_fresh";
+		}
+	};
+
+	/**
+	 * The "Kanban restarted" item for this workspace and server start (restart-wake.ts), or null when none is due:
+	 * restart wakes off, already delivered, no orchestrator (no sidebar summary and never woken: a project the user
+	 * never opened), or restart recovery's first pass not done within `watchdog.stall.restartGraceMin`.
+	 */
+	const planRestartWake = async (
+		snapshot: PipelineWorkspaceSnapshot,
+		state: WatchdogWorkspaceState,
+		context: TickContext,
+		wakesOn: boolean,
+		records: WatchdogDecisionRecord[],
+	): Promise<string | null> => {
+		const { workspaceId, serverStartedAt } = snapshot;
+		const { config } = context.parsed;
+		if (serverStartedAt === undefined || !isRestartWakeEnabled(config, workspaceId)) {
+			return null;
+		}
+		const previousServerStartedAt = snapshot.previousServerStartedAt ?? null;
+		let entry = state.restartWake;
+		if (!entry || entry.serverStartedAt !== serverStartedAt) {
+			// Read now: restart recovery deletes the manifest once it has planned with it (its pass keeps a copy).
+			const manifest = await readManifest(workspaceId).catch(() => null);
+			entry = {
+				serverStartedAt,
+				firstSeenAt: new Date(context.now).toISOString(),
+				stop: describePreviousStop(manifest, serverStartedAt, previousServerStartedAt),
+				sentAt: null,
+			};
+			state.restartWake = entry;
+		}
+		if (entry.sentAt) {
+			return null;
+		}
+		const hasOrchestrator =
+			snapshot.sessions.some((session) => isHomeAgentSessionIdForWorkspace(session.taskId, workspaceId)) ||
+			Object.keys(state.woken).length > 0;
+		if (!hasOrchestrator) {
+			const key = `${workspaceId}|${serverStartedAt}`;
+			if (!restartSkipLogged.has(key)) {
+				restartSkipLogged.add(key);
+				record(records, context, {
+					workspaceId,
+					taskId: null,
+					kind: "wake",
+					outcome: "skipped",
+					note: "Kanban restarted: no restart wake, the workspace has no orchestrator (no sidebar session before, never woken)",
+				});
+			}
+			return null;
+		}
+		const firstSeenAt = Date.parse(entry.firstSeenAt);
+		if (!wakesOn && context.now - firstSeenAt >= RESTART_WAKE_ATTENTION_KEEP_MS) {
+			return null;
+		}
+		const settings = getWorkspacePipelineSettings(config, workspaceId);
+		const recoveryNotRunning = describeRecoveryNotRunning(config, settings);
+		const reported = deps.readRestartPass?.(workspaceId);
+		const pass = reported?.serverStartedAt === serverStartedAt ? reported : null;
+		const graceOver = context.now - firstSeenAt >= config.watchdog.stall.restartGraceMin * MIN;
+		if (!recoveryNotRunning && !graceOver && (!pass || pass.resuming)) {
+			return null;
+		}
+		if (pass) {
+			// The manifest as recovery read it, before it deleted it; kept for a later worker of this start.
+			entry.stop = describePreviousStop(pass.manifest, serverStartedAt, previousServerStartedAt);
+		}
+		const summary = summarizeRestartRecords(
+			recoveryNotRunning ? [] : await readRestartRecords(getDecisionsPath(workspaceId), serverStartedAt),
+		);
+		return buildRestartWakeItem({
+			serverStartedAt,
+			stop: entry.stop ?? { kind: "unclean", at: null },
+			recoveryNotRunning,
+			passRan: pass !== null || summary.orphans > 0,
+			summary,
+			session: wakesOn ? describeRestartWakeSession(await resolveWakeTarget(snapshot, context)) : null,
+		});
+	};
+
 	const wake = async (
 		snapshot: PipelineWorkspaceSnapshot,
 		paths: WatchdogWorkspacePaths,
@@ -923,7 +1148,7 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 		queued: readonly string[],
 		context: TickContext,
 		records: WatchdogDecisionRecord[],
-	): Promise<void> => {
+	): Promise<WakeOutcome | null> => {
 		// Project isolation: a workspace's items wake only its own orchestrator (its sidebar session or a headless run
 		// in its project), never another workspace's (docs/fork/watchdog-isolation.md). Every request below names
 		// `workspaceId` as both the target and `fromWorkspaceId`, and the server refuses any pair that differs.
@@ -938,29 +1163,11 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 				outcome: "skipped",
 				note: `${override === false ? `workspaces.${workspaceId}.orchestrator.wake.enabled` : "orchestrator.wake.enabled"} is off; ${items.length} item(s) stay in ${paths.attention} only${context.parsed.config.watchdog.triageCards ? " (TRIAGE cards are not built: watchdog.triageCards has no effect)" : ""}`,
 			});
-			return;
+			return null;
 		}
-		// The orchestrator is the agent selected in Kanban settings (never a hard-coded id).
-		const agentId = snapshot.selectedAgentId;
-		const sessionId = createHomeAgentSessionId(workspaceId, agentId);
-		const startedAt = justStarted.get(sessionId);
-		const reportedSession = snapshot.sessions.find((session) => session.taskId === sessionId) ?? null;
-		const session: PipelineSessionView | null =
-			isOrchestratorSessionLive(reportedSession) ||
-			startedAt === undefined ||
-			context.now - startedAt > JUST_STARTED_MS
-				? reportedSession
-				: { taskId: sessionId, agentId, modelId: null, state: "running", pid: -1 };
+		const resolved = await resolveWakeTarget(snapshot, context);
+		const { agentId, sessionId, reportedSession, session, runningHeadlessPid, wakeMode } = resolved;
 		const headlessKey = `headless:${workspaceId}`;
-		const headlessStartedAt = justStarted.get(headlessKey);
-		// A run that was just spawned may not have written its lock yet.
-		const runningHeadlessPid =
-			(await headlessPid(workspaceId)) ||
-			(headlessStartedAt !== undefined && context.now - headlessStartedAt <= JUST_STARTED_MS ? -1 : 0);
-		// A headless run carries no session credential and no isolation guardrails: under `enforce` the wake goes
-		// to the sidebar session, which startTaskSession launches with both.
-		const wakeMode =
-			resolveIsolationMode(context.parsed.config, workspaceId) === "enforce" ? "sidebar" : wakeSettings.mode;
 		const target = {
 			workspaceId,
 			projectPath: snapshot.workspacePath,
@@ -983,12 +1190,14 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 			await appendOrchestratorQueue(paths.orchestratorQueue, workspaceId, fresh, new Date(context.now));
 
 		if (!context.act) {
-			const live = isOrchestratorSessionLive(session);
-			const route = live
-				? `type into ${sessionId}`
-				: wakeMode === "headless" && hasHeadlessRunner(agentId)
-					? `start a headless ${agentId} run in ${workspaceId}`
-					: `start ${sessionId} with the wake as its first input`;
+			const route =
+				resolved.route === "headless-queue"
+					? `queue for the running headless run in ${workspaceId}`
+					: resolved.route === "sidebar"
+						? `type into ${sessionId}`
+						: resolved.route === "headless"
+							? `start a headless ${agentId} run in ${workspaceId}`
+							: `start ${sessionId} with the wake as its first input${resolved.continueConversation ? ", continuing its conversation" : ""}`;
 			record(records, context, {
 				workspaceId,
 				taskId: null,
@@ -999,7 +1208,7 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 					600,
 				),
 			});
-			return;
+			return null;
 		}
 
 		let outcome: WakeOutcome;
@@ -1080,10 +1289,14 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 								agentId,
 								prompt,
 								fromWorkspaceId: workspaceId,
+								...(resolved.continueConversation ? { continueConversation: true } : {}),
 							})
 							.catch((error: unknown) => ({ ok: false, taskId: sessionId, error: String(error) }));
 						if (result.ok) {
 							justStarted.set(sessionId, context.now);
+							if (resolved.continueConversation) {
+								continuedSessions.add(sessionId);
+							}
 						}
 						return result;
 					},
@@ -1097,10 +1310,10 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 				outcome: "failed",
 				note: `wake failed: ${error instanceof Error ? error.message : String(error)}`,
 			});
-			return;
+			return null;
 		}
 		if (outcome.path === "none") {
-			return;
+			return outcome;
 		}
 		record(records, context, {
 			workspaceId,
@@ -1113,6 +1326,7 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 			),
 		});
 		deps.log(`watchdog ${workspaceId}: wake its orchestrator (${agentId}): ${outcome.path}: ${outcome.detail}`);
+		return outcome;
 	};
 
 	return {

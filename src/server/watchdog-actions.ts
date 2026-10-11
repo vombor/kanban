@@ -6,6 +6,7 @@
 //     (src/server/typed-input-hold.ts, issue #35);
 //   - the orchestrator sidebar session is started like the browser starts it (runtime.startTaskSession with the home
 //     agent session id), so a browser that opens later attaches to the same session instead of starting a second;
+//     after a restart the watchdog may ask it to continue the sidebar's earlier conversation (resumeFromTrash);
 //   - prune-done edits the board under the workspace lock and tells the browsers;
 //   - the PID-pressure sweep is the orphan process sweeper's own sweep;
 //   - project isolation: a wake for one workspace's board never types into or starts another workspace's
@@ -127,6 +128,7 @@ export function createWatchdogActionHandler(
 					// A home agent session runs in the project itself; the base ref is not used for it.
 					baseRef: "HEAD",
 					agentId: request.agentId,
+					...(request.continueConversation ? { resumeFromTrash: true } : {}),
 				});
 				return response.ok
 					? { ok: true, taskId }

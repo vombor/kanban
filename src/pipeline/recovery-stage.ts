@@ -136,9 +136,27 @@ export interface RecoveryEvaluationInput {
 	takeoverPolicy?: RoutingPolicy | null;
 }
 
+/**
+ * Restart recovery's pass over one workspace for one server start, as this worker life ran it: the manifest it read
+ * (before it removed it) and whether its resumes still run. The watchdog's restart wake waits for it
+ * (src/pipeline/watchdog/restart-wake.ts); the per-card outcomes are the pass's `restart` records in the decision log.
+ */
+export interface RestartPassView {
+	serverStartedAt: number;
+	/** The restart manifest found at the pass, or null (none, or unreadable). */
+	manifest: RestartManifest | null;
+	/** The plan used that manifest (isManifestForStart). */
+	manifestUsed: boolean;
+	orphans: number;
+	/** Resumes of the pass's orphans are still under way. */
+	resuming: boolean;
+}
+
 export interface RecoveryStage {
 	/** Decides for every card of the snapshot (and acts in mode "on"); returns the records to log. */
 	evaluate: (input: RecoveryEvaluationInput) => Promise<PipelineDecisionRecord[]>;
+	/** The workspace's restart pass in this worker life, or null before it ran (optional for test fakes). */
+	restartPass?: (workspaceId: string) => RestartPassView | null;
 	forget: (workspaceId: string) => void;
 	/** Resolves once background work (probes, restart resumes) has settled. */
 	idle: () => Promise<void>;
@@ -192,6 +210,8 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 	const background = new Set<Promise<void>>();
 	/** workspaceId → the server start whose orphans were already planned. */
 	const handledStarts = new Map<string, number>();
+	/** workspaceId → the first pass for the server start in handledStarts (a later "check asked for" keeps it). */
+	const restartPasses = new Map<string, RestartPassView>();
 	const recovering = new Set<string>();
 	const latest = new Map<string, RecoveryEvaluationInput>();
 	let closed = false;
@@ -708,6 +728,17 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 			await deps.removeManifest(workspaceId, manifest);
 		}
 		const usedManifest = plan.manifestAt !== null ? manifest : null;
+		const pass: RestartPassView =
+			restartPasses.get(workspaceId)?.serverStartedAt === serverStartedAt
+				? (restartPasses.get(workspaceId) as RestartPassView)
+				: {
+						serverStartedAt,
+						manifest,
+						manifestUsed: usedManifest !== null,
+						orphans: plan.orphans.length,
+						resuming: false,
+					};
+		restartPasses.set(workspaceId, pass);
 		const byId = new Map(contexts.map((context) => [context.card.id, context]));
 		const notActing = input.config.pipeline.recovery.mode === "on" ? "shadow" : "report";
 		const records: PipelineDecisionRecord[] = [
@@ -777,6 +808,7 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 				plannedNow.add(orphan.taskId);
 			}
 			recovering.add(workspaceId);
+			pass.resuming = true;
 			// Removed once the resumes are done; until then the running server's writer may replace it.
 			if (usedManifest) {
 				await deps.markManifestPlanned(workspaceId, usedManifest);
@@ -784,6 +816,7 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 			track(
 				resumeOrphans(input, devOrphans, usedManifest).finally(() => {
 					recovering.delete(workspaceId);
+					pass.resuming = false;
 				}),
 			);
 		} else if (usedManifest) {
@@ -804,9 +837,11 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 			const restart = await evaluateRestart(input, scope.act, plannedNow);
 			return [...restart, ...(await evaluateCards(input, scope.act, plannedNow))];
 		},
+		restartPass: (workspaceId) => restartPasses.get(workspaceId) ?? null,
 		forget: (workspaceId) => {
 			latest.delete(workspaceId);
 			handledStarts.delete(workspaceId);
+			restartPasses.delete(workspaceId);
 		},
 		idle: async () => {
 			await Promise.all([...background]);

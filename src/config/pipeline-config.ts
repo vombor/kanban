@@ -170,12 +170,14 @@ export const workspacePipelineSettingsSchema = z
 					.object({
 						enabled: z.boolean().nullable().default(null),
 						mode: orchestratorWakeModeSchema.nullable().default(null),
+						// This workspace's override of `watchdog.restartWake.enabled` (null keeps it).
+						restart: z.boolean().nullable().default(null),
 					})
 					.strict()
-					.default({ enabled: null, mode: null }),
+					.default({ enabled: null, mode: null, restart: null }),
 			})
 			.strict()
-			.default({ wake: { enabled: null, mode: null } }),
+			.default({ wake: { enabled: null, mode: null, restart: null } }),
 	})
 	.strict();
 export type WorkspacePipelineSettings = z.infer<typeof workspacePipelineSettingsSchema>;
@@ -329,6 +331,12 @@ const watchdogSectionSchema = z
 			.object({ enabled: z.boolean().default(true), days: z.number().positive().default(3) })
 			.strict()
 			.default({ enabled: true, days: 3 }),
+		// Once per server start, a "Kanban restarted" wake for every workspace that has an orchestrator
+		// (src/pipeline/watchdog/restart-wake.ts); `workspaces.<id>.orchestrator.wake.restart` overrides it.
+		restartWake: z
+			.object({ enabled: z.boolean().default(true) })
+			.strict()
+			.default({ enabled: true }),
 	})
 	.strict();
 
@@ -715,6 +723,12 @@ export function resolveWorkspaceWakeSettings(config: PipelineConfig, workspaceId
 		enabled: overrides.enabled ?? config.orchestrator.wake.enabled,
 		mode: overrides.mode ?? config.orchestrator.wake.mode,
 	};
+}
+
+/** Whether the workspace gets the watchdog's "Kanban restarted" wake: `watchdog.restartWake.enabled` or its override. */
+export function isRestartWakeEnabled(config: PipelineConfig, workspaceId: string): boolean {
+	const override = getWorkspacePipelineSettings(config, workspaceId).orchestrator.wake.restart;
+	return override ?? config.watchdog.restartWake.enabled;
 }
 
 function isMissingFileError(error: unknown): boolean {

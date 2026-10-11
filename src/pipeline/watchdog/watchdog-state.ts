@@ -1,5 +1,6 @@
 // The watchdog's per-workspace bookkeeping: `data/<ws>/watchdog-state.json` (was the legacy kit's
-// review-watch-state.json: `triaged`, `resumed`, `paused`, `woken`, `wakeRetry`, `wakeEnter`). The worker is its only
+// review-watch-state.json: `triaged`, `resumed`, `paused`, `woken`, `wakeRetry`, `wakeEnter`; `jobs` and
+// `restartWake` are Kanban's own). The worker is its only
 // writer. A missing or unreadable file starts empty: the worst case is one repeated wake or continue.
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
@@ -30,6 +31,22 @@ export const watchdogWorkspaceStateSchema = z.object({
 		.default(null),
 	/** Job name → when it last ran (core jobs such as prune-done and the kit features' jobs). */
 	jobs: isoMapSchema,
+	/**
+	 * The "Kanban restarted" wake of the latest server start this workspace was seen under (restart-wake.ts): when the
+	 * watchdog first saw that start, the previous stop as the manifest then told it, and when the wake was delivered.
+	 */
+	restartWake: z
+		.object({
+			serverStartedAt: z.number(),
+			firstSeenAt: z.string(),
+			stop: z
+				.object({ kind: z.enum(["clean", "planned", "unclean"]), at: z.string().nullable() })
+				.nullable()
+				.default(null),
+			sentAt: z.string().nullable().default(null),
+		})
+		.nullable()
+		.default(null),
 });
 export type WatchdogWorkspaceState = z.infer<typeof watchdogWorkspaceStateSchema>;
 

@@ -731,6 +731,45 @@ describe("recovery stage", () => {
 		expect(harness.removedManifests).toEqual(["foo"]);
 	});
 
+	it("restartPass(): the manifest it planned with (after deleting it), and whether its resumes still run", async () => {
+		let release: () => void = () => {};
+		const manifest = {
+			at: new Date(SERVER_START - 1000).toISOString(),
+			kanbanStart: new Date(PREVIOUS_START).toISOString(),
+			source: "shutdown" as const,
+			cards: [
+				{ id: "dev1", column: "in_progress" },
+				{ id: "dev2", column: "in_progress" },
+			],
+		};
+		const harness = createHarness({
+			manifest,
+			sleep: async () =>
+				await new Promise<void>((resolve) => {
+					release = resolve;
+				}),
+		});
+		expect(harness.stage.restartPass?.("foo")).toBeNull();
+		const evaluation = harness.evaluate({
+			...orphanSnapshot([dead("dev1"), dead("dev2")], [card("dev1"), card("dev2")]),
+			previousServerStartedAt: PREVIOUS_START,
+		}); // its second resume waits in sleep()
+		await vi.waitFor(() => expect(harness.actions.filter((action) => action.kind === "resume")).toHaveLength(1));
+		expect(harness.stage.restartPass?.("foo")).toEqual({
+			serverStartedAt: SERVER_START,
+			manifest,
+			manifestUsed: true,
+			orphans: 2,
+			resuming: true,
+		});
+		release();
+		await evaluation;
+		await harness.stage.idle();
+		expect(harness.stage.restartPass?.("foo")?.resuming).toBe(false);
+		harness.stage.forget("foo");
+		expect(harness.stage.restartPass?.("foo")).toBeNull();
+	});
+
 	it("after a crash (no prepare, no shutdown) resumes the cards of the crashed server's periodic manifest", async () => {
 		await withTemporaryKanbanHome(async () => {
 			const crashBoard = board({ in_progress: [card("dev1")], review: [card("dev2"), card("dev3")] });

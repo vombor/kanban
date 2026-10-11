@@ -433,6 +433,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 		}),
 		takeWakeNotes: takeWorkspaceIssueWakeNotes,
 		readChecksStatus: () => checks.status?.() ?? null,
+		readRestartPass: (workspaceId) => recovery.restartPass?.(workspaceId) ?? null,
 		log,
 	});
 	let watchdogTimer: NodeJS.Timeout | null = null;

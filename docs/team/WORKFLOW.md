@@ -242,7 +242,10 @@ The watchdog (`src/pipeline/watchdog/`, in the pipeline worker) is LLM-free and 
 - **After a restart:** the QA gate replaces a dead QA card on its own. The watchdog reports a Review card only when
   that didn't happen within `stall.restartGraceMin` (1 min): its dead QA card not superseded, or superseded with no
   new one. A replacement waiting for a QA slot or PID pressure is only logged. A card still held for the restart (an
-  orphan mark nobody resumed) is reported after the same grace plus its place in the resume queue.
+  orphan mark nobody resumed) is reported after the same grace plus its place in the resume queue. Once per server
+  start each workspace's own orchestrator gets a "Kanban restarted" wake (`watchdog.restartWake`): when, whether the
+  previous stop was clean, and what restart recovery did there, sent after recovery's first pass (or the same grace).
+  Check the board, finish what wasn't automatic (`kanban task resume <id>`), and tell the user.
 - **Stalls:** a QA-gated Review card with nothing pending (no QA card, no recovery hold, no rework waiting to start,
   no checks wait, settled) and nothing done to it (a move, its session, a verdict acted on, recovery's last send, a
   rework) for 10 min; a QA card stuck (45 min, not calibration cards); In Progress with a dead session. That one gets
