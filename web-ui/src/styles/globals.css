@@ -914,6 +914,21 @@ body.kb-dependency-link-mode {
 	border-radius: 999px;
 }
 
+/* -- Terminal input on a phone --
+   xterm moves its hidden textarea to the cursor on every cursor move (inline
+   styles), so a busy TUI moved the field the keyboard was typing and dictating
+   into dozens of times a second. A phone keyboard shows its suggestions in its
+   own bar and needs no caret position, so on touch the textarea stays put, at
+   least 1x1 (xterm: smaller "certain IMEs may break"). See terminal-ime-input.ts. */
+@media (pointer: coarse) {
+	.kb-terminal-container .xterm .xterm-helper-textarea {
+		left: 0 !important;
+		top: 0 !important;
+		width: 1px !important;
+		height: 1px !important;
+	}
+}
+
 /* -- Terminal light-mode inversion --
    Terminal renders dark internally so CLI agents output correct ANSI colors.
    CSS filter inverts the xterm canvas, then a multiply-blend overlay tints

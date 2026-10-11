@@ -34,6 +34,8 @@ export interface UsePersistentTerminalSessionResult {
 	isScrolledUp: boolean;
 	clearTerminal: () => void;
 	scrollToBottom: () => void;
+	// Enter that keeps a phone keyboard and its dictation going (terminal-ime-input.ts).
+	submitInput: () => void;
 	stopTerminal: () => Promise<void>;
 	retryConnection: () => void;
 }
@@ -213,6 +215,10 @@ export function usePersistentTerminalSession({
 		terminalRef.current?.scrollToBottom();
 	}, []);
 
+	const submitInput = useCallback(() => {
+		terminalRef.current?.submitInput();
+	}, []);
+
 	const retryConnection = useCallback(() => {
 		terminalRef.current?.retryConnection();
 	}, []);
@@ -226,6 +232,7 @@ export function usePersistentTerminalSession({
 		isScrolledUp,
 		clearTerminal,
 		scrollToBottom,
+		submitInput,
 		stopTerminal,
 		retryConnection,
 	};

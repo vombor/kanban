@@ -17,7 +17,7 @@ import type {
 import { type AppliedRestore, shouldSkipWarmRestore } from "@/terminal/restore-generation";
 import { splitRestoreSnapshot } from "@/terminal/restore-snapshot-chunks";
 import { clearTerminalGeometry, reportTerminalGeometry } from "@/terminal/terminal-geometry-registry";
-import { attachTerminalImeInput } from "@/terminal/terminal-ime-input";
+import { attachTerminalImeInput, type TerminalImeInput } from "@/terminal/terminal-ime-input";
 import { createKanbanTerminalOptions } from "@/terminal/terminal-options";
 import {
 	appendTerminalHeuristicText,
@@ -133,6 +133,11 @@ function getTerminalSocketChunkByteLength(data: string | ArrayBuffer | Blob): nu
 	return 0;
 }
 
+// The primary pointer is a finger: the on-screen keyboard and dictation (terminal-ime-input.ts).
+function isTouchInput(): boolean {
+	return window.matchMedia?.(COARSE_POINTER_QUERY).matches === true;
+}
+
 function isCopyShortcut(event: KeyboardEvent): boolean {
 	return (
 		event.type === "keydown" &&
@@ -205,7 +210,7 @@ class PersistentTerminal {
 	private readiness: TerminalReadiness = { state: "loading", phase: "connecting" };
 	private isScrolledUp = false;
 	private readonly disposeTouchScroll: () => void;
-	private readonly disposeImeInput: () => void;
+	private readonly imeInput: TerminalImeInput | null;
 	private disposed = false;
 
 	constructor(
@@ -294,15 +299,15 @@ class PersistentTerminal {
 
 		// Phone keyboards and dictation rewrite text xterm has already sent (terminal-ime-input.ts).
 		const textarea = this.terminal.textarea;
-		this.disposeImeInput = textarea
+		this.imeInput = textarea
 			? attachTerminalImeInput(this.hostElement, textarea, {
-					isEnabled: () => window.matchMedia?.(COARSE_POINTER_QUERY).matches === true,
+					isEnabled: isTouchInput,
 					canSend: () => this.isAcceptingUserInput(),
 					send: (data) => {
 						this.terminal.input(data, true);
 					},
 				})
-			: () => {};
+			: null;
 
 		// Paste reaches xterm through its textarea's paste event, not the key handler.
 		this.hostElement.addEventListener(
@@ -886,6 +891,23 @@ class PersistentTerminal {
 		return true;
 	}
 
+	// Enter for the panel's Enter button. On a phone it sends what has been
+	// dictated so far first and leaves the textarea alone, so the keyboard keeps
+	// listening (terminal-ime-input.ts).
+	submitInput(): boolean {
+		if (!this.isIoOpen()) {
+			return false;
+		}
+		if (this.imeInput && isTouchInput()) {
+			return this.imeInput.submit();
+		}
+		if (!this.isAcceptingUserInput()) {
+			return false;
+		}
+		this.terminal.input("\r");
+		return true;
+	}
+
 	paste(text: string): boolean {
 		if (!this.isIoOpen()) {
 			return false;
@@ -991,7 +1013,7 @@ class PersistentTerminal {
 		this.disposed = true;
 		this.clearLoadingTimer();
 		this.disposeTouchScroll();
-		this.disposeImeInput();
+		this.imeInput?.dispose();
 		this.reconnect.dispose();
 		this.unmount(this.visibleContainer);
 		this.closeSockets();

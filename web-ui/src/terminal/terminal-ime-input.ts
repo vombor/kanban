@@ -17,9 +17,19 @@
 //
 // Compositions (xterm shows them at the cursor and sends them at
 // compositionend) and real keys stay xterm's, as on desktop.
+//
+// Enter (the keyboard's, or the panel's Enter button through submit()) is ours
+// too: xterm's Enter empties the textarea, and a keyboard whose text is changed
+// under it ends its input session, voice typing included. Here the textarea
+// keeps its text and what has been submitted is final: the diff only covers the
+// PTY's current line (the text after the submitted part), so Backspaces never
+// reach a prompt that has already been sent, and a later rewrite of a submitted
+// hypothesis sends only what follows it.
 
 const DEL = "\x7f";
+const ENTER = "\r";
 const IME_KEY_CODE = 229;
+const ENTER_KEY_CODE = 13;
 // How long an IME edit that took text back waits for the text that replaces it.
 export const IME_REWRITE_SETTLE_MS = 300;
 
@@ -39,9 +49,20 @@ export function diffTextareaEdit(synced: string, value: string): TextareaEditDif
 	return { deleteCount: before.length - common, insert: after.slice(common).join("") };
 }
 
+// The longest common start of two texts, by code point.
+export function commonPrefix(left: string, right: string): string {
+	const a = Array.from(left);
+	const b = Array.from(right);
+	let common = 0;
+	while (common < a.length && common < b.length && a[common] === b[common]) {
+		common += 1;
+	}
+	return a.slice(0, common).join("");
+}
+
 // A line break the IME inserted is Enter for the TUI, as xterm sends it.
 export function encodeTextareaEdit({ deleteCount, insert }: TextareaEditDiff): string {
-	return DEL.repeat(deleteCount) + insert.replace(/\r?\n/g, "\r");
+	return DEL.repeat(deleteCount) + insert.replace(/\r?\n/g, ENTER);
 }
 
 export interface TerminalImeInputOptions {
@@ -52,13 +73,36 @@ export interface TerminalImeInputOptions {
 	send: (data: string) => void;
 }
 
+export interface TerminalImeInput {
+	// Sends what has been dictated so far, then Enter, and leaves the textarea
+	// and its focus as they are, so the keyboard keeps listening. False when the
+	// terminal blocks input.
+	submit: () => boolean;
+	dispose: () => void;
+}
+
+function isPlainEnter(event: KeyboardEvent): boolean {
+	return (
+		(event.key === "Enter" || event.keyCode === ENTER_KEY_CODE) &&
+		!event.shiftKey &&
+		!event.ctrlKey &&
+		!event.altKey &&
+		!event.metaKey
+	);
+}
+
 export function attachTerminalImeInput(
 	host: HTMLElement,
 	textarea: HTMLTextAreaElement,
 	{ isEnabled, canSend, send }: TerminalImeInputOptions,
-): () => void {
+): TerminalImeInput {
 	// The textarea text the PTY already has (or gets from xterm's composition send).
 	let synced = textarea.value;
+	// The textarea text that was submitted with Enter, always a prefix of `synced`.
+	// The PTY's current line is what follows it, and only that line is diffed.
+	let submitted = "";
+	// Enter asked for while xterm still owes the PTY a composition's text.
+	let isSubmitPending = false;
 	let hasPendingEdit = false;
 	let flushTimer: ReturnType<typeof setTimeout> | null = null;
 	let isComposing = false;
@@ -80,12 +124,48 @@ export function attachTerminalImeInput(
 			return;
 		}
 		hasPendingEdit = false;
-		const diff = diffTextareaEdit(synced, textarea.value);
-		synced = textarea.value;
+		const value = textarea.value;
+		// What the keyboard changed of the submitted text is gone from the PTY's reach.
+		const diff = diffTextareaEdit(synced.slice(submitted.length), value.slice(commonPrefix(submitted, value).length));
+		synced = value;
+		submitted = commonPrefix(submitted, value);
 		if (!canSend() || (diff.deleteCount === 0 && diff.insert.length === 0)) {
 			return;
 		}
 		send(encodeTextareaEdit(diff));
+		// A line break the IME typed submitted everything before it.
+		const lastBreak = synced.lastIndexOf("\n");
+		if (diff.insert.includes("\n") && lastBreak >= 0) {
+			submitted = synced.slice(0, lastBreak + 1);
+		}
+	};
+
+	// Everything the textarea holds is on the PTY now (or was dropped while input was blocked).
+	const sendEnter = () => {
+		submitted = synced;
+		send(ENTER);
+	};
+
+	const submit = (): boolean => {
+		if (!canSend()) {
+			return false;
+		}
+		if (isComposing || isXtermCompositionSendPending) {
+			// Enter goes out right after xterm has sent the composition's text.
+			isSubmitPending = true;
+			return true;
+		}
+		flush();
+		sendEnter();
+		return true;
+	};
+
+	// xterm emptied or changed the textarea itself (Enter in a composition, blur,
+	// Ctrl+C): what it holds now is the baseline, and only what is left of the
+	// submitted text stays submitted.
+	const resync = () => {
+		synced = textarea.value;
+		submitted = commonPrefix(submitted, synced);
 	};
 
 	const scheduleFlush = () => {
@@ -103,6 +183,13 @@ export function attachTerminalImeInput(
 		if (event.keyCode === IME_KEY_CODE) {
 			// xterm would diff the textarea itself after this keydown and send that too.
 			event.stopPropagation();
+			return;
+		}
+		if (isPlainEnter(event) && !isComposing && !isXtermCompositionSendPending) {
+			// Not xterm's Enter, which would empty the textarea under the keyboard.
+			event.preventDefault();
+			event.stopPropagation();
+			submit();
 			return;
 		}
 		// Before xterm handles the key (and Enter clears the textarea), the PTY gets the text.
@@ -133,6 +220,12 @@ export function attachTerminalImeInput(
 				isXtermCompositionSendPending = false;
 				// xterm sent everything from the composition's start to the end of the textarea.
 				synced = textarea.value;
+				if (isSubmitPending && !isComposing) {
+					isSubmitPending = false;
+					if (canSend()) {
+						sendEnter();
+					}
+				}
 			}, 0);
 		}, 0);
 	};
@@ -142,7 +235,7 @@ export function attachTerminalImeInput(
 		}
 		// xterm clears the textarea on Enter and blur: whatever is in it is on the PTY.
 		if (!hasPendingEdit && !isComposing && !isXtermCompositionSendPending) {
-			synced = textarea.value;
+			resync();
 		}
 	};
 	const onInput = (event: Event) => {
@@ -171,7 +264,7 @@ export function attachTerminalImeInput(
 	host.addEventListener("beforeinput", onBeforeInput, true);
 	host.addEventListener("input", onInput, true);
 	host.addEventListener("blur", onBlur, true);
-	return () => {
+	const dispose = () => {
 		clearFlushTimer();
 		host.removeEventListener("keydown", onKeyDown, true);
 		host.removeEventListener("keyup", onKeyUp, true);
@@ -181,4 +274,5 @@ export function attachTerminalImeInput(
 		host.removeEventListener("input", onInput, true);
 		host.removeEventListener("blur", onBlur, true);
 	};
+	return { submit, dispose };
 }

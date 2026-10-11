@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
 	attachTerminalImeInput,
+	commonPrefix,
 	diffTextareaEdit,
 	encodeTextareaEdit,
 	IME_REWRITE_SETTLE_MS,
+	type TerminalImeInput,
 } from "@/terminal/terminal-ime-input";
 
 describe("diffTextareaEdit", () => {
@@ -21,6 +23,12 @@ describe("diffTextareaEdit", () => {
 		expect(diffTextareaEdit("ok 👍", "ok 👌")).toEqual({ deleteCount: 1, insert: "👌" });
 	});
 
+	it("finds the common start by code point", () => {
+		expect(commonPrefix("let me kn", "let me know")).toBe("let me kn");
+		expect(commonPrefix("ok 👍", "ok 👌")).toBe("ok ");
+		expect(commonPrefix("done", "")).toBe("");
+	});
+
 	it("encodes Backspaces as DEL and a line break as Enter", () => {
 		expect(encodeTextareaEdit({ deleteCount: 2, insert: "a\nb" })).toBe("\x7f\x7fa\rb");
 	});
@@ -34,7 +42,7 @@ describe("attachTerminalImeInput", () => {
 	let xtermSaw: string[];
 	let enabled: boolean;
 	let accepting: boolean;
-	let detach: () => void;
+	let ime: TerminalImeInput;
 
 	beforeEach(() => {
 		vi.useFakeTimers();
@@ -53,7 +61,7 @@ describe("attachTerminalImeInput", () => {
 				xtermSaw.push(`${type}:${detail}`);
 			});
 		}
-		detach = attachTerminalImeInput(host, textarea, {
+		ime = attachTerminalImeInput(host, textarea, {
 			isEnabled: () => enabled,
 			canSend: () => accepting,
 			send: (data) => {
@@ -63,7 +71,7 @@ describe("attachTerminalImeInput", () => {
 	});
 
 	afterEach(() => {
-		detach();
+		ime.dispose();
 		host.remove();
 		vi.useRealTimers();
 	});
@@ -75,8 +83,10 @@ describe("attachTerminalImeInput", () => {
 		textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType, isComposing }));
 	}
 
-	function key(type: "keydown" | "keyup", keyName: string, keyCode: number) {
-		textarea.dispatchEvent(new KeyboardEvent(type, { bubbles: true, key: keyName, keyCode }));
+	function key(type: "keydown" | "keyup", keyName: string, keyCode: number, init: KeyboardEventInit = {}) {
+		const event = new KeyboardEvent(type, { bubbles: true, cancelable: true, key: keyName, keyCode, ...init });
+		textarea.dispatchEvent(event);
+		return event;
 	}
 
 	it("sends dictation that deletes and recommits its interim results once", () => {
@@ -105,9 +115,9 @@ describe("attachTerminalImeInput", () => {
 	it("sends a pending edit before the key that follows it", () => {
 		imeEdit("abc", "deleteContentBackward");
 		imeEdit("ab", "deleteContentBackward");
-		key("keydown", "Enter", 13);
+		key("keydown", "Tab", 9);
 		expect(sent).toEqual(["ab"]);
-		expect(xtermSaw).toEqual(["keydown:Enter"]);
+		expect(xtermSaw).toEqual(["keydown:Tab"]);
 	});
 
 	it("keeps IME keydowns from xterm, which would send the textarea diff a second time", () => {
@@ -136,12 +146,93 @@ describe("attachTerminalImeInput", () => {
 	it("starts over after xterm clears its textarea", () => {
 		imeEdit("hi", "insertText");
 		vi.runAllTimers();
-		key("keydown", "Enter", 13);
+		key("keydown", "c", 67, { ctrlKey: true });
 		textarea.value = "";
-		key("keyup", "Enter", 13);
+		key("keyup", "c", 67, { ctrlKey: true });
 		imeEdit("yes", "insertText");
 		vi.runAllTimers();
 		expect(sent).toEqual(["hi", "yes"]);
+	});
+
+	it("sends Enter itself and leaves the textarea to the keyboard", () => {
+		imeEdit("let me", "insertText");
+		const enter = key("keydown", "Enter", 13);
+		expect(sent).toEqual(["let me", "\r"]);
+		// xterm never saw the Enter, so it didn't empty the textarea under the keyboard.
+		expect(xtermSaw).toEqual([]);
+		expect(enter.defaultPrevented).toBe(true);
+		expect(textarea.value).toBe("let me");
+	});
+
+	it("keeps dictating after a submit without sending the submitted text again", () => {
+		imeEdit("let me", "insertText");
+		expect(ime.submit()).toBe(true);
+		imeEdit("let me know", "insertText");
+		vi.runAllTimers();
+		expect(sent).toEqual(["let me", "\r", " know"]);
+	});
+
+	it("never takes back submitted text when the keyboard rewrites its hypothesis", () => {
+		// Sent mid-hypothesis: the keyboard then replaces "let me kn" with its final "let me know".
+		imeEdit("let me kn", "insertText");
+		ime.submit();
+		imeEdit("", "deleteContentBackward");
+		imeEdit("let me know", "insertText");
+		vi.runAllTimers();
+		// The keyboard replaces all of it: the current line ("ow") becomes the new text.
+		imeEdit("", "deleteContentBackward");
+		imeEdit("see", "insertText");
+		vi.runAllTimers();
+		expect(sent).toEqual(["let me kn", "\r", "ow", "\x7f\x7fsee"]);
+	});
+
+	it("drops what the keyboard deletes of submitted text and sends the next words whole", () => {
+		imeEdit("done", "insertText");
+		ime.submit();
+		imeEdit("", "deleteContentBackward");
+		vi.runAllTimers();
+		imeEdit("next", "insertText");
+		vi.runAllTimers();
+		expect(sent).toEqual(["done", "\r", "next"]);
+	});
+
+	it("treats a line break the keyboard typed as a submit", () => {
+		imeEdit("one\n", "insertLineBreak");
+		vi.runAllTimers();
+		imeEdit("", "deleteContentBackward");
+		imeEdit("two", "insertText");
+		vi.runAllTimers();
+		expect(sent).toEqual(["one\r", "two"]);
+	});
+
+	it("submits after xterm has sent a composition that was still open", () => {
+		textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+		imeEdit("hello", "insertCompositionText", true);
+		expect(ime.submit()).toBe(true);
+		expect(sent).toEqual([]);
+		textarea.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "hello" }));
+		vi.runAllTimers();
+		// xterm sent "hello" itself; Enter follows it.
+		expect(sent).toEqual(["\r"]);
+		imeEdit("hello there", "insertText");
+		vi.runAllTimers();
+		expect(sent).toEqual(["\r", " there"]);
+	});
+
+	it("leaves Enter to xterm inside a composition and Shift+Enter always", () => {
+		key("keydown", "Enter", 13, { shiftKey: true });
+		textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+		key("keydown", "Enter", 13);
+		expect(sent).toEqual([]);
+		expect(xtermSaw).toEqual(["keydown:Enter", "keydown:Enter"]);
+	});
+
+	it("refuses a submit while the terminal blocks input", () => {
+		imeEdit("wait", "insertText");
+		accepting = false;
+		expect(ime.submit()).toBe(false);
+		vi.runAllTimers();
+		expect(sent).toEqual([]);
 	});
 
 	it("leaves the edit of a real key to xterm", () => {

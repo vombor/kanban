@@ -1,6 +1,6 @@
 import "@xterm/xterm/css/xterm.css";
 
-import { ArrowDown, Command, Maximize2, MessageSquare, Minimize2, X } from "lucide-react";
+import { ArrowDown, Command, CornerDownLeft, Maximize2, MessageSquare, Minimize2, X } from "lucide-react";
 import type { MutableRefObject, ReactElement } from "react";
 import { useMemo } from "react";
 
@@ -28,6 +28,7 @@ interface AgentTerminalSessionControls {
 	readiness: TerminalReadiness | null;
 	retryConnection: () => void;
 	scrollToBottom: () => void;
+	submitInput: () => void;
 	stopTerminal: () => Promise<void>;
 }
 
@@ -203,11 +204,14 @@ function AgentTerminalPanelLayout({
 		clearTerminal,
 		retryConnection,
 		scrollToBottom,
+		submitInput,
 		stopTerminal,
 	} = sessionControls;
 	// Phones only: desktop has the scrollbar and the wheel, and stays unchanged.
 	const isTouchDevice = useIsTouchDevice();
 	const showJumpToBottom = isTouchDevice && isScrolledUp && readiness?.state !== "loading";
+	// Enter while the keyboard dictates: a key on the keyboard would end its voice input.
+	const showEnter = isTouchDevice && readiness?.state === "ready";
 	const hasHeader = showSessionToolbar || Boolean(onClose);
 	const canStop = summary?.state === "running" || summary?.state === "awaiting_review";
 	const statusLabel = useMemo(() => describeState(summary), [summary]);
@@ -359,17 +363,33 @@ function AgentTerminalPanelLayout({
 					className="kb-terminal-container touch-pan-x touch-pinch-zoom"
 					style={{ height: "100%", width: "100%", background: terminalBackgroundColor }}
 				/>
-				{showJumpToBottom ? (
-					<button
-						type="button"
-						onClick={scrollToBottom}
-						// Keeps the terminal focused, so an open on-screen keyboard stays open.
-						onMouseDown={(event) => event.preventDefault()}
-						aria-label="Jump to bottom"
-						className="absolute right-4 bottom-4 z-20 inline-flex size-11 cursor-pointer items-center justify-center rounded-full border border-border-bright bg-surface-2 text-text-primary shadow-lg active:bg-surface-4"
-					>
-						<ArrowDown size={20} />
-					</button>
+				{showJumpToBottom || showEnter ? (
+					<div className="absolute right-4 bottom-4 z-20 flex flex-col gap-2">
+						{showJumpToBottom ? (
+							<button
+								type="button"
+								onClick={scrollToBottom}
+								// Keeps the terminal focused, so an open on-screen keyboard stays open.
+								onMouseDown={(event) => event.preventDefault()}
+								aria-label="Jump to bottom"
+								className="inline-flex size-11 cursor-pointer items-center justify-center rounded-full border border-border-bright bg-surface-2 text-text-primary shadow-lg active:bg-surface-4"
+							>
+								<ArrowDown size={20} />
+							</button>
+						) : null}
+						{showEnter ? (
+							<button
+								type="button"
+								onClick={submitInput}
+								// Keeps the terminal focused, so the keyboard and its dictation keep going.
+								onMouseDown={(event) => event.preventDefault()}
+								aria-label="Send Enter"
+								className="inline-flex size-11 cursor-pointer items-center justify-center rounded-full border border-border-bright bg-surface-2 text-text-primary shadow-lg active:bg-surface-4"
+							>
+								<CornerDownLeft size={20} />
+							</button>
+						) : null}
+					</div>
 				) : null}
 				<TerminalLoadingOverlay readiness={readiness} />
 			</div>
