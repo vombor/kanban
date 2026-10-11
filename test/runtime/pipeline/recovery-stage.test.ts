@@ -13,6 +13,7 @@ import { RESTART_RESUME_NOTE, RESTART_WIP_NOTE } from "../../../src/pipeline/rec
 import { applyRecoveryPatches } from "../../../src/pipeline/recovery-runtime";
 import {
 	createRecoveryStage,
+	isRestartTurnFinished,
 	type RecoveryAction,
 	type RecoveryActionResult,
 	type RecoveryStageDependencies,
@@ -26,6 +27,7 @@ import {
 } from "../../../src/pipeline/restart-recovery";
 import { createRestartManifestWriter } from "../../../src/server/restart-manifest-writer";
 import { getRestartManifestPath } from "../../../src/state/kanban-home";
+import { KANBAN_CLINE_HUB_ABORT_REASONS } from "../../../src/terminal/cline-hub-abort-reason";
 import type { ClineSessionDetail } from "../../../src/terminal/cline-session-files";
 import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
 import { PROVISIONAL_ALLOWED } from "../../utilities/routing-vetting";
@@ -792,5 +794,47 @@ describe("recovery stage", () => {
 		});
 		const records = await crash.evaluate({ board: board({ review: [card("dev1")] }), sessions: [session("dev1")] });
 		expect(records[0]).toMatchObject({ answer: { kind: "hold" }, outcome: "acted" });
+	});
+});
+
+describe("isRestartTurnFinished", () => {
+	const NOW = Date.parse("2026-10-11T10:00:00.000Z");
+	const detail = (last: ClineSessionDetail["messages"][number]): ClineSessionDetail => {
+		const messages = [{ role: "user", content: [{ type: "text", text: "go" }], outputTokens: null, ts: null }, last];
+		return {
+			snapshot: {
+				sessionId: "1791335760135_38ara",
+				status: "running",
+				startedAt: NOW - 600_000,
+				messagesWrittenAt: NOW - 300_000,
+				lastMessage: {
+					role: last.role,
+					content: last.content,
+					...(last.displayError ? { displayError: true } : {}),
+				},
+			},
+			messages,
+			lastWriteAt: NOW - 300_000,
+		};
+	};
+	const reply = (text: string, displayError = false) => ({
+		role: "assistant",
+		content: [{ type: "text", text }],
+		outputTokens: null,
+		ts: null,
+		...(displayError ? { displayError: true } : {}),
+	});
+
+	it("resumes a turn that ended on Cline's error notice: the model did no work in it (issue #32)", () => {
+		expect(isRestartTurnFinished(detail(reply("No model loaded: Devstral-Small-2507-GGUF", true)), NOW)).toBe(false);
+		expect(isRestartTurnFinished(detail(reply("The operation timed out.")), NOW)).toBe(false);
+	});
+
+	it("counts a final reply as finished work, Kanban's own hub abort notice included", () => {
+		const idle = { ...detail(reply("Done.\nSTATUS: DONE")) };
+		expect(isRestartTurnFinished({ ...idle, snapshot: { ...idle.snapshot, status: "idle" } }, NOW)).toBe(true);
+		const aborted = detail(reply(KANBAN_CLINE_HUB_ABORT_REASONS.orphaned, true));
+		expect(isRestartTurnFinished(aborted, NOW)).toBe(false);
+		expect(isRestartTurnFinished({ ...aborted, snapshot: { ...aborted.snapshot, status: "idle" } }, NOW)).toBe(true);
 	});
 });

@@ -1,9 +1,9 @@
 // The reasons Kanban gives the Cline hub's `run.abort` (cline-hub-client.ts, issue #28). Cline writes the reason word
 // for word into the run's session as its own error notice (an assistant message with `metadata.displayRole:
 // "error"`), the same mark it puts on provider errors such as "No model loaded: <model>". So every reason starts with
-// one marker, and recovery's detector (detectFinalProviderError in src/pipeline/recovery-detect.ts) never reads a
+// one marker, and the provider-error detector (detectFinalProviderError in cline-provider-error.ts) never reads a
 // notice carrying it as a provider error: a run Kanban ended is not one to retry (issue #32). Kept apart from the
-// hub client so the pipeline's detector doesn't import the websocket client.
+// hub client so the detector doesn't import the websocket client.
 
 /** The start of every reason Kanban passes to `run.abort`. */
 export const KANBAN_CLINE_HUB_ABORT_MARKER = "Kanban ended this run: ";

@@ -39,6 +39,7 @@ import {
 	type RecoveryFlowPatch,
 	readRecoveryFlow,
 } from "./recovery";
+import { detectFinalProviderError } from "./recovery-detect";
 import { buildPoisonedHistoryPrompt, buildRestartResumeLaunch, CLEAR_SETTLE_MS } from "./recovery-prompts";
 import { planRestartRecovery, type RestartManifest, type RestartOrphan } from "./restart-recovery";
 
@@ -159,6 +160,22 @@ function describeDecision(decision: RecoveryDecision): unknown {
 
 function isConfirmed(result: RecoveryActionResult): boolean {
 	return result.ok && (result.evidence === "state" || result.evidence === "hook");
+}
+
+/**
+ * Whether a restart orphan's Cline turn had ended before the restart, so its card is finished work and not resumed.
+ * A turn that ended on a provider error (detectFinalProviderError: a bare error, or Cline's own error notice such as
+ * "No model loaded: <model>") is not finished: the model did no work in it, so it is resumed like any orphan.
+ */
+export function isRestartTurnFinished(detail: ClineSessionDetail | null, now: number): boolean {
+	const decision = evaluateClineTurnEnd({
+		session: detail?.snapshot ?? null,
+		providerError: detail ? detectFinalProviderError(detail.messages) : null,
+		runningSince: null,
+		now,
+		requireStatus: false,
+	});
+	return decision.ended && decision.reason !== "provider_error";
 }
 
 export function createRecoveryStage(deps: RecoveryStageDependencies): RecoveryStage {
@@ -637,14 +654,7 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 				(state === "running" || state === "interrupted") &&
 				!context.session?.live
 			) {
-				const detail = await readDetail(input, context);
-				const decision = evaluateClineTurnEnd({
-					session: detail?.snapshot ?? null,
-					runningSince: null,
-					now: deps.now(),
-					requireStatus: false,
-				});
-				if (decision.ended) {
+				if (isRestartTurnFinished(await readDetail(input, context), deps.now())) {
 					ended.add(context.card.id);
 				}
 			}

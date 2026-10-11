@@ -8,6 +8,7 @@ import type { ClineTurnDetectorSettings } from "../config/cline-turn-detector-co
 import type { RuntimeTaskSessionSummary } from "../core/api-contract";
 import { isHomeAgentSessionId } from "../core/home-agent-session";
 import { CLINE_CLI_ASK_TOOL_PATTERN } from "./agent-session-adapters";
+import { detectFinalReplyProviderError } from "./cline-provider-error";
 import {
 	type ClineSessionDetail,
 	type ClineSessionDetailMessage,
@@ -55,11 +56,13 @@ export interface ReadClineTurnEndInput {
 }
 
 export async function readClineTurnEnd(input: ReadClineTurnEndInput): Promise<ClineTurnEndDecision> {
+	const session = await input.reader.readLatestSession(
+		getClineSessionsPath(input.settings.dataDir),
+		input.summary.workspacePath,
+	);
 	return evaluateClineTurnEnd({
-		session: await input.reader.readLatestSession(
-			getClineSessionsPath(input.settings.dataDir),
-			input.summary.workspacePath,
-		),
+		session,
+		providerError: detectFinalReplyProviderError(session?.lastMessage ?? null),
 		runningSince: input.sessions.getStateEnteredAt(input.summary.taskId),
 		now: input.now,
 		requireStatus: input.requireStatus,

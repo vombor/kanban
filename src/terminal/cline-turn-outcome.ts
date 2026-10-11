@@ -7,8 +7,10 @@
 // the reply is one of:
 //   - a reply with a `STATUS:` line (the status-line rule asks every model to end a finished turn with one),
 //   - a QA reviewer's final line "QA <id> round N: PASS|FAIL|STALLED, report in …" (QA ends with no STATUS line),
-//   - a provider image rejection ("no images", or an image over its size limits) or a bare provider error (the
-//     session file may even stay "running"),
+//   - a provider image rejection ("no images", or an image over its size limits) or a final reply that is an error
+//     (the caller's `providerError`, detectFinalProviderError in cline-provider-error.ts: a bare provider error, a
+//     short fatal API error, or Cline's own error notice such as "No model loaded: <model>"; the session file may
+//     even stay "running"),
 //   - with `requireStatus: false`, any final reply (used to stop a running → in_progress bounce).
 // The reply must be newer than the moment the session last turned "running"; a reply from before that only
 // counts after BOUNCE_QUIET_MS with nothing written (a bounce back to running that no new message followed).
@@ -16,6 +18,7 @@
 // Ported from archive/devteam-kit:services/kanban-column-sync.mjs@6da71597 (clineTurnEnded) and
 // archive/devteam-kit:lib/cline-session.cjs@6da71597 (NO_IMAGES, providerErrorText),
 // archive/devteam-kit:lib/cline-hooks.cjs@6da71597 (parseStatus).
+import type { FinalProviderError } from "./cline-provider-error";
 
 /** Quiet time after a regular final reply (17ac0070: 20 s with nothing written). */
 export const CLINE_TURN_END_QUIET_MS = 20_000;
@@ -32,6 +35,8 @@ export interface ClineSessionContentBlock {
 export interface ClineSessionMessage {
 	role: string;
 	content: string | ClineSessionContentBlock[];
+	/** Cline's own error notice (`metadata.displayRole: "error"`), not the model's reply (see ClineSessionDetailMessage). */
+	displayError?: boolean;
 }
 
 /** What the detector needs from one cline 3.x session dir (`<id>.json` + `<id>.messages.json`). */
@@ -84,6 +89,11 @@ export interface ClineTurnEndInput {
 	now: number;
 	/** Default true: a dev reply needs a STATUS line (an announcement without a tool call is not an ending, 9496770). */
 	requireStatus?: boolean;
+	/**
+	 * Whether the session's final reply is an error, not the model's answer: detectFinalProviderError on the same
+	 * session (cline-provider-error.ts), the one reader of that question, so the detector and recovery agree.
+	 */
+	providerError: FinalProviderError | null;
 }
 
 // A provider's "no images" rejection, shown as the final assistant text after a text-only model opened a
@@ -189,11 +199,15 @@ export function getClineFinalReplyText(message: ClineSessionMessage | null): str
 		.join("\n");
 }
 
-function classifyFinalReply(text: string, requireStatus: boolean): ClineTurnEndReason | null {
+function classifyFinalReply(
+	text: string,
+	requireStatus: boolean,
+	providerError: FinalProviderError | null,
+): ClineTurnEndReason | null {
 	if (isClineNoImagesRejection(text)) {
 		return "no_images";
 	}
-	if (getClineProviderErrorText(text)) {
+	if (providerError) {
 		return "provider_error";
 	}
 	if (hasClineStatusLine(text)) {
@@ -217,7 +231,7 @@ export function evaluateClineTurnEnd(input: ClineTurnEndInput): ClineTurnEndDeci
 	if (text === null || session.messagesWrittenAt === null) {
 		return { ended: false, reason: "no_final_reply" };
 	}
-	const reason = classifyFinalReply(text, input.requireStatus ?? true);
+	const reason = classifyFinalReply(text, input.requireStatus ?? true, input.providerError);
 	const rejected = reason === "no_images" || reason === "provider_error";
 	// A "running" session file only ends on a rejection: otherwise the model is still streaming.
 	if (session.status === "running" && !rejected) {

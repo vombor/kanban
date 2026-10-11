@@ -52,22 +52,33 @@ async function readJsonObject(path: string): Promise<Record<string, unknown> | n
 	}
 }
 
+/** Cline's mark on its own error notices (an assistant message with `metadata.displayRole: "error"`). */
+function isErrorNotice(metadata: unknown): boolean {
+	return (
+		Boolean(metadata) &&
+		typeof metadata === "object" &&
+		(metadata as { displayRole?: unknown }).displayRole === "error"
+	);
+}
+
 function toMessage(value: unknown): ClineSessionMessage | null {
 	if (!value || typeof value !== "object") {
 		return null;
 	}
-	const { role, content } = value as { role?: unknown; content?: unknown };
+	const { role, content, metadata } = value as { role?: unknown; content?: unknown; metadata?: unknown };
 	if (typeof role !== "string") {
 		return null;
 	}
+	const mark = isErrorNotice(metadata) ? { displayError: true } : {};
 	if (typeof content === "string") {
-		return { role, content };
+		return { role, content, ...mark };
 	}
 	if (!Array.isArray(content)) {
-		return { role, content: [] };
+		return { role, content: [], ...mark };
 	}
 	return {
 		role,
+		...mark,
 		content: content
 			.filter((block): block is Record<string, unknown> => Boolean(block) && typeof block === "object")
 			.map((block) => ({
@@ -194,9 +205,7 @@ function toDetailMessage(value: unknown): ClineSessionDetailMessage | null {
 		content: blocks,
 		outputTokens: typeof outputTokens === "number" ? outputTokens : null,
 		ts: Number.isFinite(time) ? time : null,
-		...(metadata && typeof metadata === "object" && (metadata as { displayRole?: unknown }).displayRole === "error"
-			? { displayError: true }
-			: {}),
+		...(isErrorNotice(metadata) ? { displayError: true } : {}),
 	};
 }
 

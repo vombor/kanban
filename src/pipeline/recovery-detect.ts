@@ -5,26 +5,20 @@
 // Ported from archive/devteam-kit:services/kanban-autoland.mjs@6da71597 (POISONED, TRANSIENT, OVERFLOW,
 // prematureStop, finalProviderError, overflowCulprit, hungRequest). The incident behind each rule is in
 // docs/team/HISTORY.md ("Pipeline: recovery").
-import { isKanbanClineHubAbortReason } from "../terminal/cline-hub-abort-reason";
-import type { ClineSessionDetail, ClineSessionDetailMessage } from "../terminal/cline-session-files";
 import {
-	CLINE_CONTEXT_OVERFLOW_PATTERN,
-	getClineImageRejection,
-	getClineProviderErrorText,
-} from "../terminal/cline-turn-outcome";
+	detectFinalProviderError,
+	type FinalProviderError,
+	getClineMessageText,
+	hasClineToolUse,
+	isContextOverflowError,
+	isPoisonedHistoryError,
+} from "../terminal/cline-provider-error";
+import type { ClineSessionDetail, ClineSessionDetailMessage } from "../terminal/cline-session-files";
+import { getClineImageRejection } from "../terminal/cline-turn-outcome";
 
-// An API error that stays in the conversation and fails every later request: "continue" can't help, only a new
-// conversation (/clear) with the card prompt resent (c09cd4b: `ls -R` over node_modules overflowed a 131k context
-// and "continue" re-sent it). Overflows include llama.cpp's (Lemonade) "Context size has been exceeded." and "the
-// request exceeds the available context size" (CLINE_CONTEXT_OVERFLOW_PATTERN; issues #25, #26).
-const OVERFLOW_PATTERN = new RegExp(
-	`context length|context window|input length|prompt is too long|too many tokens|${CLINE_CONTEXT_OVERFLOW_PATTERN.source}`,
-	"i",
-);
-const POISONED_PATTERN = new RegExp(
-	`ValidationException|failed to satisfy constraint|validation error|invalid.*tool.?use|messages\\.\\d+|${OVERFLOW_PATTERN.source}`,
-	"i",
-);
+// The final-reply error reader and its patterns live with the turn detector, which reads them too.
+export { detectFinalProviderError, type FinalProviderError, isContextOverflowError, isPoisonedHistoryError };
+
 // Provider errors worth a backoff retry rather than a nudge (daf86a5: three 5xx in 25 s escalated 0789a; 519d05f:
 // stream timeouts; 6698365: "connection refused" from a restarting Lemonade).
 const TRANSIENT_PATTERN =
@@ -37,14 +31,6 @@ const ANNOUNCE_PATTERN =
 export const OUTPUT_CAP_TOKENS = 4096;
 /** A tool result bigger than this is named as the overflow's culprit (0a3d1fc). */
 const OVERFLOW_CULPRIT_MIN_BYTES = 100_000;
-
-export function isPoisonedHistoryError(text: string): boolean {
-	return POISONED_PATTERN.test(text);
-}
-
-export function isContextOverflowError(text: string): boolean {
-	return OVERFLOW_PATTERN.test(text);
-}
 
 /** A provider error that gets the retry backoff (and then the outage hold). A poisoned history never does. */
 export function isTransientProviderError(text: string): boolean {
@@ -59,18 +45,6 @@ export type PrematureStop =
 
 function isBlank(message: ClineSessionDetailMessage): boolean {
 	return message.content.every((block) => block.type === "text" && !(block.text ?? "").trim());
-}
-
-function hasToolUse(message: ClineSessionDetailMessage): boolean {
-	return message.content.some((block) => block.type === "tool_use");
-}
-
-function textOf(message: ClineSessionDetailMessage): string {
-	return message.content
-		.filter((block) => block.type === "text")
-		.map((block) => block.text ?? "")
-		.join(" ")
-		.trim();
 }
 
 /**
@@ -88,10 +62,10 @@ export function detectPrematureStop(
 		return { kind: "empty", outputCap: (lastAny.outputTokens ?? 0) >= outputCap };
 	}
 	const last = assistant.filter((message) => message.content.length > 0).at(-1);
-	if (!last || hasToolUse(last)) {
+	if (!last || hasClineToolUse(last)) {
 		return null;
 	}
-	const text = textOf(last);
+	const text = getClineMessageText(last);
 	const rejection = getClineImageRejection(text);
 	if (rejection) {
 		return { kind: "no_images", text: text.slice(-160), tooLarge: rejection === "too_large" };
@@ -101,50 +75,8 @@ export function detectPrematureStop(
 		: null;
 }
 
-/** A fatal API error shown as the whole final reply is at most this long (longer text is the agent talking). */
-const FINAL_ERROR_MAX_LENGTH = 600;
-
 // Lemonade's answer for a model it unloaded to load another one (`max_loaded_models`): capacity, not an outage.
 const MODEL_NOT_LOADED_PATTERN = /\bno model loaded\b/i;
-
-/** A turn's final reply that is an error, not the model's answer. */
-export interface FinalProviderError {
-	text: string;
-	/**
-	 * Cline's own error notice in place of a reply (`displayError`): "No model loaded: <model>", llama.cpp's
-	 * "decode() failed: vk::Queue::submit: ErrorDeviceLost", "Response stream ended without a finish reason.". Most
-	 * match no text pattern (issues #25, #32).
-	 */
-	notice: boolean;
-}
-
-/**
- * 0bc6387: a final reply that is a bare provider error ("The operation timed out.") ends the turn on an error. So
- * does a short final reply carrying a fatal API error (context overflow, a Bedrock ValidationException), which the
- * legacy kit read from Cline's hooks log and Kanban only sees in the session file, and any error notice Cline wrote
- * in place of a reply (issue #32: a rework turn whose whole reply was "No model loaded: <model>" was escalated as
- * "came back unchanged"), except the reason of a run Kanban itself ended through the Cline hub (cline-hub-abort-reason.ts).
- */
-export function detectFinalProviderError(messages: readonly ClineSessionDetailMessage[]): FinalProviderError | null {
-	const last = messages.at(-1);
-	if (!last || last.role !== "assistant" || hasToolUse(last)) {
-		return null;
-	}
-	const text = textOf(last);
-	const notice = Boolean(last.displayError);
-	// Kanban's own `run.abort` reason, which Cline writes as a notice too (issue #28): Kanban ended that run.
-	if (notice && isKanbanClineHubAbortReason(text)) {
-		return null;
-	}
-	if (text.length <= FINAL_ERROR_MAX_LENGTH && isPoisonedHistoryError(text)) {
-		return { text, notice };
-	}
-	const matched = getClineProviderErrorText(text);
-	if (matched) {
-		return { text: matched, notice };
-	}
-	return notice && text ? { text, notice } : null;
-}
 
 /**
  * A provider error that gets the retry backoff (and then the outage hold): a transient one by its text, or any error

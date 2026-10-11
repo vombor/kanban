@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 
+import { KANBAN_CLINE_HUB_ABORT_REASONS } from "../../../src/terminal/cline-hub-abort-reason";
+import { detectFinalReplyProviderError } from "../../../src/terminal/cline-provider-error";
+
 import {
 	CLINE_TURN_END_BOUNCE_QUIET_MS,
 	CLINE_TURN_END_QUIET_MS,
@@ -34,8 +37,20 @@ function session(overrides: Partial<ClineSessionSnapshot> = {}): ClineSessionSna
 	};
 }
 
+function notice(text: string): ClineSessionMessage {
+	return { ...reply(text), displayError: true };
+}
+
+/** As the callers do: the provider-error answer of the same session's last message. */
 function evaluate(sessionOverrides: Partial<ClineSessionSnapshot> = {}, input: Partial<ClineTurnEndInput> = {}) {
-	return evaluateClineTurnEnd({ session: session(sessionOverrides), runningSince: RUNNING_SINCE, now: NOW, ...input });
+	const snapshot = session(sessionOverrides);
+	return evaluateClineTurnEnd({
+		session: snapshot,
+		providerError: detectFinalReplyProviderError(snapshot.lastMessage),
+		runningSince: RUNNING_SINCE,
+		now: NOW,
+		...input,
+	});
 }
 
 describe("parseClineStatusLine (ported from cline-hooks.test.cjs)", () => {
@@ -116,7 +131,9 @@ describe("evaluateClineTurnEnd", () => {
 			reason: "no_final_reply",
 		});
 		expect(evaluate({ lastMessage: null })).toEqual({ ended: false, reason: "no_final_reply" });
-		expect(evaluateClineTurnEnd({ session: null, runningSince: RUNNING_SINCE, now: NOW })).toEqual({
+		expect(
+			evaluateClineTurnEnd({ session: null, providerError: null, runningSince: RUNNING_SINCE, now: NOW }),
+		).toEqual({
 			ended: false,
 			reason: "no_session",
 		});
@@ -171,6 +188,64 @@ describe("evaluateClineTurnEnd", () => {
 				messagesWrittenAt: NOW - CLINE_TURN_END_REJECTED_QUIET_MS,
 			}),
 		).toMatchObject({ ended: true, reason: "provider_error" });
+	});
+
+	it("ends a turn whose only reply is Cline's error notice while the session file stays running (issue #32)", () => {
+		for (const text of [
+			"No model loaded: Devstral-Small-2507-GGUF",
+			"decode() failed: vk::Queue::submit: ErrorDeviceLost",
+		]) {
+			const errored = { status: "running", lastMessage: notice(text) };
+			expect(evaluate({ ...errored, messagesWrittenAt: NOW - CLINE_TURN_END_REJECTED_QUIET_MS + 1 }), text).toEqual({
+				ended: false,
+				reason: "not_quiet",
+			});
+			expect(
+				evaluate({ ...errored, messagesWrittenAt: NOW - CLINE_TURN_END_REJECTED_QUIET_MS }),
+				text,
+			).toMatchObject({
+				ended: true,
+				reason: "provider_error",
+				text,
+			});
+		}
+		// The same text without Cline's mark is the model talking: a running session file is still streaming.
+		expect(
+			evaluate({
+				status: "running",
+				lastMessage: reply("No model loaded: Devstral-Small-2507-GGUF"),
+				messagesWrittenAt: NOW - CLINE_TURN_END_REJECTED_QUIET_MS,
+			}),
+		).toEqual({ ended: false, reason: "session_running" });
+	});
+
+	it("never reads Kanban's own hub abort notice as a provider error (issue #28)", () => {
+		const aborted = {
+			status: "running",
+			lastMessage: notice(KANBAN_CLINE_HUB_ABORT_REASONS.tuiExited(1)),
+			messagesWrittenAt: NOW - CLINE_TURN_END_REJECTED_QUIET_MS,
+		};
+		expect(detectFinalReplyProviderError(aborted.lastMessage)).toBeNull();
+		expect(evaluate(aborted)).toEqual({ ended: false, reason: "session_running" });
+	});
+
+	it("does not end a turn that went on after an error notice", () => {
+		// Cline retried: the newest message is the model's tool call, not the notice.
+		expect(
+			evaluate({
+				status: "running",
+				lastMessage: { role: "assistant", content: [{ type: "tool_use" }] },
+				messagesWrittenAt: NOW - CLINE_TURN_END_REJECTED_QUIET_MS,
+			}),
+		).toEqual({ ended: false, reason: "no_final_reply" });
+		// Something was written after the notice: not quiet yet.
+		expect(
+			evaluate({
+				status: "running",
+				lastMessage: notice("No model loaded: Devstral-Small-2507-GGUF"),
+				messagesWrittenAt: NOW - 5_000,
+			}),
+		).toEqual({ ended: false, reason: "not_quiet" });
 	});
 
 	it("waits after a switch back to running that no message followed, then ends the turn (9675b6ff, 10a60)", () => {
