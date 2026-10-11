@@ -34,6 +34,8 @@ interface FakeTerminalOptions {
 	missing?: boolean;
 	/** A summary exists (hydrated after a restart) but there is no live PTY. */
 	inactive?: boolean;
+	/** The user has a draft in the terminal (TerminalSessionManager.hasTypedInputSinceEnter). */
+	userTyping?: boolean;
 	/** What the agent does when it receives Enter number `n` (1-based). */
 	onEnter?: (n: number, terminal: FakeTerminal) => void;
 }
@@ -59,6 +61,7 @@ function createFakeTerminal(options: FakeTerminalOptions = {}): FakeTerminal {
 			terminal.patch({ state: "awaiting_review", reviewReason: "exit", pid: null, exitCode: 0 });
 		},
 		getSummary: vi.fn(() => (options.missing ? null : { ...terminal.summary })),
+		hasTypedInputSinceEnter: vi.fn(() => options.userTyping ?? false),
 		writeInput: vi.fn((_taskId: string, data: Buffer) => {
 			if (options.missing || !active) {
 				return null;
@@ -140,6 +143,15 @@ describe("deliverTaskInput", () => {
 		expect(delivery.error).toMatch(/not picked up/);
 		// The echo of the typed text happened before Enter and did not count.
 		expect(terminal.writes).toEqual(["go", "\r", "\r"]);
+	});
+
+	it("refuses with user_typing and writes nothing while the user is typing in the terminal (issue #35)", async () => {
+		const terminal = createFakeTerminal({ userTyping: true });
+
+		const delivery = await runDelivery(deliverTaskInput(terminal, "task-1", "go"));
+
+		expect(delivery).toMatchObject({ ok: false, status: "user_typing", enterAttempts: 0 });
+		expect(terminal.writeInput).not.toHaveBeenCalled();
 	});
 
 	it("reports no_session and writes nothing when the task has no session", async () => {

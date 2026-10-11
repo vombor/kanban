@@ -12,6 +12,14 @@
 // Activity means the session summary moved after Enter: a state change, a
 // hook event or new output. Typing echoes before the mark is taken, so the
 // echo of the text itself does not count as delivery.
+//
+// Nothing is typed while the user is typing in that terminal
+// (TerminalSessionManager.hasTypedInputSinceEnter, the one "is the user typing"
+// rule): Kanban's text and Enter would submit their half-written draft with it
+// (issue #35). The answer is then `user_typing` with nothing written; Kanban's
+// own deliveries that must still arrive (watchdog wakes, pipeline nudges and
+// reworks) go through the typed-input hold (src/server/typed-input-hold.ts),
+// which types them once the user's input clears.
 
 import type {
 	RuntimeAgentId,
@@ -31,10 +39,13 @@ const DEFAULT_CONFIRM_TIMEOUT_MS = 8_000;
 const DEFAULT_POLL_INTERVAL_MS = 250;
 const MAX_ENTER_ATTEMPTS = 2;
 
+export const USER_TYPING_ERROR = "The user is typing in this terminal; nothing was typed.";
+
 /** The slice of the terminal session manager delivery needs. */
 export interface TaskInputTerminal {
 	getSummary(taskId: string): RuntimeTaskSessionSummary | null;
 	writeInput(taskId: string, data: Buffer): RuntimeTaskSessionSummary | null;
+	hasTypedInputSinceEnter(taskId: string): boolean;
 }
 
 export interface DeliverTaskInputOptions {
@@ -150,6 +161,9 @@ export async function deliverTaskInput(
 	const initial = terminal.getSummary(taskId);
 	if (!initial) {
 		return result("no_session", { error: "Task session is not running." });
+	}
+	if (terminal.hasTypedInputSinceEnter(taskId)) {
+		return result("user_typing", { summary: initial, error: USER_TYPING_ERROR });
 	}
 
 	// Text and focus-in are written before the first await, so a caller that

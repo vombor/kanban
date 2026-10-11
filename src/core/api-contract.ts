@@ -1224,8 +1224,11 @@ export type RuntimeTaskInputDeliveryRequest = z.infer<typeof runtimeTaskInputDel
  * - `delivered`: the session showed activity after Enter (`evidence` says which signal moved).
  * - `sent`: written without confirmation (`enter` or `confirm` was false).
  * - `undelivered`: typed and Enter pressed twice, but the session showed no activity.
- * - `queued`: nothing typed yet: the user is typing in the orchestrator sidebar, so a watchdog wake is held and typed
- *   once their input clears (src/server/orchestrator-wake-hold.ts).
+ * - `queued`: nothing typed yet: the user is typing in that terminal, so Kanban's own input (a watchdog wake, a
+ *   pipeline nudge or rework) is held and typed once their input clears (src/server/typed-input-hold.ts).
+ * - `user_typing`: refused, nothing typed: the user is typing in that terminal (a draft since their last Enter, or a
+ *   keystroke within the quiet time; TerminalSessionManager.hasTypedInputSinceEnter).
+ * - `busy`: refused, nothing typed: held Kanban input for that terminal is waiting or being typed.
  * - `no_session`: the task has no running session; nothing was written.
  * - `session_ended`: the session went away (or stopped) part-way through.
  * - `aborted`: the caller cancelled before delivery finished.
@@ -1236,6 +1239,8 @@ export const runtimeTaskInputDeliveryStatusSchema = z.enum([
 	"sent",
 	"undelivered",
 	"queued",
+	"user_typing",
+	"busy",
 	"no_session",
 	"session_ended",
 	"aborted",

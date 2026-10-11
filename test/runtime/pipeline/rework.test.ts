@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import type { PipelineActionResult } from "../../../src/pipeline/actions";
 import type { QaVerdict } from "../../../src/pipeline/qa-verdict";
 import { REWORK_STARTED_CHECK_MS, readEscalationRecord, readQaflow, readReworks } from "../../../src/pipeline/rework";
 import { createPipelineWorkerHarness, createSnapshot } from "../../utilities/pipeline-worker";
@@ -73,6 +74,32 @@ describe("rework loop", () => {
 			sawRunningAt: "2026-10-07T10:00:00.000Z",
 			startedAt: "2026-10-07T10:00:00.000Z",
 		});
+	});
+
+	it("the started-check waits for a rework the server holds while the user types, and times it from when it was typed (issue #35)", async () => {
+		const harness = createHarness({
+			actionResult: (action) =>
+				(action.kind === "deliverInput" ? { ok: true, status: "queued" } : { ok: true }) as PipelineActionResult,
+		});
+		await harness.seed("d1111", { qaVerdicts: [failVerdict(1)] });
+		await harness.tick({ review: [DEV] }, [SESSION]);
+		expect(kinds(harness.actions)).toContain("deliverInput:d1111");
+		harness.actions.length = 0;
+
+		// Held far longer than the started-check time: no restart (it would kill the session the user types in).
+		const heldSince = REWORK_T0;
+		harness.setNow(REWORK_T0 + 5 * REWORK_STARTED_CHECK_MS);
+		await harness.tick({ review: [DEV] }, [{ ...SESSION, heldInputSince: heldSince }]);
+		expect(harness.actions).toEqual([]);
+
+		// Typed by the hold just now: the started-check counts from then.
+		const typedAt = REWORK_T0 + 5 * REWORK_STARTED_CHECK_MS;
+		harness.setNow(typedAt + REWORK_STARTED_CHECK_MS - 1000);
+		await harness.tick({ review: [DEV] }, [{ ...SESSION, heldInputTypedAt: typedAt }]);
+		expect(harness.actions).toEqual([]);
+		harness.setNow(typedAt + REWORK_STARTED_CHECK_MS);
+		await harness.tick({ review: [DEV] }, [{ ...SESSION, heldInputTypedAt: typedAt }]);
+		expect(kinds(harness.actions)).toEqual(["resumeTask:d1111"]);
 	});
 
 	it("leaves a card to recovery while recovery holds it or has typed into it since the rework", async () => {

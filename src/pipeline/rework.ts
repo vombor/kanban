@@ -301,12 +301,15 @@ export interface ReworkContext {
 export interface ReworkDependencies {
 	/** updateTask, resumeTask, blockTask, createTask, startTask on the server. */
 	actions: PipelineActions;
-	/** Types into a card's agent (the watchdog's `deliverInput` request, with its delivery check). */
+	/**
+	 * Types into a card's agent (the watchdog's `deliverInput` request, with its delivery check). Status `queued`:
+	 * the server holds it while the user types in the card's terminal (typed-input-hold.ts).
+	 */
 	deliverInput: (input: {
 		workspaceId: string;
 		taskId: string;
 		text: string;
-	}) => Promise<{ ok: boolean; error?: string }>;
+	}) => Promise<{ ok: boolean; status?: string; error?: string }>;
 	store: PipelineStateStore;
 	bus: PipelineEventBus;
 	appendQaLog: AppendQaLog;
@@ -450,7 +453,7 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 		workspacePath: scope.context.snapshot.workspacePath,
 	});
 
-	const deliver = async (scope: CardScope, text: string): Promise<{ ok: boolean; error?: string }> =>
+	const deliver = async (scope: CardScope, text: string): Promise<{ ok: boolean; status?: string; error?: string }> =>
 		await deps
 			.deliverInput({ workspaceId: scope.context.snapshot.workspaceId, taskId: scope.entry.card.id, text })
 			.catch((error: unknown) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }));
@@ -804,6 +807,9 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 		let note: string;
 		if (sent.ok) {
 			note = via === "chat" ? "typed into its own session" : `its conversation was cleared first (${clearCommand})`;
+			if (sent.status === "queued") {
+				note += "; held while the user types in the card's terminal, typed once they are done";
+			}
 		} else if (!canRestartOnSameModel(card, session)) {
 			await updateFlow(workspaceId, card.id, (current) => setLastRework(current, { via: "not started" }));
 			await escalate(scope, {
@@ -1236,7 +1242,12 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 		if (handback && Date.parse(handback.at) >= Date.parse(last.at)) {
 			return null;
 		}
-		const sentAt = Date.parse(last.at);
+		// Input the server holds while the user types in the card's terminal (typed-input-hold.ts) is neither sent nor
+		// unanswered: the started-check waits for it, and its clock starts when the hold typed it.
+		if (session?.heldInputSince != null) {
+			return null;
+		}
+		const sentAt = Math.max(Date.parse(last.at), session?.heldInputTypedAt ?? 0);
 		const nowIso = new Date(context.now).toISOString();
 		if (last.via === "pending") {
 			await recoverPendingRework(scope, last, sentAt);

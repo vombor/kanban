@@ -59,6 +59,7 @@ vi.mock("../../../src/server/browser.js", () => ({
 
 import { createIsolationService } from "../../../src/isolation/isolation-service";
 import { KANBAN_SESSION_CREDENTIAL_ENV, KANBAN_SESSION_WORKSPACE_ENV } from "../../../src/isolation/session-identity";
+import { createTypedInputHold, type TypedInputHold } from "../../../src/server/typed-input-hold";
 import { getKanbanGlobalConfigPath } from "../../../src/state/kanban-home";
 import type { RuntimeTrpcContext } from "../../../src/trpc/app-router";
 import { type CreateRuntimeApiDependencies, createRuntimeApi } from "../../../src/trpc/runtime-api";
@@ -706,13 +707,19 @@ describe("createRuntimeApi update handlers", () => {
 describe("createRuntimeApi deliverTaskInput", () => {
 	const scope = { workspaceId: "workspace-1", workspacePath: "/tmp/repo" };
 
-	function createApi(terminalManager: { getSummary: unknown; writeInput: unknown }) {
+	function createApi(
+		terminalManager: { getSummary: unknown; writeInput: unknown; hasTypedInputSinceEnter?: unknown },
+		typedInputHold?: TypedInputHold,
+	) {
 		return createTestRuntimeApi({
 			getActiveWorkspaceId: vi.fn(() => "workspace-1"),
 			loadScopedRuntimeConfig: vi.fn(async () => createRuntimeConfigState()),
 			setActiveRuntimeConfig: vi.fn(),
-			getScopedTerminalManager: vi.fn(async () => terminalManager as never),
+			getScopedTerminalManager: vi.fn(
+				async () => ({ hasTypedInputSinceEnter: vi.fn(() => false), ...terminalManager }) as never,
+			),
 			resolveInteractiveShellCommand: vi.fn(),
+			...(typedInputHold ? { typedInputHold } : {}),
 		});
 	}
 
@@ -725,6 +732,43 @@ describe("createRuntimeApi deliverTaskInput", () => {
 
 		expect(response).toMatchObject({ ok: true, status: "sent", enterAttempts: 1 });
 		expect(writeInput.mock.calls.map((call: unknown[]) => String(call[1]))).toEqual(["hello", "\r"]);
+	});
+
+	it("refuses (user_typing) and types nothing while the user is typing in the card's terminal (issue #35)", async () => {
+		const summary = createSummary();
+		const writeInput = vi.fn(() => summary);
+		const terminal = { getSummary: vi.fn(() => summary), writeInput, hasTypedInputSinceEnter: vi.fn(() => true) };
+		const hold = createTypedInputHold({
+			getTerminal: () => ({ ...terminal, hasLiveProcess: () => true }) as never,
+			log: vi.fn(),
+		});
+		const api = createApi(terminal, hold);
+
+		const response = await api.deliverTaskInput(scope, { taskId: "task-1", text: "hello" });
+
+		expect(response).toMatchObject({ ok: false, status: "user_typing", enterAttempts: 0 });
+		expect(writeInput).not.toHaveBeenCalled();
+		// Refused, not held: nothing is typed later either.
+		expect(hold.pending("workspace-1", "task-1")).toBe(0);
+	});
+
+	it("refuses (busy) while Kanban input held for that terminal waits, so a send never jumps ahead of it", async () => {
+		const summary = createSummary();
+		const writeInput = vi.fn(() => summary);
+		let typing = true;
+		const terminal = { getSummary: vi.fn(() => summary), writeInput, hasTypedInputSinceEnter: vi.fn(() => typing) };
+		const hold = createTypedInputHold({
+			getTerminal: () => ({ ...terminal, hasLiveProcess: () => true }) as never,
+			log: vi.fn(),
+		});
+		expect(await hold.deliver("workspace-1", "task-1", "continue")).toMatchObject({ status: "queued" });
+		typing = false;
+		const api = createApi(terminal, hold);
+
+		const response = await api.deliverTaskInput(scope, { taskId: "task-1", text: "hello" });
+
+		expect(response).toMatchObject({ ok: false, status: "busy" });
+		expect(writeInput).not.toHaveBeenCalled();
 	});
 
 	it("reports no_session when the task has no session", async () => {

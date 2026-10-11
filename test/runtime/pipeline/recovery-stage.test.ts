@@ -8,7 +8,7 @@ import { getDefaultKit, resolveKitLayers } from "../../../src/kits/resolve-kit";
 import type { PipelineDecisionRecord } from "../../../src/pipeline/decision-log";
 import type { PipelineSessionView, PipelineWorkspaceSnapshot } from "../../../src/pipeline/engine";
 import type { PipelineWorkspaceState } from "../../../src/pipeline/pipeline-state";
-import type { RecoveryFlowPatch } from "../../../src/pipeline/recovery";
+import { type RecoveryFlowPatch, recoveryHoldReason } from "../../../src/pipeline/recovery";
 import { RESTART_RESUME_NOTE, RESTART_WIP_NOTE } from "../../../src/pipeline/recovery-prompts";
 import { applyRecoveryPatches } from "../../../src/pipeline/recovery-runtime";
 import {
@@ -238,6 +238,65 @@ describe("recovery stage", () => {
 		});
 		const records = await harness.evaluate({ board: board({ review: [card("dev1")] }), sessions: [session("dev1")] });
 		expect(records[0]?.note).toContain("sent, unconfirmed (output)");
+	});
+
+	it("counts a nudge the server held while the user types as neither sent nor failed until the hold types it (issue #35)", async () => {
+		const harness = createHarness({
+			details: prematureDetail,
+			act: () => ({ ok: true, status: "queued", evidence: null }),
+		});
+		const reviewCard = board({ review: [card("dev1")] });
+		const records = await harness.evaluate({ board: reviewCard, sessions: [session("dev1")] });
+		expect(records[0]).toMatchObject({ outcome: "acted", note: expect.stringContaining("held: the user is typing") });
+		let qaflow = harness.getCards().dev1?.qaflow as Record<string, unknown>;
+		expect(qaflow.heldInputAt).toBe(new Date(NOW).toISOString());
+		expect(qaflow.continues).toHaveLength(1);
+		// The engine, the QA gate and the rework stage leave the card alone meanwhile.
+		expect(recoveryHoldReason(harness.getCards().dev1)).toContain("held while the user types");
+
+		// Still held, long past nudgeCheckSec: recovery waits and types nothing more.
+		const later = createHarness({ details: prematureDetail, cards: harness.getCards() });
+		later.deps.now = () => NOW + 60 * 60_000;
+		const heldRecords = await later.evaluate({
+			board: reviewCard,
+			sessions: [session("dev1", { heldInputSince: NOW })],
+		});
+		expect(later.actions).toEqual([]);
+		expect(heldRecords[0]).toMatchObject({
+			outcome: "none",
+			note: expect.stringContaining("is held while the user types"),
+		});
+
+		// Typed by the hold: it counts as sent from then, so the nudge check starts there.
+		const typedAt = NOW + 60 * 60_000 - 1_000;
+		await later.evaluate({ board: reviewCard, sessions: [session("dev1", { heldInputTypedAt: typedAt })] });
+		qaflow = later.getCards().dev1?.qaflow as Record<string, unknown>;
+		expect(qaflow.heldInputAt).toBeNull();
+		expect(qaflow.recoverySentAt).toBe(new Date(typedAt).toISOString());
+		await later.evaluate({ board: reviewCard, sessions: [session("dev1", { heldInputTypedAt: typedAt })] });
+		expect(later.actions).toEqual([]);
+		expect(recoveryHoldReason(later.getCards().dev1)).toBeNull();
+	});
+
+	it("waits while a rework is held for the card instead of nudging behind it", async () => {
+		const harness = createHarness({ details: prematureDetail });
+		const records = await harness.evaluate({
+			board: board({ review: [card("dev1")] }),
+			sessions: [session("dev1", { heldInputSince: NOW - 1_000 })],
+		});
+		expect(harness.actions).toEqual([]);
+		expect(records[0]?.note).toContain("Kanban input (a rework, a QA nudge) is held");
+	});
+
+	it("drops the wait when the held nudge was dropped untyped, and decides again", async () => {
+		const harness = createHarness({
+			details: prematureDetail,
+			cards: { dev1: { qaflow: { heldInputAt: new Date(NOW - 60_000).toISOString() } } },
+		});
+		const records = await harness.evaluate({ board: board({ review: [card("dev1")] }), sessions: [session("dev1")] });
+		expect(records[0]?.note).toContain("dropped untyped");
+		expect((harness.getCards().dev1?.qaflow as Record<string, unknown>).heldInputAt).toBeNull();
+		expect(harness.actions).toEqual([]);
 	});
 
 	it("cancels a hung request and schedules the provider retry", async () => {

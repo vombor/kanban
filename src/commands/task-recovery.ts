@@ -22,6 +22,7 @@ import type {
 	RuntimeAgentId,
 	RuntimeBoardCard,
 	RuntimeBoardColumnId,
+	RuntimeTaskInputDeliveryResponse,
 	RuntimeWorkspaceStateResponse,
 } from "../core/api-contract";
 import { resolveCardRole } from "../core/card-role";
@@ -176,13 +177,49 @@ export async function sendTaskMessage(input: {
 		ok: result.ok,
 		taskId: input.taskId,
 		status: result.status,
+		result: describeTaskSendResult(result),
 		// "output" only means the TUI printed something after Enter; a busy TUI does that without taking the text.
 		confirmed: result.evidence === "state" || result.evidence === "hook",
 		evidence: result.evidence,
 		enterAttempts: result.enterAttempts,
 		sessionState: result.summary?.state ?? null,
-		...(result.error ? { error: result.error } : {}),
+		...(result.error ? { error: describeTaskSendError(result) } : {}),
 	};
+}
+
+/**
+ * The one line a person or the orchestrator reads. A send is never held (typed-input-hold.ts `deliverUnlessBusy`):
+ * while the user types in that terminal it is refused, and it says so, never "delivered".
+ */
+export function describeTaskSendResult(result: RuntimeTaskInputDeliveryResponse): string {
+	switch (result.status) {
+		case "delivered":
+			return result.evidence === "output"
+				? "typed; the agent printed output after Enter, which doesn't prove it took the message"
+				: "delivered: the agent picked the message up";
+		case "sent":
+			return "typed, not confirmed (no Enter or no confirmation asked)";
+		case "undelivered":
+			return "typed, but the agent showed no activity after Enter (twice)";
+		case "user_typing":
+			return "NOT SENT: the user is typing in this card's terminal; nothing was typed. Send it again later.";
+		case "busy":
+			return "NOT SENT: Kanban input held for this card's terminal is waiting to be typed; nothing was typed. Send it again in a few seconds.";
+		case "queued":
+			return "held: nothing typed yet";
+		case "no_session":
+			return "NOT SENT: the card has no running session";
+		case "session_ended":
+			return "the session ended part-way through";
+		case "aborted":
+			return "cancelled";
+		case "error":
+			return "NOT SENT: error";
+	}
+}
+
+function describeTaskSendError(result: RuntimeTaskInputDeliveryResponse): string | undefined {
+	return result.status === "user_typing" ? "user is typing in this card's terminal, not sent" : result.error;
 }
 
 async function resumeOne(workspace: TaskWorkspace, taskId: string, dryRun: boolean): Promise<JsonRecord> {

@@ -97,6 +97,12 @@ export interface RecoveryFlowState {
 	escalated: { at: string; reason: string } | null;
 	/** When recovery last typed into the card (Kanban's own field; the legacy kit didn't need it). */
 	recoverySentAt: string | null;
+	/**
+	 * When the server held recovery's message because the user was typing in the card's terminal (Kanban's own field,
+	 * issue #35; src/server/typed-input-hold.ts). Until the hold has typed it, the message is neither sent nor failed:
+	 * `recoverySentAt` moves to the time it was typed (decideHeldInput).
+	 */
+	heldInputAt: string | null;
 	/** The rework stage's newest unreturned rework (rework-state.ts); a fresh one not seen started is its card. */
 	openRework: OpenRework | null;
 	/** The newest of these restarts the nudge/continue/retry budgets (sinceBudget). */
@@ -186,6 +192,7 @@ export function readRecoveryFlow(entry: Record<string, unknown> | undefined): Re
 				: { at: "", reason: "escalated" }
 			: null,
 		recoverySentAt: stringOrNull(flow.recoverySentAt),
+		heldInputAt: stringOrNull(flow.heldInputAt),
 		openRework: readOpenRework(flow),
 		resetAt: stringOrNull(flow.resetAt),
 		lastReworkAt: stringOrNull(flow.lastReworkAt),
@@ -896,6 +903,10 @@ export function decideRecovery(input: RecoveryCardInput): RecoveryDecision {
 					{ takeover: null },
 				);
 	}
+	const held = decideHeldInput(flow, input.session);
+	if (held) {
+		return held;
+	}
 	if (flow.orphan) {
 		return { kind: "none", reason: "orphaned by a Kanban restart: restart recovery resumes it" };
 	}
@@ -909,6 +920,44 @@ export function decideRecovery(input: RecoveryCardInput): RecoveryDecision {
 }
 
 /**
+ * Recovery's message the server held while the user typed in the card's terminal (`heldInputAt`), or null when
+ * there is none. While the session view still shows held input (recovery's, or a rework's, which is typed first and
+ * must not get a nudge typed after it), recovery waits: the message counts as neither
+ * delivered nor failed, so `nudgeCheckSec` doesn't run and no further nudge is sent. Once the hold has typed it,
+ * `recoverySentAt` becomes that time, so the nudge check and the silent-stall clock start from the real delivery. A
+ * hold dropped untyped (its session went, or the user kept a draft past the hold's limit) ends the wait: recovery
+ * decides again, the attempt already counted against its budget.
+ */
+export function decideHeldInput(
+	flow: RecoveryFlowState,
+	session: Pick<PipelineSessionView, "heldInputSince" | "heldInputTypedAt"> | null,
+): RecoveryDecision | null {
+	if (session?.heldInputSince != null) {
+		return {
+			kind: "wait",
+			reason: `${flow.heldInputAt ? "recovery's message" : "Kanban input (a rework, a QA nudge)"} is held while the user types in the card's terminal (since ${iso(session.heldInputSince)})`,
+		};
+	}
+	if (!flow.heldInputAt) {
+		return null;
+	}
+	const heldAt = Date.parse(flow.heldInputAt);
+	const typedAt = session?.heldInputTypedAt ?? null;
+	if (typedAt !== null && Number.isFinite(heldAt) && typedAt >= heldAt) {
+		return {
+			kind: "wait",
+			reason: `recovery's held message was typed at ${iso(typedAt)}, once the user stopped typing`,
+			patch: { heldInputAt: null, recoverySentAt: iso(typedAt) },
+		};
+	}
+	return {
+		kind: "wait",
+		reason: `recovery's message held at ${flow.heldInputAt} was dropped untyped; deciding again`,
+		patch: { heldInputAt: null },
+	};
+}
+
+/**
  * Why recovery holds a Review card back from the submission stage and the QA gate, or null. Ported from
  * archive/devteam-kit:services/kanban-autoland.mjs@6da71597 (onDevReview: an orphan, a live session, a pending
  * provider-error retry or an outage hold is not finished work, so no snapshot and no QA round; dc6e70d, 692f174, 8a1bf34).
@@ -917,6 +966,9 @@ export function recoveryHoldReason(entry: Record<string, unknown> | undefined): 
 	const flow = readRecoveryFlow(entry);
 	if (flow.orphan) {
 		return "orphaned by a Kanban restart";
+	}
+	if (flow.heldInputAt) {
+		return "recovery's message is held while the user types in the card's terminal";
 	}
 	if (flow.outage) {
 		return `provider outage hold on ${flow.outage.model}`;
@@ -966,6 +1018,7 @@ export function leftReviewPatch(flow: RecoveryFlowState, now: number): RecoveryF
 		...(flow.takeover ? { takeover: null } : {}),
 		...(flow.liveHold ? { liveHold: null } : {}),
 		...(flow.capacityStop ? { capacityStop: null } : {}),
+		...(flow.heldInputAt ? { heldInputAt: null } : {}),
 		// An orphan resumed (or finished, or trashed) by hand is not one any more.
 		...(flow.orphan ? { orphan: null } : {}),
 	};

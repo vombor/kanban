@@ -36,6 +36,7 @@ import {
 } from "../isolation/session-identity";
 import { readProjectShortcuts } from "../projects/project-shortcut-store";
 import { openInBrowser } from "../server/browser";
+import type { TypedInputHold } from "../server/typed-input-hold";
 import { getDebugResetTargetPaths, getProjectShortcutsPath } from "../state/kanban-home";
 import { listWorkspaceIndexEntries, loadWorkspaceBoardById } from "../state/workspace-state";
 import { buildRuntimeConfigResponse, resolveAgentCommand } from "../terminal/agent-registry";
@@ -67,6 +68,12 @@ export interface CreateRuntimeApiDependencies {
 	 * agents that read Cline's models.json (src/server/cline-lemonade-context-sync-monitor.ts). Must not throw.
 	 */
 	beforeAgentLaunch?: (agentId: RuntimeAgentId) => Promise<void>;
+	/**
+	 * deliverTaskInput behind the typed-input hold (src/server/typed-input-hold.ts): a send is refused, never held,
+	 * while the user types in that terminal or Kanban input held for it waits. Absent: deliverTaskInput alone (which
+	 * refuses while the user types, too).
+	 */
+	typedInputHold?: Pick<TypedInputHold, "deliverUnlessBusy">;
 }
 
 async function resolveExistingTaskCwdOrEnsure(options: {
@@ -370,10 +377,16 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 			try {
 				const body = parseTaskInputDeliveryRequest(input);
 				const terminalManager = await deps.getScopedTerminalManager(workspaceScope);
-				return await deliverTaskInput(terminalManager, body.taskId, body.text, {
-					enter: body.enter,
-					confirm: body.confirm,
-				});
+				const options = { enter: body.enter, confirm: body.confirm };
+				return deps.typedInputHold
+					? await deps.typedInputHold.deliverUnlessBusy(
+							terminalManager,
+							workspaceScope.workspaceId,
+							body.taskId,
+							body.text,
+							options,
+						)
+					: await deliverTaskInput(terminalManager, body.taskId, body.text, options);
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				return {

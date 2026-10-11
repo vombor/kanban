@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
 	state: null as unknown,
 	selectedAgentId: "cline" as RuntimeAgentId,
 	startTaskSession: vi.fn(),
+	deliverTaskInput: vi.fn(),
 	ensureWorktree: vi.fn(async () => ({ ok: true })),
 	updateTrackedPipelineCardFlow: vi.fn(async () => true),
 }));
@@ -21,6 +22,7 @@ vi.mock("../../src/commands/runtime-trpc-client", () => ({
 		runtime: {
 			getConfig: { query: async () => ({ selectedAgentId: mocks.selectedAgentId }) },
 			startTaskSession: { mutate: mocks.startTaskSession },
+			deliverTaskInput: { mutate: mocks.deliverTaskInput },
 		},
 	}),
 	notifyRuntimeWorkspaceStateUpdated: vi.fn(async () => undefined),
@@ -36,7 +38,7 @@ vi.mock("../../src/pipeline/recovery-runtime", () => ({
 	updateTrackedPipelineCardFlow: mocks.updateTrackedPipelineCardFlow,
 }));
 
-import { resumeTasks } from "../../src/commands/task-recovery";
+import { resumeTasks, sendTaskMessage } from "../../src/commands/task-recovery";
 import { RESTART_RESUME_NOTE } from "../../src/pipeline/recovery-prompts";
 
 function deadSession(agentId: RuntimeAgentId): RuntimeTaskSessionSummary {
@@ -105,5 +107,32 @@ describe("kanban task resume", () => {
 				},
 			],
 		});
+	});
+});
+
+describe("kanban task send", () => {
+	it("says plainly that nothing was sent while the user is typing in the card's terminal (issue #35)", async () => {
+		mocks.deliverTaskInput.mockResolvedValueOnce({
+			ok: false,
+			status: "user_typing",
+			evidence: null,
+			enterAttempts: 0,
+			summary: null,
+			error: "The user is typing in this terminal; nothing was typed.",
+		});
+		const result = await sendTaskMessage({
+			cwd: "/repos/foo",
+			taskId: "d1111",
+			text: "check the tests",
+			enter: true,
+		});
+		expect(result).toMatchObject({
+			ok: false,
+			status: "user_typing",
+			confirmed: false,
+			error: "user is typing in this card's terminal, not sent",
+		});
+		expect(String(result.result)).toMatch(/^NOT SENT: the user is typing in this card's terminal/);
+		expect(JSON.stringify(result)).not.toContain("delivered");
 	});
 });

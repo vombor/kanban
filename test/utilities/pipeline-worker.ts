@@ -301,7 +301,10 @@ export function createSnapshot(input: {
 	workspaceId: string;
 	board: RuntimeBoardData;
 	selectedAgentId: RuntimeAgentId;
-	sessions?: Array<Partial<RuntimeTaskSessionSummary> & Pick<PipelineSessionView, "live"> & { taskId: string }>;
+	sessions?: Array<
+		Partial<RuntimeTaskSessionSummary> &
+			Pick<PipelineSessionView, "live" | "heldInputSince" | "heldInputTypedAt"> & { taskId: string }
+	>;
 }): PipelineWorkspaceSnapshot {
 	return {
 		workspaceId: input.workspaceId,
@@ -322,6 +325,8 @@ export function createSnapshot(input: {
 				...(session.exitCode !== undefined ? { exitCode: session.exitCode } : {}),
 				...(session.latestHookActivity !== undefined ? { latestHookActivity: session.latestHookActivity } : {}),
 				...(session.live !== undefined ? { live: session.live } : {}),
+				...(session.heldInputSince !== undefined ? { heldInputSince: session.heldInputSince } : {}),
+				...(session.heldInputTypedAt !== undefined ? { heldInputTypedAt: session.heldInputTypedAt } : {}),
 			}),
 		),
 	};

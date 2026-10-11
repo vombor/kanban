@@ -70,6 +70,9 @@ export interface RecoveryActionResult {
 	error?: string;
 }
 
+/** deliverTaskInput's status for input the server holds while the user types in the terminal (typed-input-hold.ts). */
+const HELD_STATUS = "queued";
+
 /** How long a capacity-held resume waits before it looks again. */
 const CAPACITY_RECHECK_MS = 30_000;
 /** How long a resume held for PID pressure waits before it looks again (the legacy kit's 30 s). */
@@ -289,24 +292,33 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 		taskId: string,
 		text: string,
 		clear: string | null,
-	): Promise<{ result: RecoveryActionResult; note: string }> => {
+	): Promise<{ result: RecoveryActionResult; note: string; held: boolean }> => {
+		let clearHeld = false;
 		if (clear) {
 			const cleared = await deps.act(workspaceId, { kind: "deliver", taskId, text: clear });
 			if (!cleared.ok) {
 				return {
 					result: cleared,
 					note: `${clear} not delivered (${cleared.status ?? "?"}: ${cleared.error ?? ""})`,
+					held: false,
 				};
 			}
-			await deps.sleep(CLEAR_SETTLE_MS);
+			clearHeld = cleared.status === HELD_STATUS;
+			if (!clearHeld) {
+				await deps.sleep(CLEAR_SETTLE_MS);
+			}
 		}
+		// Held `clear`: the text is held behind it, and the hold types them apart (typed-input-hold.ts).
 		const result = await deps.act(workspaceId, { kind: "deliver", taskId, text });
+		const held = clearHeld || result.status === HELD_STATUS;
 		const note = !result.ok
 			? `not delivered (${result.status ?? "?"}: ${result.error ?? ""})`
-			: isConfirmed(result)
-				? `delivered (${result.evidence})`
-				: `sent, unconfirmed (${result.evidence ?? "no evidence"}): checked again in a while`;
-		return { result, note };
+			: held
+				? "held: the user is typing in the card's terminal; the server types it once they are done"
+				: isConfirmed(result)
+					? `delivered (${result.evidence})`
+					: `sent, unconfirmed (${result.evidence ?? "no evidence"}): checked again in a while`;
+		return { result, note, held };
 	};
 
 	/** Carries out one card's decision. Returns the record outcome and note; adds state patches to `patches`. */
@@ -367,9 +379,10 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 						cleanedDirs: cleaned,
 					});
 				}
-				const { result, note } = await deliver(workspaceId, taskId, text, decision.clear);
-				// The budget counts the attempt either way, so a nudge that never lands still ends in an escalation.
-				patches.set(taskId, { ...decision.patch, recoverySentAt: now });
+				const { result, note, held } = await deliver(workspaceId, taskId, text, decision.clear);
+				// The budget counts the attempt either way, so a nudge that never lands still ends in an escalation. A held
+				// one is sent once typed (decideHeldInput moves `recoverySentAt` then).
+				patches.set(taskId, { ...decision.patch, recoverySentAt: now, ...(held ? { heldInputAt: now } : {}) });
 				const cleanNote = cleaned.length > 0 ? `; cleaned ${cleaned.join(", ")}` : "";
 				return { outcome: result.ok ? "acted" : "failed", note: `${decision.reason}${cleanNote}; ${note}` };
 			}

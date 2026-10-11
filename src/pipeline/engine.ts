@@ -59,6 +59,13 @@ export type PipelineSessionView = Pick<RuntimeTaskSessionSummary, "taskId" | "ag
 		live?: boolean;
 		/** When the user last typed into the session's terminal (epoch ms; TerminalSessionManager.getViewerTypedAt). */
 		viewerTypedAt?: number | null;
+		/**
+		 * Since when Kanban input for the session has been held because the user is typing in its terminal, or null
+		 * (src/server/typed-input-hold.ts): recovery and the rework stage wait for it to be typed.
+		 */
+		heldInputSince?: number | null;
+		/** When held input was last typed into the session, or null: a held nudge or rework counts as sent from then. */
+		heldInputTypedAt?: number | null;
 	};
 
 /** What the server sends the worker about one workspace. */

@@ -85,7 +85,6 @@ import { createClineLemonadeContextSyncMonitor } from "./cline-lemonade-context-
 import { createGitHubAppRequestHandler } from "./github-app-route";
 import { handleHttpRequest, handleSocketUpgrade } from "./middleware";
 import { createModelListsRequestHandler } from "./model-lists-route";
-import { createOrchestratorWakeHold } from "./orchestrator-wake-hold";
 import { createOrphanProcessSweeper } from "./orphan-process-sweeper";
 import { createPipelineActionRunner } from "./pipeline-actions";
 import { createProcessReaper, type PreparedWorktreeReap } from "./process-reaper";
@@ -95,6 +94,7 @@ import type { RuntimeStateHub } from "./runtime-state-hub";
 import { createShortcutPortProxyHandler, createShortcutPortRegistry, isShortcutPortProxyPath } from "./shortcut-ports";
 import { createTaskLandingGate } from "./task-landing-gate";
 import { createTaskTrashWorkflow, createTrashTaskRequestHandler, type TaskTrashWorkflow } from "./task-trash-workflow";
+import { createTypedInputHold, type TypedInputHold } from "./typed-input-hold";
 import { createWatchdogActionHandler } from "./watchdog-actions";
 import type { WorkspaceRegistry } from "./workspace-registry";
 
@@ -146,6 +146,8 @@ export interface RuntimeServer {
 	handleWatchdogRequest: (request: WatchdogActionRequest) => Promise<unknown>;
 	/** Runs the pipeline worker's action requests (pipeline-actions.ts). */
 	runPipelineAction: (request: PipelineActionRequest) => Promise<PipelineActionResult>;
+	/** Kanban's typed input held while the user types in a terminal; the pipeline snapshot reads describe(). */
+	typedInputHold: Pick<TypedInputHold, "describe">;
 	/** Project isolation's state: credentials, grants, the caller checks. */
 	isolation: IsolationService;
 	url: string;
@@ -341,7 +343,15 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		};
 	};
 
+	// Kanban's own typed input (sidebar wakes, the pipeline's card input) waits while the user types in that terminal,
+	// and `kanban task send` is refused meanwhile (typed-input-hold.ts, issue #35).
+	const typedInputHold = createTypedInputHold({
+		getTerminal: (workspaceId) => deps.workspaceRegistry.getTerminalManagerForWorkspace(workspaceId) ?? null,
+		log: deps.warn,
+	});
+	typedInputHold.start();
 	const runtimeApi = createRuntimeApi({
+		typedInputHold,
 		getActiveWorkspaceId: deps.workspaceRegistry.getActiveWorkspaceId,
 		getActiveRuntimeConfig: deps.workspaceRegistry.getActiveRuntimeConfig,
 		loadScopedRuntimeConfig: deps.workspaceRegistry.loadScopedRuntimeConfig,
@@ -387,12 +397,6 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		settleMs: deps.reviewSettleMs ?? DEFAULT_REVIEW_SETTLE_MS,
 	});
 	messageNotices.start();
-	// The watchdog's sidebar wakes wait while the user types there, by the same rule (orchestrator-wake-hold.ts).
-	const orchestratorWakeHold = createOrchestratorWakeHold({
-		getTerminal: (workspaceId) => deps.workspaceRegistry.getTerminalManagerForWorkspace(workspaceId) ?? null,
-		log: deps.warn,
-	});
-	orchestratorWakeHold.start();
 	// A session's credential stops working when its process ends (resolveCaller checks that too); this drops them.
 	const credentialSweep = setInterval(() => void isolation.pruneCredentials().catch(() => undefined), 10_000);
 	credentialSweep.unref();
@@ -472,7 +476,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		getTerminal: getScopedTerminalManager,
 		startTaskSession: async (scope, input) => await runtimeApi.startTaskSession(scope, input),
 		credentials: isolation,
-		wakeHold: orchestratorWakeHold,
+		inputHold: typedInputHold,
 		runProcessSweep: async () => {
 			await orphanProcessSweeper.sweep();
 			return await orphanProcessSweeper.getStatus();
@@ -871,11 +875,12 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		url,
 		taskTrashWorkflow,
 		handleWatchdogRequest,
+		typedInputHold,
 		runPipelineAction,
 		isolation,
 		close: async () => {
 			messageNotices.close();
-			orchestratorWakeHold.close();
+			typedInputHold.close();
 			clearInterval(credentialSweep);
 			orphanProcessSweeper.close();
 			clineTurnMonitor.close();

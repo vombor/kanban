@@ -41,7 +41,7 @@ function createFakeTerminalManager() {
 		setSession: (taskId: string, fields: Pick<RuntimeTaskSessionSummary, "state" | "stateChangedAt">) => {
 			summaryFields.set(taskId, fields);
 		},
-		manager: { writeInput, getSummary } as unknown as TerminalSessionManager,
+		manager: { writeInput, getSummary, hasTypedInputSinceEnter: () => false } as unknown as TerminalSessionManager,
 	};
 }
 

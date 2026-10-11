@@ -1114,6 +1114,11 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		if (context.settings.pipeline.paused) {
 			return null;
 		}
+		// Kanban input the server holds while the user types in the QA card's terminal (typed-input-hold.ts): a
+		// further nudge would be typed after it.
+		if (context.snapshot.sessions.find((candidate) => candidate.taskId === qaTaskId)?.heldInputSince != null) {
+			return null;
+		}
 		if (entry.nudges < context.qa.maxNudges) {
 			const nudges = entry.nudges + 1;
 			const sent = await deps.deliverInput({

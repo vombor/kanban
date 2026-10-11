@@ -337,10 +337,12 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 		workspaceId: string;
 		taskId: string;
 		text: string;
-	}): Promise<{ ok: boolean; error?: string }> => {
+	}): Promise<{ ok: boolean; status?: string; error?: string }> => {
 		try {
 			const delivered = await watchdogActions.request({ kind: "deliverInput", workspaceId, taskId, text });
-			return delivered.ok ? { ok: true } : { ok: false, error: delivered.error ?? delivered.status };
+			return delivered.ok
+				? { ok: true, status: delivered.status }
+				: { ok: false, status: delivered.status, error: delivered.error ?? delivered.status };
 		} catch (error) {
 			return { ok: false, error: error instanceof Error ? error.message : String(error) };
 		}
