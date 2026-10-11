@@ -7,6 +7,7 @@
 // has a new session in the same worktree keeps it. Each run is ended once.
 import type { RuntimeTaskSessionSummary } from "../core/api-contract";
 import { getAgentTurnEndSource } from "../terminal/agent-session-adapters";
+import { KANBAN_CLINE_HUB_ABORT_REASONS } from "../terminal/cline-hub-abort-reason";
 import type { ClineHubRunCanceller } from "../terminal/cline-hub-runs";
 import type { TerminalSessionManager } from "../terminal/session-manager";
 
@@ -84,12 +85,7 @@ export function createClineHubRunFollower(deps: ClineHubRunFollowerDependencies)
 		const run = runs.get(summary.taskId);
 		if (summary.pid === null && run) {
 			runs.delete(summary.taskId);
-			endRun(
-				workspaceId,
-				summary.taskId,
-				run,
-				`Kanban ended this run: its card's Cline TUI exited${summary.exitCode === null ? "" : ` (code ${summary.exitCode})`}`,
-			);
+			endRun(workspaceId, summary.taskId, run, KANBAN_CLINE_HUB_ABORT_REASONS.tuiExited(summary.exitCode));
 		}
 	};
 
@@ -114,7 +110,7 @@ export function createClineHubRunFollower(deps: ClineHubRunFollowerDependencies)
 						workspaceId,
 						summary.taskId,
 						{ startedAt: summary.startedAt, workspacePath: summary.workspacePath },
-						"Kanban ended this run: its card's Cline TUI died with the previous Kanban server",
+						KANBAN_CLINE_HUB_ABORT_REASONS.orphaned,
 					);
 				}
 			}

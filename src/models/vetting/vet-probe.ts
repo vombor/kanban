@@ -24,14 +24,12 @@ import {
 	detectFinalProviderError,
 	detectHungRequest,
 	isContextOverflowError,
-	isPoisonedHistoryError,
-	isTransientProviderError,
+	isRetryableProviderError,
 } from "../../pipeline/recovery-detect";
 import type { AgentToolProcessFinder } from "../../server/process-reaper";
 import { getClineDataDirPath } from "../../state/kanban-home";
 import { getAgentTurnEndSource } from "../../terminal/agent-session-adapters";
 import {
-	type ClineSessionDetailMessage,
 	type ClineSessionDetailReader,
 	createClineSessionFileReader,
 	getClineSessionsPath,
@@ -108,20 +106,6 @@ export function isProviderTimeoutError(text: string): boolean {
 	return TIMEOUT_PATTERN.test(text);
 }
 
-/** The text of the session's last message when it is Cline's own error notice in place of a reply, else null. */
-export function readFinalClineErrorNotice(messages: readonly ClineSessionDetailMessage[]): string | null {
-	const last = messages.at(-1);
-	if (!last?.displayError || last.role !== "assistant" || last.content.some((block) => block.type === "tool_use")) {
-		return null;
-	}
-	const text = last.content
-		.filter((block) => block.type === "text")
-		.map((block) => block.text ?? "")
-		.join(" ")
-		.trim();
-	return text || null;
-}
-
 export function createVetProbe(
 	options: VetProbeOptions = {},
 ): (input: VetProbeInput) => Promise<VetProbeVerdict | null> {
@@ -139,14 +123,13 @@ export function createVetProbe(
 				: null;
 		const loading = modelLoaded === false;
 		if (detail) {
-			const notice = readFinalClineErrorNotice(detail.messages);
-			const providerError = detectFinalProviderError(detail.messages) ?? notice;
+			const providerError = detectFinalProviderError(detail.messages);
 			if (providerError) {
-				const text = providerError.slice(0, 300);
-				if (isContextOverflowError(providerError)) {
+				const text = providerError.text.slice(0, 300);
+				if (isContextOverflowError(providerError.text)) {
 					return { failure: { kind: "context_overflow", detail: text, harness: true }, hold: null };
 				}
-				if (isLocalProvider(input.providerId) && isProviderTimeoutError(providerError)) {
+				if (isLocalProvider(input.providerId) && isProviderTimeoutError(providerError.text)) {
 					return {
 						failure: {
 							kind: "provider_timeout",
@@ -162,9 +145,7 @@ export function createVetProbe(
 						kind: "provider_error",
 						detail: text,
 						// A rejected request (validation, a malformed tool call in the history) may be the model's doing.
-						harness:
-							isTransientProviderError(providerError) ||
-							(notice !== null && !isPoisonedHistoryError(providerError)),
+						harness: isRetryableProviderError(providerError),
 					},
 					hold: null,
 				};

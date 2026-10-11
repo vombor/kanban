@@ -16,6 +16,7 @@ import {
 	sinceBudget,
 } from "../../../src/pipeline/recovery";
 import { CONTINUE_PROMPT, IMAGE_TOO_LARGE_NOTE, SMALL_IMAGES_ONLY } from "../../../src/pipeline/recovery-prompts";
+import { KANBAN_CLINE_HUB_ABORT_REASONS } from "../../../src/terminal/cline-hub-abort-reason";
 import type { ClineSessionDetail, ClineSessionDetailMessage } from "../../../src/terminal/cline-session-files";
 
 const NOW = Date.parse("2026-10-07T12:00:00.000Z");
@@ -384,6 +385,110 @@ describe("decideRecovery: Review cards", () => {
 			"wait",
 		);
 		expect(decision.reason).toContain("other (glm)");
+	});
+
+	describe("a turn that ends on Cline's error notice (issue #32)", () => {
+		const LEMONADE = { provider: "lemonade", model: "Devstral-Small-2-24B-Instruct-2512-GGUF-Q4_K_M" };
+		const NOT_LOADED = "No model loaded: Devstral-Small-2-24B-Instruct-2512-GGUF-Q4_K_M";
+		const DEVICE_LOST = "decode() failed: vk::Queue::submit: ErrorDeviceLost";
+		const capacityHold = {
+			provider: "lemonade",
+			maxLoadedModels: 2,
+			loadedModels: 2,
+			holders: ["qa1 (gemma-4-31B-it-qat-q4_0-gguf-Q4_0)", "dev2 (GLM-4.7-Flash-GGUF)"],
+			otherWorkspaceHolders: 0,
+		};
+		const reworkAt = new Date(NOW - 3 * MIN).toISOString();
+		// The rework stage saw the rework start (09:07:33Z: the session ran), and the turn ended on the notice.
+		const reworkFlow = flow({
+			lastReworkAt: reworkAt,
+			reworks: [{ at: reworkAt, startedAt: reworkAt, sawRunningAt: reworkAt, next: 2 }],
+		});
+		const noticeTurn = (error: string, prompt = "REWORK round 2 (QA round 1: FAIL)") =>
+			detail([message("user", prompt), message("assistant", error, { displayError: true })], {
+				writtenAgoMs: MIN,
+			});
+
+		it("holds a rework turn that got only 'No model loaded' for a provider retry, also while the provider is full", () => {
+			for (const hold of [null, capacityHold]) {
+				const decision = expectKind(
+					decideRecovery(
+						input({ model: LEMONADE, flow: reworkFlow, detail: noticeTurn(NOT_LOADED), capacityHold: hold }),
+					),
+					"hold",
+				);
+				expect(decision.reason).toContain("lemonade unloaded lemonade/Devstral");
+				expect(decision.reason).toContain("once the provider has room");
+				expect(decision.patch.retryAt).toBe(new Date(NOW + MIN).toISOString());
+				expect(decision.patch.transient).toEqual([{ at: new Date(NOW).toISOString(), warn: NOT_LOADED }]);
+				// No nudge, continue or escalation is counted.
+				expect(decision.patch.nudges).toBeUndefined();
+				expect(decision.patch.continues).toBeUndefined();
+				expect(decision.patch.escalated).toBeUndefined();
+			}
+			// The hold keeps the rework stage and the QA gate off the card (recoveryHoldReason).
+			const held = { qaflow: { ...reworkFlow, retryAt: new Date(NOW + MIN).toISOString() } };
+			expect(recoveryHoldReason(held)).toContain("provider-error retry due at");
+		});
+
+		it("sends the due retry only once the provider has room, never into the next eviction", () => {
+			const due = flow({
+				retryAt: new Date(NOW - 1000).toISOString(),
+				transient: [{ at: new Date(NOW - MIN).toISOString(), warn: NOT_LOADED }],
+			});
+			const waiting = expectKind(
+				decideRecovery(input({ model: LEMONADE, flow: due, detail: noticeTurn(NOT_LOADED), capacityHold })),
+				"wait",
+			);
+			expect(waiting.reason).toContain("qa1 (gemma-4-31B-it-qat-q4_0-gguf-Q4_0)");
+			const retry = expectKind(
+				decideRecovery(input({ model: LEMONADE, flow: due, detail: noticeTurn(NOT_LOADED) })),
+				"nudge",
+			);
+			expect(retry.cause).toBe("retry");
+			expect(retry.text).toContain(NOT_LOADED);
+		});
+
+		it("holds a rework turn that ended on a Vulkan ErrorDeviceLost for a provider retry", () => {
+			const decision = expectKind(
+				decideRecovery(
+					input({
+						model: { provider: "lemonade", model: "Laguna-S-2.1-GGUF-UD-Q4_K_XL" },
+						flow: reworkFlow,
+						detail: noticeTurn(DEVICE_LOST),
+					}),
+				),
+				"hold",
+			);
+			expect(decision.reason).toContain("provider error on lemonade/Laguna-S-2.1-GGUF-UD-Q4_K_XL (1/4)");
+			expect(decision.patch.transient?.[0]?.warn).toBe(DEVICE_LOST);
+			expect(decision.patch.nudges).toBeUndefined();
+		});
+
+		it("holds a normal dev turn that ended on either notice the same way", () => {
+			for (const error of [NOT_LOADED, DEVICE_LOST]) {
+				const decision = expectKind(
+					decideRecovery(input({ model: LEMONADE, detail: noticeTurn(error, "Implement the thing.") })),
+					"hold",
+				);
+				expect(decision.patch.retryAt).toBe(new Date(NOW + MIN).toISOString());
+			}
+			// Kanban's own hub abort (a TUI exit, issue #28) is written as a notice too, and is no provider error.
+			for (const reason of [KANBAN_CLINE_HUB_ABORT_REASONS.tuiExited(0), KANBAN_CLINE_HUB_ABORT_REASONS.orphaned]) {
+				const decision = decideRecovery(
+					input({ model: LEMONADE, detail: noticeTurn(reason, "Implement the thing.") }),
+				);
+				expect(decision.kind, JSON.stringify(decision)).not.toBe("hold");
+				expect(decision.kind).not.toBe("nudge");
+			}
+			// The same words as the model's own reply are no provider error.
+			expectKind(
+				decideRecovery(
+					input({ model: LEMONADE, detail: detail([message("user", "go"), message("assistant", DEVICE_LOST)]) }),
+				),
+				"none",
+			);
+		});
 	});
 
 	it("waits nudgeCheckSec after a message before deciding again (an unconfirmed nudge)", () => {

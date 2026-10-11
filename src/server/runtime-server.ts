@@ -55,6 +55,7 @@ import {
 	mutateWorkspaceState,
 } from "../state/workspace-state";
 import { agentReadsClineModelsFile } from "../terminal/agent-session-adapters";
+import { KANBAN_CLINE_HUB_ABORT_REASONS } from "../terminal/cline-hub-abort-reason";
 import type { ClineHubRunCanceller } from "../terminal/cline-hub-runs";
 import { createClineTurnMonitor } from "../terminal/cline-turn-monitor";
 import { deliverTaskInput } from "../terminal/deliver-task-input";
@@ -319,7 +320,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 					workspaceId: scope.workspaceId,
 					taskId,
 					worktreePaths,
-					reason: "Kanban ended this run: its card is done or deleted",
+					reason: KANBAN_CLINE_HUB_ABORT_REASONS.doneOrDeleted,
 				})
 				.catch((error: unknown) => {
 					deps.warn(

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 
+import { KANBAN_CLINE_HUB_ABORT_REASONS } from "../../../src/terminal/cline-hub-abort-reason";
 import {
 	abortClineHubRun,
 	type ClineHubConnection,
@@ -26,12 +27,15 @@ interface FakeHub {
 	url: string;
 	sessions: Map<string, FakeHubSession>;
 	commands: string[];
+	/** The `reason` of every `run.abort`. */
+	abortReasons: unknown[];
 	close: () => Promise<void>;
 }
 
 async function startFakeHub(): Promise<FakeHub> {
 	const sessions = new Map<string, FakeHubSession>();
 	const commands: string[] = [];
+	const abortReasons: unknown[] = [];
 	const server = new WebSocketServer({
 		port: 0,
 		host: "127.0.0.1",
@@ -59,6 +63,7 @@ async function startFakeHub(): Promise<FakeHub> {
 						: { ok: false, error: { code: "session_not_found", message: `Unknown session: ${sessionId}` } },
 				);
 			} else if (command === "run.abort") {
+				abortReasons.push(frame.envelope.payload?.reason);
 				if (session && session.status === "running") {
 					session.abortsToEnd -= 1;
 					if (session.abortsToEnd <= 0) {
@@ -76,6 +81,7 @@ async function startFakeHub(): Promise<FakeHub> {
 		url: `ws://127.0.0.1:${port}/hub`,
 		sessions,
 		commands,
+		abortReasons,
 		close: async () => {
 			for (const client of server.clients) {
 				client.terminate();
@@ -140,6 +146,18 @@ describe("abortClineHubRun", () => {
 		expect(await abortClineHubRun(connection, "1_idle", "test", { settleMs: 1 })).toBe("ended");
 		expect(await abortClineHubRun(connection, "1_gone", "test", { settleMs: 1 })).toBe("not_found");
 		expect(hub.commands).not.toContain("run.abort");
+	});
+
+	it("sends every reason with Kanban's marker, adding it to one without (issue #32)", async () => {
+		const { hub, connection } = await connectToFakeHub();
+		hub.sessions.set("1_a", { status: "running", abortsToEnd: 1 });
+		hub.sessions.set("1_b", { status: "running", abortsToEnd: 1 });
+		await abortClineHubRun(connection, "1_a", KANBAN_CLINE_HUB_ABORT_REASONS.doneOrDeleted, { settleMs: 1 });
+		await abortClineHubRun(connection, "1_b", "a new reason", { settleMs: 1 });
+		expect(hub.abortReasons).toEqual([
+			"Kanban ended this run: its card is done or deleted",
+			"Kanban ended this run: a new reason",
+		]);
 	});
 
 	it("gives up after its attempts", async () => {

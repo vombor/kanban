@@ -46,7 +46,9 @@ import {
 	detectPrematureStop,
 	findOverflowCulprit,
 	isContextOverflowError,
+	isModelNotLoadedError,
 	isPoisonedHistoryError,
+	isRetryableProviderError,
 	isTransientProviderError,
 	type PrematureStop,
 } from "./recovery-detect";
@@ -299,14 +301,16 @@ function escalate(input: RecoveryCardInput, reason: string, details: string[] = 
 
 /**
  * The provider-error path (daf86a5, 692f174): a backoff retry while retries are left (outside the nudge budget,
- * QA held), then an outage hold with probes when the provider has a probe. Null when neither applies.
+ * QA held), then an outage hold with probes when the provider has a probe. Null when neither applies. A model the
+ * provider unloaded for another one (issue #32) takes the same path: its due retry waits for the provider's
+ * capacity (decidePendingHold), so it isn't sent into the next eviction.
  */
 function providerHold(
 	input: RecoveryCardInput,
 	warn: string,
-	extraPatch: RecoveryFlowPatch = {},
+	retryable = isTransientProviderError(warn),
 ): { kind: "hold"; reason: string; patch: RecoveryFlowPatch } | null {
-	if (!isTransientProviderError(warn)) {
+	if (!retryable) {
 		return null;
 	}
 	const { flow, settings, now } = input;
@@ -318,11 +322,16 @@ function providerHold(
 	if (streak.length < backoff.length) {
 		const waitMin = backoff[streak.length] ?? backoff.at(-1) ?? 1;
 		const retryAt = iso(now + waitMin * 60_000);
+		const what = isModelNotLoadedError(warn)
+			? `${input.model?.provider ?? "the provider"} unloaded ${label} for another model`
+			: `provider error on ${label}`;
+		const when = isModelNotLoadedError(warn)
+			? `retrying in ${waitMin} min once the provider has room`
+			: `retrying in ${waitMin} min`;
 		return {
 			kind: "hold",
-			reason: `provider error on ${label} (${streak.length + 1}/${backoff.length}); retrying in ${waitMin} min; no QA. ${warn.slice(0, 120)}`,
+			reason: `${what} (${streak.length + 1}/${backoff.length}); ${when}; no QA. ${warn.slice(0, 120)}`,
 			patch: {
-				...extraPatch,
 				retryAt,
 				transient: [...flow.transient, { at: iso(now), warn: warn.slice(0, 200) }],
 			},
@@ -336,7 +345,6 @@ function providerHold(
 		kind: "hold",
 		reason: `provider retries used up on ${label}; outage hold, probing every ${outage.probeEveryMin} min (resume after ${outage.upsToResume} good probes in a row, escalate after ${outage.maxMin} min); no QA`,
 		patch: {
-			...extraPatch,
 			outage: { since: iso(now), model: label, warn: warn.slice(0, 200), ups: 0, lastProbe: null },
 		},
 	};
@@ -432,18 +440,26 @@ export function applyOutageProbe(
 	};
 }
 
-function stopReason(input: RecoveryCardInput): { error: string; reason: string } | null {
+interface StopReason {
+	error: string;
+	reason: string;
+	/** The provider-error path applies (isRetryableProviderError). */
+	retryable: boolean;
+}
+
+function stopReason(input: RecoveryCardInput): StopReason | null {
 	const { detail, session } = input;
 	const messages = detail?.messages ?? [];
 	const replyError = detectFinalProviderError(messages);
 	if (replyError) {
-		return { error: replyError, reason: "error" };
+		return { error: replyError.text, reason: "error", retryable: isRetryableProviderError(replyError) };
 	}
 	if (detail?.snapshot.status === "failed") {
-		return { error: "the Cline session failed", reason: "error" };
+		return { error: "the Cline session failed", reason: "error", retryable: false };
 	}
 	if (session?.reviewReason === "error") {
-		return { error: session.latestHookActivity?.finalMessage?.trim() || "agent error (no message)", reason: "error" };
+		const error = session.latestHookActivity?.finalMessage?.trim() || "agent error (no message)";
+		return { error, reason: "error", retryable: isTransientProviderError(error) };
 	}
 	return null;
 }
@@ -494,12 +510,8 @@ function nudgeForPremature(input: RecoveryCardInput, stop: PrematureStop): Recov
 	};
 }
 
-function nudgeForError(input: RecoveryCardInput, stop: { error: string; reason: string }): RecoveryDecision {
+function nudgeForError(input: RecoveryCardInput, stop: StopReason): RecoveryDecision {
 	const { flow, settings, now } = input;
-	const hold = providerHold(input, stop.error);
-	if (hold) {
-		return hold;
-	}
 	const used = sinceBudget(flow.nudges, flow);
 	const label = modelLabel(input.model);
 	if (used.length >= settings.maxNudges) {
@@ -632,6 +644,13 @@ function decideSettledReview(input: RecoveryCardInput): RecoveryDecision {
 	// note instead, or the cleared conversation opens the same image again (issue #12).
 	const stop = premature?.kind === "no_images" ? null : stopReason(input);
 	if (stop) {
+		// The provider-error hold is recorded before any capacity wait: a wait leaves no state, so the rework stage
+		// would judge the errored turn as a rework that "came back unchanged" and the QA gate would review it
+		// (issue #32). The due retry waits for capacity itself.
+		const hold = providerHold(input, stop.error, stop.retryable);
+		if (hold) {
+			return withPatch(hold, clearHold);
+		}
 		if (input.capacityHold) {
 			return { kind: "wait", reason: describeCapacityHold(input.capacityHold) };
 		}

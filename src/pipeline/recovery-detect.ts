@@ -5,6 +5,7 @@
 // Ported from archive/devteam-kit:services/kanban-autoland.mjs@6da71597 (POISONED, TRANSIENT, OVERFLOW,
 // prematureStop, finalProviderError, overflowCulprit, hungRequest). The incident behind each rule is in
 // docs/team/HISTORY.md ("Pipeline: recovery").
+import { isKanbanClineHubAbortReason } from "../terminal/cline-hub-abort-reason";
 import type { ClineSessionDetail, ClineSessionDetailMessage } from "../terminal/cline-session-files";
 import {
 	CLINE_CONTEXT_OVERFLOW_PATTERN,
@@ -103,21 +104,59 @@ export function detectPrematureStop(
 /** A fatal API error shown as the whole final reply is at most this long (longer text is the agent talking). */
 const FINAL_ERROR_MAX_LENGTH = 600;
 
+// Lemonade's answer for a model it unloaded to load another one (`max_loaded_models`): capacity, not an outage.
+const MODEL_NOT_LOADED_PATTERN = /\bno model loaded\b/i;
+
+/** A turn's final reply that is an error, not the model's answer. */
+export interface FinalProviderError {
+	text: string;
+	/**
+	 * Cline's own error notice in place of a reply (`displayError`): "No model loaded: <model>", llama.cpp's
+	 * "decode() failed: vk::Queue::submit: ErrorDeviceLost", "Response stream ended without a finish reason.". Most
+	 * match no text pattern (issues #25, #32).
+	 */
+	notice: boolean;
+}
+
 /**
  * 0bc6387: a final reply that is a bare provider error ("The operation timed out.") ends the turn on an error. So
  * does a short final reply carrying a fatal API error (context overflow, a Bedrock ValidationException), which the
- * legacy kit read from Cline's hooks log and Kanban only sees in the session file.
+ * legacy kit read from Cline's hooks log and Kanban only sees in the session file, and any error notice Cline wrote
+ * in place of a reply (issue #32: a rework turn whose whole reply was "No model loaded: <model>" was escalated as
+ * "came back unchanged"), except the reason of a run Kanban itself ended through the Cline hub (cline-hub-abort-reason.ts).
  */
-export function detectFinalProviderError(messages: readonly ClineSessionDetailMessage[]): string | null {
+export function detectFinalProviderError(messages: readonly ClineSessionDetailMessage[]): FinalProviderError | null {
 	const last = messages.at(-1);
 	if (!last || last.role !== "assistant" || hasToolUse(last)) {
 		return null;
 	}
 	const text = textOf(last);
-	if (text.length <= FINAL_ERROR_MAX_LENGTH && isPoisonedHistoryError(text)) {
-		return text;
+	const notice = Boolean(last.displayError);
+	// Kanban's own `run.abort` reason, which Cline writes as a notice too (issue #28): Kanban ended that run.
+	if (notice && isKanbanClineHubAbortReason(text)) {
+		return null;
 	}
-	return getClineProviderErrorText(text);
+	if (text.length <= FINAL_ERROR_MAX_LENGTH && isPoisonedHistoryError(text)) {
+		return { text, notice };
+	}
+	const matched = getClineProviderErrorText(text);
+	if (matched) {
+		return { text: matched, notice };
+	}
+	return notice && text ? { text, notice } : null;
+}
+
+/**
+ * A provider error that gets the retry backoff (and then the outage hold): a transient one by its text, or any error
+ * notice of Cline's that isn't a poisoned history (resending the conversation can't hit the same rejection).
+ */
+export function isRetryableProviderError(error: FinalProviderError): boolean {
+	return isTransientProviderError(error.text) || (error.notice && !isPoisonedHistoryError(error.text));
+}
+
+/** The provider unloaded the card's model for another one (Lemonade's "No model loaded: <model>"). */
+export function isModelNotLoadedError(text: string): boolean {
+	return MODEL_NOT_LOADED_PATTERN.test(text);
 }
 
 /** 0a3d1fc: the biggest tool result of the session, when it is big enough to have overflowed the context. */
@@ -200,7 +239,10 @@ export function detectRunError(detail: ClineSessionDetail): AgentRunError | null
 	}
 	const error = detectFinalProviderError(detail.messages);
 	if (error) {
-		return { kind: isContextOverflowError(error) ? "context_overflow" : "provider_error", text: error.slice(0, 300) };
+		return {
+			kind: isContextOverflowError(error.text) ? "context_overflow" : "provider_error",
+			text: error.text.slice(0, 300),
+		};
 	}
 	return detail.snapshot.status === "failed" ? { kind: "session_failed", text: "the Cline session failed" } : null;
 }

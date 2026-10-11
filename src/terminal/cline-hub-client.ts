@@ -18,6 +18,8 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { WebSocket } from "ws";
 
+import { withKanbanClineHubAbortMarker } from "./cline-hub-abort-reason";
+
 const HUB_DISCOVERY_ENV = "CLINE_HUB_DISCOVERY_PATH";
 const HUB_AUTH_SUBPROTOCOL_PREFIX = "cline-hub-auth.";
 const HUB_PROTOCOL_VERSION = "v1";
@@ -215,7 +217,11 @@ async function readHubSessionStatus(connection: ClineHubConnection, sessionId: s
 	}
 }
 
-/** Aborts a session's run in the hub until the hub says it no longer runs (see the header for why once is not enough). */
+/**
+ * Aborts a session's run in the hub until the hub says it no longer runs (see the header for why once is not enough).
+ * The reason always goes with Kanban's marker (cline-hub-abort-reason.ts): Cline writes it into the session as an error
+ * notice, and recovery must not take it for a provider error.
+ */
 export async function abortClineHubRun(
 	connection: ClineHubConnection,
 	sessionId: string,
@@ -228,8 +234,9 @@ export async function abortClineHubRun(
 	if (initial !== "running") {
 		return initial === null ? "not_found" : "ended";
 	}
+	const marked = withKanbanClineHubAbortMarker(reason);
 	for (let attempt = 0; attempt < attempts; attempt += 1) {
-		await connection.command("run.abort", { sessionId, reason }, sessionId);
+		await connection.command("run.abort", { sessionId, reason: marked }, sessionId);
 		await wait(settleMs);
 		const status = await readHubSessionStatus(connection, sessionId);
 		if (status !== "running") {

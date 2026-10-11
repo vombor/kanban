@@ -1,6 +1,8 @@
 // A rework that recovery nudges is not "came back unchanged" (foo 552ba/64a2d, 2026-10-08, #4): a rework round after
 // a land conflict ended on a "model doesn't support images" reply, recovery cleared and resent the card prompt, and
 // the rework stage escalated the card 11-15 ms later in the same evaluation, so the redone rework never reached QA.
+// The same for a rework turn whose whole reply is Cline's error notice (notes 6c90e/98832, 2026-10-11, #32: "No model
+// loaded: <model>", "decode() failed: vk::Queue::submit: ErrorDeviceLost"): a provider retry, not an unchanged rework.
 // These run the real recovery stage in the pipeline worker, so the order between recovery and the rework stage is
 // the worker's own.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -25,8 +27,8 @@ const DEV = createCard({
 	agentSettings: { providerId: "bedrock", modelId: "us.openai.gpt-6.1-sol" },
 });
 
-/** The dev card's newest Cline session: its last assistant reply, written `writtenAt`. */
-function reply(text: string, writtenAt: number): ClineSessionDetail {
+/** The dev card's newest Cline session: its last assistant reply, written `writtenAt` (Cline's error notice with `displayError`). */
+function reply(text: string, writtenAt: number, displayError = false): ClineSessionDetail {
 	const content = [{ type: "text", text }];
 	return {
 		snapshot: {
@@ -38,7 +40,7 @@ function reply(text: string, writtenAt: number): ClineSessionDetail {
 		},
 		messages: [
 			{ role: "user", content: [{ type: "text", text: "go" }], outputTokens: null, ts: null },
-			{ role: "assistant", content, outputTokens: null, ts: null },
+			{ role: "assistant", content, outputTokens: null, ts: null, ...(displayError ? { displayError } : {}) },
 		],
 		lastWriteAt: writtenAt,
 	};
@@ -130,7 +132,7 @@ describe("pipeline worker: a rework recovery nudges", () => {
 		const nudges = () => deliveries.filter((action) => action.kind === "deliver");
 		const blocks = () => h.actions.filter((action) => action.kind === "blockTask");
 		/** A QA PASS whose land conflicted, its rework sent and seen running, then the rework turn's end. */
-		const runReworkRound = async (lastReply: string) => {
+		const runReworkRound = async (lastReply: string, displayError = false) => {
 			// After the state's `since` (the first load), or the rework stage leaves the conflict as history.
 			await h.store.load("foo");
 			vi.advanceTimersByTime(1_000);
@@ -150,7 +152,7 @@ describe("pipeline worker: a rework recovery nudges", () => {
 			// The rework turn ends early, before it committed anything: the snapshot is the reviewed one.
 			vi.advanceTimersByTime(60_000);
 			const turnEnded = Date.now();
-			detail = reply(lastReply, turnEnded);
+			detail = reply(lastReply, turnEnded, displayError);
 			vi.advanceTimersByTime(13_000);
 			await send({ review: [DEV] }, { stateChangedAt: turnEnded });
 			return turnEnded;
@@ -222,4 +224,45 @@ describe("pipeline worker: a rework recovery nudges", () => {
 		expect(blocks().map((action) => ("taskId" in action ? action.taskId : ""))).toEqual([DEV.id]);
 		expect(readEscalationRecord(readQaflow(await entry()))?.reason).toMatch(/unchanged/u);
 	});
+
+	for (const notice of [
+		"No model loaded: Devstral-Small-2-24B-Instruct-2512-GGUF-Q4_K_M",
+		"decode() failed: vk::Queue::submit: ErrorDeviceLost",
+	]) {
+		it(`holds a rework turn that ended on "${notice}" for a provider retry, then judges the retried turn`, async () => {
+			const { harness, send, entry, nudges, blocks, runReworkRound, setDetail } = setup();
+			const turnEnded = await runReworkRound(notice, true);
+
+			// A provider-retry hold: nothing typed yet, no escalation, the rework not counted as returned.
+			expect(nudges()).toEqual([]);
+			expect(blocks()).toEqual([]);
+			const held = readQaflow(await entry());
+			expect(held.retryAt).toBeDefined();
+			expect(held.nudges).toBeUndefined();
+			expect(readEscalationRecord(held)).toBeNull();
+			expect(readReworks(held)[0]?.returned).toBeUndefined();
+
+			// The retry is due: recovery resends, and the rework stage still leaves the card alone.
+			vi.advanceTimersByTime(61_000);
+			await send({ review: [DEV] }, { stateChangedAt: turnEnded });
+			expect(nudges().map((action) => ("text" in action ? action.text : ""))).toEqual([
+				expect.stringContaining(notice),
+			]);
+			expect(blocks()).toEqual([]);
+			expect(readReworks(readQaflow(await entry()))[0]?.returned).toBeUndefined();
+
+			// The retried turn does the rework: back in Review with new work, it counts as returned, not unchanged.
+			await send({ in_progress: [DEV] }, { stateChangedAt: Date.now(), state: "running" });
+			vi.advanceTimersByTime(60_000);
+			const redoneAt = Date.now();
+			harness.setSnapshot(() => "snap-rebased");
+			setDetail(reply(DONE, redoneAt));
+			vi.advanceTimersByTime(13_000);
+			await send({ review: [DEV] }, { stateChangedAt: redoneAt });
+			expect(blocks()).toEqual([]);
+			const final = readQaflow(await entry());
+			expect(readEscalationRecord(final)).toBeNull();
+			expect(readReworks(final)[0]).toMatchObject({ returnedSnapshot: "snap-rebased" });
+		});
+	}
 });

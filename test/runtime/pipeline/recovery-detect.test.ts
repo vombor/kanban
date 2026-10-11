@@ -7,9 +7,12 @@ import {
 	detectRunError,
 	findOverflowCulprit,
 	isContextOverflowError,
+	isModelNotLoadedError,
 	isPoisonedHistoryError,
+	isRetryableProviderError,
 	isTransientProviderError,
 } from "../../../src/pipeline/recovery-detect";
+import { KANBAN_CLINE_HUB_ABORT_REASONS } from "../../../src/terminal/cline-hub-abort-reason";
 import type { ClineSessionDetail, ClineSessionDetailMessage } from "../../../src/terminal/cline-session-files";
 
 const text = (
@@ -126,10 +129,66 @@ describe("provider error classes", () => {
 	});
 
 	it("reads a bare provider error as the final reply (0bc6387)", () => {
-		expect(detectFinalProviderError([text("assistant", "The operation timed out.")])).toBe(
-			"The operation timed out.",
-		);
+		expect(detectFinalProviderError([text("assistant", "The operation timed out.")])).toEqual({
+			text: "The operation timed out.",
+			notice: false,
+		});
 		expect(detectFinalProviderError([text("assistant", "Done. STATUS: DONE")])).toBeNull();
+	});
+
+	it("reads Cline's error notices as provider errors, whatever their text (issue #32)", () => {
+		const notice = { displayError: true };
+		for (const error of [
+			"No model loaded: Devstral-Small-2-24B-Instruct-2512-GGUF-Q4_K_M",
+			"decode() failed: vk::Queue::submit: ErrorDeviceLost",
+			"Response stream ended without a finish reason.",
+		]) {
+			const found = detectFinalProviderError([text("user", "REWORK round 2"), text("assistant", error, notice)]);
+			expect(found).toEqual({ text: error, notice: true });
+			expect(found && isRetryableProviderError(found)).toBe(true);
+			expect(detectRunError(detailOf([text("user", "go"), text("assistant", error, notice)]))).toEqual({
+				kind: "provider_error",
+				text: error,
+			});
+		}
+		// The same text written by the model is its reply, not an error.
+		expect(
+			detectFinalProviderError([text("assistant", "decode() failed: vk::Queue::submit: ErrorDeviceLost")]),
+		).toBeNull();
+		// A notice that poisons the history stays the /clear path, and an overflow notice stays an overflow.
+		const validation = detectFinalProviderError([text("assistant", "ValidationException: messages.3", notice)]);
+		expect(validation && isRetryableProviderError(validation)).toBe(false);
+		expect(detectRunError(detailOf([text("assistant", "Context size has been exceeded.", notice)]))?.kind).toBe(
+			"context_overflow",
+		);
+		expect(isModelNotLoadedError("No model loaded: GLM-4.7-Flash-GGUF")).toBe(true);
+		expect(isModelNotLoadedError("decode() failed: vk::Queue::submit: ErrorDeviceLost")).toBe(false);
+	});
+
+	it("never reads the reason of a run Kanban ended through the Cline hub as a provider error (issues #28, #32)", () => {
+		const notice = { displayError: true };
+		// Every reason Kanban sends today, as Cline writes it into the session (verbatim, as an error notice).
+		const reasons = [
+			KANBAN_CLINE_HUB_ABORT_REASONS.tuiExited(0),
+			KANBAN_CLINE_HUB_ABORT_REASONS.tuiExited(null),
+			KANBAN_CLINE_HUB_ABORT_REASONS.orphaned,
+			KANBAN_CLINE_HUB_ABORT_REASONS.doneOrDeleted,
+		];
+		expect(reasons).toEqual([
+			"Kanban ended this run: its card's Cline TUI exited (code 0)",
+			"Kanban ended this run: its card's Cline TUI exited",
+			"Kanban ended this run: its card's Cline TUI died with the previous Kanban server",
+			"Kanban ended this run: its card is done or deleted",
+		]);
+		for (const reason of reasons) {
+			const messages = [text("user", "REWORK round 2"), text("assistant", reason, notice)];
+			expect(detectFinalProviderError(messages)).toBeNull();
+			expect(detectRunError(detailOf(messages))).toBeNull();
+		}
+		// Even one that reads like a provider error: the marker decides.
+		expect(
+			detectFinalProviderError([text("assistant", "Kanban ended this run: the operation timed out", notice)]),
+		).toBeNull();
 	});
 
 	it("names the oversized tool call of an overflow (0a3d1fc)", () => {
@@ -201,9 +260,10 @@ describe("context overflow from a local server (issue #26)", () => {
 	});
 
 	it("calls a QA run that ended on the overflow a context_overflow run error (notes c92da, 9e059)", () => {
-		expect(detectFinalProviderError([text("user", "go"), toolCall, text("assistant", CLINE_OVERFLOW)])).toBe(
-			CLINE_OVERFLOW,
-		);
+		expect(detectFinalProviderError([text("user", "go"), toolCall, text("assistant", CLINE_OVERFLOW)])).toEqual({
+			text: CLINE_OVERFLOW,
+			notice: false,
+		});
 		expect(detectRunError(detailOf([text("user", "go"), toolCall, text("assistant", CLINE_OVERFLOW)]))).toEqual({
 			kind: "context_overflow",
 			text: CLINE_OVERFLOW,
