@@ -1345,8 +1345,9 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 	 * foo 7ab30, 2026-10-09, sat 18 min on a "Command was aborted" tool result, holding its QA slot) can't be nudged
 	 * into its dead turn and recovery doesn't touch QA cards: a verdict it wrote first is recorded, otherwise it is
 	 * replaced like a QA card that ended on its own error (replaceAfterAgentError: a fresh QA card for the same
-	 * snapshot, then a STALLED for the orchestrator). A shell tool whose command still runs is no stall, and a run that
-	 * never took its prompt (`no_session`, a sign-in screen) stays the watchdog's report: a new card opens the same screen.
+	 * snapshot, then a STALLED for the orchestrator), whether or not its slot was freed after `timeoutMin`. A shell tool
+	 * whose command still runs is no stall, and a run that never took its prompt (`no_session`, a sign-in screen) stays
+	 * the watchdog's report: a new card opens the same screen.
 	 */
 	const replaceSilentQaCards = async (
 		context: QaGateContext,
@@ -1362,13 +1363,9 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		for (const card of inProgress) {
 			const entry = readQaGateEntry(state.cards[card.id]);
 			const session = sessions.get(card.id);
-			if (
-				!entry ||
-				entry.status !== "running" ||
-				entry.timedOutAt !== null ||
-				!session?.live ||
-				session.state !== "running"
-			) {
+			// A slot freed after `timeoutMin` (`timedOutAt`) is slot accounting only: the card still runs, so it is still
+			// replaced when it goes silent (notes' 3d45a and 9ef37 ran 65-100 min on 2026-10-11, their slots long freed).
+			if (!entry || entry.status !== "running" || !session?.live || session.state !== "running") {
 				continue;
 			}
 			const read = await deps

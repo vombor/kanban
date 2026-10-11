@@ -4,7 +4,12 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { RuntimeBoardCard, RuntimeBoardColumnId } from "../../../src/core/api-contract";
 import { handBackTask } from "../../../src/pipeline/handback";
-import { type QaSilentStallRead, readQaGateEntry, readQaVerdictRecords } from "../../../src/pipeline/qa-gate";
+import {
+	findRunningQaCard,
+	type QaSilentStallRead,
+	readQaGateEntry,
+	readQaVerdictRecords,
+} from "../../../src/pipeline/qa-gate";
 import type { QaVerdict } from "../../../src/pipeline/qa-verdict";
 import type { ClineSilentStall } from "../../../src/terminal/cline-turn-check";
 import { createPipelineWorkerHarness, createSnapshot, type QaGateHarnessAction } from "../../utilities/pipeline-worker";
@@ -505,6 +510,59 @@ describe("QA gate", () => {
 			const state = await harness.store.load("foo");
 			expect(readQaVerdictRecords(state.cards.d1111)).toMatchObject([{ qaTaskId: "qa001", verdict: "PASS" }]);
 			expect(readQaGateEntry(state.cards.qa001)).toMatchObject({ status: "ingested" });
+		});
+
+		// notes 2026-10-11: 3d45a and 9ef37 ran 65-100 min; once their slots were freed at timeoutMin, a silent session
+		// was no longer replaced.
+		it("replaces a silent QA card whose slot was freed after timeoutMin, leaves one still writing, and records a verdict it wrote", async () => {
+			const startTimedOut = async () => {
+				const harness = createHarness({
+					config: { pipeline: { qa: { timeoutMin: 60 } }, workspaces: { foo: QA_WORKSPACE } },
+				});
+				await startQa(harness);
+				const board = {
+					in_progress: [qaOf("qa001", "d1111")],
+					review: [createCard({ id: "d1111", ...OPENAI_DEV })],
+				};
+				const sessions = [running("qa001")];
+				harness.setNow(T0 + 61 * 60_000);
+				await send(harness, board, { sessions });
+				expect(readQaGateEntry((await harness.store.load("foo")).cards.qa001)?.timedOutAt).not.toBeNull();
+				expect(harness.actions).toEqual([]);
+				return { harness, send: () => send(harness, board, { sessions }) };
+			};
+
+			// Still writing: its session made progress within hungMin (15).
+			const writing = await startTimedOut();
+			writing.harness.setSilentStall("qa001", silent(5));
+			await writing.send();
+			expect(writing.harness.actions).toEqual([]);
+			expect(readQaGateEntry((await writing.harness.store.load("foo")).cards.qa001)).toMatchObject({
+				status: "running",
+			});
+
+			// Silent past hungMin: replaced through the qa-agent-error path, not nudged.
+			const silentCard = await startTimedOut();
+			silentCard.harness.setSilentStall("qa001", silent(16));
+			await silentCard.send();
+			expect(kinds(silentCard.harness.actions)).toEqual(["finishTask:qa001"]);
+			const replaced = await silentCard.harness.store.load("foo");
+			expect(readQaGateEntry(replaced.cards.qa001)).toMatchObject({ status: "superseded", trashed: true });
+			expect(replaced.cards.d1111?.qaCreated).toBeUndefined();
+			expect(replaced.cards.d1111?.qaAgentErrors).toMatchObject([{ qaTaskId: "qa001", kind: "silent_stall" }]);
+			expect(
+				findRunningQaCard({ cards: replaced.cards, devTaskId: "d1111", columnOf: () => "in_progress" }),
+			).toBeNull();
+
+			// Silent past hungMin with its verdict written: the verdict is recorded and the PASS lands.
+			const wrote = await startTimedOut();
+			wrote.harness.setSilentStall("qa001", silent(16));
+			wrote.harness.setVerdict("/tmp/kanban-qa-out/qa001", { kind: "ok", verdict: createVerdict() });
+			await wrote.send();
+			expect(kinds(wrote.harness.actions)).toEqual(["finishTask:qa001", "finishTask:d1111"]);
+			const recorded = await wrote.harness.store.load("foo");
+			expect(readQaVerdictRecords(recorded.cards.d1111)).toMatchObject([{ qaTaskId: "qa001", verdict: "PASS" }]);
+			expect(readQaGateEntry(recorded.cards.qa001)).toMatchObject({ status: "ingested" });
 		});
 	});
 
