@@ -1099,6 +1099,7 @@ export default function App(): ReactElement {
 					/>
 					<LandOrDiscardDialog
 						open={landingDecisionRequest !== null}
+						taskId={landingDecisionRequest?.task.id ?? null}
 						taskTitle={landingDecisionRequest?.task.title || landingDecisionRequest?.task.id || ""}
 						baseRef={landingDecisionRequest?.baseRef ?? ""}
 						canLand={landingDecisionRequest?.canLand ?? false}

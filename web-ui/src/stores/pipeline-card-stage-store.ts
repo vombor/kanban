@@ -22,6 +22,15 @@ export function getPipelineCardStage(taskId: string): RuntimePipelineCardStage |
 	return stagesByTaskId.get(taskId) ?? null;
 }
 
+/**
+ * The card's stage while its checks or QA are in flight (the stage's `inFlight`), else null: the one rule for "landing
+ * now skips the pipeline", asked by Approve & land and by the Done move's "land or discard?" dialog.
+ */
+export function getInFlightPipelineCardStage(taskId: string): RuntimePipelineCardStage | null {
+	const stage = getPipelineCardStage(taskId);
+	return stage?.inFlight ? stage : null;
+}
+
 function subscribe(listener: () => void): () => void {
 	listeners.add(listener);
 	return () => {
@@ -31,5 +40,10 @@ function subscribe(listener: () => void): () => void {
 
 export function usePipelineCardStage(taskId: string): RuntimePipelineCardStage | null {
 	const getSnapshot = useCallback(() => getPipelineCardStage(taskId), [taskId]);
+	return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+export function useInFlightPipelineCardStage(taskId: string | null): RuntimePipelineCardStage | null {
+	const getSnapshot = useCallback(() => (taskId ? getInFlightPipelineCardStage(taskId) : null), [taskId]);
 	return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

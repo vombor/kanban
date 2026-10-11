@@ -1,7 +1,7 @@
 import { useCallback, useState } from "react";
 
 import type { RuntimePipelineCardStage } from "@/runtime/types";
-import { getPipelineCardStage } from "@/stores/pipeline-card-stage-store";
+import { getInFlightPipelineCardStage } from "@/stores/pipeline-card-stage-store";
 import type { BoardCard } from "@/types";
 
 export interface PendingApproveAndLand {
@@ -23,8 +23,8 @@ export function useApproveAndLandConfirmation(approveAndLandTask: (taskId: strin
 
 	const requestApproveAndLand = useCallback(
 		(card: BoardCard) => {
-			const stage = getPipelineCardStage(card.id);
-			if (stage?.inFlight) {
+			const stage = getInFlightPipelineCardStage(card.id);
+			if (stage) {
 				setPendingApproveAndLand({ taskId: card.id, taskTitle: card.title || card.id, stage });
 				return;
 			}

@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 
-import { describePipelineCardStage } from "@/components/board-card-pipeline-stage";
+import { PipelineInFlightNotice } from "@/components/pipeline-in-flight-notice";
 import { Button } from "@/components/ui/button";
 import {
 	AlertDialog,
@@ -44,10 +44,7 @@ export function ApproveAndLandWarningDialog({
 				<AlertDialogDescription>
 					The pipeline is still working on <span className="text-text-primary">{taskTitle}</span>:
 				</AlertDialogDescription>
-				{stage ? <p className="text-text-primary">{describePipelineCardStage(stage)}</p> : null}
-				<p className="text-text-secondary">
-					Approve & land squash-lands it now and skips the rest of its checks and QA.
-				</p>
+				{stage ? <PipelineInFlightNotice stage={stage} action="Approve & land" /> : null}
 			</AlertDialogBody>
 			<AlertDialogFooter>
 				<AlertDialogCancel asChild>
