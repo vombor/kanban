@@ -977,6 +977,7 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 				qaLogPath: paths.qaLog,
 				items: fresh,
 				now: new Date(context.now),
+				userTypedAt: reportedSession?.viewerTypedAt ?? null,
 			});
 		const queueForHeadless = async (fresh: readonly string[]) =>
 			await appendOrchestratorQueue(paths.orchestratorQueue, workspaceId, fresh, new Date(context.now));

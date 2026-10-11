@@ -1224,6 +1224,8 @@ export type RuntimeTaskInputDeliveryRequest = z.infer<typeof runtimeTaskInputDel
  * - `delivered`: the session showed activity after Enter (`evidence` says which signal moved).
  * - `sent`: written without confirmation (`enter` or `confirm` was false).
  * - `undelivered`: typed and Enter pressed twice, but the session showed no activity.
+ * - `queued`: nothing typed yet: the user is typing in the orchestrator sidebar, so a watchdog wake is held and typed
+ *   once their input clears (src/server/orchestrator-wake-hold.ts).
  * - `no_session`: the task has no running session; nothing was written.
  * - `session_ended`: the session went away (or stopped) part-way through.
  * - `aborted`: the caller cancelled before delivery finished.
@@ -1233,6 +1235,7 @@ export const runtimeTaskInputDeliveryStatusSchema = z.enum([
 	"delivered",
 	"sent",
 	"undelivered",
+	"queued",
 	"no_session",
 	"session_ended",
 	"aborted",

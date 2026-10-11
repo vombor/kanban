@@ -73,6 +73,8 @@ interface ActiveProcessState {
 	 * agent asked, for agents that report no hook on it (src/terminal/user-input-wait.ts).
 	 */
 	viewerSubmittedAt: number | null;
+	/** When the user last typed text (Enter included) into the session's terminal (writeInput `fromViewer`). */
+	viewerTypedAt: number | null;
 	autoConfirmedWorkspaceTrust: boolean;
 	workspaceTrustNavigationKeys: number;
 	workspaceTrustConfirmTimer: NodeJS.Timeout | null;
@@ -126,6 +128,9 @@ export interface StartShellSessionRequest {
 function now(): number {
 	return Date.now();
 }
+
+/** How long after the user's last keystroke in a terminal Kanban still counts them as typing there. */
+export const VIEWER_TYPING_QUIET_MS = 10_000;
 
 function createDefaultSummary(taskId: string): RuntimeTaskSessionSummary {
 	return {
@@ -389,9 +394,26 @@ export class TerminalSessionManager implements TerminalSessionService {
 		return this.entries.get(taskId)?.active?.viewerSubmittedAt ?? null;
 	}
 
-	/** Whether text was typed into the session since its last Enter (the input box may hold a draft). */
+	/** When the user last typed text (Enter included) into the session's terminal, or null (none since it started). */
+	getViewerTypedAt(taskId: string): number | null {
+		return this.entries.get(taskId)?.active?.viewerTypedAt ?? null;
+	}
+
+	/**
+	 * Whether nothing may type into the session and press Enter now: text was typed since its last Enter (the input
+	 * box may hold a draft), or the user typed into its terminal within VIEWER_TYPING_QUIET_MS (an Enter alone doesn't
+	 * end their typing: the next line may follow). The one "is the user typing" rule (orchestrator message notices,
+	 * the watchdog's sidebar wakes).
+	 */
 	hasTypedInputSinceEnter(taskId: string): boolean {
-		return this.entries.get(taskId)?.active?.typedSinceEnter === true;
+		const active = this.entries.get(taskId)?.active;
+		if (!active) {
+			return false;
+		}
+		return (
+			active.typedSinceEnter ||
+			(active.viewerTypedAt !== null && now() - active.viewerTypedAt < VIEWER_TYPING_QUIET_MS)
+		);
 	}
 
 	/** Whether the task's session has a process now (false for a summary hydrated after a restart). */
@@ -667,6 +689,7 @@ export class TerminalSessionManager implements TerminalSessionService {
 			awaitingCodexPromptAfterEnter: false,
 			typedSinceEnter: false,
 			viewerSubmittedAt: null,
+			viewerTypedAt: null,
 			autoConfirmedWorkspaceTrust: false,
 			workspaceTrustNavigationKeys: 0,
 			workspaceTrustConfirmTimer: null,
@@ -837,6 +860,7 @@ export class TerminalSessionManager implements TerminalSessionService {
 			awaitingCodexPromptAfterEnter: false,
 			typedSinceEnter: false,
 			viewerSubmittedAt: null,
+			viewerTypedAt: null,
 			autoConfirmedWorkspaceTrust: false,
 			workspaceTrustNavigationKeys: 0,
 			workspaceTrustConfirmTimer: null,
@@ -923,6 +947,9 @@ export class TerminalSessionManager implements TerminalSessionService {
 			entry.active.typedSinceEnter = true;
 		}
 		entry.active.session.write(data);
+		if (options.fromViewer && text.length > 0) {
+			entry.active.viewerTypedAt = now();
+		}
 		if (submitted && options.fromViewer) {
 			entry.active.viewerSubmittedAt = now();
 			for (const listener of this.viewerSubmitListeners) {

@@ -57,6 +57,8 @@ export type PipelineSessionView = Pick<RuntimeTaskSessionSummary, "taskId" | "ag
 	> & {
 		/** The session has a process (a TUI to type into). False for a summary hydrated after a restart. */
 		live?: boolean;
+		/** When the user last typed into the session's terminal (epoch ms; TerminalSessionManager.getViewerTypedAt). */
+		viewerTypedAt?: number | null;
 	};
 
 /** What the server sends the worker about one workspace. */

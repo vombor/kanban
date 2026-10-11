@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { RuntimeAgentId } from "../../../src/core/api-contract";
 import { createHomeAgentSessionId } from "../../../src/core/home-agent-session";
 import type { PipelineSessionView } from "../../../src/pipeline/engine";
-import { wakeOrchestrator } from "../../../src/pipeline/watchdog/wake";
+import { buildWakeText, WAKE_USER_ACTIVE_MS, wakeOrchestrator } from "../../../src/pipeline/watchdog/wake";
 import { addWakeRequest } from "../../../src/pipeline/watchdog/wake-requests";
 import { createEmptyWatchdogState } from "../../../src/pipeline/watchdog/watchdog-state";
 import { createWatchdogHarness, deliveryResult, WATCHDOG_NOW } from "../../utilities/watchdog";
@@ -175,6 +175,38 @@ describe("wakeOrchestrator", () => {
 		expect(typed).toEqual(["WAKE", ""]);
 		expect(state.wakeEnter).toBeNull();
 		expect(Object.keys(state.woken)).toEqual(["- a: x"]);
+	});
+
+	it("a wake the server holds while the user types counts as woken, so the next tick doesn't type it again", async () => {
+		const state = createEmptyWatchdogState();
+		const typed: string[] = [];
+		const base = {
+			state,
+			queued: [],
+			target,
+			mode: "sidebar" as const,
+			text: () => "WAKE",
+			cooldownMs: 30 * MIN,
+			retryMs: 120 * MIN,
+			deps: {
+				headlessPid: () => 0,
+				hasHeadlessRunner: true,
+				queueForHeadless: async () => {},
+				startHeadless: async () => ({ ok: true }),
+				deliver: async (text: string) => {
+					typed.push(text);
+					return { ...deliveryResult("queued"), ok: true };
+				},
+				startSession: async () => ({ ok: true }),
+			},
+		};
+		const first = await wakeOrchestrator({ ...base, items: ["- a: x"], now: WATCHDOG_NOW });
+		expect(first).toMatchObject({ path: "sidebar", ok: true });
+		expect(first.detail).toContain("held for");
+		expect(state.wakeEnter).toBeNull();
+		const second = await wakeOrchestrator({ ...base, items: ["- a: x"], now: WATCHDOG_NOW + MIN });
+		expect(second.path).toBe("none");
+		expect(typed).toEqual(["WAKE"]);
 	});
 
 	it("a failed start keeps queued items for the next tick", async () => {
@@ -411,5 +443,30 @@ describe("watchdog wake isolated by project", () => {
 		expect(harness.requests.filter((request) => request.kind === "startOrchestratorSession")).toEqual([
 			expect.objectContaining({ workspaceId: "foo", agentId: "claude" }),
 		]);
+	});
+});
+
+describe("buildWakeText's audience (issue #35)", () => {
+	const input = {
+		workspaceId: "foo",
+		projectPath: "/projects/foo",
+		attentionPath: "/a",
+		decisionsPath: "/d",
+		qaLogPath: "/q",
+		items: ["- d0001 stalled"],
+		now: new Date(WATCHDOG_NOW),
+	};
+
+	it("says no human is watching only when nobody typed into the sidebar within WAKE_USER_ACTIVE_MS", () => {
+		expect(buildWakeText(input)).toContain("needs the orchestrator; no human is watching: d0001 stalled");
+		expect(buildWakeText({ ...input, userTypedAt: WATCHDOG_NOW - WAKE_USER_ACTIVE_MS })).toContain(
+			"no human is watching",
+		);
+		const recent = buildWakeText({ ...input, userTypedAt: WATCHDOG_NOW - 3 * MIN - 5_000 });
+		expect(recent).not.toContain("no human is watching");
+		expect(recent).toContain("the user typed in this sidebar 3 min ago and may be reading: d0001 stalled");
+		expect(buildWakeText({ ...input, userTypedAt: WATCHDOG_NOW - 5_000 })).toContain(
+			"the user typed in this sidebar under a minute ago",
+		);
 	});
 });

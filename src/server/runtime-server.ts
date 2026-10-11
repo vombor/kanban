@@ -85,6 +85,7 @@ import { createClineLemonadeContextSyncMonitor } from "./cline-lemonade-context-
 import { createGitHubAppRequestHandler } from "./github-app-route";
 import { handleHttpRequest, handleSocketUpgrade } from "./middleware";
 import { createModelListsRequestHandler } from "./model-lists-route";
+import { createOrchestratorWakeHold } from "./orchestrator-wake-hold";
 import { createOrphanProcessSweeper } from "./orphan-process-sweeper";
 import { createPipelineActionRunner } from "./pipeline-actions";
 import { createProcessReaper, type PreparedWorktreeReap } from "./process-reaper";
@@ -386,6 +387,12 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		settleMs: deps.reviewSettleMs ?? DEFAULT_REVIEW_SETTLE_MS,
 	});
 	messageNotices.start();
+	// The watchdog's sidebar wakes wait while the user types there, by the same rule (orchestrator-wake-hold.ts).
+	const orchestratorWakeHold = createOrchestratorWakeHold({
+		getTerminal: (workspaceId) => deps.workspaceRegistry.getTerminalManagerForWorkspace(workspaceId) ?? null,
+		log: deps.warn,
+	});
+	orchestratorWakeHold.start();
 	// A session's credential stops working when its process ends (resolveCaller checks that too); this drops them.
 	const credentialSweep = setInterval(() => void isolation.pruneCredentials().catch(() => undefined), 10_000);
 	credentialSweep.unref();
@@ -465,6 +472,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		getTerminal: getScopedTerminalManager,
 		startTaskSession: async (scope, input) => await runtimeApi.startTaskSession(scope, input),
 		credentials: isolation,
+		wakeHold: orchestratorWakeHold,
 		runProcessSweep: async () => {
 			await orphanProcessSweeper.sweep();
 			return await orphanProcessSweeper.getStatus();
@@ -867,6 +875,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		isolation,
 		close: async () => {
 			messageNotices.close();
+			orchestratorWakeHold.close();
 			clearInterval(credentialSweep);
 			orphanProcessSweeper.close();
 			clineTurnMonitor.close();

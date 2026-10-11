@@ -53,6 +53,20 @@ export interface WakeTextInput {
 	qaLogPath: string;
 	items: readonly string[];
 	now: Date;
+	/** When the user last typed into the orchestrator sidebar (epoch ms), or null. */
+	userTypedAt?: number | null;
+}
+
+/** The user typed into the sidebar this recently: the wake must not say nobody is watching (issue #35). */
+export const WAKE_USER_ACTIVE_MS = 30 * 60_000;
+
+/** Who may be reading the wake: nobody, unless the user typed into the sidebar within WAKE_USER_ACTIVE_MS. */
+export function describeWakeAudience(userTypedAt: number | null | undefined, now: number): string {
+	if (userTypedAt === null || userTypedAt === undefined || now - userTypedAt >= WAKE_USER_ACTIVE_MS) {
+		return "no human is watching";
+	}
+	const minutes = Math.max(0, Math.floor((now - userTypedAt) / 60_000));
+	return `the user typed in this sidebar ${minutes < 1 ? "under a minute" : `${minutes} min`} ago and may be reading`;
 }
 
 /** One line: which workspace and project, the items, and where to look. */
@@ -62,7 +76,7 @@ export function buildWakeText(input: WakeTextInput): string {
 		`pipeline decisions ${input.decisionsPath}`,
 		`QA log ${input.qaLogPath}`,
 	].join(", ");
-	return `[kanban watchdog ${input.now.toISOString().slice(11, 16)}Z] workspace ${input.workspaceId} (${input.projectPath}) needs the orchestrator; no human is watching: ${input.items.map(cleanItem).join(" | ")} . Assess it (${where}; kanban CLI calls for it need --project-path ${input.projectPath}), fix orchestration problems yourself, apply the standing rules for model/benchmark decisions, and leave only real product/budget decisions for the user.`.replace(
+	return `[kanban watchdog ${input.now.toISOString().slice(11, 16)}Z] workspace ${input.workspaceId} (${input.projectPath}) needs the orchestrator; ${describeWakeAudience(input.userTypedAt, input.now.getTime())}: ${input.items.map(cleanItem).join(" | ")} . Assess it (${where}; kanban CLI calls for it need --project-path ${input.projectPath}), fix orchestration problems yourself, apply the standing rules for model/benchmark decisions, and leave only real product/budget decisions for the user.`.replace(
 		/\s*\n\s*/gu,
 		" ",
 	);
@@ -219,7 +233,11 @@ export async function wakeOrchestrator(input: WakeInput): Promise<WakeOutcome> {
 		const result = await deps.deliver(input.text(fresh));
 		if (result.ok) {
 			markWoken(state, fresh, now);
-			return { path: "sidebar", ok: true, items: fresh, detail: `typed into ${target.sessionId}: ${result.status}` };
+			const detail =
+				result.status === "queued"
+					? `held for ${target.sessionId} while the user types there; typed once their input clears`
+					: `typed into ${target.sessionId}: ${result.status}`;
+			return { path: "sidebar", ok: true, items: fresh, detail };
 		}
 		keepForRetry(state, fresh, input.queued, now);
 		if (result.status === "undelivered") {

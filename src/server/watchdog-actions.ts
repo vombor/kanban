@@ -1,6 +1,8 @@
 // The server side of the watchdog's actions (src/pipeline/watchdog/actions.ts). The watchdog runs in the pipeline
 // worker and asks; the server owns the PTYs, the board and the process reaper, so it does the work here:
 //   - typed input goes through deliverTaskInput (text, Enter, activity check), the one delivery path (plan §4.4);
+//     a wake into the orchestrator sidebar goes through the wake hold first, which holds it while the user is typing
+//     there (src/server/orchestrator-wake-hold.ts, issue #35);
 //   - the orchestrator sidebar session is started like the browser starts it (runtime.startTaskSession with the home
 //     agent session id), so a browser that opens later attaches to the same session instead of starting a second;
 //   - prune-done edits the board under the workspace lock and tells the browsers;
@@ -24,6 +26,7 @@ import type { IsolationService } from "../isolation/isolation-service";
 import type { WatchdogActionRequest, WatchdogActionResults } from "../pipeline/watchdog/actions";
 import { pruneDoneCards } from "../pipeline/watchdog/prune-done";
 import { deliverTaskInput, type TaskInputTerminal } from "../terminal/deliver-task-input";
+import type { OrchestratorWakeHold } from "./orchestrator-wake-hold";
 
 const ESC = "\u001b";
 
@@ -42,6 +45,8 @@ export interface WatchdogActionDependencies {
 	runProcessSweep: () => Promise<{ supported: boolean; lastSweep: RuntimeProcessSweepResult | null }>;
 	onBoardMutated: (scope: WatchdogActionScope) => Promise<void>;
 	pruneDone?: typeof pruneDoneCards;
+	/** Holds sidebar wakes while the user types into the sidebar (absent: typed at once, as before). */
+	wakeHold?: Pick<OrchestratorWakeHold, "deliver">;
 	/** The isolation service's credentials (absent: headless runs get none). */
 	credentials?: Pick<IsolationService, "issueCredential" | "bindCredential">;
 }
@@ -96,6 +101,10 @@ export function createWatchdogActionHandler(
 						: null;
 				if (refused) {
 					return { ok: false, status: "error", evidence: null, enterAttempts: 0, summary: null, error: refused };
+				}
+				if (isHomeAgentSessionId(request.taskId) && deps.wakeHold) {
+					scopeOf(request.workspaceId); // throws for a workspace that isn't registered, as below
+					return await deps.wakeHold.deliver(request.workspaceId, request.taskId, request.text);
 				}
 				const terminal = await deps.getTerminal(scopeOf(request.workspaceId));
 				return await deliverTaskInput(terminal, request.taskId, request.text);

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { RuntimeTaskSessionSummary } from "../../../src/core/api-contract";
 import { buildShellCommandLine } from "../../../src/core/shell";
-import { TerminalSessionManager } from "../../../src/terminal/session-manager";
+import { TerminalSessionManager, VIEWER_TYPING_QUIET_MS } from "../../../src/terminal/session-manager";
 
 function createSummary(overrides: Partial<RuntimeTaskSessionSummary> = {}): RuntimeTaskSessionSummary {
 	return {
@@ -305,7 +305,13 @@ describe("TerminalSessionManager viewer Enter (orchestrator waits, issue #10)", 
 		if (!entry) {
 			throw new Error("no entry");
 		}
-		entry.active = { session, typedSinceEnter: false, viewerSubmittedAt: null, awaitingCodexPromptAfterEnter: false };
+		entry.active = {
+			session,
+			typedSinceEnter: false,
+			viewerSubmittedAt: null,
+			viewerTypedAt: null,
+			awaitingCodexPromptAfterEnter: false,
+		};
 		return session;
 	}
 
@@ -327,6 +333,53 @@ describe("TerminalSessionManager viewer Enter (orchestrator waits, issue #10)", 
 			expect(manager.getViewerInputSubmittedAt("__home_agent__:alpha:claude")).toBe(50_000);
 			expect(submitted).toHaveBeenCalledWith("__home_agent__:alpha:claude");
 			expect(session.write).toHaveBeenCalledTimes(3);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
+
+describe("TerminalSessionManager hasTypedInputSinceEnter (sidebar wakes and notices, issue #35)", () => {
+	const taskId = "__home_agent__:alpha:claude";
+	function withActiveSession(manager: TerminalSessionManager): void {
+		manager.hydrateFromRecord({ [taskId]: createSummary({ taskId }) });
+		const entries = (manager as unknown as { entries: Map<string, { active: unknown }> }).entries;
+		const entry = entries.get(taskId);
+		if (!entry) {
+			throw new Error("no entry");
+		}
+		entry.active = {
+			session: { write: vi.fn() },
+			typedSinceEnter: false,
+			viewerSubmittedAt: null,
+			viewerTypedAt: null,
+			awaitingCodexPromptAfterEnter: false,
+		};
+	}
+
+	it("holds while a draft is typed and for the quiet time after the user's last key, Enter included", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(100_000);
+		try {
+			const manager = new TerminalSessionManager();
+			withActiveSession(manager);
+			expect(manager.hasTypedInputSinceEnter(taskId)).toBe(false);
+
+			manager.writeInput(taskId, Buffer.from("ok looks like that got"), { fromViewer: true });
+			vi.setSystemTime(100_000 + VIEWER_TYPING_QUIET_MS * 3);
+			expect(manager.hasTypedInputSinceEnter(taskId)).toBe(true);
+
+			manager.writeInput(taskId, Buffer.from("\r"), { fromViewer: true });
+			expect(manager.getViewerTypedAt(taskId)).toBe(100_000 + VIEWER_TYPING_QUIET_MS * 3);
+			vi.advanceTimersByTime(VIEWER_TYPING_QUIET_MS - 1);
+			expect(manager.hasTypedInputSinceEnter(taskId)).toBe(true);
+			vi.advanceTimersByTime(1);
+			expect(manager.hasTypedInputSinceEnter(taskId)).toBe(false);
+
+			// Kanban's own delivery and the viewer's focus-in escape sequence don't count as the user typing.
+			manager.writeInput(taskId, Buffer.from("notice\r"));
+			manager.writeInput(taskId, Buffer.from("\u001b[I"), { fromViewer: true });
+			expect(manager.hasTypedInputSinceEnter(taskId)).toBe(false);
 		} finally {
 			vi.useRealTimers();
 		}

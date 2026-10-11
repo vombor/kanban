@@ -698,6 +698,7 @@ async function startServer(): Promise<{
 					workspacePath: summary.workspacePath,
 					exitCode: summary.exitCode,
 					live: terminalManager?.hasLiveProcess(summary.taskId) ?? false,
+					viewerTypedAt: terminalManager?.getViewerTypedAt(summary.taskId) ?? null,
 				})),
 				selectedAgentId: config.selectedAgentId,
 				serverStartedAt,
