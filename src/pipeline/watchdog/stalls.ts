@@ -12,7 +12,8 @@
 //     waiting to start, no checks running or queued for it and no checks wait before its deadline (issue #34),
 //     settled (isReviewSettled), not escalated or stopped (listed already), not an open user item, no runoff PASS
 //     parked for its snapshot, and nothing happened to it (a move, its session, a verdict acted on, recovery's last
-//     send, a rework, its checks finishing, the gate creating its QA card) for > stall.reviewMin             → item
+//     send, a rework, its checks finishing, the gate creating its QA card, ingesting its verdict or acting on a
+//     PASS) for > stall.reviewMin; a PASS not acted on yet (readPendingQaPass) is reported as a stuck land  → item
 //   QA/TRIAGE card in progress with its session not running > stall.qaMin                                  → item
 //   dev card in progress whose session is not running > stall.resumeIdleMin: one continue per dead session
 //     (not during a PID brownout), then > stall.idleMin                                                     → item
@@ -36,7 +37,13 @@ import type { PipelineSessionView } from "../engine";
 import { readPipelineHold } from "../hold";
 import type { PipelineCardState } from "../pipeline-state";
 import { readQaChecksWaitDeadline } from "../qa-checks-report";
-import { findRunningQaCard, readQaGateEntry, readQaPassEntry } from "../qa-gate";
+import {
+	findRunningQaCard,
+	readPendingQaPass,
+	readQaGateEntry,
+	readQaPassEntry,
+	readQaVerdictRecords,
+} from "../qa-gate";
 import { recoveryHoldReason } from "../recovery";
 import { isReworkAwaitingStart, readOpenRework } from "../rework-state";
 import { describeWorktreeStashes } from "../worktree-stash";
@@ -176,9 +183,11 @@ function parseTimes(values: unknown[]): number[] {
 
 /**
  * When the pipeline last did something to the card: a verdict acted on, recovery's last send, its last rework, its
- * checks finishing (recorded on the entry), the QA gate creating its QA card. The last two follow each other within a
- * second, and the gate's write that creates the QA card also ends its checks wait (issue #34: e4b7c was reported in
- * that second, its QA card queued in Backlog and its wait gone).
+ * checks finishing (recorded on the entry), the QA gate creating its QA card, ingesting its verdict and acting on a
+ * PASS (`qaPass.at`). The checks finishing and the QA card's creation follow each other within a second, and the
+ * gate's write that creates the QA card also ends its checks wait (issue #34: e4b7c was reported in that second, its
+ * QA card queued in Backlog and its wait gone); a PASS's ingest ends its QA card's count seconds before the land
+ * answers (666f0 was reported in that window).
  */
 function readPipelineActivityTimes(cards: Readonly<Record<string, PipelineCardState>>, taskId: string): number[] {
 	const entry = cards[taskId];
@@ -186,9 +195,11 @@ function readPipelineActivityTimes(cards: Readonly<Record<string, PipelineCardSt
 	const rework = asRecord(Array.isArray(qaflow.reworks) ? qaflow.reworks.at(-1) : undefined);
 	const verdictAt = readNewestHandledVerdictAt(entry);
 	const qaGate = typeof entry?.qaCard === "string" ? readQaGateEntry(cards[entry.qaCard]) : null;
+	const gateTimes = [readQaVerdictRecords(entry).at(-1)?.at, readQaPassEntry(entry)?.at];
 	return [
 		...(verdictAt === null ? [] : [verdictAt]),
 		...(qaGate?.reviewsTaskId === taskId ? [qaGate.createdAt] : []),
+		...gateTimes.filter((at): at is number => typeof at === "number" && Number.isFinite(at)),
 		...parseTimes([qaflow.recoverySentAt, rework.at, rework.startedAt, rework.restartAt, asRecord(entry?.checks).at]),
 	];
 }
@@ -338,10 +349,21 @@ export function detectStalls(input: StallInput): StallResult {
 			if (heldPass && heldPass.snapshot === entry?.snapshot) {
 				continue;
 			}
+			const quietMin = Math.round((now - quietSince) / MIN);
+			// A PASS the gate hasn't acted on this long is a stuck land, not a card with nothing pending.
+			const pendingPass = readPendingQaPass(entry);
+			if (pendingPass) {
+				items.push({
+					key: `${card.id}:review-stall`,
+					taskId: card.id,
+					issue: `dev card's QA PASS of round ${pendingPass.round} (QA card ${pendingPass.qaTaskId}, snapshot ${short(pendingPass.snapshot)}) was recorded ${Math.round((now - pendingPass.at) / MIN)} min ago and has not landed (no land answer, no rework; nothing happened to it for ${quietMin} min) (session ${session?.state ?? "missing"})`,
+				});
+				continue;
+			}
 			items.push({
 				key: `${card.id}:review-stall`,
 				taskId: card.id,
-				issue: `dev card has been in Review ${minutes} min with nothing pending (no QA card, no hold, no rework; nothing happened to it for ${Math.round((now - quietSince) / MIN)} min) (session ${session?.state ?? "missing"}, reviewReason ${session?.reviewReason ?? "none"}, snapshot ${typeof entry?.snapshot === "string" ? entry.snapshot : "none"})`,
+				issue: `dev card has been in Review ${minutes} min with nothing pending (no QA card, no hold, no rework; nothing happened to it for ${quietMin} min) (session ${session?.state ?? "missing"}, reviewReason ${session?.reviewReason ?? "none"}, snapshot ${typeof entry?.snapshot === "string" ? entry.snapshot : "none"})`,
 			});
 			continue;
 		}

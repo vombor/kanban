@@ -15,7 +15,14 @@ import { isPipelineCandidate, type PipelineCardOutcome, type PipelineSessionView
 import { readPipelineHold } from "./hold";
 import { type PipelineCardState, type PipelineWorkspaceState, readEscalatedAt } from "./pipeline-state";
 import { readQaChecksWaitDeadline } from "./qa-checks-report";
-import { findRunningQaCard, type QaQueueWait, readQaGateEntry, readQaPassEntry, readQaVerdictRecords } from "./qa-gate";
+import {
+	findRunningQaCard,
+	type QaQueueWait,
+	readPendingQaPass,
+	readQaGateEntry,
+	readQaPassEntry,
+	readQaVerdictRecords,
+} from "./qa-gate";
 import { recoveryHoldReason, recoveryRedoReason } from "./recovery";
 import { readEscalationRecord, readQaflow, readReworks } from "./rework";
 import { readOpenRework } from "./rework-state";
@@ -86,6 +93,9 @@ function describeVerdict(entry: PipelineCardState | undefined, snapshot: string)
 	};
 	if (verdict.verdict !== "PASS") {
 		return stage("qa_verdict", `QA r${verdict.round} ${verdict.verdict}`, { ...fields, next: "rework next" });
+	}
+	if (readPendingQaPass(entry, snapshot)) {
+		return stage("qa_verdict", `QA r${verdict.round} PASS`, { ...fields, next: "landing", inFlight: true });
 	}
 	const pass = readQaPassEntry(entry);
 	const conflict = pass?.snapshot === snapshot && pass.landing?.decision === "conflict";

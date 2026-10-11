@@ -343,6 +343,24 @@ export function readQaVerdictRecords(entry: PipelineCardState | undefined): QaVe
 }
 
 /**
+ * The dev card's recorded PASS whose land is pending: the newest verdict is a PASS for `snapshot` (default: the
+ * entry's current one) that actOnPasses hasn't acted on yet (no `qaPass` names its QA card). Ingest and land are
+ * seconds apart (the Done workflow writes `qaPass` once it answers), and the QA card no longer counts once ingested
+ * (findRunningQaCard), so in between this is the only sign the card is moving (foo 666f0, 2026-10-11). Once acted on
+ * the PASS is landed (Done), held, stale, or a conflict for the rework stage (`qaPass.landing`).
+ */
+export function readPendingQaPass(
+	entry: PipelineCardState | undefined,
+	snapshot: string | null = typeof entry?.snapshot === "string" ? entry.snapshot : null,
+): QaVerdictRecord | null {
+	const latest = readQaVerdictRecords(entry).at(-1);
+	if (!latest || latest.verdict !== "PASS" || !snapshot || latest.snapshot !== snapshot) {
+		return null;
+	}
+	return readQaPassEntry(entry)?.qaTaskId === latest.qaTaskId ? null : latest;
+}
+
+/**
  * The gate's QA card that is reviewing the dev card right now: the one its entry names (`qaCard`, made for `qaCreated`),
  * started and not yet ingested or superseded, In Progress or in Review waiting for its verdict to be ingested. A slot
  * freed after `qa.timeoutMin` (`timedOutAt`) is slot accounting only: the card still runs and is still ingested, so it

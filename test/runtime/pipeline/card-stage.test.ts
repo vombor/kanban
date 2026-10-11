@@ -224,6 +224,14 @@ describe("describePipelineCardStages", () => {
 		expect(describeStages({ cards: passed })[0]).toMatchObject({
 			label: "QA r2 PASS",
 			next: "land conflict · rework next",
+			inFlight: false,
+		});
+		// Ingested, its land not answered yet (readPendingQaPass): landing, in flight.
+		const landing = { ...cards, [DEV.id]: { ...passed[DEV.id], qaPass: undefined } };
+		expect(describeStages({ cards: landing })[0]).toMatchObject({
+			label: "QA r2 PASS",
+			next: "landing",
+			inFlight: true,
 		});
 	});
 

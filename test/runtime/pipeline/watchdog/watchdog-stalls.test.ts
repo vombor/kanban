@@ -328,6 +328,122 @@ describe("detectStalls", () => {
 		});
 	});
 
+	describe("a PASS being landed (foo 666f0, 2026-10-11)", () => {
+		const SNAPSHOT = "77a73e0e5b1c";
+		// 666f0: in Review 15 min; QA card 2f6ab's PASS ingested 13:51:02.265, the watchdog's report 13:51:03.971, the
+		// land's answer 13:51:04.118.
+		const card666f0 = (minutes: number) => old("666f0", { updatedAt: NOW - minutes * MIN });
+		const quiet = (minutes: number) =>
+			new Map([
+				[
+					"666f0",
+					session("666f0", { state: "awaiting_review", reviewReason: "hook", updatedAt: NOW - minutes * MIN }),
+				],
+			]);
+		const pass = (at: number) => ({
+			qaTaskId: "2f6ab",
+			round: 1,
+			snapshot: SNAPSHOT,
+			verdict: "PASS",
+			blocking: [],
+			notes: "",
+			scores: {},
+			visual: null,
+			artifactsDir: null,
+			at,
+		});
+		const qaGate = (ingestedAt: number): QaGateEntry => ({
+			reviewsTaskId: "666f0",
+			round: 1,
+			snapshot: SNAPSHOT,
+			snapshotRef: "refs/kanban/snapshots/666f0",
+			outboxDir: "/tmp/outbox/2f6ab",
+			scratchDir: "/tmp/scratch/666f0",
+			baseRef: "main",
+			agentId: "cline",
+			model: null,
+			devAgentId: "codex",
+			devModel: null,
+			route: null,
+			status: "ingested",
+			createdAt: NOW - 30 * MIN,
+			startedAt: NOW - 29 * MIN,
+			reviewSeenAt: null,
+			nudges: 0,
+			timedOutAt: null,
+			ingestedAt,
+			verdict: "PASS",
+			trashed: true,
+			supersededAt: null,
+			checks: "PASS",
+		});
+		const cards = (ingestedAt: number, dev: PipelineCardState = {}): Record<string, PipelineCardState> => ({
+			"666f0": {
+				snapshot: SNAPSHOT,
+				qaCreated: SNAPSHOT,
+				qaCard: "2f6ab",
+				qaVerdicts: [pass(ingestedAt)],
+				...dev,
+			},
+			"2f6ab": { qaGate: qaGate(ingestedAt) },
+		});
+
+		it("doesn't report a card whose PASS was just ingested and whose land hasn't answered yet", () => {
+			const board = createBoard({ review: [card666f0(15)] });
+			expect(detectStalls(input(board, { sessions: quiet(15), pipelineCards: cards(NOW - 1706) })).items).toEqual(
+				[],
+			);
+		});
+
+		it("reports a PASS whose land is stuck past stall.reviewMin, measured from the ingest", () => {
+			const board = createBoard({ review: [card666f0(30)] });
+			expect(detectStalls(input(board, { sessions: quiet(30), pipelineCards: cards(NOW - 9 * MIN) })).items).toEqual(
+				[],
+			);
+			const items = detectStalls(input(board, { sessions: quiet(30), pipelineCards: cards(NOW - 11 * MIN) })).items;
+			expect(items).toEqual([expect.objectContaining({ key: "666f0:review-stall", taskId: "666f0" })]);
+			expect(items[0]?.issue).toContain(
+				"QA PASS of round 1 (QA card 2f6ab, snapshot 77a73e0e) was recorded 11 min ago",
+			);
+			expect(items[0]?.issue).toContain("has not landed");
+		});
+
+		it("leaves a conflicted land to the rework stage", () => {
+			const board = createBoard({ review: [card666f0(30)] });
+			const conflict = (at: number) => ({
+				qaPass: {
+					qaTaskId: "2f6ab",
+					snapshot: SNAPSHOT,
+					at,
+					action: "land",
+					status: "blocked",
+					error: "conflict",
+					landing: { decision: "conflict", files: ["a.ts"] },
+				},
+			});
+			// The land just answered with a conflict: the rework stage's turn.
+			expect(
+				detectStalls(
+					input(board, { sessions: quiet(30), pipelineCards: cards(NOW - 20 * MIN, conflict(NOW - MIN)) }),
+				).items,
+			).toEqual([]);
+			// Its conflict rework sent and not started yet: the rework's started-check holds it.
+			const reworkSent = {
+				...conflict(NOW - 20 * MIN),
+				qaflow: { reworks: [{ at: new Date(NOW - 20 * MIN).toISOString(), startedAt: null, restartAt: null }] },
+			};
+			expect(
+				detectStalls(input(board, { sessions: quiet(30), pipelineCards: cards(NOW - 20 * MIN, reworkSent) })).items,
+			).toEqual([]);
+			// Answered long ago and nothing since: reported as before, not as a pending land.
+			const items = detectStalls(
+				input(board, { sessions: quiet(30), pipelineCards: cards(NOW - 20 * MIN, conflict(NOW - 20 * MIN)) }),
+			).items;
+			expect(items).toEqual([expect.objectContaining({ key: "666f0:review-stall" })]);
+			expect(items[0]?.issue).toContain("with nothing pending");
+		});
+	});
+
 	it("an empty diff whose agent ran is reported at once, instead of the generic Review stall", () => {
 		const card = createCard({ id: "b2d5b", updatedAt: NOW - 1 * MIN });
 		const emptyDiff = {
