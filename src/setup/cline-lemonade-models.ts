@@ -16,8 +16,10 @@
 // contextWindow (see src/models/lemonade-models.ts for where the size comes from), maxTokens, supportsVision and
 // supportsReasoning, and zero prices when none are set; other keys of a model are kept, and models Lemonade no longer
 // lists are dropped. With Lemonade down no value changes (only a list is still rewritten as a record).
-// Read-only: `kanban setup` and doctor print the differences, and only the user's `kanban cline
-// apply-lemonade-models` (cline-lemonade-apply.ts) writes them (Kanban writes nothing under ~/.cline otherwise).
+// Read-only: `kanban setup` and doctor print the differences, and the user's `kanban cline apply-lemonade-models`
+// (cline-lemonade-apply.ts) writes them. The one exception is the server's context sync
+// (cline-lemonade-context-sync.ts, issue #31): from this same plan it writes only contextWindow and maxTokens of
+// models already in the file.
 import { DEFAULT_LEMONADE_MODEL_LIST_SETTINGS } from "../config/model-lists-config";
 import {
 	fetchLemonadeCatalog,
@@ -238,6 +240,10 @@ export interface LemonadeModelsPlan {
 	diff: LemonadeModelsDiff;
 	/** The wanted `providers.lemonade.models`. */
 	models: StoredModels;
+	/** What Lemonade said about each listed model (empty when it didn't answer). */
+	updates: LemonadeModelUpdate[];
+	/** The Lemonade API root the values come from. */
+	apiBaseUrl: string;
 	/** What is in sync, what would change, or why nothing can be compared. */
 	details: string[];
 }
@@ -285,7 +291,7 @@ export async function planLemonadeModelsForEntry(
 			: []),
 		...(catalog && empty ? [describeInSync(models)] : []),
 	];
-	return { inSync: catalog !== null && empty, unreachable, diff, models, details };
+	return { inSync: catalog !== null && empty, unreachable, diff, models, updates, apiBaseUrl, details };
 }
 
 export type ClineLemonadeModelsPlan =

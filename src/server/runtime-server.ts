@@ -4,6 +4,7 @@ import { createServer as createHttpsServer } from "node:https";
 import { join } from "node:path";
 
 import { createHTTPHandler } from "@trpc/server/adapters/standalone";
+import { createClineLemonadeContextSyncSettingsLoader } from "../config/cline-lemonade-context-sync-config";
 import { createClineTurnDetectorSettingsLoader } from "../config/cline-turn-detector-config";
 import { createLemonadeModelListSettingsLoader } from "../config/model-lists-config";
 import { createProcessReaperSettingsLoader } from "../config/process-reaper-config";
@@ -53,6 +54,7 @@ import {
 	loadWorkspaceStateById,
 	mutateWorkspaceState,
 } from "../state/workspace-state";
+import { agentReadsClineModelsFile } from "../terminal/agent-session-adapters";
 import type { ClineHubRunCanceller } from "../terminal/cline-hub-runs";
 import { createClineTurnMonitor } from "../terminal/cline-turn-monitor";
 import { deliverTaskInput } from "../terminal/deliver-task-input";
@@ -78,6 +80,7 @@ import {
 	getTaskWorktreeCandidatePaths,
 } from "../workspace/task-worktree";
 import { getWebUiDir, normalizeRequestPath, readAsset } from "./assets";
+import { createClineLemonadeContextSyncMonitor } from "./cline-lemonade-context-sync-monitor";
 import { createGitHubAppRequestHandler } from "./github-app-route";
 import { handleHttpRequest, handleSocketUpgrade } from "./middleware";
 import { createModelListsRequestHandler } from "./model-lists-route";
@@ -263,6 +266,12 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		loadSettings: createProcessReaperSettingsLoader(deps.warn),
 		log: deps.warn,
 	});
+	// Keeps Cline's Lemonade context windows equal to Lemonade's ctx_size: every sweep and right before a Cline launch.
+	const clineLemonadeContextSync = createClineLemonadeContextSyncMonitor({
+		loadSettings: createClineLemonadeContextSyncSettingsLoader(deps.warn),
+		loadLemonadeModelList: createLemonadeModelListSettingsLoader(deps.warn),
+		log: deps.warn,
+	});
 	// Ends Cline CLI turns that Cline's TaskComplete hook missed, through the same ingest path the hook uses.
 	const inProcessHooksApi = createHooksApi({
 		getWorkspacePathById: deps.workspaceRegistry.getWorkspacePathById,
@@ -347,6 +356,11 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		},
 		sessionSyncEnabled: deps.sessionSyncEnabled,
 		isolation,
+		beforeAgentLaunch: async (agentId) => {
+			if (agentReadsClineModelsFile(agentId)) {
+				await clineLemonadeContextSync.sync("launch");
+			}
+		},
 	});
 	// Orchestrator message notices wait for the receiver's settled Review with nothing typed (message-notices.ts).
 	const messageNotices = createMessageNoticeQueue({
@@ -837,6 +851,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 	}
 	orphanProcessSweeper.start();
 	clineTurnMonitor.start();
+	clineLemonadeContextSync.start();
 	const activeWorkspaceId = deps.workspaceRegistry.getActiveWorkspaceId();
 	const url = activeWorkspaceId
 		? buildKanbanRuntimeUrl(`/${encodeURIComponent(activeWorkspaceId)}`)
@@ -853,6 +868,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			clearInterval(credentialSweep);
 			orphanProcessSweeper.close();
 			clineTurnMonitor.close();
+			clineLemonadeContextSync.close();
 			await deps.runtimeStateHub.close();
 			await terminalWebSocketBridge.close();
 			await new Promise<void>((resolveClose, rejectClose) => {

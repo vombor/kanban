@@ -552,11 +552,13 @@ from each model's architecture config:
 | **sum** | | | | **about 62 GB** |
 
 GLM at its max context (202752) adds about 4 GB. Keep it at 131072 in Lemonade (`--save-options` replaces the
-model's stored options, so repeat the backend), then let Cline's models.json follow:
+model's stored options, so repeat the backend). Cline's models.json follows by itself: the server's Lemonade context
+sync (`agents.cline.lemonadeContextSync`, on by default) writes the new `contextWindow`/`maxTokens` within 30 s and
+before the next Cline launch. Models to add or remove are still the user's command:
 
 ```sh
 lemonade load GLM-4.7-Flash-GGUF --ctx-size 131072 --llamacpp vulkan --save-options
-kanban cline apply-lemonade-models --origin <kanban origin>    # doctor's "cline lemonade models" row prints it
+kanban cline apply-lemonade-models --origin <kanban origin>    # only for models added or removed; doctor prints it
 ```
 
 ### Settings team-local needs
@@ -576,8 +578,9 @@ The other local gotchas:
 - **Images.** GLM is text-only; the QA model (Gemma) and the fallback (Qwen3.6) read images, so the kit has no
   `qa.promptNotes.screenshotFallback`. Recovery clears and resends an image a model rejects (too large or no vision).
 - **Context overflow.** Cline compacts at 0.9 × the `contextWindow` in its models.json, so that window must be the
-  one Lemonade really loads. `kanban doctor`'s "cline lemonade models" row compares them, and
-  `kanban cline apply-lemonade-models --origin <origin>` (the user's command) fixes models.json. Beyond that,
+  one Lemonade really loads. The server's Lemonade context sync keeps it so after a reload (`report`/`off` in
+  `agents.cline.lemonadeContextSync` stop it), `kanban doctor`'s "cline lemonade models" row compares them, and
+  `kanban cline apply-lemonade-models --origin <origin>` (the user's command) fixes the rest of models.json. Beyond that,
   recovery (mode `on`) clears an overflowed history.
 - **Models.** `kanban doctor` also warns when Lemonade doesn't list a model the kit routes to, hasn't downloaded it,
   or doesn't mark it tool-calling. It reports INFO when Lemonade is down.

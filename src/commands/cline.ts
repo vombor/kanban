@@ -68,7 +68,7 @@ export function registerClineCommand(program: Command): void {
 	cline
 		.command("apply-lemonade-models")
 		.description(
-			"Write Kanban's Lemonade settings into Cline's models.json: the provider's modelsSourceUrl (Kanban's model-lists route) and each model's context window, maxTokens, vision and reasoning as Lemonade reports them now. Only the Lemonade provider entry changes. This is the only way Kanban writes Cline's files, and only when you run it: `kanban setup` and `kanban doctor` just print it. Backs up models.json into the Kanban home (backups/cline/) first and writes atomically.",
+			"Write Kanban's Lemonade settings into Cline's models.json: the provider's modelsSourceUrl (Kanban's model-lists route) and each model's context window, maxTokens, vision and reasoning as Lemonade reports them now. Only the Lemonade provider entry changes. Apart from the server's Lemonade context sync (agents.cline.lemonadeContextSync: contextWindow and maxTokens of models already listed), this is the only way Kanban writes Cline's files, and only when you run it: `kanban setup` and `kanban doctor` just print it. Backs up models.json into the Kanban home (backups/cline/) first and writes atomically.",
 		)
 		.option("--dry-run", "Print what would change; write nothing.")
 		.option("--origin <url>", "Kanban server origin for the model-lists route (default: the running server).")

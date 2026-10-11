@@ -261,5 +261,28 @@ describe("Cline models.json Lemonade metadata plan", () => {
 			expect(pass?.level).toBe("pass");
 			expect(pass?.message).toContain("6 model(s) in sync");
 		});
+
+		it("says what the Lemonade context sync will write, or that it is off", async () => {
+			write(clineModelsFile({ "GLM-4.7-Flash-GGUF": { contextWindow: 65536, maxTokens: 16384 } }));
+			const run = (mode: "on" | "report" | "off") =>
+				checkClineLemonadeModels({
+					modelsPath,
+					origin: ORIGIN,
+					lemonadeModelList: { url: "http://lemonade.test:13305", requireLabels: LABELS },
+					contextSync: { mode, intervalSec: 30 },
+					historyPath: "/home/k/data/models/cline-lemonade-sync.jsonl",
+					fetch: createFakeLemonadeFetch(),
+				});
+			const [on] = await run("on");
+			expect(on?.level).toBe("warn");
+			expect(on?.message).toContain(
+				"the server's Lemonade context sync writes the context windows of GLM-4.7-Flash-GGUF within 30s or before the next Cline launch; if they stay, see /home/k/data/models/cline-lemonade-sync.jsonl",
+			);
+			const [off] = await run("off");
+			expect(off?.level).toBe("warn");
+			expect(off?.message).toContain(
+				"the Lemonade context sync is off (agents.cline.lemonadeContextSync.mode), so the context windows of GLM-4.7-Flash-GGUF change only with the command",
+			);
+		});
 	});
 });

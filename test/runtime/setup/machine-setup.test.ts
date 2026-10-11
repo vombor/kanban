@@ -136,7 +136,7 @@ describe("kanban setup steps", () => {
 		expect(step.apply).toBeUndefined();
 		expect(step.details).toEqual([
 			`lemonade modelsSourceUrl: http://127.0.0.1:13306/lemonade/models -> ${ORIGIN}/api/model-lists/lemonade`,
-			`to apply, run \`kanban cline apply-lemonade-models --origin ${ORIGIN}\` (Kanban itself never writes Cline's models.json)`,
+			`to apply, run \`kanban cline apply-lemonade-models --origin ${ORIGIN}\` (Kanban itself only syncs the context windows of models already listed)`,
 		]);
 		expect(readFileSync(paths.clineModels, "utf8")).toBe(raw);
 	});

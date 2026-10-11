@@ -77,8 +77,8 @@ The user's command. It is in `USER_ONLY_COMMANDS`, so agent sessions are refused
 
 `kanban cline remove-bedrock-key` is still there, but it only refuses and points at `store-bedrock-key`.
 
-This follows `kanban cline apply-lemonade-models`: Kanban never writes Cline's files on its own; the user runs the
-command that does.
+This follows `kanban cline apply-lemonade-models`: Kanban doesn't write Cline's files on its own (the one exception
+is the Lemonade context windows in models.json, issue #31); the user runs the command that does.
 
 ## When a card hits the sign-in screen anyway
 

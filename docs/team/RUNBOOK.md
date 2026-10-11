@@ -60,7 +60,8 @@ Fix it before anything else.
 - **Machine setup** (npm settings, Cline's Lemonade model list, the CLAUDE.md section, trust):
   `kanban setup [--dry-run]`. While the legacy kit's `kit.config.json` exists, it leaves the CLAUDE.md section alone
   unless `--claude-md`.
-- **Cline settings and ~/.cline:** Kanban writes nothing under `~/.cline` (that is Cline's). Every Cline launch gets
+- **Cline settings and ~/.cline:** Kanban writes nothing under `~/.cline` (that is Cline's), except the Lemonade
+  context windows in `models.json` (below). Every Cline launch gets
   Kanban's rules as worktree rules (`.cline/rules/kanban-*.md`, git-excluded) and `CLINE_DISABLE_CLINE_PASS_NOTICE=1`.
   Bedrock needs its key and region stored in Cline's `providers.json`: Cline's TUI doesn't count
   `AWS_BEARER_TOKEN_BEDROCK`/`AWS_REGION` and opens its sign-in screen without them. Run `kanban cline store-bedrock-key`
@@ -73,8 +74,16 @@ Fix it before anything else.
   (its `modelsSourceUrl` and each model's context window, maxTokens, vision, reasoning) with Kanban's model-lists route
   and what Lemonade reports now, and list every difference (doctor: WARN, INFO when Lemonade is down). To apply them,
   run the printed `kanban cline apply-lemonade-models --origin <origin>` yourself (`--dry-run` first to see the
-  changes). It changes only the Lemonade entry, backs up the old file to `~/.kanban/backups/cline/`, and is the only
-  time Kanban writes a Cline file. To roll back, copy the backup over `~/.cline/data/settings/models.json`.
+  changes). It changes only the Lemonade entry and backs up the old file to `~/.kanban/backups/cline/`. To roll back,
+  copy the backup over `~/.cline/data/settings/models.json`.
+- **Lemonade context windows follow a reload by themselves** (issue #31): the server's Lemonade context sync
+  (`agents.cline.lemonadeContextSync`, `mode` `on` by default, `report` only logs, `off`; `intervalSec` 30) compares
+  the same way every 30 s and right before each Cline launch, and writes only `contextWindow` and `maxTokens` of
+  models already in the entry, from Lemonade's `recipe_options.ctx_size` (never `max_context_window`), with the same
+  backup and atomic write. It is the one write Kanban makes in Cline's files on its own; adding or removing models,
+  `modelsSourceUrl` and every other key stay the command's. Each change (old -> new per model, with the Lemonade value)
+  is in the server log and `~/.kanban/data/models/cline-lemonade-sync.jsonl`, as are report-mode, skipped and failed
+  writes. A running Cline session keeps its window; the next one gets the new one.
 
 ## Switching a runtime feature on (one owner at a time)
 

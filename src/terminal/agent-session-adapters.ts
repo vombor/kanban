@@ -148,6 +148,8 @@ interface AgentSessionAdapter {
 	prepare(input: AgentAdapterLaunchInput): Promise<PreparedAgentLaunch>;
 	inputDelivery?: AgentInputDeliveryProfile;
 	turnEndSource?: AgentTurnEndSource;
+	/** The agent reads model context windows from Cline's models.json (src/setup/cline-lemonade-context-sync.ts). */
+	readsClineModelsFile?: boolean;
 	recovery?: AgentRecoveryProfile;
 }
 
@@ -1747,6 +1749,8 @@ const kiroAdapter: AgentSessionAdapter = {
 const clineCliAdapter: AgentSessionAdapter = {
 	// Some providers end a turn without Cline's TaskComplete hook; the session files show it (cline-turn-outcome.ts).
 	turnEndSource: "cline-session-files",
+	// Lemonade windows come from models.json, which the server syncs right before each launch.
+	readsClineModelsFile: true,
 	// The TUI shows "esc to cancel" while a request runs (archive/devteam-kit:services/kanban-autoland.mjs@0261b20).
 	recovery: { clearContextCommand: "/clear", cancelTurnInput: ESCAPE },
 	async prepare(input) {
@@ -2345,6 +2349,11 @@ export function getAgentRecoveryProfile(agentId: RuntimeAgentId | null): AgentRe
 
 export function getAgentTurnEndSource(agentId: RuntimeAgentId | null): AgentTurnEndSource | null {
 	return (agentId ? ADAPTERS[agentId].turnEndSource : undefined) ?? null;
+}
+
+/** Whether a launch of the agent reads Cline's models.json, so the Lemonade context sync runs before it. */
+export function agentReadsClineModelsFile(agentId: RuntimeAgentId | null): boolean {
+	return (agentId ? ADAPTERS[agentId].readsClineModelsFile : undefined) ?? false;
 }
 
 /**

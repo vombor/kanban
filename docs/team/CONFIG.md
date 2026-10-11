@@ -202,6 +202,8 @@ session `__home_agent__:<ws>:<selected agent>` of the workspace the items are ab
 | `agents.cline.dataDir` | null (`~/.cline/data`) | Cline's sessions and providers |
 | `agents.cline.turnDetector.mode` | `report` | Cline CLI turn-end detector and session sync's idle-TUI check: `off` / `report` / `on`. `report` while the legacy column-sync logic is still the reference |
 | `agents.cline.turnDetector.intervalSec` | 15 | |
+| `agents.cline.lemonadeContextSync.mode` | `on` | The server keeps each Lemonade model's `contextWindow`/`maxTokens` in Cline's models.json equal to Lemonade's `recipe_options.ctx_size` (only models already listed, nothing else; the rest is `kanban cline apply-lemonade-models`): `off` / `report` (log only) / `on`. Every change in the server log and `data/models/cline-lemonade-sync.jsonl` |
+| `agents.cline.lemonadeContextSync.intervalSec` | 30 | Also runs right before each Cline launch |
 | `agents.codex.home` | null (`$CODEX_HOME`, else `~/.codex`) | |
 | `backups.board.enabled`, `.everyMin`, `.keep` | `true`, 10, 200 | every board write writes `board-latest.json`, plus a timestamped copy at most every `everyMin` |
 | `processes.reaper.enabled`, `.intervalSec`, `.mode` | `true`, 300, `terminate` | the orphan-process sweep (read on every sweep; anything unclear means `report`) |

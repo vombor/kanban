@@ -9,6 +9,7 @@ import { getWorkspacePipelineSettings, parsePipelineConfig, readPipelineConfig }
 import type { RuntimeConfigState } from "../config/runtime-config";
 import { updateGlobalRuntimeConfig, updateRuntimeConfig } from "../config/runtime-config";
 import type {
+	RuntimeAgentId,
 	RuntimeConfigResponse,
 	RuntimeProcessSweepResponse,
 	RuntimeRunUpdateResponse,
@@ -61,6 +62,11 @@ export interface CreateRuntimeApiDependencies {
 	sessionSyncEnabled: boolean;
 	/** Project isolation (src/isolation/): each launch gets a session credential and, under `enforce`, its denies. */
 	isolation?: IsolationService;
+	/**
+	 * Runs before a new agent process starts (not when a live session is handed back): the Lemonade context sync for
+	 * agents that read Cline's models.json (src/server/cline-lemonade-context-sync-monitor.ts). Must not throw.
+	 */
+	beforeAgentLaunch?: (agentId: RuntimeAgentId) => Promise<void>;
 }
 
 async function resolveExistingTaskCwdOrEnsure(options: {
@@ -260,6 +266,9 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 						? deps.isolation.credentials.current(workspaceScope.workspaceId, body.taskId)
 						: deps.isolation.issueCredential(identity)
 					: null;
+				if (deps.beforeAgentLaunch && !terminalManager.willReuseLiveSession(body.taskId)) {
+					await deps.beforeAgentLaunch(resolved.agentId);
+				}
 				const summary = await terminalManager.startTaskSession({
 					taskId: body.taskId,
 					agentId: resolved.agentId,

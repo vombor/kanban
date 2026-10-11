@@ -2,7 +2,7 @@
 // machine setup and the "one owner" check. Fast and read-only unless `--fix`, which runs only the safe fixes
 // (register the given project with the default kit, trust, managed sections, worktree push hooks). Machine setup
 // drift is reported, and `kanban setup` fixes it: setup writes user files (CLAUDE.md, .npmrc), and prints the command
-// the user runs for Cline's files (Kanban writes nothing under ~/.cline).
+// the user runs for Cline's files (Kanban writes nothing under ~/.cline but the server's Lemonade context sync).
 import { listLegacyKitProjects, readLegacyKitConfig, readLegacyKitServices } from "../config/legacy-kit-config";
 import { readLemonadeModelListSettings } from "../config/model-lists-config";
 import { readPipelineConfig, readRawGlobalConfig } from "../config/pipeline-config";
@@ -16,6 +16,7 @@ import { getAgentTrustConfigPaths } from "../setup/workspace-trust-report";
 import {
 	getClineGlobalRulesPath,
 	getClineHomeDirPath,
+	getClineLemonadeSyncHistoryPath,
 	getClineModelsSettingsPath,
 	getClineProvidersSettingsPath,
 	resolveKanbanHome,
@@ -152,6 +153,8 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
 			modelsPath: clineModelsPath,
 			origin: options.origin,
 			lemonadeModelList: (await readLemonadeModelListSettings()).settings,
+			contextSync: config.agents.cline.lemonadeContextSync,
+			historyPath: getClineLemonadeSyncHistoryPath(home.homePath),
 			fetch: options.fetch,
 		})),
 	);

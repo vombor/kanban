@@ -365,6 +365,39 @@ describe("createRuntimeApi startTaskSession", () => {
 		expect(terminalManager.startTaskSession).toHaveBeenCalledTimes(3);
 	});
 
+	it("runs beforeAgentLaunch with the agent before a new process starts, not for a live session handed back", async () => {
+		taskWorktreeMocks.resolveTaskCwd.mockResolvedValue("/tmp/existing-worktree");
+		let reused = false;
+		const order: string[] = [];
+		const terminalManager = {
+			startTaskSession: vi.fn(async () => {
+				order.push("start");
+				return createSummary();
+			}),
+			applyTurnCheckpoint: vi.fn(),
+			willReuseLiveSession: vi.fn(() => reused),
+		};
+		const beforeAgentLaunch = vi.fn(async (agentId: string) => {
+			order.push(`before:${agentId}`);
+		});
+		const api = createTestRuntimeApi({
+			getActiveWorkspaceId: vi.fn(() => "workspace-1"),
+			loadScopedRuntimeConfig: vi.fn(async () => createRuntimeConfigState()),
+			setActiveRuntimeConfig: vi.fn(),
+			getScopedTerminalManager: vi.fn(async () => terminalManager as never),
+			resolveInteractiveShellCommand: vi.fn(),
+			beforeAgentLaunch,
+		});
+		const scope = { workspaceId: "workspace-1", workspacePath: "/tmp/repo" };
+
+		await api.startTaskSession(scope, { taskId: "task-1", baseRef: "main", prompt: "Fix it" });
+		expect(order).toEqual(["before:claude", "start"]);
+		reused = true;
+		await api.startTaskSession(scope, { taskId: "task-1", baseRef: "main", prompt: "Fix it" });
+		expect(beforeAgentLaunch).toHaveBeenCalledTimes(1);
+		expect(terminalManager.startTaskSession).toHaveBeenCalledTimes(2);
+	});
+
 	it("gives each new agent process a session credential bound to its workspace, and keeps a live session's", async () => {
 		taskWorktreeMocks.resolveTaskCwd.mockResolvedValue("/tmp/existing-worktree");
 		guardrailMocks.resolveTaskGuardrails.mockResolvedValue(null);

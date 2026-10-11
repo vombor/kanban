@@ -3,7 +3,8 @@
 // Cline offers every id the provider's `modelsSourceUrl` returns. The legacy kit pointed it at its own
 // model-lists service (http://127.0.0.1:13306/lemonade/models), which the route in
 // src/server/model-lists-route.ts replaces. That URL (or a missing one) should be the route; a URL the user chose
-// for something else is left alone. Read-only: Kanban writes nothing under ~/.cline (user rule, 2026-10-07), so
+// for something else is left alone. Read-only: Kanban writes nothing under ~/.cline (user rule, 2026-10-07; the Lemonade context windows are the one
+// exception, issue #31), so
 // `kanban setup` and doctor only report the drift, and the user's `kanban cline apply-lemonade-models`
 // (src/setup/cline-lemonade-apply.ts) is the one thing that changes the file. The provider entry is never created.
 import { readFile } from "node:fs/promises";

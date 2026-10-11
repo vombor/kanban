@@ -139,7 +139,7 @@ export function getClineDataDirPath(dataDirOverride: string | null = null): stri
 	return resolveClineDataDir(dataDirOverride);
 }
 
-/** Cline's custom-provider file (`<data>/settings/models.json`). `kanban setup` and doctor compare its Lemonade entry; only the user's `kanban cline apply-lemonade-models` writes it. */
+/** Cline's custom-provider file (`<data>/settings/models.json`). `kanban setup` and doctor compare its Lemonade entry; the user's `kanban cline apply-lemonade-models` writes it, and the server's Lemonade context sync its context windows. */
 export function getClineModelsSettingsPath(dataDirOverride: string | null = null): string {
 	return join(resolveClineDataDir(dataDirOverride), CLINE_SETTINGS_DIR, "models.json");
 }
@@ -368,6 +368,15 @@ export function getKanbanDataPath(homePath = getKanbanHomePath()): string {
 /** Model metadata caches, such as Bedrock's inference-profile list (`<home>/data/models`). */
 export function getKanbanModelsDataPath(homePath = getKanbanHomePath()): string {
 	return join(getKanbanDataPath(homePath), MODELS_DATA_DIR);
+}
+
+/**
+ * Every change the server's Lemonade context sync writes into Cline's models.json, would write (report mode) or
+ * couldn't write, one JSON line each (`<home>/data/models/cline-lemonade-sync.jsonl`,
+ * src/server/cline-lemonade-context-sync-monitor.ts). Machine-wide, as Cline's models.json is.
+ */
+export function getClineLemonadeSyncHistoryPath(homePath = getKanbanHomePath()): string {
+	return join(getKanbanModelsDataPath(homePath), "cline-lemonade-sync.jsonl");
 }
 
 /** `kanban models vet` runs (`<home>/data/models/vetting/<run>`: report.md, result.json, run.log), machine-wide. */

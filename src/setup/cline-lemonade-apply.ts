@@ -1,6 +1,8 @@
-// `kanban cline apply-lemonade-models`: the one command that writes Cline's models.json, and only when the user runs
-// it. Kanban writes nothing under ~/.cline on its own (user rule, 2026-10-07; the user chose "Kanban prints, the user
-// applies"): `kanban setup` and doctor only print the differences and this command line.
+// `kanban cline apply-lemonade-models`: the one command that writes Cline's whole Lemonade entry in models.json, and
+// only when the user runs it. Kanban writes nothing under ~/.cline on its own (user rule, 2026-10-07; the user chose
+// "Kanban prints, the user applies"): `kanban setup` and doctor only print the differences and this command line. The
+// one exception is the server's context sync (cline-lemonade-context-sync.ts, issue #31): contextWindow and maxTokens
+// of models already in the entry.
 //
 // It changes the Lemonade provider entry and nothing else: `provider.modelsSourceUrl` (cline-models-source.ts) and
 // `models` (cline-lemonade-models.ts). Before writing it copies the file as read into the Kanban home's backups
@@ -31,7 +33,7 @@ export function formatApplyLemonadeModelsCommand(origin: string): string {
 
 /** Setup's and doctor's line telling the user what to run. */
 export function formatApplyLemonadeModelsHint(origin: string): string {
-	return `to apply, run \`${formatApplyLemonadeModelsCommand(origin)}\` (Kanban itself never writes Cline's models.json)`;
+	return `to apply, run \`${formatApplyLemonadeModelsCommand(origin)}\` (Kanban itself only syncs the context windows of models already listed)`;
 }
 
 /** Where the command keeps its copies of models.json: `<home>/backups/cline`. */

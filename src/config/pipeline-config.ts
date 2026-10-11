@@ -13,6 +13,10 @@ import { z } from "zod";
 import { type RuntimeLandingMode, runtimeLandingModeSchema } from "../core/api-contract";
 import { lockedFileSystem } from "../fs/locked-file-system";
 import { getKanbanGlobalConfigPath, KANBAN_HOME_MARKER_VERSION } from "../state/kanban-home";
+import {
+	clineLemonadeContextSyncModeSchema,
+	DEFAULT_CLINE_LEMONADE_CONTEXT_SYNC,
+} from "./cline-lemonade-context-sync-config";
 import { clineTurnDetectorModeSchema, getDefaultClineTurnDetectorSettings } from "./cline-turn-detector-config";
 import { DEFAULT_LEMONADE_MODEL_LIST_SETTINGS } from "./model-lists-config";
 
@@ -417,6 +421,14 @@ const clineTurnDetectorSchema = z
 	})
 	.strict();
 
+// The server's sync of Cline's Lemonade context windows (cline-lemonade-context-sync-config.ts reads it per tick).
+const clineLemonadeContextSyncSchema = z
+	.object({
+		mode: clineLemonadeContextSyncModeSchema.default(DEFAULT_CLINE_LEMONADE_CONTEXT_SYNC.mode),
+		intervalSec: z.number().int().positive().default(DEFAULT_CLINE_LEMONADE_CONTEXT_SYNC.intervalSec),
+	})
+	.strict();
+
 // Agent data dirs: null = the agent's own default location.
 const agentsSectionSchema = z
 	.object({
@@ -425,9 +437,14 @@ const agentsSectionSchema = z
 			.object({
 				dataDir: z.string().nullable().default(null),
 				turnDetector: clineTurnDetectorSchema.default(DEFAULT_CLINE_TURN_DETECTOR),
+				lemonadeContextSync: clineLemonadeContextSyncSchema.default({ ...DEFAULT_CLINE_LEMONADE_CONTEXT_SYNC }),
 			})
 			.strict()
-			.default({ dataDir: null, turnDetector: DEFAULT_CLINE_TURN_DETECTOR }),
+			.default({
+				dataDir: null,
+				turnDetector: DEFAULT_CLINE_TURN_DETECTOR,
+				lemonadeContextSync: { ...DEFAULT_CLINE_LEMONADE_CONTEXT_SYNC },
+			}),
 		codex: z
 			.object({ home: z.string().nullable().default(null) })
 			.strict()

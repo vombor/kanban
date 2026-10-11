@@ -87,7 +87,20 @@ describe("pipeline config", () => {
 		});
 		expect(issues).toEqual([]);
 		expect(config.agents.pretrust).toBe(false);
-		expect(config.agents.cline).toEqual({ dataDir: "/data", turnDetector: { mode: "on", intervalSec: 30 } });
+		expect(config.agents.cline).toEqual({
+			dataDir: "/data",
+			turnDetector: { mode: "on", intervalSec: 30 },
+			lemonadeContextSync: { mode: "on", intervalSec: 30 },
+		});
+	});
+
+	it("accepts the Lemonade context sync settings under agents.cline, on by default", () => {
+		expect(parsePipelineConfig({}).config.agents.cline.lemonadeContextSync).toEqual({ mode: "on", intervalSec: 30 });
+		const { config, issues } = parsePipelineConfig({
+			agents: { cline: { lemonadeContextSync: { mode: "report", intervalSec: 10 } } },
+		});
+		expect(issues).toEqual([]);
+		expect(config.agents.cline.lemonadeContextSync).toEqual({ mode: "report", intervalSec: 10 });
 	});
 
 	it("gives an unconfigured workspace landing off and no kit", () => {
