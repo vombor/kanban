@@ -29,6 +29,7 @@ import type {
 	RuntimeOpenFileRequest,
 	RuntimeOpenFileResponse,
 	RuntimeOrchestratorWaitResponse,
+	RuntimePipelineCardStage,
 	RuntimeProcessSweepResponse,
 	RuntimeProjectAddRequest,
 	RuntimeProjectAddResponse,
@@ -95,6 +96,7 @@ import {
 	runtimeOpenFileRequestSchema,
 	runtimeOpenFileResponseSchema,
 	runtimeOrchestratorWaitResponseSchema,
+	runtimePipelineCardStagesResponseSchema,
 	runtimeProcessSweepResponseSchema,
 	runtimeProjectAddRequestSchema,
 	runtimeProjectAddResponseSchema,
@@ -247,6 +249,11 @@ export interface RuntimeTrpcContext {
 	providerCapacityApi?: RuntimeProviderCapacityApi;
 	/** `kanban pipeline pause|resume` (src/trpc/pipeline-pause-api.ts); absent = not available. */
 	pipelinePauseApi?: RuntimePipelinePauseApi;
+	/**
+	 * The pipeline worker's card stages of a workspace as the state hub keeps them for its board (src/pipeline/card-stage.ts),
+	 * for `kanban pipeline status`; absent = not available.
+	 */
+	getPipelineCardStages?: (workspaceId: string) => RuntimePipelineCardStage[];
 	runtimeApi: {
 		loadConfig: (scope: RuntimeTrpcWorkspaceScope | null) => Promise<RuntimeConfigResponse>;
 		saveConfig: (
@@ -938,6 +945,14 @@ export const runtimeAppRouter = t.router({
 					request: input,
 				});
 			}),
+		// The board's stage badges of the workspace's dev cards, read as they are (`kanban pipeline status`): scoped like
+		// every workspace read, since a stage carries the project's card text.
+		cardStages: workspaceProcedure.output(runtimePipelineCardStagesResponseSchema).query(({ ctx }) => {
+			if (!ctx.getPipelineCardStages) {
+				throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Pipeline card stages are not available here." });
+			}
+			return { stages: ctx.getPipelineCardStages(ctx.workspaceScope.workspaceId) };
+		}),
 		resubmit: workspaceProcedure
 			.input(taskResubmitRequestSchema)
 			.output(taskResubmitResponseSchema)

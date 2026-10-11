@@ -499,6 +499,12 @@ export const runtimePipelineCardStageSchema = z.object({
 });
 export type RuntimePipelineCardStage = z.infer<typeof runtimePipelineCardStageSchema>;
 
+/** One workspace's card stages as its board has them (tRPC `pipeline.cardStages`, `kanban pipeline status`). */
+export const runtimePipelineCardStagesResponseSchema = z.object({
+	stages: z.array(runtimePipelineCardStageSchema),
+});
+export type RuntimePipelineCardStagesResponse = z.infer<typeof runtimePipelineCardStagesResponseSchema>;
+
 export const runtimeStateStreamSnapshotMessageSchema = z.object({
 	type: z.literal("snapshot"),
 	currentProjectId: z.string().nullable(),

@@ -551,6 +551,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			pipelineResubmitApi,
 			providerCapacityApi,
 			pipelinePauseApi,
+			getPipelineCardStages: deps.runtimeStateHub.getPipelineCardStages,
 			shortcutsApi,
 			githubApi,
 			runtimeApi,

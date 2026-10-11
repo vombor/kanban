@@ -1,7 +1,10 @@
 import { readFile } from "node:fs/promises";
+import { TRPCClientError } from "@trpc/client";
 import type { Command } from "commander";
 
 import { getWorkspacePipelineSettings, readPipelineConfig } from "../config/pipeline-config";
+import type { RuntimePipelineCardStage } from "../core/api-contract";
+import { getKanbanRuntimeOrigin } from "../core/runtime-endpoint";
 import { isPipelineWorkspace } from "../pipeline/engine";
 import { formatLegacyImportReport, runLegacyImport } from "../pipeline/legacy-import";
 import { runPipelineWorkerProcess } from "../pipeline/worker";
@@ -39,6 +42,31 @@ async function readLastDecisions(workspaceId: string, count: number): Promise<un
 				return [];
 			}
 		});
+}
+
+type CardStagesRead =
+	| { ok: true; stages: RuntimePipelineCardStage[] }
+	| { ok: false; serverRunning: boolean; error: string };
+
+/**
+ * A workspace's card stages as the running server keeps them for its board (tRPC `pipeline.cardStages`): the stage is the
+ * pipeline worker's answer (src/pipeline/card-stage.ts), so the CLI never works it out from the state or the decision log.
+ */
+async function readWorkspaceCardStages(workspaceId: string): Promise<CardStagesRead> {
+	try {
+		const { stages } = await createRuntimeTrpcClient(workspaceId).pipeline.cardStages.query();
+		return { ok: true, stages };
+	} catch (error) {
+		// A tRPC error with data is the server's own answer (refused, unknown workspace); anything else never reached one.
+		if (error instanceof TRPCClientError && error.data) {
+			return { ok: false, serverRunning: true, error: toErrorMessage(error) };
+		}
+		return { ok: false, serverRunning: false, error: toErrorMessage(error) };
+	}
+}
+
+function formatCardStage(stage: RuntimePipelineCardStage) {
+	return { ...stage, deadlineAt: stage.deadline === null ? null : new Date(stage.deadline).toISOString() };
 }
 
 /**
@@ -84,7 +112,7 @@ export function registerPipelineCommand(program: Command): void {
 	pipeline
 		.command("status")
 		.description(
-			"Print each workspace's landing mode, shadow and pause flags and kit, whether the pipeline runs for it, and its latest decisions (data/<workspace>/pipeline-decisions.jsonl).",
+			"Print each workspace's landing mode, shadow and pause flags and kit, whether the pipeline runs for it, its latest decisions (data/<workspace>/pipeline-decisions.jsonl) and, on landing mode qa, each Review/In Progress dev card's pipeline stage as the board shows it (read from the running server).",
 		)
 		.option("--workspace <workspace>", "Only this workspace (workspace id or project path).")
 		.option("--decisions <count>", "How many of the latest decisions to print per workspace.", parseCount, 10)
@@ -95,9 +123,14 @@ export function registerPipelineCommand(program: Command): void {
 					options.workspace !== undefined
 						? [(await resolveWorkspaceTarget(options.workspace, { allowUnregistered: true })).workspaceId]
 						: (await listWorkspaceIndexEntries()).map((entry) => entry.workspaceId);
+				const cardStageReads: CardStagesRead[] = [];
 				const workspaces = await Promise.all(
 					workspaceIds.map(async (workspaceId) => {
 						const settings = getWorkspacePipelineSettings(config, workspaceId);
+						const cardStages = settings.landing.mode === "qa" ? await readWorkspaceCardStages(workspaceId) : null;
+						if (cardStages) {
+							cardStageReads.push(cardStages);
+						}
 						return {
 							workspaceId,
 							landingMode: settings.landing.mode,
@@ -106,12 +139,30 @@ export function registerPipelineCommand(program: Command): void {
 							pausedAt: settings.pipeline.pausedAt,
 							kit: settings.kit?.name ?? "default",
 							pipeline: !config.pipeline.paused && isPipelineWorkspace(settings),
+							...(cardStages === null
+								? {}
+								: cardStages.ok
+									? { cardStages: cardStages.stages.map(formatCardStage) }
+									: { cardStages: null, cardStagesError: cardStages.error }),
 							decisions: await readLastDecisions(workspaceId, options.decisions),
 						};
 					}),
 				);
+				const origin = getKanbanRuntimeOrigin();
+				const unanswered = cardStageReads.find((read) => !read.ok && !read.serverRunning);
+				const serverDown = unanswered && !unanswered.ok ? unanswered.error : null;
+				// The server is asked only for workspaces on landing mode qa; running null: none was asked.
+				const server =
+					serverDown !== null
+						? { origin, running: false, error: serverDown }
+						: { origin, running: cardStageReads.length > 0 ? true : null, error: null };
+				if (serverDown !== null) {
+					process.stderr.write(
+						`No Kanban server is running at ${origin} (${serverDown}): card stages come only from it, so none are shown. The rest is from config.json and the decision logs.\n`,
+					);
+				}
 				process.stdout.write(
-					`${JSON.stringify({ ok: true, configPath, paused: config.pipeline.paused, workspaces, issues }, null, 2)}\n`,
+					`${JSON.stringify({ ok: true, configPath, paused: config.pipeline.paused, server, workspaces, issues }, null, 2)}\n`,
 				);
 			} catch (error) {
 				process.stderr.write(`Pipeline status failed: ${toErrorMessage(error)}\n`);

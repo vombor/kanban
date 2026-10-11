@@ -70,6 +70,8 @@ export interface RuntimeStateHub {
 	 * a client that connects later, and sent to that workspace's clients only, since they carry its cards' text.
 	 */
 	setPipelineCardStages: (workspaceId: string, stages: RuntimePipelineCardStage[]) => void;
+	/** The card stages kept for a workspace (empty: none), for `kanban pipeline status` (tRPC `pipeline.cardStages`). */
+	getPipelineCardStages: (workspaceId: string) => RuntimePipelineCardStage[];
 	close: () => Promise<void>;
 }
 
@@ -505,6 +507,7 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 		broadcastTaskReadyForReview,
 		broadcastProjectShortcutsUpdated,
 		setPipelineCardStages,
+		getPipelineCardStages: (workspaceId) => pipelineCardStagesByWorkspaceId.get(workspaceId) ?? [],
 		close: async () => {
 			stopKeepalive();
 			activityListeners.clear();
