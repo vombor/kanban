@@ -3,6 +3,8 @@
 // the rework stage escalated the card 11-15 ms later in the same evaluation, so the redone rework never reached QA.
 // The same for a rework turn whose whole reply is Cline's error notice (notes 6c90e/98832, 2026-10-11, #32: "No model
 // loaded: <model>", "decode() failed: vk::Queue::submit: ErrorDeviceLost"): a provider retry, not an unchanged rework.
+// And for a rework turn that overflowed its context ("Context size has been exceeded.") while the provider is full: it
+// waits for capacity under recovery's hold, then gets the issue #26 overflow path, not an unchanged-rework escalation.
 // These run the real recovery stage in the pipeline worker, so the order between recovery and the rework stage is
 // the worker's own.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -61,7 +63,9 @@ describe("pipeline worker: a rework recovery nudges", () => {
 		vi.useRealTimers();
 	});
 
-	function setup() {
+	/** `holders`: other In Progress cards (no session), e.g. ones holding the provider's loaded model. */
+	function setup(options: { dev?: RuntimeBoardCard; holders?: () => RuntimeBoardCard[] } = {}) {
+		const dev = options.dev ?? DEV;
 		let detail: ClineSessionDetail | null = null;
 		const deliveries: RecoveryAction[] = [];
 		let harness: ReturnType<typeof createPipelineWorkerHarness> | null = null;
@@ -108,27 +112,28 @@ describe("pipeline worker: a rework recovery nudges", () => {
 			columns: Partial<Record<RuntimeBoardColumnId, RuntimeBoardCard[]>>,
 			devSession: { stateChangedAt: number; state?: "running" | "awaiting_review" },
 		) => {
+			const holders = options.holders?.() ?? [];
 			await h.send(
 				createSnapshot({
 					workspaceId: "foo",
-					board: createBoard(columns),
+					board: createBoard({ ...columns, in_progress: [...(columns.in_progress ?? []), ...holders] }),
 					selectedAgentId: "claude",
 					sessions: [
 						{
-							taskId: DEV.id,
+							taskId: dev.id,
 							agentId: "cline",
-							modelId: "us.openai.gpt-6.1-sol",
+							modelId: dev.agentSettings?.modelId ?? null,
 							state: devSession.state ?? "awaiting_review",
 							startedAt: T0 - 30 * 60_000,
 							stateChangedAt: devSession.stateChangedAt,
-							workspacePath: `/wt/${DEV.id}`,
+							workspacePath: `/wt/${dev.id}`,
 							live: true,
 						},
 					],
 				}),
 			);
 		};
-		const entry = async () => (await h.store.load("foo")).cards[DEV.id];
+		const entry = async () => (await h.store.load("foo")).cards[dev.id];
 		const nudges = () => deliveries.filter((action) => action.kind === "deliver");
 		const blocks = () => h.actions.filter((action) => action.kind === "blockTask");
 		/** A QA PASS whose land conflicted, its rework sent and seen running, then the rework turn's end. */
@@ -141,20 +146,20 @@ describe("pipeline worker: a rework recovery nudges", () => {
 			const qaPass = { ...conflict.qaPass, at: Date.now() + 1_000 };
 			vi.advanceTimersByTime(2_000);
 			await h.store.update("foo", (state) => {
-				state.cards[DEV.id] = { qaVerdicts, qaPass };
+				state.cards[dev.id] = { qaVerdicts, qaPass };
 				return state;
 			});
 			h.setSnapshot(() => qaPass.snapshot);
-			await send({ review: [DEV] }, { stateChangedAt: T0 - 60_000 });
+			await send({ review: [dev] }, { stateChangedAt: T0 - 60_000 });
 			expect(readReworks(readQaflow(await entry()))).toHaveLength(1);
 			vi.advanceTimersByTime(10_000);
-			await send({ in_progress: [DEV] }, { stateChangedAt: Date.now(), state: "running" });
+			await send({ in_progress: [dev] }, { stateChangedAt: Date.now(), state: "running" });
 			// The rework turn ends early, before it committed anything: the snapshot is the reviewed one.
 			vi.advanceTimersByTime(60_000);
 			const turnEnded = Date.now();
 			detail = reply(lastReply, turnEnded, displayError);
 			vi.advanceTimersByTime(13_000);
-			await send({ review: [DEV] }, { stateChangedAt: turnEnded });
+			await send({ review: [dev] }, { stateChangedAt: turnEnded });
 			return turnEnded;
 		};
 		return {
@@ -265,4 +270,85 @@ describe("pipeline worker: a rework recovery nudges", () => {
 			expect(readReworks(final)[0]).toMatchObject({ returnedSnapshot: "snap-rebased" });
 		});
 	}
+	describe("a rework turn that overflowed while the provider is full", () => {
+		const OVERFLOW = "Context size has been exceeded.";
+		const LOCAL_DEV = createCard({
+			id: "d2222",
+			agentId: "cline",
+			agentSettings: { providerId: "lemonade", modelId: "GLM-4.7-Flash-GGUF" },
+		});
+		// Another In Progress card holds Lemonade's one loaded model (models.providerCapacity default: 1).
+		const HOLDER = createCard({
+			id: "h3333",
+			agentId: "cline",
+			agentSettings: { providerId: "lemonade", modelId: "gemma-4-31B-it-qat-q4_0-gguf-Q4_0" },
+		});
+		const clears = (deliveries: RecoveryAction[]) =>
+			deliveries.filter((action) => action.kind === "deliver" && action.text.includes(OVERFLOW));
+
+		it("holds it for capacity, then sends the overflow path instead of escalating it as unchanged", async () => {
+			let holders = [HOLDER];
+			const { harness, send, entry, nudges, blocks, runReworkRound, setDetail } = setup({
+				dev: LOCAL_DEV,
+				holders: () => holders,
+			});
+			const turnEnded = await runReworkRound(OVERFLOW, true);
+
+			// Recovery's capacity hold: nothing typed, no escalation, the rework not counted as returned.
+			expect(nudges()).toEqual([]);
+			expect(blocks()).toEqual([]);
+			const held = readQaflow(await entry());
+			expect(held.capacityStop).toMatchObject({ stop: expect.stringContaining(OVERFLOW) });
+			expect(held.nudges).toBeUndefined();
+			expect(held.retryAt).toBeUndefined();
+			expect(readEscalationRecord(held)).toBeNull();
+			expect(readReworks(held)[0]?.returned).toBeUndefined();
+
+			// Still full on the next snapshot: still held.
+			vi.advanceTimersByTime(30_000);
+			await send({ review: [LOCAL_DEV] }, { stateChangedAt: turnEnded });
+			expect(nudges()).toEqual([]);
+			expect(blocks()).toEqual([]);
+
+			// The holder is done: recovery clears the conversation and resends the card prompt with the overflow note.
+			holders = [];
+			vi.advanceTimersByTime(30_000);
+			await send({ review: [LOCAL_DEV] }, { stateChangedAt: turnEnded });
+			expect(clears(nudges())).toHaveLength(1);
+			expect(blocks()).toEqual([]);
+			const sent = readQaflow(await entry());
+			expect(sent.capacityStop).toBeNull();
+			expect(sent.nudges).toHaveLength(1);
+			expect(readEscalationRecord(sent)).toBeNull();
+			expect(readReworks(sent)[0]?.returned).toBeUndefined();
+
+			// The redone turn does the rework: it counts as returned with new work, no FAIL round or fallback.
+			await send({ in_progress: [LOCAL_DEV] }, { stateChangedAt: Date.now(), state: "running" });
+			vi.advanceTimersByTime(60_000);
+			const redoneAt = Date.now();
+			harness.setSnapshot(() => "snap-rebased");
+			setDetail(reply(DONE, redoneAt));
+			vi.advanceTimersByTime(13_000);
+			await send({ review: [LOCAL_DEV] }, { stateChangedAt: redoneAt });
+			expect(blocks()).toEqual([]);
+			// Its new work gets a QA round; no sibling on another model (a fallback) is created.
+			const created = harness.actions.flatMap((action) => (action.kind === "createTask" ? [action.task.role] : []));
+			expect(created).toEqual(["qa"]);
+			const final = readQaflow(await entry());
+			expect(readEscalationRecord(final)).toBeNull();
+			expect(readReworks(final)).toHaveLength(1);
+			expect(readReworks(final)[0]).toMatchObject({ returnedSnapshot: "snap-rebased" });
+		});
+
+		it("sends the overflow path at once when the provider has room", async () => {
+			const { entry, nudges, blocks, runReworkRound } = setup({ dev: LOCAL_DEV });
+			await runReworkRound(OVERFLOW, true);
+			expect(clears(nudges())).toHaveLength(1);
+			expect(blocks()).toEqual([]);
+			const sent = readQaflow(await entry());
+			expect(sent.capacityStop).toBeUndefined();
+			expect(readEscalationRecord(sent)).toBeNull();
+			expect(readReworks(sent)[0]?.returned).toBeUndefined();
+		});
+	});
 });

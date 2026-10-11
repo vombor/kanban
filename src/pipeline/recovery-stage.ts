@@ -582,7 +582,12 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 			await deps.updateCards(
 				workspaceId,
 				// recoverySentAt: a QA card queued for the interrupted turn is superseded (qa-gate.ts).
-				new Map([[orphan.taskId, { orphan: null, liveHold: null, retryAt: null, recoverySentAt: sentAt }]]),
+				new Map([
+					[
+						orphan.taskId,
+						{ orphan: null, liveHold: null, capacityStop: null, retryAt: null, recoverySentAt: sentAt },
+					],
+				]),
 			);
 			await deps.appendRecords([
 				record(

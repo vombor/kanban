@@ -141,7 +141,7 @@ switching a workspace to landing `qa` starts the worker without a Kanban restart
 | `recovery.stallNudgeMin` | 8 | a running Cline card whose session file shows no progress this long (a silent stall: a tool call with no result, a reply with no STATUS line, or no reply) gets a nudge, counted in `maxNudges`, then escalates. Each further nudge needs another `stallNudgeMin` of silence after the previous one, a hook counts as progress, a pending question to the user is no stall, and a `run_commands` call whose command still runs (a process the agent started, in the card's worktree) is never nudged, however long it takes. 8 clears normal long steps: the longest tool call in foo's session files (3,378 calls, 10/07) took 195 s (`team_await_runs`, its teammates writing meanwhile, which counts as progress), and `run_commands` returns after about 32 s. A session file still `running` with no reply is the hung check's (`hungMin`) |
 | `recovery.outage.probeEveryMin` | 5 | outage hold: probe the model this often |
 | `recovery.outage.upsToResume` | 2 | good probes in a row to resume |
-| `recovery.outage.maxMin` | 360 | escalate after this long |
+| `recovery.outage.maxMin` | 360 | escalate after this long; also the limit of a stop recovery holds while the provider is at its `models.providerCapacity` limit (`qaflow.capacityStop`): a provider that stays full this long escalates the card to the orchestrator |
 
 ## `sessionSync.*`
 

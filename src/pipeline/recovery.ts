@@ -86,6 +86,12 @@ export interface RecoveryFlowState {
 	takeover: RecoveryTakeoverRequest | null;
 	hung: { dir: string; lastWrite: number; at: string } | null;
 	liveHold: string | null;
+	/**
+	 * A stop recovery acts on once the provider has room (a crash, a poisoned or overflowed history, a premature stop
+	 * seen during a capacity wait; Kanban's own field). Like a retry hold it keeps the rework stage and the QA gate off
+	 * the turn, which they would otherwise judge as a rework that "came back unchanged" (follow-up of issue #32).
+	 */
+	capacityStop: { at: string; stop: string } | null;
 	orphan: { at: string; kanbanStart: string; kind: RuntimeTaskRole } | null;
 	/** Set by escalation (the rework loop, or recovery); recovery leaves an escalated card alone. */
 	escalated: { at: string; reason: string } | null;
@@ -169,6 +175,7 @@ export function readRecoveryFlow(entry: Record<string, unknown> | undefined): Re
 		takeover: readTakeoverRequest(flow.takeover),
 		hung: recordOrNull(flow.hung),
 		liveHold: stringOrNull(flow.liveHold),
+		capacityStop: recordOrNull(flow.capacityStop),
 		orphan: recordOrNull(flow.orphan),
 		escalated: escalated
 			? isRecord(escalated)
@@ -579,10 +586,15 @@ function decideReview(input: RecoveryCardInput): RecoveryDecision {
 	const { flow, now } = input;
 	if (isWorking(input)) {
 		const dir = input.detail?.snapshot.sessionId ?? "session";
+		// A stop held for capacity is over once the session runs again: the live session's hold takes over.
+		const patch: RecoveryFlowPatch = {
+			...(flow.liveHold !== dir ? { liveHold: dir } : {}),
+			...(flow.capacityStop ? { capacityStop: null } : {}),
+		};
 		return {
 			kind: "wait",
 			reason: `in Review but ${dir} is still running; no nudge, no QA until it ends`,
-			...(flow.liveHold !== dir ? { patch: { liveHold: dir } } : {}),
+			...(Object.keys(patch).length > 0 ? { patch } : {}),
 		};
 	}
 	// A turn that ended moments ago may resume on its own (src/terminal/review-settle.ts): nothing is typed into it
@@ -595,16 +607,55 @@ function decideReview(input: RecoveryCardInput): RecoveryDecision {
 	// The hold is for a running session, and this one's Review has settled, so it ends whatever recovery decides. A
 	// "none" carries no patch, and the engine, the QA gate and the rework stage skip a held card without a word
 	// (issue #20: codex f0ba7, whose turn outcome recovery can't read, kept the hold of a turn that ran in Review and
-	// was never snapshotted again, `kanban task resubmit` included).
-	return decision.kind === "none" && flow.liveHold
-		? { kind: "wait", reason: `${decision.reason}; the running session's hold ends`, patch: { liveHold: null } }
+	// was never snapshotted again, `kanban task resubmit` included). The same for a stop held for capacity whose turn
+	// has nothing left for recovery to do.
+	if (decision.kind === "none" && flow.liveHold) {
+		return { kind: "wait", reason: `${decision.reason}; the running session's hold ends`, patch: settledHolds(flow) };
+	}
+	return decision.kind === "none" && flow.capacityStop
+		? { kind: "wait", reason: `${decision.reason}; the capacity wait's hold ends`, patch: { capacityStop: null } }
 		: decision;
+}
+
+/** The holds a settled Review ends when recovery acts on it (or finds nothing to do). */
+function settledHolds(flow: RecoveryFlowState): RecoveryFlowPatch {
+	return {
+		...(flow.liveHold ? { liveHold: null } : {}),
+		...(flow.capacityStop ? { capacityStop: null } : {}),
+	};
+}
+
+/**
+ * The wait for provider capacity before recovery acts on a stop. It is recorded (`capacityStop`, once per stop), so
+ * the rework stage and the QA gate leave the turn to recovery meanwhile (recoveryHoldReason): a plain wait leaves no
+ * state, and a rework turn that overflowed or crashed would be escalated as "came back unchanged". No hold is a dead
+ * end: a provider that stays full (its holder stuck) for `outage.maxMin`, the limit of the other "the provider can't
+ * serve this card" hold, escalates the card to the orchestrator (no fallback model, no FAIL round).
+ */
+function capacityStopWait(input: RecoveryCardInput, hold: ProviderCapacityHold, stop: string): RecoveryDecision {
+	const { flow, settings, now } = input;
+	const reason = `${describeCapacityHold(hold)}; then: ${stop.slice(0, 120)}`;
+	if (!flow.capacityStop) {
+		return { kind: "wait", reason, patch: { capacityStop: { at: iso(now), stop: stop.slice(0, 200) } } };
+	}
+	const heldMs = now - Date.parse(flow.capacityStop.at);
+	if (heldMs > settings.outage.maxMin * 60_000) {
+		return escalate(
+			input,
+			`${hold.provider} stayed full for ${Math.round(heldMs / 60_000)} min (limit ${settings.outage.maxMin}) while recovery waited to act on the stop: ${flow.capacityStop.stop.slice(0, 120)}`,
+			[
+				`held by ${[...hold.holders, ...(hold.otherWorkspaceHolders ? [`${hold.otherWorkspaceHolders} other project card(s)`] : [])].join(", ")}`,
+			],
+			{ capacityStop: null },
+		);
+	}
+	return { kind: "wait", reason };
 }
 
 /** decideReview for a Review that has settled and a session that isn't working. */
 function decideSettledReview(input: RecoveryCardInput): RecoveryDecision {
 	const { flow, now, settings } = input;
-	const clearHold: RecoveryFlowPatch = flow.liveHold ? { liveHold: null } : {};
+	const clearHold = settledHolds(flow);
 	const pending = decidePendingHold(input, clearHold);
 	if (pending) {
 		return pending;
@@ -626,9 +677,12 @@ function decideSettledReview(input: RecoveryCardInput): RecoveryDecision {
 	const status = finalText ? parseClineStatusLine(finalText) : null;
 	// ebde195: the STATUS line decides for every model. DONE goes to QA as is; BLOCKED / NEEDS_INPUT escalate.
 	if (status && status.kind !== "DONE") {
-		return escalate(input, `agent reported ${status.kind}: ${status.detail || "no detail"}`.slice(0, 300), [
-			`session ${input.detail?.snapshot.sessionId ?? "?"}`,
-		]);
+		return withPatch(
+			escalate(input, `agent reported ${status.kind}: ${status.detail || "no detail"}`.slice(0, 300), [
+				`session ${input.detail?.snapshot.sessionId ?? "?"}`,
+			]),
+			clearHold,
+		);
 	}
 	if (status) {
 		return flow.transient.length > 0 || flow.liveHold
@@ -646,13 +700,14 @@ function decideSettledReview(input: RecoveryCardInput): RecoveryDecision {
 	if (stop) {
 		// The provider-error hold is recorded before any capacity wait: a wait leaves no state, so the rework stage
 		// would judge the errored turn as a rework that "came back unchanged" and the QA gate would review it
-		// (issue #32). The due retry waits for capacity itself.
+		// (issue #32). The due retry waits for capacity itself. Any other stop (a crash, a poisoned or overflowed
+		// history) waits for capacity under its own hold, then takes its path below.
 		const hold = providerHold(input, stop.error, stop.retryable);
 		if (hold) {
 			return withPatch(hold, clearHold);
 		}
 		if (input.capacityHold) {
-			return { kind: "wait", reason: describeCapacityHold(input.capacityHold) };
+			return capacityStopWait(input, input.capacityHold, `agent stopped with ${stop.reason}: ${stop.error}`);
 		}
 		return withPatch(nudgeForError(input, stop), clearHold);
 	}
@@ -662,7 +717,7 @@ function decideSettledReview(input: RecoveryCardInput): RecoveryDecision {
 			: { kind: "none", reason: "the turn ended normally" };
 	}
 	if (input.capacityHold) {
-		return { kind: "wait", reason: describeCapacityHold(input.capacityHold) };
+		return capacityStopWait(input, input.capacityHold, `premature stop (${premature.kind})`);
 	}
 	return withPatch(nudgeForPremature(input, premature), clearHold);
 }
@@ -676,6 +731,17 @@ function withPatch(decision: RecoveryDecision, extra: RecoveryFlowPatch): Recove
 
 export function describeCapacityHold(hold: ProviderCapacityHold): string {
 	return `${hold.provider} holds ${hold.maxLoadedModels} model(s) already (${hold.holders.join(", ")}); waiting for it`;
+}
+
+/** In Progress the turn runs again, so a stop held for capacity (`capacityStop`) is over. */
+function endCapacityStop(decision: RecoveryDecision, flow: RecoveryFlowState): RecoveryDecision {
+	if (!flow.capacityStop) {
+		return decision;
+	}
+	if (decision.kind === "none" || (decision.kind === "wait" && !decision.patch)) {
+		return { kind: "wait", reason: decision.reason, patch: { capacityStop: null } };
+	}
+	return withPatch(decision, { capacityStop: null });
 }
 
 function decideInProgress(input: RecoveryCardInput): RecoveryDecision {
@@ -839,7 +905,7 @@ export function decideRecovery(input: RecoveryCardInput): RecoveryDecision {
 			reason: `rework sent at ${flow.openRework?.at}: the rework stage's started-check owns it until it starts`,
 		};
 	}
-	return input.column === "review" ? decideReview(input) : decideInProgress(input);
+	return input.column === "review" ? decideReview(input) : endCapacityStop(decideInProgress(input), flow);
 }
 
 /**
@@ -860,6 +926,9 @@ export function recoveryHoldReason(entry: Record<string, unknown> | undefined): 
 	}
 	if (flow.retryAt) {
 		return `provider-error retry due at ${flow.retryAt}`;
+	}
+	if (flow.capacityStop) {
+		return `recovery acts on the stop once the provider has room (${flow.capacityStop.stop.slice(0, 120)})`;
 	}
 	return flow.liveHold ? `session ${flow.liveHold} is still running` : null;
 }
@@ -896,6 +965,7 @@ export function leftReviewPatch(flow: RecoveryFlowState, now: number): RecoveryF
 		...(flow.outage ? endOutagePatch(flow, now, "card moved by hand") : {}),
 		...(flow.takeover ? { takeover: null } : {}),
 		...(flow.liveHold ? { liveHold: null } : {}),
+		...(flow.capacityStop ? { capacityStop: null } : {}),
 		// An orphan resumed (or finished, or trashed) by hand is not one any more.
 		...(flow.orphan ? { orphan: null } : {}),
 	};

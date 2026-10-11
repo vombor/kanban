@@ -491,6 +491,142 @@ describe("decideRecovery: Review cards", () => {
 		});
 	});
 
+	describe("a stop seen while the provider is at capacity (follow-up of issue #32)", () => {
+		const LEMONADE = { provider: "lemonade", model: "GLM-4.7-Flash-GGUF" };
+		const OVERFLOW = "Context size has been exceeded.";
+		const capacityHold = {
+			provider: "lemonade",
+			maxLoadedModels: 1,
+			loadedModels: 1,
+			holders: ["qa1 (gemma-4-31B-it-qat-q4_0-gguf-Q4_0)"],
+			otherWorkspaceHolders: 0,
+		};
+		const reworkAt = new Date(NOW - 3 * MIN).toISOString();
+		const reworkFlow = {
+			lastReworkAt: reworkAt,
+			reworks: [{ at: reworkAt, startedAt: reworkAt, sawRunningAt: reworkAt, next: 2 }],
+		};
+		const overflowTurn = detail(
+			[message("user", "REWORK round 2 (QA round 1: FAIL)"), message("assistant", OVERFLOW, { displayError: true })],
+			{ writtenAgoMs: MIN },
+		);
+
+		it("records a hold for an overflowed rework turn, then clears it with the overflow path once there is room", () => {
+			const waiting = expectKind(
+				decideRecovery(input({ model: LEMONADE, flow: flow(reworkFlow), detail: overflowTurn, capacityHold })),
+				"wait",
+			);
+			expect(waiting.reason).toContain("qa1 (gemma-4-31B-it-qat-q4_0-gguf-Q4_0)");
+			expect(waiting.patch?.capacityStop).toEqual({
+				at: new Date(NOW).toISOString(),
+				stop: `agent stopped with error: ${OVERFLOW}`,
+			});
+			// No nudge, retry, continue or escalation is counted for the wait.
+			expect(waiting.patch?.nudges).toBeUndefined();
+			expect(waiting.patch?.retryAt).toBeUndefined();
+			expect(waiting.patch?.escalated).toBeUndefined();
+			// The hold keeps the rework stage and the QA gate off the card (recoveryHoldReason).
+			const held = { ...reworkFlow, capacityStop: waiting.patch?.capacityStop };
+			expect(recoveryHoldReason({ qaflow: held })).toContain(OVERFLOW);
+			// Still full: written once, nothing new to record.
+			const again = expectKind(
+				decideRecovery(input({ model: LEMONADE, flow: flow(held), detail: overflowTurn, capacityHold })),
+				"wait",
+			);
+			expect(again.patch).toBeUndefined();
+			// Room again: the issue #26 overflow path (/clear + the card prompt with the note), and the hold ends.
+			const nudge = expectKind(
+				decideRecovery(input({ model: LEMONADE, flow: flow(held), detail: overflowTurn })),
+				"nudge",
+			);
+			expect(nudge).toMatchObject({ cause: "poisoned", clear: "/clear" });
+			expect(nudge.overflow?.error).toBe(OVERFLOW);
+			expect(nudge.patch.capacityStop).toBeNull();
+		});
+
+		it("escalates once to the orchestrator when the provider stays full past outage.maxMin, and clears the hold", () => {
+			const heldFor = (min: number) =>
+				flow({ ...reworkFlow, capacityStop: { at: new Date(NOW - min * MIN).toISOString(), stop: OVERFLOW } });
+			// Before the limit (360 min by default): still waiting, nothing written.
+			const waiting = expectKind(
+				decideRecovery(
+					input({ model: LEMONADE, flow: heldFor(settings.outage.maxMin), detail: overflowTurn, capacityHold }),
+				),
+				"wait",
+			);
+			expect(waiting.patch).toBeUndefined();
+			// Past it: escalated, naming the stop and the provider that stayed full; the hold ends.
+			const escalated = expectKind(
+				decideRecovery(
+					input({
+						model: LEMONADE,
+						flow: heldFor(settings.outage.maxMin + 1),
+						detail: overflowTurn,
+						capacityHold,
+					}),
+				),
+				"escalate",
+			);
+			expect(escalated.reason).toContain("lemonade stayed full for 361 min");
+			expect(escalated.reason).toContain(OVERFLOW);
+			expect(escalated.details).toEqual(["held by qa1 (gemma-4-31B-it-qat-q4_0-gguf-Q4_0)"]);
+			expect(escalated.patch.capacityStop).toBeNull();
+			expect(escalated.patch.escalated?.reason).toBe(escalated.reason);
+			// No nudge, retry or takeover counted with it.
+			expect(escalated.patch.nudges).toBeUndefined();
+			expect(escalated.patch.retryAt).toBeUndefined();
+			expect(escalated.patch.takeover).toBeUndefined();
+			// Once: the escalated card is recovery's no more, and the hold no longer holds it.
+			const after = flow({ ...reworkFlow, ...escalated.patch });
+			expectKind(
+				decideRecovery(input({ model: LEMONADE, flow: after, detail: overflowTurn, capacityHold })),
+				"none",
+			);
+			expect(recoveryHoldReason({ qaflow: { ...reworkFlow, ...escalated.patch } })).toBeNull();
+		});
+
+		it("takes the overflow path at once without a capacity wait", () => {
+			const nudge = expectKind(
+				decideRecovery(input({ model: LEMONADE, flow: flow(reworkFlow), detail: overflowTurn })),
+				"nudge",
+			);
+			expect(nudge).toMatchObject({ cause: "poisoned", clear: "/clear" });
+			expect(nudge.patch.capacityStop).toBeUndefined();
+		});
+
+		it("records the hold for a crash and a premature stop too", () => {
+			const crash = detail([message("user", "go")], { status: "failed" });
+			const premature = detail([message("user", "go"), message("assistant", "Let me check:")]);
+			for (const turn of [crash, premature]) {
+				const waiting = expectKind(decideRecovery(input({ model: LEMONADE, detail: turn, capacityHold })), "wait");
+				expect(waiting.patch?.capacityStop?.at).toBe(new Date(NOW).toISOString());
+			}
+		});
+
+		it("ends the hold when the turn moved on: finished, running again, In Progress or left by hand", () => {
+			const held = flow({ capacityStop: { at: new Date(NOW - MIN).toISOString(), stop: OVERFLOW } });
+			const done = expectKind(decideRecovery(input({ flow: held })), "wait");
+			expect(done.patch).toEqual({ capacityStop: null });
+			const running = expectKind(
+				decideRecovery(
+					input({
+						flow: held,
+						session: session({ state: "running" }),
+						detail: detail([message("user", "go")], { status: "running", writtenAgoMs: 30_000 }),
+					}),
+				),
+				"wait",
+			);
+			expect(running.patch?.capacityStop).toBeNull();
+			const inProgress = expectKind(
+				decideRecovery(input({ flow: held, column: "in_progress", session: session({ state: "running" }) })),
+				"wait",
+			);
+			expect(inProgress.patch).toEqual({ capacityStop: null });
+			expect(leftReviewPatch(held, NOW)).toEqual({ capacityStop: null });
+		});
+	});
+
 	it("waits nudgeCheckSec after a message before deciding again (an unconfirmed nudge)", () => {
 		expectKind(
 			decideRecovery(

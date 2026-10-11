@@ -231,6 +231,7 @@ async function resumeOne(workspace: TaskWorkspace, taskId: string, dryRun: boole
 		orphan: null,
 		escalated: null,
 		liveHold: null,
+		capacityStop: null,
 		retryAt: null,
 	}));
 	return { ...result, ok: true, sessionState: started.state };
