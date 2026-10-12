@@ -1,8 +1,9 @@
 # Models: Cline's models.json is the allow list
 
 Kanban keeps **no list of allowed models** (the vetted model registry, `models/vetted.json`, was removed on
-2026-10-12, user decision). Any project may put any model on any role: the kit gives defaults, the project overrides
-them (`kanban kit set roles.<role>.agent|provider|model|tier ...`), a card may name its own (`kanban task create
+2026-10-12, user decision). Any project may put any model on any role: the kit gives defaults (on the `team` kit,
+its preset: `cloud`, `cline` or `lemonade`, `kits/presets/*.json`; a custom team has none, [KITS.md](KITS.md#presets)),
+the project overrides them (`kanban kit set roles.<role>.agent|provider|model|tier ...`), a card may name its own (`kanban task create
 --agent-id/--model`, the create dialog), and Kanban neither refuses nor warns about the choice. Vendors are still
 read from whatever model is chosen (`getModelVendor()`), so a kit's `qa.requireDifferentVendor` still holds.
 
@@ -31,8 +32,8 @@ read from whatever model is chosen (`getModelVendor()`), so a kit's `qa.requireD
   `kanban setup-provider lemonade` to drop it.
 - The Lemonade models row: metadata that differs from what Lemonade reports (with the command), and record models
   Lemonade doesn't list (kept; pull the model or take it out of the record).
-- The allow-list row (`src/doctor/cline-models-allow-list-checks.ts`): a kit role (roles, QA routes, the fallback,
-  runoff models) or an open card that puts a Cline card on a model its provider's models.json record doesn't list is
+- The allow-list row (`src/doctor/cline-models-allow-list-checks.ts`): a kit role (roles from the kit, its preset or
+  the project settings, QA routes, the fallback, runoff models) or an open card that puts a Cline card on a model its provider's models.json record doesn't list is
   a warning, nothing more. A provider without an entry in models.json (Cline's built-in ones, e.g. `bedrock`,
   `cline-pass`) has no record to check.
 - An old `workspaces.<id>.models.allowProvisional` in config.json still parses and is ignored; doctor warns and
@@ -112,10 +113,11 @@ for dev and qa (none was run for plan):
 | cline-pass/kimi-k3 | passed (ClinePass: "will consume usage faster than others") | passed | |
 | cline-pass/minimax-m3 | passed | passed | |
 
-The `team-cline` kit (KITS.md) routes dev to glm-5.3, QA to qwen3.8-max, plan cards to minimax-m3 and the fallback to
-kimi-k3.
+The `team` kit's `cline` preset ([KITS.md](KITS.md#cline)) routes dev to glm-5.3, QA to qwen3.8-max, plan cards to
+minimax-m3 and the fallback to kimi-k3.
 
-The same day `cline + lemonade + Laguna-XS-2.1-GGUF-Q4_K_M` passed for dev and qa (not plan).
+The same day `cline + lemonade + Laguna-XS-2.1-GGUF-Q4_K_M` passed for dev and qa (not plan); it is the `lemonade`
+preset's fallback ([KITS.md](KITS.md#lemonade)).
 
 ## OpenAI-compatible servers (`providers.openaiCompatible`)
 

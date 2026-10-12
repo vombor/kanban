@@ -15,6 +15,8 @@ import {
 	readRenamedWorkspaceKits,
 	updatePipelineConfigFile,
 } from "../config/pipeline-config";
+import { describeCustomTeamGap } from "../kits/apply-kit";
+import { formatKitSelection, formatKitSelectionArgs } from "../kits/renamed-kits";
 import { DEFAULT_KIT_NAME, type KitCatalog, resolveWorkspaceKit } from "../kits/resolve-kit";
 import { stripForeignQueueLines } from "../pipeline/watchdog/headless-run";
 import { addProject, resolveProjectRepoPath } from "../projects/project-add";
@@ -161,7 +163,7 @@ export async function checkProjects(context: DoctorProjectContext): Promise<Doct
 		findings.push({
 			level: "info",
 			area: "project",
-			message: `${entry.workspaceId} (${entry.repoPath}): kit ${resolution.kitName}, landing ${settings.landing.mode}${extras.length ? ` (${extras.join(", ")})` : ""}`,
+			message: `${entry.workspaceId} (${entry.repoPath}): kit ${resolution.kitLabel}, landing ${settings.landing.mode}${extras.length ? ` (${extras.join(", ")})` : ""}`,
 		});
 		if (context.projectRoots && !(await resolvePathInsideProjectRoots(entry.repoPath, context.projectRoots)).ok) {
 			findings.push({
@@ -183,7 +185,16 @@ export async function checkProjects(context: DoctorProjectContext): Promise<Doct
 			findings.push({
 				level: "info",
 				area: "project",
-				message: `${entry.workspaceId}: landing qa, but kit ${resolution.kitName} asks for no QA, so every card waits for Approve & land`,
+				message: `${entry.workspaceId}: landing qa, but kit ${resolution.kitLabel} asks for no QA, so every card waits for Approve & land`,
+			});
+		}
+		const customGap = describeCustomTeamGap(resolution.kitName, resolution.presetName, resolution.kit);
+		if (customGap) {
+			findings.push({
+				level: "warn",
+				area: "project",
+				message: `${entry.workspaceId}: ${customGap}`,
+				hint: `kanban kit set roles.<role>.agent <agent> --project ${entry.workspaceId}, or kanban kit apply team --preset <name> --project ${entry.workspaceId}`,
 			});
 		}
 		const recommended = resolution.kit.recommends?.landingMode;
@@ -191,8 +202,8 @@ export async function checkProjects(context: DoctorProjectContext): Promise<Doct
 			findings.push({
 				level: "info",
 				area: "project",
-				message: `${entry.workspaceId}: kit ${resolution.kitName} recommends landing ${recommended} (now ${settings.landing.mode})`,
-				hint: `kanban kit apply ${resolution.kitName} --project ${entry.workspaceId} --landing ${recommended}`,
+				message: `${entry.workspaceId}: kit ${resolution.kitLabel} recommends landing ${recommended} (now ${settings.landing.mode})`,
+				hint: `kanban kit apply ${formatKitSelectionArgs({ name: resolution.kitName, preset: resolution.presetName })} --project ${entry.workspaceId} --landing ${recommended}`,
 			});
 		}
 	}
@@ -443,11 +454,11 @@ export function checkLegacyConfigKeys(
 		findings.push({
 			level: "warn",
 			area: "home",
-			message: `${configPath} has "${key}": "${from}"; the built-in kit ${from} was renamed to ${to} (2026-10-12), so the project runs on ${to}`,
+			message: `${configPath} has "${key}": "${from}"; the built-in kit ${from} is now ${formatKitSelection(to)} (2026-10-12), so the project runs on ${formatKitSelection(to)}`,
 			hint: "kanban doctor --fix rewrites it",
 			fix: async () => {
 				await updatePipelineConfigFile((config) => migrateLegacyConfigKeys(config).config, configPath);
-				return [`${key}: ${from} -> ${to}`];
+				return [`${key}: ${from} -> ${formatKitSelection(to)}`];
 			},
 		});
 	}

@@ -63,7 +63,7 @@ describe("doctor: Cline's models.json is the allow list", () => {
 			{
 				level: "warn",
 				area: "project",
-				message: `local: kit team-local roles.fallback puts Cline cards on lemonade + ${LAGUNA}, which lemonade's models record in Cline's models.json doesn't list, so Cline couldn't select it`,
+				message: `local: kit team (lemonade) roles.fallback puts Cline cards on lemonade + ${LAGUNA}, which lemonade's models record in Cline's models.json doesn't list, so Cline couldn't select it`,
 				hint: expect.stringContaining("kanban models vet"),
 			},
 		]);

@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getBuiltInKits, getDefaultKit } from "../../../../../src/kits/resolve-kit";
+import { getDefaultKit } from "../../../../../src/kits/resolve-kit";
 import { createBenchFeature } from "../../../../../src/kits/team/bench/bench-feature";
 import {
 	AWS_PRICE_LIST_HOST,
@@ -16,6 +16,7 @@ import type { PriceTableFile } from "../../../../../src/kits/team/bench/prices";
 import { createPipelineEventBus } from "../../../../../src/pipeline/events";
 import { createPipelineFeatureRegistry } from "../../../../../src/pipeline/features";
 import { getPricesDataPaths, type PricesDataPaths } from "../../../../../src/state/kanban-home";
+import { getLegacyTeamKit } from "../../../../utilities/team-kits";
 import { createTempDir } from "../../../../utilities/temp-dir";
 
 type Offer = { products: Record<string, unknown>; terms: { OnDemand: Record<string, unknown> } };
@@ -262,7 +263,7 @@ describe("daily price check job", () => {
 			autoSync: false,
 		}));
 		registry.register(createBenchFeature({ readContext, paths }));
-		const team = getBuiltInKits().get("team-cloud");
+		const team = getLegacyTeamKit();
 		if (!team) {
 			throw new Error("team kit missing");
 		}
@@ -275,7 +276,7 @@ describe("daily price check job", () => {
 	});
 
 	it("takes its models from the kit's tiers and dropped list", () => {
-		const team = getBuiltInKits().get("team-cloud");
+		const team = getLegacyTeamKit();
 		if (!team) {
 			throw new Error("team kit missing");
 		}

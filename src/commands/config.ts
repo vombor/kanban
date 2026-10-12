@@ -137,7 +137,7 @@ export function registerConfigCommand(program: Command): void {
 	config
 		.command("import-kit")
 		.description(
-			"Map the legacy kit's kit.config.json onto config.json: a project with QA on gets kit team-cloud (its differences as overrides, landing qa when it auto-lands, pipeline.shadow), every other project gets the default kit with landing off, and machine-wide keys become core settings. Top-level routing is never copied onto a project.",
+			"Map the legacy kit's kit.config.json onto config.json: a project with QA on gets kit team with preset cloud (its differences as overrides, landing qa when it auto-lands, pipeline.shadow), every other project gets the default kit with landing off, and machine-wide keys become core settings. Top-level routing is never copied onto a project.",
 		)
 		.argument("[file]", `The legacy kit config (default: ${getLegacyKitConfigPath()}).`)
 		.option("--dry-run", "Print the mapping and what would change; write nothing.")

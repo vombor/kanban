@@ -28,6 +28,8 @@ export const kitSettingSetRequestSchema = z.object({ key: z.string().min(1), val
 export const kitSettingUnsetRequestSchema = z.object({ key: z.string().min(1) });
 export const kitApplyRequestSchema = z.object({
 	kitName: z.string().min(1),
+	/** The team kit's preset; null = a custom team; missing keeps the workspace's own preset on the same kit. */
+	preset: z.string().min(1).nullable().optional(),
 	landing: runtimeLandingModeSchema.optional(),
 	set: z.record(z.string(), z.unknown()).optional(),
 	unset: z.array(z.string().min(1)).optional(),
@@ -38,6 +40,7 @@ export type KitApplyRequest = z.infer<typeof kitApplyRequestSchema>;
 const kitApplyResultSchema = z.object({
 	workspaceId: z.string(),
 	kitName: z.object({ from: z.string(), to: z.string() }),
+	preset: z.object({ from: z.string().nullable(), to: z.string().nullable() }),
 	landing: z.object({ from: runtimeLandingModeSchema, to: runtimeLandingModeSchema }),
 	overrides: z.record(z.string(), z.unknown()),
 	changes: z.array(
@@ -220,7 +223,12 @@ export function createKitSettingsApi(deps: CreateKitSettingsApiDependencies): Ru
 				async (by) => await unsetProjectKitSetting({ workspaceId, key: request.key, by, ...deps.paths }),
 			),
 		apply: async ({ caller, workspaceId, request }) => {
-			const decision = await decide("kit.apply", caller, workspaceId, `(kit) ${request.kitName}`);
+			const decision = await decide(
+				"kit.apply",
+				caller,
+				workspaceId,
+				`(kit) ${request.kitName}${request.preset ? ` (preset ${request.preset})` : request.preset === null ? " (custom)" : ""}`,
+			);
 			if (!decision.allowed) {
 				return { ok: false, result: null, error: decision.message };
 			}

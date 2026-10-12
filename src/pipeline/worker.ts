@@ -256,7 +256,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 				workspaceId: request.workspaceId,
 				taskId: request.taskId,
 				stage: "checks",
-				kit: resolution.kitName,
+				kit: resolution.kitLabel,
 				landingMode: settings.landing.mode,
 				shadow: settings.pipeline.shadow,
 				effectiveAgent: null,
@@ -550,7 +550,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			settings.landing.mode,
 			settings.pipeline.shadow,
 			settings.pipeline.paused,
-			resolution.kitName,
+			resolution.kitLabel,
 			recoveryMode,
 		]);
 		if (lastWatchKeys.get(workspaceId) !== watchKey) {
@@ -560,7 +560,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 				workspaceId,
 				taskId: null,
 				stage: "worker",
-				kit: resolution.kitName,
+				kit: resolution.kitLabel,
 				landingMode: settings.landing.mode,
 				shadow: settings.pipeline.shadow,
 				effectiveAgent: null,
@@ -568,7 +568,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 				role: null,
 				answer: null,
 				outcome: "none",
-				note: `watching: landing ${settings.landing.mode}, kit ${resolution.kitName}${settings.pipeline.shadow ? ", shadow" : ""}${settings.pipeline.paused ? ", QA paused" : ""}, recovery ${recoveryMode}${recoveryScope.evaluate && !recoveryScope.act ? " (report only)" : ""}; acting on verdicts since ${state.since}`,
+				note: `watching: landing ${settings.landing.mode}, kit ${resolution.kitLabel}${settings.pipeline.shadow ? ", shadow" : ""}${settings.pipeline.paused ? ", QA paused" : ""}, recovery ${recoveryMode}${recoveryScope.evaluate && !recoveryScope.act ? " (report only)" : ""}; acting on verdicts since ${state.since}`,
 			});
 		}
 
@@ -579,7 +579,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			snapshot,
 			settings,
 			config: parsed.config,
-			kitName: resolution.kitName,
+			kitName: resolution.kitLabel,
 			state,
 			agentDefaultModels,
 			// The rework loop below carries out an outage takeover only here.
@@ -595,7 +595,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			settings,
 			qa: parsed.config.pipeline.qa,
 			kit: resolution.kit,
-			kitName: resolution.kitName,
+			kitName: resolution.kitLabel,
 			policy,
 			featureOnPass: async (input: PipelineFeaturePassInput) => await features.answerOnPass(workspaceId, input),
 			agentDefaultModels,
@@ -610,7 +610,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			: await evaluatePipelineWorkspace({
 					snapshot,
 					settings,
-					kitName: resolution.kitName,
+					kitName: resolution.kitLabel,
 					policy,
 					state: gateState,
 					limits: { maxFailRounds: parsed.config.pipeline.rework.maxFailRounds },
@@ -623,7 +623,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 								workspaceId,
 								workspacePath: snapshot.workspacePath,
 								settings,
-								kitName: resolution.kitName,
+								kitName: resolution.kitLabel,
 								projectChecks: resolution.kit.checks,
 								state: gateState,
 							},
@@ -677,7 +677,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 						snapshot,
 						settings,
 						rework: parsed.config.pipeline.rework,
-						kitName: resolution.kitName,
+						kitName: resolution.kitLabel,
 						policy,
 						agentDefaultModels,
 						clineDataDir: parsed.config.agents.cline.dataDir,

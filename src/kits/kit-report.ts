@@ -139,7 +139,10 @@ function listSampleDevModels(kit: KitDocument, assigned: EffectiveModel | null):
 }
 
 export function buildKitReport(input: {
+	/** The kit as shown: its name, or `team (<preset>)` / `team (custom)` (formatKitSelection). */
 	kitName: string;
+	/** The preset's description, shown instead of the team kit's. */
+	description?: string | null;
 	resolved: ResolvedKit;
 	workspaceId: string;
 	selectedAgentId: RuntimeAgentId;
@@ -204,7 +207,7 @@ export function buildKitReport(input: {
 	};
 	return {
 		kitName: input.kitName,
-		description: kit.description ?? null,
+		description: input.description ?? kit.description ?? null,
 		roles,
 		fallback,
 		projectSettings: input.projectSettings ?? null,
@@ -272,7 +275,7 @@ function formatRoleRow(row: KitRoleRow): string {
 function formatTeamDefinition(report: KitReport): string[] {
 	const lines = [
 		`Team definition (kit ${report.kitName}; a project changes its team only by using another kit: kanban kit apply, by the user or the project's orchestrator):`,
-		"  Roles and their models  [source: project = a project setting, else the kit that set it]:",
+		"  Roles and their models  [source: project = a project setting, preset:<name> = the team kit's preset, else the kit that set it]:",
 	];
 	lines.push(
 		...(report.roles.length > 0

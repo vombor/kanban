@@ -16,7 +16,8 @@ import { createPipelineWorkerHarness, createSnapshot, type QaGateHarnessAction }
 import { createBoard, createCard } from "../../utilities/workspace-state-store";
 
 const T0 = Date.parse("2026-10-07T10:00:00.000Z");
-const QA_WORKSPACE = { landing: { mode: "qa" }, kit: { name: "team-cloud" } };
+// The legacy-team fixture (written by the harness): OpenAI-built cards get Haiku on Cline with the drive rule.
+const QA_WORKSPACE = { landing: { mode: "qa" }, kit: { name: "legacy-team" } };
 const OPENAI_DEV = {
 	agentId: "cline" as const,
 	agentSettings: { providerId: "bedrock", modelId: "us.openai.gpt-6.1-sol" },
@@ -682,7 +683,9 @@ describe("QA gate", () => {
 		const preview = { pidFile: ".preview.pid", start: "npm run preview:start", stop: "npm run preview:stop" };
 		const harness = createHarness({
 			config: {
-				workspaces: { foo: { ...QA_WORKSPACE, kit: { name: "team-cloud", overrides: { "qa.preview": preview } } } },
+				workspaces: {
+					foo: { ...QA_WORKSPACE, kit: { name: "legacy-team", overrides: { "qa.preview": preview } } },
+				},
 			},
 		});
 		await send(harness, { review: [createCard({ id: "d1111" })] });

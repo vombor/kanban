@@ -3,7 +3,7 @@
 // never writes the prompt itself; it only answers `qaPolicy` with `promptParts`.
 //
 // Ported from archive/devteam-kit:qa/qa-card.cjs@6da71597 (buildPrompt, requirementsOf, PROMPT_RULES: QA process
-// v4). The text is kept word for word so foo's QA prompt from the `team-cloud` kit equals the legacy kit's
+// v4). The text is kept word for word so foo's QA prompt from the `team` kit equals the legacy kit's
 // (`team-qa-prompt.test.ts`, P4-T1), and so is each rule behind it:
 // - QA isolation (4d41fe5): QA only reviews and writes OUT/verdict.json; it runs no kanban command and never
 //   touches the dev worktree, the project or the Kanban home. The pipeline ingests the verdict.

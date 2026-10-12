@@ -39,8 +39,15 @@ import {
 	type KitRoleName,
 	kitDocumentObjectSchema,
 } from "./kit-schema";
-import { getRenamedKitName } from "./renamed-kits";
-import { DEFAULT_KIT_NAME, type KitCatalog, loadKitCatalog, readKitValue, resolveKitByName } from "./resolve-kit";
+import { formatKitSelection, getRenamedKit } from "./renamed-kits";
+import {
+	DEFAULT_KIT_NAME,
+	type KitCatalog,
+	loadKitCatalog,
+	readKitValue,
+	resolveKitByName,
+	TEAM_KIT_NAME,
+} from "./resolve-kit";
 
 /** Project facts a project sets on its kit: a key here, or anything under it. */
 export const PROJECT_FACT_KEYS = [
@@ -155,6 +162,12 @@ export function classifyKitSettingKey(key: string, kit: KitDocument): KitSetting
 		return { kind: "invalid", message: `"${key}" has an empty segment` };
 	}
 	const [top] = segments as [string, ...string[]];
+	if (top === "preset") {
+		return {
+			kind: "invalid",
+			message: `${key} identifies the kit; another preset is kanban kit apply team --preset <name> (or --custom)`,
+		};
+	}
 	if (!Object.hasOwn(kitDocumentObjectSchema.shape, top)) {
 		return { kind: "invalid", message: `"${key}" is not a kit key` };
 	}
@@ -348,8 +361,10 @@ async function changeProjectSettings(
 		readPipelineConfig(input.configPath),
 		loadKitCatalog(input.kitsDir),
 	]);
-	const kitName = getWorkspacePipelineSettings(config, input.workspaceId).kit?.name ?? DEFAULT_KIT_NAME;
-	const team = resolveKitByName(catalog, kitName);
+	const kitRef = getWorkspacePipelineSettings(config, input.workspaceId).kit;
+	const kitName = kitRef?.name ?? DEFAULT_KIT_NAME;
+	const preset = kitRef?.preset ?? null;
+	const team = resolveKitByName(catalog, kitName, {}, preset);
 	if (!team.ok) {
 		throw new KitSettingRefusedError(`kit ${kitName} of ${input.workspaceId} does not resolve: ${team.error}`);
 	}
@@ -360,8 +375,13 @@ async function changeProjectSettings(
 		(entry) => {
 			const currentKit = entry.kit && typeof entry.kit === "object" ? (entry.kit as Record<string, unknown>) : {};
 			const storedName = typeof currentKit.name === "string" ? currentKit.name : DEFAULT_KIT_NAME;
-			// A renamed kit's old name is the same kit (the write below stores the new name).
-			if ((getRenamedKitName(storedName) ?? storedName) !== kitName) {
+			const storedPreset = typeof currentKit.preset === "string" ? currentKit.preset : null;
+			// A renamed kit's old name is the same kit and preset (the write below stores the new pair).
+			const renamed = getRenamedKit(storedName);
+			const stored = renamed
+				? { name: renamed.name, preset: storedPreset ?? renamed.preset }
+				: { name: storedName, preset: storedPreset };
+			if (stored.name !== kitName || stored.preset !== preset) {
 				throw new KitSettingRefusedError(`workspaces.${input.workspaceId}.kit changed meanwhile; run it again.`);
 			}
 			const before =
@@ -369,7 +389,7 @@ async function changeProjectSettings(
 					? (currentKit.overrides as Record<string, unknown>)
 					: {};
 			const after = plan({ kit: team.kit, kitName, overrides: before });
-			const resolved = resolveKitByName(catalog, kitName, after);
+			const resolved = resolveKitByName(catalog, kitName, after, preset);
 			if (!resolved.ok) {
 				throw new KitSettingRefusedError(`${input.key}: kit ${kitName} would not resolve: ${resolved.error}`);
 			}
@@ -383,6 +403,8 @@ async function changeProjectSettings(
 			// No kit entry means `default`, so `default` without settings is written as no entry.
 			if (kitName === DEFAULT_KIT_NAME && Object.keys(after).length === 0) {
 				delete entry.kit;
+			} else if (kitName === TEAM_KIT_NAME) {
+				entry.kit = { name: kitName, preset, overrides: after };
 			} else {
 				entry.kit = { name: kitName, overrides: after };
 			}
@@ -392,7 +414,13 @@ async function changeProjectSettings(
 	);
 	const historyPath = input.historyPath ?? getKitSettingsHistoryPath(input.workspaceId);
 	await appendKitSettingsHistory(changes, historyPath);
-	return { workspaceId: input.workspaceId, kitName, key: input.key, changes, historyPath };
+	return {
+		workspaceId: input.workspaceId,
+		kitName: formatKitSelection({ name: kitName, preset }),
+		key: input.key,
+		changes,
+		historyPath,
+	};
 }
 
 /** Stored legacy keys whose whole meaning is under `key` (`dev.agent` for `roles.dev.agent`). */
@@ -455,7 +483,8 @@ export function describeProjectSettings(
 	catalog: KitCatalog,
 	kitName: string,
 	overrides: Record<string, unknown>,
+	preset: string | null = null,
 ): ClassifiedOverrides | null {
-	const team = resolveKitByName(catalog, kitName);
+	const team = resolveKitByName(catalog, kitName, {}, preset);
 	return team.ok ? classifyStoredOverrides(overrides, team.kit) : null;
 }

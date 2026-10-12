@@ -1,14 +1,15 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
 import type { AgentSessionIdentity, RuntimeCaller } from "../../../src/isolation/session-identity";
 import { readKitSettingsHistory } from "../../../src/kits/project-settings";
-import { getKitSettingsHistoryPath } from "../../../src/state/kanban-home";
+import { getKanbanKitsPath, getKitSettingsHistoryPath } from "../../../src/state/kanban-home";
 import { type RuntimeTrpcContext, runtimeAppRouter } from "../../../src/trpc/app-router";
 import { createKitSettingsApi, decideKitSettingsCaller } from "../../../src/trpc/kit-settings-api";
 import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
+import { readLegacyTeamKitText } from "../../utilities/team-kits";
 
 function session(workspaceId: string, role: AgentSessionIdentity["role"], taskId: string): RuntimeCaller {
 	return {
@@ -79,7 +80,7 @@ describe("kit settings caller rules", () => {
 			const response = await set(OWN_ORCHESTRATOR);
 			expect(response).toMatchObject({
 				ok: true,
-				kitName: "team-cloud",
+				kitName: "team (cloud)",
 				changes: [{ key: "roles.fallback.model", to: "us.moonshotai.kimi-k3" }],
 			});
 			expect(
@@ -110,13 +111,16 @@ describe("kit apply through the route", () => {
 	it("lets the user and the project's own orchestrator switch its kit, and refuses another orchestrator and a card", async () => {
 		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
 			mkdirSync(dirname(globalConfigPath), { recursive: true });
+			// A kit with tiers: the legacy-team fixture (the built-in team-cloud kit before presets) as a user kit.
+			mkdirSync(getKanbanKitsPath(), { recursive: true });
+			writeFileSync(join(getKanbanKitsPath(), "legacy-team.json"), readLegacyTeamKitText());
 			writeFileSync(
 				globalConfigPath,
 				JSON.stringify({
 					workspaces: {
 						foo: {
 							landing: { mode: "off" },
-							kit: { name: "team-cloud", overrides: { "qa.blurb": "Foo", "tiers.tier2.1.model": "m-senior" } },
+							kit: { name: "legacy-team", overrides: { "qa.blurb": "Foo", "tiers.tier2.1.model": "m-senior" } },
 						},
 					},
 				}),
@@ -129,47 +133,52 @@ describe("kit apply through the route", () => {
 			});
 			const readKit = () => JSON.parse(readFileSync(globalConfigPath, "utf8")).workspaces.foo.kit;
 			for (const caller of [OTHER_ORCHESTRATOR, OWN_CARD, UNKNOWN]) {
-				const response = await api.apply({ caller, workspaceId: "foo", request: { kitName: "team-local" } });
+				const response = await api.apply({
+					caller,
+					workspaceId: "foo",
+					request: { kitName: "team", preset: "lemonade" },
+				});
 				expect(response).toMatchObject({ ok: false, result: null });
 			}
 			expect(logged).toEqual(["kit.apply refused", "kit.apply refused", "kit.apply refused"]);
-			expect(readKit().name).toBe("team-cloud");
+			expect(readKit().name).toBe("legacy-team");
 
-			// The orchestrator switches its own project's kit; a setting that doesn't fit team-local is dropped.
+			// The orchestrator switches its own project's kit; a setting that doesn't fit team (lemonade) is dropped.
 			const switched = await api.apply({
 				caller: OWN_ORCHESTRATOR,
 				workspaceId: "foo",
-				request: { kitName: "team-local" },
+				request: { kitName: "team", preset: "lemonade" },
 			});
 			expect(switched.ok).toBe(true);
 			expect(switched.result).toMatchObject({
-				kitName: { from: "team-cloud", to: "team-local" },
+				kitName: { from: "legacy-team", to: "team" },
+				preset: { from: null, to: "lemonade" },
 				written: true,
 				dropped: [
 					{ key: "tiers.tier2.1.model", value: "m-senior", why: expect.stringContaining('no tier "tier2"') },
 				],
 				historyPath: getKitSettingsHistoryPath("foo"),
 			});
-			expect(readKit()).toEqual({ name: "team-local", overrides: { "qa.blurb": "Foo" } });
+			expect(readKit()).toEqual({ name: "team", preset: "lemonade", overrides: { "qa.blurb": "Foo" } });
 
 			// Landing mode and removing a stored team key stay the user's.
 			const landing = await api.apply({
 				caller: OWN_ORCHESTRATOR,
 				workspaceId: "foo",
-				request: { kitName: "team-cloud", landing: "qa" },
+				request: { kitName: "legacy-team", landing: "qa" },
 			});
 			expect(landing).toMatchObject({ ok: false, error: expect.stringContaining("landing mode is the user's") });
-			expect(readKit().name).toBe("team-local");
+			expect(readKit()).toMatchObject({ name: "team", preset: "lemonade" });
 
 			const byUser = await api.apply({
 				caller: { kind: "user" },
 				workspaceId: "foo",
-				request: { kitName: "team-cloud", landing: "qa", set: { "roles.dev.model": "m-dev" } },
+				request: { kitName: "legacy-team", landing: "qa", set: { "roles.dev.model": "m-dev" } },
 			});
 			expect(byUser.ok).toBe(true);
 			const stored = JSON.parse(readFileSync(globalConfigPath, "utf8")).workspaces.foo;
 			expect(stored.kit).toEqual({
-				name: "team-cloud",
+				name: "legacy-team",
 				overrides: { "qa.blurb": "Foo", "roles.dev.model": "m-dev" },
 			});
 			expect(stored.landing).toEqual({ mode: "qa" });
@@ -177,8 +186,10 @@ describe("kit apply through the route", () => {
 			const history = await readKitSettingsHistory(getKitSettingsHistoryPath("foo"));
 			expect(history.map(({ key, by, via }) => ({ key, by: by.kind, via }))).toEqual([
 				{ key: "(kit)", by: "orchestrator", via: "kit apply" },
+				{ key: "(preset)", by: "orchestrator", via: "kit apply" },
 				{ key: "tiers.tier2.1.model", by: "orchestrator", via: "kit apply" },
 				{ key: "(kit)", by: "user", via: "kit apply" },
+				{ key: "(preset)", by: "user", via: "kit apply" },
 				{ key: "roles.dev.model", by: "user", via: "kit apply" },
 			]);
 		});

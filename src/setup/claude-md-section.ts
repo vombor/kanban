@@ -27,13 +27,16 @@ export function renderClaudeMdSection(): string {
   prints each project's routing kit and landing mode, and every problem with the command that fixes it.
   \`kanban doctor --fix <workspace path>\` applies the safe fixes (registering the project, agent folder trust,
   managed sections). Tell the user what it changed.
-- A project's routing is its kit, the team definition: its roles (dev, QA, plan, fallback) with a default model each,
-  and the flow (QA, rework rounds, which triggers hand a card to the fallback, approval):
-  \`kanban kit show --project <path>\`. A new project picks its kit when it is created or first added (the browser's
-  add-project dialog, \`kanban project create|add --kit <name>\`; \`default\` when none is picked). A project's kit is
-  the one chosen at creation; you may switch your own project to another kit (\`kanban kit apply <kit> --project
-  <path>\`, \`--dry-run\` first; settings that don't fit the new kit are dropped and listed; \`--landing\` is the
-  user's), never another project's. A project on
+- A project's routing is its kit: \`kanban kit show --project <path>\`. The \`team\` kit is the one team workflow
+  (dev, QA, plan and fallback roles, QA by another vendor, 3 rework rounds, then the fallback starts at once without
+  approval, paid or free), the same for every team; its models come from a preset (\`kanban kit presets\`: cloud,
+  cline, lemonade) or, for a custom team, the project's own role settings. A new project picks its kit when it is
+  created or first added (the browser's add-project dialog, \`kanban project create|add --kit <name> [--preset <p> |
+  --custom --set roles.<role>.agent=...]\`; \`default\` when none is picked). A project's kit is the one chosen at
+  creation; you may switch your own project to another kit or preset (\`kanban kit apply team --preset <p> --project
+  <path>\`, \`kanban kit apply team --custom --set roles.dev.agent=<a> --set roles.qa.agent=<a> ...\`, \`kanban kit apply
+  <kit>\`; \`--dry-run\` first; settings that don't fit are dropped and listed; \`--landing\` is the user's), never
+  another project's. A project on
   \`default\` (no kit entry): every card runs on the agent selected in Kanban settings, and nothing is QA'd, reworked
   or landed automatically.
 - The project's settings on its kit are yours to change, at once and without a card: any model the kit names
@@ -41,8 +44,8 @@ export function renderClaudeMdSection(): string {
   \`qa.routes.<i>.model\`, \`plan.candidates.<i>.model\`, \`onFail.runoff.models.<i>.model\` with their agent/provider)
   and project facts (\`qa.blurb\`, \`qa.promptNotes.*\`, \`qa.serversScript\`, \`qa.preview\`, \`land.postLand\`,
   \`plan.rules\`, \`checks.*\`, \`worktrees.symlinkIgnored.*\`); \`kanban kit unset <key>\` removes one. Flow keys
-  (onFail, fallback triggers and approval, QA rules, requireDifferentVendor, features) are refused: another flow is
-  another kit.
+  (onFail, fallback triggers and approval, QA rules, requireDifferentVendor, features) are refused: they are the
+  team kit's alone, and no preset or project setting changes them.
 - Kits are created and changed only by the user (\`kanban kit create <name> --from <kit>\`, \`kanban kit edit <name>\`);
   for a team change (another trigger, flow or QA rule), ask the user and give them the command.
 - You may add, change and remove the project's top-bar shortcuts (any label, command, icon) for the user:

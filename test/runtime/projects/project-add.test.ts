@@ -56,17 +56,18 @@ describe("kanban project add", () => {
 			const repo = createRepo(join(userHomePath, "shop"));
 			const result = await addProject({
 				repoPath: repo,
-				kit: "team-cloud",
+				kit: "team",
+				preset: "cloud",
 				landing: "qa",
 				blurb: "Project: shop",
 				base: "main",
 			});
-			expect(result).toMatchObject({ kitName: "team-cloud", landingMode: "qa" });
+			expect(result).toMatchObject({ kitName: "team", presetName: "cloud", landingMode: "qa" });
 			const { config } = await readPipelineConfig(globalConfigPath);
 			expect(config.workspaces[result.workspaceId]).toMatchObject({
 				landing: { mode: "qa" },
 				defaultBaseRef: "main",
-				kit: { name: "team-cloud", overrides: { "qa.blurb": "Project: shop" } },
+				kit: { name: "team", preset: "cloud", overrides: { "qa.blurb": "Project: shop" } },
 			});
 
 			const plain = createRepo(join(userHomePath, "plain"));
@@ -80,9 +81,16 @@ describe("kanban project add", () => {
 		await withTemporaryKanbanHome(async ({ userHomePath, globalConfigPath }) => {
 			const repo = createRepo(join(userHomePath, "app"));
 			await expect(addProject({ repoPath: repo, kit: "nope" })).rejects.toThrow('unknown kit "nope"');
-			await expect(addProject({ repoPath: repo, chooseKit: async () => "team" })).rejects.toThrow(
-				"renamed to team-cloud",
-			);
+			await expect(
+				addProject({
+					repoPath: repo,
+					chooseKit: async () => ({ name: "team-cloud", preset: null, roleSettings: {} }),
+				}),
+			).rejects.toThrow("is now team (cloud)");
+			await expect(addProject({ repoPath: repo, kit: "team" })).rejects.toThrow("needs its models");
+			await expect(
+				addProject({ repoPath: repo, kit: "team", preset: null, roleSettings: { "roles.dev.agent": "codex" } }),
+			).rejects.toThrow("needs roles.qa.agent");
 			expect(await listWorkspaceIndexEntries()).toEqual([]);
 			expect((await readPipelineConfig(globalConfigPath)).config.workspaces).toEqual({});
 		});
@@ -95,26 +103,34 @@ describe("kanban project add", () => {
 			const result = await addProject({
 				repoPath: repo,
 				chooseKit: async (choices) => {
-					asked.push(choices.kits.map((kit) => kit.name));
-					return "team-local";
+					asked.push([...choices.kits.map((kit) => kit.name), ...choices.presets.map((preset) => preset.name)]);
+					return { name: "team", preset: "lemonade", roleSettings: {} };
 				},
 			});
-			expect(asked).toEqual([["default", "team-cloud", "team-local", "team-cline"]]);
-			expect(result).toMatchObject({ kitName: "team-local", landingMode: "off" });
+			expect(asked).toEqual([["default", "team", "cloud", "cline", "lemonade"]]);
+			expect(result).toMatchObject({ kitName: "team", presetName: "lemonade", landingMode: "off" });
 			const { config } = await readPipelineConfig(globalConfigPath);
-			expect(config.workspaces[result.workspaceId]?.kit).toEqual({ name: "team-local", overrides: {} });
+			expect(config.workspaces[result.workspaceId]?.kit).toEqual({
+				name: "team",
+				preset: "lemonade",
+				overrides: {},
+			});
 			const history = readFileSync(getKitSettingsHistoryPath(result.workspaceId), "utf8")
 				.trim()
 				.split("\n")
 				.map((line) => JSON.parse(line) as Record<string, unknown>);
 			expect(history).toEqual([
-				expect.objectContaining({ key: "(kit)", from: "default", to: "team-local", via: "kit apply" }),
+				expect.objectContaining({ key: "(kit)", from: "default", to: "team", via: "kit apply" }),
+				expect.objectContaining({ key: "(preset)", from: null, to: "lemonade", via: "kit apply" }),
 			]);
 			// Adding it again asks nothing.
 			await addProject({ repoPath: repo, chooseKit: async () => Promise.reject(new Error("asked again")) });
 
 			const plain = createRepo(join(userHomePath, "plain"));
-			const plainResult = await addProject({ repoPath: plain, chooseKit: async () => "default" });
+			const plainResult = await addProject({
+				repoPath: plain,
+				chooseKit: async () => ({ name: "default", preset: null, roleSettings: {} }),
+			});
 			expect(plainResult).toMatchObject({ kitName: "default", config: ["no entry: kit default, landing off"] });
 			const explicit = createRepo(join(userHomePath, "explicit"));
 			const explicitResult = await addProject({ repoPath: explicit, kit: "default" });
@@ -127,9 +143,16 @@ describe("kanban project add", () => {
 	it("keeps an existing project's kit and landing mode, and says how to change them", async () => {
 		await withTemporaryKanbanHome(async ({ userHomePath, globalConfigPath }) => {
 			const repo = createRepo(join(userHomePath, "app"));
-			const first = await addProject({ repoPath: repo, kit: "team-cloud", landing: "off" });
+			const first = await addProject({
+				repoPath: repo,
+				kit: "team",
+				preset: null,
+				roleSettings: { "roles.dev.agent": "codex", "roles.qa.agent": "cline" },
+				landing: "off",
+			});
 			const second = await addProject({ repoPath: repo, kit: "default", landing: "qa", name: "App" });
-			expect(second).toMatchObject({ kitName: "team-cloud", landingMode: "off" });
+			expect(second).toMatchObject({ kitName: "team", presetName: null, landingMode: "off" });
+			expect(second.warnings.join("\n")).toContain("already uses kit team (custom)");
 			expect(second.warnings.join("\n")).toContain(`kanban kit apply default --project ${first.workspaceId}`);
 			expect(second.warnings.join("\n")).toContain("landing qa not applied");
 			const { config } = await readPipelineConfig(globalConfigPath);

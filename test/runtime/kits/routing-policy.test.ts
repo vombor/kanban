@@ -2,11 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import { kitDocumentSchema } from "../../../src/kits/kit-schema";
 import { createRoutingPolicy, getModelVendor } from "../../../src/kits/policy";
-import { getBuiltInKits, getDefaultKit, resolveKitLayers } from "../../../src/kits/resolve-kit";
+import { getDefaultKit, resolveKitLayers } from "../../../src/kits/resolve-kit";
 import { createCardHistory, createEffectiveCard } from "../../utilities/effective-card";
+import { getLegacyTeamKit } from "../../utilities/team-kits";
 
 function teamPolicy(overrides: Record<string, unknown> = {}) {
-	const team = getBuiltInKits().get("team-cloud");
+	const team = getLegacyTeamKit();
 	if (!team) {
 		throw new Error("team kit missing");
 	}

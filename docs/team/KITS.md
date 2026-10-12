@@ -11,27 +11,36 @@ something is done, and the core never decides who does it.
 - A new project **picks its kit when it is created or first added** ([Picking a kit for a new project](#picking-a-kit-for-a-new-project)),
   `default` preselected. Afterwards the project's kit is the one chosen then; it changes with `kanban kit apply`,
   run by the user or the project's own orchestrator ([Switching a project's kit](#switching-a-projects-kit)).
-- **`team-cloud`** is the built-in preset for the dev-team workflow (Cline juniors on tier-3 models, cross-vendor QA,
-  same-model rework, then a fallback model, then the orchestrator).
-- **`team-local`** is the same workflow on local Lemonade models only (Cline + provider `lemonade`, nothing paid
-  or in the cloud), with a fallback local model before the orchestrator. See [The `team-local` kit](#the-team-local-kit).
-- **`team-cline`** is the same workflow on ClinePass, Cline's subscription provider (Cline + provider
-  `cline-pass`, $0 per run), with a fallback ClinePass model before the orchestrator. See
-  [The `team-cline` kit](#the-team-cline-kit).
-- **User kits** live in `<home>/kits/<name>.json`.
+- **`team`** is the built-in dev-team workflow, the same for every project on it: cross-vendor QA, same-model
+  rework, then a fallback model that takes the task over at once, then the orchestrator
+  ([The `team` kit](#the-team-kit)). It holds no models. They come from a **preset** or from the project itself:
+  - **presets** (`kits/presets/<name>.json`) name only models ([Presets](#presets)): **`cloud`** (AWS Bedrock,
+    paid per token), **`cline`** (ClinePass, Cline's subscription provider, $0 per run) and **`lemonade`** (local
+    Lemonade models only, nothing paid or in the cloud);
+  - a **custom team** is `team` without a preset: the project sets each role's agent, provider and model itself
+    ([Custom team](#custom-team)).
+- **User kits** live in `<home>/kits/<name>.json`. They are full kits with a workflow of their own (foo's `team-foo`).
+
+Until 2026-10-12 the built-in team kits were `team-cloud`, `team-local` and `team-cline`, each a full copy of the
+workflow plus its models (and the copies had drifted apart). A config entry that still names one of them runs on
+`team` with the matching preset ([Renamed kits](#renamed-kits)).
 
 A kit is the **team definition**: its roles with a default model each, and the flow. A project changes only its
 **project settings** on top (every model the kit names and project facts, [Project settings](#project-settings)); a
-different flow is a different kit. Kits themselves are created and edited only by the user.
+different flow is a different kit. On `team` the flow is fixed: a preset can't hold a workflow key (the preset schema
+has none), and a project can't set one. Kits themselves are created and edited only by the user.
 
-Any model may be on any role ([MODELS.md](MODELS.md)): the kit gives each role a default, the project overrides it
+Any model may be on any role ([MODELS.md](MODELS.md)): the kit (on `team`, its preset) gives each role a default, the project overrides it
 (`kanban kit set roles.<role>.*`), and Kanban doesn't refuse or warn about the choice. For Cline roles, Cline's
 models.json is the allow list: `kanban doctor` warns when a role names a model its provider's models.json record
 doesn't list (Cline couldn't select it).
 
 Code: `src/kits/kit-schema.ts` (schema), `src/kits/kit-roles.ts` (roles and the fallback flow),
 `src/kits/project-settings.ts` (what a project may set), `src/kits/kit-legacy-keys.ts` (keys from before the split), `src/kits/resolve-kit.ts` (resolver), `src/kits/policy.ts` (the one
-evaluator), `kits/default.json`, `kits/team-cloud.json`, `kits/team-local.json`, `kits/team-cline.json`. Plan: `docs/fork/kit-merge-plan.md` §3.2-§3.4, §4.0.
+evaluator), `src/kits/renamed-kits.ts` (the old kit names), `kits/default.json`, `kits/team.json`,
+`kits/presets/cloud.json`, `kits/presets/cline.json`, `kits/presets/lemonade.json`. The built-in kits and presets are
+JSON imports bundled into `dist/cli.js`, so a change to them needs a rebuild. Plan: `docs/fork/kit-merge-plan.md`
+§3.2-§3.4, §4.0; presets: `docs/specs/team-kit-presets.md`.
 
 ## The questions
 
@@ -53,7 +62,7 @@ by hand.
 The core keeps these guarantees whatever the kit says:
 
 - **An explicit choice wins.** An agent or model set by the card's creator is never replaced by `devAssignment`.
-  The create dialog only preselects the kit's proposal and shows "from kit `team-cloud`".
+  The create dialog only preselects the kit's proposal and shows which kit it comes from (e.g. `team (cloud)`).
 - **A card keeps what it was created with.** Applying or changing a kit doesn't touch existing cards, and clearing
   a card's agent (`kanban task update --agent-id default --provider default --model default`, or the editor's
   first agent option, the selected one) makes it run on the agent selected in Kanban settings, not on the kit's
@@ -72,8 +81,9 @@ The core keeps these guarantees whatever the kit says:
   took the task over (otherwise the fallback sibling would fall back onto the fallback again, sibling after
   sibling), or when the card races in a runoff (`refuseTakeover()` in `src/pipeline/rework.ts`). No kit can turn
   this off.
-- **`fallback.requireApproval` parks the sibling.** It waits in Backlog until the orchestrator or the user starts
-  it. Either way the original card goes to Backlog as `BLOCKED: …`.
+- **`fallback.requireApproval` parks the sibling** (a user kit only: `team` has it off, for every preset and
+  custom team). It waits in Backlog until the orchestrator or the user starts it. Either way the original card goes
+  to Backlog as `BLOCKED: …`.
 - **Only a hold stops a PASS from landing.** The hold is answered by the team kit's `runoffs` feature;
   `kanban task release-hold` is the human way out.
 
@@ -81,15 +91,23 @@ The core keeps these guarantees whatever the kit says:
 
 Every path that creates or first adds a project asks which kit it uses, with `default` preselected:
 
-- the browser's Add Project dialog (Open folder, Clone from URL, New project): a "Routing kit" picker, each option with
-  the kit's description and its four role models (dev, qa, plan, fallback, from the resolved kit, so user kits show
-  the same way; tRPC `projects.kits`, `src/kits/kit-choices.ts`);
-- `kanban project create|add <path> --kit <name>` (default `default`). Without `--kit` the CLI shows the same list as a
-  numbered prompt, but only when stdin is a terminal; anything else (a script, a pipe, an agent) gets `default` without
-  being asked, so nothing blocks.
+- the browser's Add Project dialog (Open folder, Clone from URL, New project): a "Routing kit" picker with `default`,
+  `team`, then the user kits, each with its description and its four role models (dev, qa, plan, fallback, from the
+  resolved kit, so user kits show the same way; tRPC `projects.kits`, `src/kits/kit-choices.ts`). With `team` a
+  "Models" select follows: a preset (`cloud`, `cline`, `lemonade`, each showing its description and four roles) or
+  "custom", which turns the four roles into editable rows (agent, provider, model; dev and QA agents required);
+- `kanban project create|add <path> --kit <name>` (default `default`); for `team` also `--preset <name>`, or
+  `--custom --set roles.dev.agent=<agent> --set roles.qa.agent=<agent> [--set roles.<role>.provider|model=…]`.
+  Without `--kit` the CLI shows the same list as a numbered prompt and, after `team`, asks for the preset (a custom
+  team is given with flags), but only when stdin is a terminal; anything else (a script, a pipe, an agent) gets
+  `default` without being asked, so nothing blocks.
 
-The name is checked before anything is created, cloned or registered: an unknown, renamed or invalid kit is refused
-with the resolver's reason. The choice is applied through `kanban kit apply`'s code (`src/kits/apply-kit.ts`: its key
+Both say that **the fallback starts without asking**: on `team` a paid fallback model runs and costs without
+approval. If that cost worries you, don't pick a paid fallback model (a preset with a free one, or a custom team).
+
+The choice is checked before anything is created, cloned or registered: an unknown, renamed or invalid kit, a
+preset on a kit other than `team`, `team` without a preset or `--custom`, and a custom team without its dev and QA
+agents are refused with the reason. The choice is applied through `kanban kit apply`'s code (`src/kits/apply-kit.ts`: its key
 checks and the settings history), never a second writer of `workspaces.<id>.kit`; `default` writes no kit entry, as
 before. A project that is already added (or already has a config entry) keeps its kit: the dialog's Open folder and
 `project add` leave it alone, and `project add --kit` says how to change it. The landing mode stays `off` unless
@@ -101,8 +119,14 @@ projects: project create/add is refused to every agent session, so agents never 
 A key's value comes from the first of these that has it:
 
 1. The workspace's project settings: `kit.overrides` in config.json (dotted key → value, e.g. `"qa.blurb"`).
-2. The named kit.
-3. The `default` kit.
+2. The preset (`kit.preset`, only with the `team` kit): its models.
+3. The named kit.
+4. The `default` kit.
+
+A workspace's kit is stored as `workspaces.<id>.kit = { name, preset, overrides }`. `preset` is a preset's name or
+`null`: `team` with `null` is a custom team, and every other kit has `null` (a preset on another kit is an error).
+A preset's and the team kit's `recommends.settings` add up (by `key`, the preset wins on the same key), so the
+lemonade preset's turn detector setting comes on top of the team's recovery settings.
 
 A role names a `model` or a `tier`, never both: a layer that sets one drops the other's value from the layers
 below, so a project's `roles.dev.model` replaces the kit's `roles.dev.tier` (its provider then comes from
@@ -110,24 +134,54 @@ below, so a project's `roles.dev.model` replaces the kit's `roles.dev.tier` (its
 
 Arrays are replaced, never merged: overriding `qa.routes` replaces the whole list. Nothing is inherited from another
 workspace, and there is no top-level routing key a project could pick up by accident. A workspace without a `kit`
-entry gets `default`. If the named kit is missing, or its overrides don't validate, the workspace falls back to
-`default` and `kanban doctor` / `kanban kit show` report it.
+entry gets `default`. If the named kit or preset is missing, or its overrides don't validate, the workspace falls
+back to `default` and `kanban doctor` / `kanban kit show` report it.
 
 ```jsonc
 // <home>/config.json
 "workspaces": {
-  "foo":         { "landing": { "mode": "qa" }, "kit": { "name": "team-cloud", "overrides": { "qa.blurb": "Project: Pawsome…" } } },
+  "notes":       { "landing": { "mode": "qa" }, "kit": { "name": "team", "preset": "lemonade", "overrides": { "qa.promptNotes.dbSetup": "npx prisma db push" } } },
+  "bar":         { "landing": { "mode": "qa" }, "kit": { "name": "team", "preset": null, "overrides": { "roles.dev.agent": "codex", "roles.qa.agent": "claude" } } },  // custom team
+  "foo":         { "landing": { "mode": "qa" }, "kit": { "name": "team-foo", "overrides": { "qa.blurb": "Project: Pawsome…" } } },  // user kit
   "kanban-2uge": { "landing": { "mode": "off" } }   // no kit: default
 }
 ```
 
-`kanban kit show --project <ws>` prints the team definition (each role's effective agent and model with its
-source, the fallback and its triggers), the project settings with their history, and every resolved value with its
-source (`project`, the kit's name, or `default`). The pipeline worker reads the kit and its overrides on every evaluation, so a kit change needs no
-restart.
+`kanban kit show --project <ws>` prints the team definition (the kit and its preset, or custom; each role's
+effective agent and model with its source; the fallback, its triggers and its approval, on `team` "none, the sibling
+starts at once"), the project
+settings with their history, and every resolved value with its source (`project`, `preset:<name>`, the kit's name,
+or `default`). `kanban kit show team --preset <name>` (or `--custom`) shows a kit without a project, and
+`kanban kit presets` lists the presets with their four roles. The pipeline worker reads the kit and its overrides
+on every evaluation, so a kit change needs no restart.
 
 The landing mode is a core setting ([CONFIG.md](CONFIG.md)), not a kit key. Applying a kit never changes it.
-`kanban kit apply team-cloud --project foo --landing qa` sets both in one step on purpose.
+`kanban kit apply team --preset cloud --project foo --landing qa` sets both in one step on purpose.
+
+### Renamed kits
+
+`team-cloud`, `team-local` and `team-cline` were replaced on 2026-10-12 (`src/kits/renamed-kits.ts`):
+
+| Old kit | Now |
+|---|---|
+| `team-cloud` | `team` + preset `cloud` |
+| `team-local` | `team` + preset `lemonade` |
+| `team-cline` | `team` + preset `cline` |
+
+The old names keep working where they are stored and nowhere else: a `workspaces.<id>.kit` that names one runs on
+`team` with its preset at once (every reader sees the new pair; config.json keeps the old name until it is
+rewritten), `kanban doctor` warns, and `--fix` (and `kanban config import-kit`) rewrites the entry to
+`{ "name": "team", "preset": … }` with its overrides unchanged. `kanban kit apply team-local`, `kit create --from
+team-local` and the other commands that take a kit name answer `kit "team-local" is now team (lemonade)
+(2026-10-12); use team --preset lemonade`.
+`kit list` lists only `team` and its presets, and no user kit may take an old name. A user kit made `--from` an old
+kit earlier is a full copy and needs nothing. The earlier rename of the same day (`team` → `team-cloud`) is gone:
+`team` is the new kit's name, so a stored `team` is the team kit (without a preset, a custom team).
+
+What changed for a project on an old kit is only the workflow the copies differed in, now fixed in `team`
+([below](#the-team-kit)): on `team-local` (notes) and `team-cline` the outage takeover and the `runoffs` feature are
+now on; on `team-cloud` the per-vendor QA route and its `drive` rule are gone (QA is `roles.qa` for every dev card).
+Project settings that are project facts keep applying unchanged.
 
 ### Existing cards after a kit change
 
@@ -160,23 +214,25 @@ agent on a kit with a dev assignment, the CLI prints the `reassign` command for 
 ## Schema
 
 `"kit": 1` is the schema version. The schema is strict: an unknown key is an error at `kanban kit apply` (and in a
-user kit file), never a silent no-op. A missing key means "no answer", so the `default` kit's value applies.
+user kit file), never a silent no-op. A missing key means "no answer", so the `default` kit's value applies. The
+`team` column is `kits/team.json`; where it names no value (the role models, tiers, the price region) the
+[preset](#presets) or the project gives it.
 
-| Key | Type | Used for | `default` | `team-cloud` |
+| Key | Type | Used for | `default` | `team` |
 |---|---|---|---|---|
 | `kit` | `1` | schema version | `1` | `1` |
-| `name` | lowercase `[a-z0-9_-]`, the file name | | `default` | `team-cloud` |
+| `name` | lowercase `[a-z0-9_-]`, the file name | | `default` | `team` |
 | `description` | text | `kanban kit list` | | |
-| `roles.dev` | `{ agent?, provider?, model? \| tier?, note? }` | `devAssignment`: the agent and model of new dev cards (model needs agent) | none (→ `null`) | `cline`, tier `tier3` |
-| `roles.qa` | same | `qaPolicy`: the QA agent and model when no route matches. No model = the agent's own default (Codex: `~/.codex/config.toml`) | none | `codex` |
-| `roles.plan` | same | `planAssignment`: the planner; no agent = the selected agent, no model = the agent's own default | none | `claude` |
-| `roles.fallback` | same | the model a dev card's task falls back to (`fallback.on`). No agent = the dev role's agent, else the card's; a tier needs the `tiers` feature | none | tier `tier2` |
+| `roles.dev` | `{ agent?, provider?, model? \| tier?, note? }` | `devAssignment`: the agent and model of new dev cards (model needs agent) | none (→ `null`) | from the preset or project |
+| `roles.qa` | same | `qaPolicy`: the QA agent and model when no route matches. No model = the agent's own default (Codex: `~/.codex/config.toml`) | none | from the preset or project |
+| `roles.plan` | same | `planAssignment`: the planner; no agent = the selected agent, no model = the agent's own default | none | from the preset or project |
+| `roles.fallback` | same | the model a dev card's task falls back to (`fallback.on`). No agent = the dev role's agent, else the card's; a tier needs the `tiers` feature | none | from the preset or project |
 | `qa.enabled` | boolean | `qaPolicy`: does a dev card get QA at all | `false` | `true` |
 | `qa.skip.roles` | roles | `qaPolicy`: roles that never get QA | `qa`, `triage`, `calibration`, `plan` | same |
 | `qa.skip.effectiveAgents` | agent ids | `qaPolicy`: effective agents whose cards never get QA | `[]` | `[]` |
-| `qa.routes[]` | `{ devModel, agent, model?, provider?, rules?, why? }` | `qaPolicy`: `devModel` is a regex on the dev card's effective model; first match wins | `[]` | OpenAI-built → `cline` + Haiku 5.5, rules `["drive"]` |
+| `qa.routes[]` | `{ devModel, agent, model?, provider?, rules?, why? }` | `qaPolicy`: `devModel` is a regex on the dev card's effective model; first match wins (user kits) | `[]` | `[]`: `roles.qa` for every dev card |
 | `qa.requireDifferentVendor` | boolean | `qaPolicy`: refuse (answer `none`) a route whose QA model has the dev model's vendor | `false` | `true` |
-| `qa.rules.<name>` | text | QA prompt steps a route names in `rules`; `{outbox}` is filled in | `{}` | `drive` |
+| `qa.rules.<name>` | text | QA prompt steps a route names in `rules`; `{outbox}` is filled in | `{}` | `drive` ("drive the changed path"), reached only through a route, and `team` has none |
 | `qa.blurb` | text | the "Project: …" line of the QA prompt | `""` | `""` (foo overrides it) |
 | `qa.promptNotes.{screenshotFallback,knownBaseIssues,dbSetup}` | text | project sentences in the QA prompt | `""` | `""` (foo overrides `dbSetup`) |
 | `qa.serversScript` | path or null | the script QA uses to start the project's servers in its scratch copy | `null` | `null` |
@@ -184,8 +240,8 @@ user kit file), never a silent no-op. A missing key means "no answer", so the `d
 | `plan.enabled` | boolean | `planAssignment`: does the project make plan cards at all | `false` | `true` |
 | `plan.startInPlanMode` | boolean | the plan card starts in the agent's plan mode | `false` | `true` |
 | `plan.rules.<name>` | text | project rules added to the plan prompt, in key order | `{}` | `{}` |
-| `plan.candidates[]` | `{ agent, model?, note? }` | agents and models a later runoff or calibration compares; never read for routing | `[]` | `claude` |
-| `plan.note` | text | | | why there is no model pin |
+| `plan.candidates[]` | `{ agent, model?, note? }` | agents and models a later runoff or calibration compares; never read for routing | `[]` | from the preset |
+| `plan.note` | text | | | from the preset |
 | `onFail.rework` | `none` \| `same-model` | `onFail`: hand a FAIL back to the same card and model | `none` | `same-model` |
 | `onFail.reworkRounds` | integer | `onFail`: FAIL rounds before `then` (capped by `pipeline.rework.maxFailRounds`) | `0` | `3` |
 | `onFail.conflict` | `stop` \| `rework` | `onFail`: a merge conflict at land | `stop` | `rework` |
@@ -202,12 +258,20 @@ user kit file), never a silent no-op. A missing key means "no answer", so the `d
 | `checks.envFile`, `checks.databaseUrlVar`, `checks.setup`, `checks.teardown` | path, variable name, shell commands | the scripted checks' environment ([Project settings](#the-scripted-checks-environment-checks)) | unset | unset |
 | `worktrees.symlinkIgnored.include`, `worktrees.symlinkIgnored.exclude` | glob lists | which git-ignored paths of the main checkout task worktrees link ([below](#task-worktrees-ignored-paths-worktreessymlinkignored)) | unset (the default excludes) | unset |
 | `features[]` | `scoreboard`, `bench`, `runoffs`, `calibration`, `tiers` | built-in team features that run for the project | `[]` | all five |
-| `tiers.<name>[]` | `{ provider?, model, default?, note? }` | `roles.<role>.tier`, `kanban bench tiers`, `bench runoff create --tier` | | `tier3`, `tier2`, `tier1`, `qa` |
-| `dropped[]` | `{ provider?, model, at?, why? }` | a user kit's own models no tier lookup returns, on any provider | | none |
-| `tierRules`, `tierNotes` | text per tier | shown by `kanban bench tiers` | | |
-| `prices.{region,autoSync}` | | the `bench` feature's daily AWS price check | | `us-west-2`, `true` |
+| `tiers.<name>[]` | `{ provider?, model, default?, note? }` | `roles.<role>.tier`, `kanban bench tiers`, `bench runoff create --tier` | | from the preset (cline, lemonade: `dev`, `qa`, `senior`; cloud: none) |
+| `dropped[]` | `{ provider?, model, at?, why? }` | a kit's own models no tier lookup returns, on any provider | | none |
+| `tierRules`, `tierNotes` | text per tier | shown by `kanban bench tiers` | | from the preset |
+| `prices.region` | AWS region | the `bench` feature's daily AWS price check | | from the preset (cloud: `us-west-2`) |
+| `prices.autoSync` | boolean | turns that check off for a user kit; the check proposes only metered models, so a kit with none skips it anyway | | unset |
 | `recommends.landingMode` | landing mode | shown by `kanban kit show/apply`, **never applied** without `--landing` | | `qa` |
-| `recommends.settings[]` | `{ key, op?, value, why }` | core settings the kit's routing needs: `key` is a dotted config.json key (`workspace.` = the project's own `workspaces.<id>` entry), `op` `equals` (default), `atMost` or `atLeast`. Shown by `kanban kit show/apply` and warned about by `kanban doctor` when unmet, **never applied** | | (team-local: three) |
+| `recommends.settings[]` | `{ key, op?, value, why }` | core settings the kit's routing needs: `key` is a dotted config.json key (`workspace.` = the project's own `workspaces.<id>` entry), `op` `equals` (default), `atMost` or `atLeast`. Shown by `kanban kit show/apply` and warned about by `kanban doctor` when unmet, **never applied** | | recovery on (two; the lemonade preset adds the turn detector) |
+
+**A preset** (`kits/presets/<name>.json`, `kitPresetSchema` in `src/kits/kit-schema.ts`, `"preset": 1`) is strict
+too and has only these keys: `preset`, `name`, `description`, `roles.<role>.agent|provider|model|tier|note`,
+`tiers`, `tierRules`, `tierNotes`, `dropped`, `plan.candidates`, `plan.note`, `prices.region` and
+`recommends.settings` (provider facts). Any other key (onFail, fallback, QA rules or routes, features, …) fails to
+parse, so no preset can change the workflow. A preset must resolve over `team`, so a role's `tier` names one of the
+preset's own tiers.
 
 Checks across keys run on the resolved kit:
 
@@ -268,17 +332,23 @@ and a route's `devModel`/`rules`, `qa.rules`, `tiers` as a whole (which tiers ex
 `roles.<role>.note`. A project gets another flow by using another kit (`kanban kit apply`, [Switching a project's
 kit](#switching-a-projects-kit)); kits themselves are made and edited only by the user.
 
+On `team` that leaves a project the role models (on a preset they override some of its roles; on a custom team they
+are the models), the tier picks where its preset has tiers (cline, lemonade; cloud and a custom team have none), the
+plan candidates its preset lists, and the project facts. Every workflow key is refused, and so is the preset itself:
+it changes with `kanban kit apply team --preset <name>`, never as an override (`kit`, `name` and `preset` identify
+the kit).
+
 ```sh
 kanban kit set roles.fallback.model us.moonshotai.kimi-k3 --project /projects/foo
 kanban kit set roles.fallback.agent codex --project /projects/foo
 kanban kit set qa.promptNotes.dbSetup "npx prisma migrate deploy" --project /projects/foo
 kanban kit set land.postLand '[{"paths":"^prisma/","run":"npx prisma generate"}]' --project /projects/foo
-kanban kit unset roles.dev.model --project /projects/foo       # the kit's dev model again
+kanban kit unset roles.dev.model --project /projects/foo       # the preset's (or kit's) dev model again
 kanban kit unset roles.fallback --project /projects/foo        # every field of the role
-kanban kit set tiers.tier3.0.model us.openai.gpt-6.1-sol --project /projects/foo   # one tier pick
-kanban kit set qa.routes.0.model us.amazon.nova-2-lite-v1:0 --project /projects/foo # a QA route's reviewer
+kanban kit set tiers.dev.0.model Muse-Glimmer-30B-GGUF-Q4_K_M --project /projects/notes   # one tier pick (lemonade preset)
+kanban kit set qa.routes.0.model us.amazon.nova-2-lite-v1:0 --project /projects/foo # a QA route's reviewer (a user kit with routes)
 kanban kit unset qa.routes.0 --project /projects/foo           # every setting of that route entry
-kanban kit set onFail.reworkRounds 5 --project /projects/foo   # refused: part of the team definition (kit team-cloud)
+kanban kit set onFail.reworkRounds 5 --project /projects/notes # refused: part of the team definition (kit team)
 kanban kit set roles.dev.model gpt-9 --project /projects/foo          # any model; for Cline, doctor warns if models.json doesn't list it
 ```
 
@@ -311,14 +381,25 @@ in-process (that is the user). Every change is logged to `kit-settings-history.j
 
 A switch keeps the project's settings that still fit the new kit and drops the others, listed in the output
 (`dropped`, with why): a role, tier or list entry the new kit doesn't have, or a value that doesn't resolve on it
-(`roles.dev.tier tier3` on a kit without `tier3`). Team keys stored before the split stay, as before. The checks a
+(`roles.dev.tier dev` on the `cloud` preset, which has no tiers). Team keys stored before the split stay, as before. The checks a
 switch did before stay: an unknown kit, `--set` takes only project settings, the whole resolution must validate.
 `--landing` (the core landing mode) and `--unset` of a stored team key stay the user's: the orchestrator is
 refused them.
 
+`team` needs its models: `--preset <name>`, or `--custom` with at least `--set roles.dev.agent=<agent>` and
+`--set roles.qa.agent=<agent>` (given now or already stored; without a QA agent no card would be QA'd). A project
+already on `team` keeps its preset when neither is given. A change of preset is a switch too: a stored tier pick the
+new preset has no tier for is dropped and listed, role settings always fit. The history gets a `(preset)` line.
+Old kit names are answered with the new form ([Renamed kits](#renamed-kits)).
+
 ```sh
-kanban kit apply team-local --project /projects/foo --dry-run   # what changes, what is dropped
-kanban kit apply team-local --project /projects/foo
+kanban kit presets                                                  # the presets and their four roles
+kanban kit apply team --preset lemonade --project /projects/foo --dry-run   # what changes, what is dropped
+kanban kit apply team --preset lemonade --project /projects/foo
+kanban kit apply team --custom --project /projects/foo \
+  --set roles.dev.agent=codex --set roles.dev.provider=bedrock --set roles.dev.model=us.openai.gpt-6.1-sol \
+  --set roles.qa.agent=claude \
+  --set roles.fallback.agent=codex --set roles.fallback.provider=bedrock --set roles.fallback.model=us.moonshotai.kimi-k3
 ```
 
 **Where.** Project settings stay in config.json (`workspaces.<id>.kit.overrides`), not in the project repo: a card
@@ -511,80 +592,154 @@ open runoff (`hold`). A feature that fails to answer leaves the PASS for the nex
 With landing `off` (the default), the orchestrator or the user lands. With landing `qa` on `default`, every
 submitted card waits for Approve & land.
 
-## The `team-cloud` kit
+## The `team` kit
 
-`kits/team-cloud.json`: the dev-team routing that ran the `foo` project under the legacy kit, as data. P4-T1 checked
-parity against the legacy kit's live config (`test/runtime/kits/team-parity.test.ts`,
-`team-qa-routing.test.ts`, `team-qa-prompt.test.ts`).
+`kits/team.json`: the dev-team workflow, the same for every project on it, with no models (user request
+2026-10-12). Its four roles (dev, QA, plan, fallback) are slots with a note each; the models come from a
+[preset](#presets) or, for a [custom team](#custom-team), from the project's own role settings. The workflow goes
+back to the routing that ran the `foo` project under the legacy kit; P4-T1 checked parity against the legacy kit's
+live config (`test/runtime/kits/team-parity.test.ts`, `team-qa-routing.test.ts`, `team-qa-prompt.test.ts`).
 
-It was named `team` until 2026-10-12 (user request: `team-cloud` next to `team-local` and `team-cline`). The old
-name keeps working where it is stored and nowhere else (`src/kits/renamed-kits.ts`): a `workspaces.<id>.kit` that
-names `team` runs on `team-cloud`, `kanban doctor` warns and `--fix` (and `kanban config import-kit`) rewrites it;
-`kanban kit apply team`, `kit create --from team`, `kit show team` and the other commands that take a kit name answer
-"renamed to team-cloud"; `kit list` lists `team-cloud` only, and no user kit may be named `team`. A user kit made
-`--from team` earlier is a full copy, so it needs nothing.
-
-- **Dev:** Cline on the `tier3` default (`us.openai.gpt-6.1-sol` on bedrock).
-- **Plan:** plan cards on Claude with the Claude CLI's default model (no pin), starting in plan mode (user
-  2026-10-07). `plan.candidates` lists only Claude for now; benchmarking other models and auditioning Copilot and
-  Codex come later and need no schema change.
-- **QA:** every dev card. OpenAI-built cards (`(^|\.)openai\.|^gpt-`) get Cline on Haiku 5.5 plus the `drive` rule
-  ("log in and drive the changed path, screenshot it"). Everything else gets Codex with its own model. The QA
-  vendor must differ from the dev vendor.
+- **QA:** every dev card, by `roles.qa` (no `qa.routes`). The QA vendor must differ from the dev vendor
+  (`qa.requireDifferentVendor`): a card whose effective model is from the QA model's vendor gets no QA
+  (`kit show` warns). QA, TRIAGE, calibration and plan cards are never QA'd.
+- **Plan:** plan cards on `roles.plan`, starting in the agent's plan mode.
 - **FAIL:** same-model rework for 3 rounds (conflicts too, with rebase notes), then the **fallback**.
-- **Fallback** (since 2026-10-09, user: it is team definition, not one project's overrides; foo ran it through
-  `escalate.to`/`escalate.requireApproval: false`/`onOutage.then: escalate` overrides before): `roles.fallback` is
-  the `tier2` pick (`us.moonshotai.kimi-k3` on bedrock) on the dev role's agent. It takes the task over on a
-  sibling card, started at once (`requireApproval: false`), after 3 failed QA rounds, a QA stall, an unchanged
-  rework, a conflict its reworks didn't fix, or a provider outage hold that lasted `pipeline.recovery.outage.maxMin`.
-  A fallback sibling that fails goes to the orchestrator. A project picks its own fallback model with
-  `kanban kit set roles.fallback.agent|model` (foo: Codex on kimi-k3).
-- **Features:** `scoreboard`, `bench`, `runoffs`, `calibration`, `tiers`.
-- **Recommends** landing `qa`.
+- **Fallback:** `roles.fallback` takes the task over on a sibling card after 3 failed QA rounds, a QA stall, an
+  unchanged rework, a conflict its reworks didn't fix, or a provider outage hold that lasted
+  `pipeline.recovery.outage.maxMin`. It **starts at once, without approval** (`fallback.requireApproval: false`),
+  whatever the model costs. A fallback sibling that fails in turn goes to the orchestrator, never to another sibling
+  (`refuseTakeover()` in `src/pipeline/rework.ts`), so the orchestrator is the last resort.
+- **Features:** `scoreboard`, `bench`, `runoffs`, `calibration`, `tiers` ([below](#the-team-features)).
+- **Recommends** landing `qa`, and the settings `pipeline.recovery.mode = on` and the project's `recovery.enabled`
+  (default `true`), so provider errors are retried, outages held and probed, stalled turns nudged and account answers
+  escalated (`recommends.settings`, never applied).
 
-One known difference from the legacy kit: Claude-built dev cards get QA (by Codex). The legacy kit skipped them only
-because of a literal `agentId === "claude"` check. To skip them, set `qa.skip.effectiveAgents: ["claude"]` as an
-override (plan §12).
+The built-in team kits before 2026-10-12 differed in a few workflow keys. `team` has one fixed answer for each, and
+neither a preset nor a project can change it:
 
-## The `team-local` kit
+| Key | Before | In `team` |
+|---|---|---|
+| `fallback.requireApproval` | `false` in all three, but per kit | `false`: the fallback starts without asking, for every preset and custom team, paid or free. A paid fallback model runs and costs without approval; if that worries you, don't pick a paid fallback |
+| `fallback.on.outage` | on in team-cloud only | on: after `maxMin` the fallback sibling starts. On a provider whose outage takes every model down (Lemonade, ClinePass) the sibling waits on the same outage and then goes to the orchestrator, since a sibling is never handed on again. The cost is one extra Backlog card per outage |
+| `runoffs` feature | team-cloud only | on: it acts only while a runoff group exists (`onFail.runoff` is `null`; groups come from `kanban bench runoff create`) |
+| `qa.routes` | team-cloud: OpenAI-built cards → Cline on Haiku 4.5 with the `drive` rule | none: `roles.qa` for every dev card. `qa.routes` stays in the schema for user kits; `team` keeps the `drive` rule text so imported legacy routes that name it still validate, but nothing in `team` reaches it |
+| recovery `recommends.settings` | team-local and team-cline only | in `team`. Lemonade's turn detector setting stays in the lemonade preset (a provider fact) |
+| `prices.autoSync` | team-cloud on, the others off | unset: the daily price check proposes only metered models (`listKitModels` in `src/kits/team/bench/price-sync-job.ts`), so it runs for cloud and has nothing to do for cline and lemonade |
 
-`kits/team-local.json`: the team workflow on the local Lemonade server (http://localhost:13305/api/v1, OpenAI
-compatible) through the Cline CLI with provider `lemonade`. No paid or cloud provider appears anywhere in it
-(`test/runtime/kits/team-local-kit.test.ts` checks every model and agent). All three models passed `kanban models vet` for dev
-and QA (2026-10-12, cline 3.0.70); none was vetted for plan. Its models must be in Cline's models.json record;
+### The team features
+
+They are built in (`src/kits/team/`) and run only for projects whose kit lists them in `features`.
+
+| Feature | What | Data |
+|---|---|---|
+| `scoreboard` | one line per recorded verdict, escalation and Approve & land (events `verdictRecorded`, `escalated`, `landed`); rebuilds the Markdown table | `data/<ws>/scoreboard.jsonl`, `scoreboard.md` |
+| `bench` | card metrics (turns, tokens, list-price cost), `kanban bench metrics|record-verdict|scoreboard|reset`, the daily AWS price check (a watchdog feature job) | `data/prices/` |
+| `runoffs` | holds the PASS of every card in an open runoff, decides once all have passed or escalated (mean QA score, then fewer FAIL rounds, then lower cost), lands the winner and tags and discards the losers through the Done workflow; `benchOnly` lands nothing | `data/<ws>/runoffs.json` |
+| `calibration` | `kanban bench calibrate <spec>`: the same QA review on fixed snapshots by several QA models | `data/<ws>/calibration/<name>/` |
+| `tiers` | a fallback by tier (`roles.fallback.tier`: a sibling card on that tier's model), `kanban bench tiers` | |
+
+The scoreboard is the team kit's score of its routing decisions. It is not the core's record of verdicts (that is
+`pipeline-state.json`), and no core decision reads it.
+
+## Presets
+
+A preset (`kits/presets/<name>.json`, [schema](#schema)) names the `team` kit's models: each role's agent,
+provider and model (or a tier of its own), tier lists with their notes, plan candidates, the price region and the
+core settings its provider needs. It holds no workflow key. `kanban kit presets` lists them with their four roles,
+`kanban kit show team --preset <name>` shows one resolved. Their models must be in Cline's models.json record where
+a role is on Cline (doctor warns otherwise).
+
+| Preset | Dev | QA | Plan | Fallback |
+|---|---|---|---|---|
+| `cloud` | Codex, `bedrock` / `us.openai.gpt-6.1-sol` | Cline, `bedrock` / `us.anthropic.claude-haiku-5-5` | Cline, `bedrock` / `us.anthropic.claude-opus-5-5` | Codex, `bedrock` / `us.moonshotai.kimi-k3` |
+| `cline` | Cline, `cline-pass/glm-5.3` | Cline, `cline-pass/qwen3.8-max` | Cline, `cline-pass/minimax-m3` | Cline, `cline-pass/kimi-k3` |
+| `lemonade` | Cline, `Muse-Glimmer-30B-GGUF-Q4_K_M` | Cline, `gemma-4-31B-it-qat-q4_0-gguf-Q4_0` | Cline, the dev model | Cline, `Laguna-XS-2.1-GGUF-Q4_K_M` |
+
+A project on a preset can still set its own model for any role (`kanban kit set roles.<role>.*`, the value's
+source is then `project` instead of `preset:<name>`), and a tier pick where the preset has tiers.
+
+### `cloud`
+
+`kits/presets/cloud.json`: AWS Bedrock, paid per token. Every role names its model directly; there are no tiers.
+
+- **Dev:** GPT-6.1 Sol on Codex (user 2026-10-12; it won the tier-3 multi-region runoff and both mai-vs-sol runoffs
+  on foo).
+- **QA:** Claude Haiku 5.5 on Cline, another vendor (anthropic) than the dev model (openai) and the fallback
+  (moonshotai), so the fallback sibling is still reviewed by Haiku.
+- **Plan:** Claude Opus 5.5 on Cline, in its plan mode (`--plan`).
+- **Fallback:** Kimi K3 on Codex. It is paid and starts without approval.
+- **Prices:** `prices.region: us-west-2` for the daily AWS price check, which runs for this preset's models.
+
+### `cline`
+
+`kits/presets/cline.json`: ClinePass, Cline's subscription provider, through the Cline CLI with provider
+`cline-pass` (model ids `cline-pass/<model>`, $0 per run). Every role is `cline + cline-pass`
+(`test/runtime/kits/cline-preset.test.ts` checks every model and agent). All four models passed `kanban models vet`
+for dev and QA (2026-10-12, cline 3.0.70; none was vetted for plan, [MODELS.md](MODELS.md#clinepass-cline-pass)). The
+key must be stored with `kanban setup-provider cline-pass` ([cline-pass-auth.md](../fork/cline-pass-auth.md)).
+
+| Role | Model | Vendor (`getModelVendor()`) |
+|---|---|---|
+| Dev (`roles.dev`: tier `dev`) | `cline-pass/glm-5.3` | zai |
+| QA (`roles.qa`) | `cline-pass/qwen3.8-max` | qwen |
+| Plan cards (`roles.plan`, Cline `--plan`) | `cline-pass/minimax-m3` | minimax |
+| Fallback dev model (`roles.fallback`: tier `senior`) | `cline-pass/kimi-k3` (ClinePass: "will consume usage faster than others") | moonshotai |
+
+- The vendor is read from the id after `cline-pass/`, so the dev and the fallback models are both reviewed by
+  qwen3.8-max. The other ClinePass models that passed the vet are candidates in `tiers` (`mimo-v2.6-pro`,
+  `mimo-v2.6-flash`, `deepseek-v4.1-flash`, `muse-spark-1.3-contributor` for dev; `minimax-m3`, `mimo-v2.6-pro`
+  for QA).
+- **Outage:** the outage takeover starts the kimi-k3 sibling after `maxMin`; it waits on the same subscription's
+  outage and then goes to the orchestrator. ClinePass's account answers (no subscription, an organization account)
+  escalate at once, and its usage-limit answer gets the provider retries and then escalates (provider errors,
+  MODELS.md).
+- **QA slots:** ClinePass is a cloud provider, so its QA cards take a cloud QA slot (`pipeline.qa.slots`), unlike
+  Lemonade's.
+- **Runoffs:** a runoff races sibling cards on several models for the same task, which multiplies the
+  subscription's usage for one card; nothing starts one unless you create a group.
+- **Costs:** a turn on provider `cline-pass` costs 0 whatever the model id (`SUBSCRIPTION_PROVIDER_IDS` in
+  `src/kits/team/bench/prices.ts`), so the scoreboard and `kanban bench metrics` show `$0.00`, and the price check
+  has nothing to propose.
+
+```sh
+kanban kit apply team --preset cline --project /projects/<name> --landing qa --dry-run
+kanban kit apply team --preset cline --project /projects/<name> --landing qa
+kanban kit show --project /projects/<name>
+kanban doctor /projects/<name>     # warns about unmet settings and models Cline's models.json doesn't list
+```
+
+### `lemonade`
+
+`kits/presets/lemonade.json` (the models of the former `team-local` kit): the local Lemonade server
+(http://localhost:13305/api/v1, OpenAI compatible) through the Cline CLI with provider `lemonade`. No paid or cloud
+provider appears anywhere in it (`test/runtime/kits/lemonade-preset.test.ts` checks every model and agent). All
+three models passed `kanban models vet` for dev and QA (2026-10-12, cline 3.0.70); none was vetted for plan.
 `kanban bench calibrate` can still compare candidates on the project.
 
 | Role | Model (passed `kanban models vet`) | Why |
 |---|---|---|
-| Dev (`roles.dev`: tier `dev`), plan cards (`roles.plan`, Cline `--plan`) | `Muse-Glimmer-30B-GGUF-Q4_K_M` | Meta's Muse Glimmer (Meta Superintelligence Lab, distilled from Muse Spark): a dense 30B with tool-calling + vision, 16.9 GB, 65536 context as Lemonade loads it (max 131072). Plans on the dev model need no model swap (not vetted for plan) |
-| QA (`roles.qa`) | `gemma-4-31B-it-qat-q4_0-gguf-Q4_0` | another family (google) than the dev (meta) and fallback (poolside) models, vision + tool-calling; 17.6 GB, 65536 context as Lemonade loads it. No `qa.routes`, so a card someone builds on Gemma itself gets no QA (`kit show` warns) |
+| Dev (`roles.dev`: tier `dev`), plan cards (`roles.plan`: tier `dev`, Cline `--plan`) | `Muse-Glimmer-30B-GGUF-Q4_K_M` | Meta's Muse Glimmer (Meta Superintelligence Lab, distilled from Muse Spark): a dense 30B with tool-calling + vision, 16.9 GB, 65536 context as Lemonade loads it (max 131072). Plans on the dev model need no model swap (not vetted for plan) |
+| QA (`roles.qa`) | `gemma-4-31B-it-qat-q4_0-gguf-Q4_0` | another family (google) than the dev (meta) and fallback (poolside) models, vision + tool-calling; 17.6 GB, 65536 context as Lemonade loads it. A card someone builds on Gemma itself gets no QA (`kit show` warns) |
 | Fallback dev model (`roles.fallback`: tier `senior`) | `Laguna-XS-2.1-GGUF-Q4_K_M` | Poolside's Laguna, a third family, neither the dev nor the QA model, so its sibling is still reviewed by Gemma. Tool-calling, 18.9 GB, 65536 context as Lemonade loads it |
 
-These are the defaults since 2026-10-12. The dev tier lists Laguna-XS as its second candidate; the kit names no
+These are the defaults since 2026-10-12. The dev tier lists Laguna-XS as its second candidate; the preset names no
 model that the pod's Lemonade doesn't have.
 
-- **FAIL:** same-model rework for 3 rounds (conflicts too), then the fallback: a sibling card on Laguna-XS takes the
-  task over and starts at once (`requireApproval: false`: a local run costs nothing). The core never hands a task
-  onto the model the card runs on, and a fallback sibling that fails in turn goes to the orchestrator, never to
-  another sibling (`refuseTakeover()` in `src/pipeline/rework.ts`). So the orchestrator is the last resort, after
-  the fallback has failed too.
-- **Outage:** `fallback.on.outage: false` (the same fallback structure as `team-cloud`, with this trigger off). Lemonade down (connection refused, `/health` not `ok`) is a provider
-  outage: recovery holds the card and probes `/health` every `pipeline.recovery.outage.probeEveryMin`, resumes it
-  when Lemonade is back, and gives it to the orchestrator at `maxMin`. A takeover would not help: every model in the
-  kit runs on the same server.
-- **Features:** `scoreboard`, `bench`, `calibration` and `tiers` (the fallback is a tier). Dropped:
-  - `runoffs` races sibling cards on several models at once, which one GPU can only do by swapping models on every
-    request;
-  - the `bench` feature's daily AWS price check (`prices.autoSync: false`): local models have no AWS price, and
-    the check skips local-provider models anyway.
+- **Outage:** Lemonade down (connection refused, `/health` not `ok`) is a provider outage: recovery holds the card
+  and probes `/health` every `pipeline.recovery.outage.probeEveryMin` and resumes it when Lemonade is back. After
+  `maxMin` the outage takeover starts the Laguna sibling, which waits on the same server and then goes to the
+  orchestrator (every model runs on the same server, so the takeover only costs one extra card). The notes project
+  sees this since the switch from `team-local`, where the trigger was off.
+- **Runoffs:** a runoff races sibling cards on several models at once, which one GPU can only do by swapping models
+  on every request; nothing starts one unless you create a group.
 - **Costs:** a turn on provider `lemonade` costs 0 whatever the model id (`LOCAL_PROVIDER_IDS` in
   `src/kits/team/bench/prices.ts`), so the scoreboard, `kanban bench metrics` and the calibration results show
-  `$0.00`, not "no price".
-- **Recommends** landing `qa`.
+  `$0.00`, not "no price", and the price check has nothing to propose.
 
-### One GPU: keep dev, QA and fallback loaded
+#### One GPU: keep dev, QA and fallback loaded
 
-team-local runs three local models at the same time: Muse-Glimmer (dev and plan), Gemma (QA) and Laguna-XS
+The lemonade preset runs three local models at the same time: Muse-Glimmer (dev and plan), Gemma (QA) and Laguna-XS
 (fallback).
 Lemonade keeps at most `max_loaded_models` LLMs resident (`/api/v1/health` `max_models.llm`, default 1). When it is
 full it evicts the least recently used one, so with one slot every dev ↔ QA switch reloads a model. Raise it to 3:
@@ -605,7 +760,7 @@ Kanban's own limit, `models.providerCapacity.lemonade.maxLoadedModels` (default 
 
 Above Lemonade's value, cards on different models make it reload on every request. Below it, QA cards wait for
 nothing. `kanban doctor` and `kanban kit show` read `/api/v1/health` and warn about both cases, and when
-`max_models.llm` is below the 3 models the kit runs. With Lemonade at 1 and Kanban at 1, work runs one model at a
+`max_models.llm` is below the 3 models the preset runs. With Lemonade at 1 and Kanban at 1, work runs one model at a
 time: a QA card waits until no dev card runs on Muse-Glimmer, and every switch still costs a model load. Not covered yet: a
 card a human starts by hand, and the rework stage's sibling and resume starts.
 
@@ -632,21 +787,21 @@ lemonade load Muse-Glimmer-30B-GGUF-Q4_K_M --ctx-size 65536 --llamacpp vulkan --
 kanban setup-provider lemonade    # metadata of the record's models, drops a modelsSourceUrl; doctor prints it
 ```
 
-### Settings team-local needs
+#### Settings the lemonade preset needs
 
-The kit lists them in `recommends.settings`; Kanban's Lemonade limit is checked against Lemonade itself (above). `kanban kit show` prints each with its current value, `kanban kit apply`
-lists the unmet ones, and `kanban doctor` warns for every project on the kit whose config lacks one. None is
-applied for you:
+The team kit and the preset list them in `recommends.settings` (merged); Kanban's Lemonade limit is checked against
+Lemonade itself (above). `kanban kit show` prints each with its current value, `kanban kit apply` lists the unmet
+ones, and `kanban doctor` warns for every project on the preset whose config lacks one. None is applied for you:
 
-| Setting | Value | For |
-|---|---|---|
-| `agents.cline.turnDetector.mode` | `on` | Lemonade/llama.cpp ends Cline turns without the TaskComplete hook; only the turn detector in mode `on` ends them (`report` only logs) |
-| `pipeline.recovery.mode` | `on` | a no-images rejection is cleared and resent (with "never read image files"), a poisoned or overflowing context is cleared and resent, a Lemonade outage is held and probed instead of escalated |
-| `workspaces.<id>.recovery.enabled` | `true` (default) | the same, for this project |
+| Setting | Value | From | For |
+|---|---|---|---|
+| `agents.cline.turnDetector.mode` | `on` | the preset | Lemonade/llama.cpp ends Cline turns without the TaskComplete hook; only the turn detector in mode `on` ends them (`report` only logs) |
+| `pipeline.recovery.mode` | `on` | `team` | a no-images rejection is cleared and resent (with "never read image files"), a poisoned or overflowing context is cleared and resent, a Lemonade outage is held and probed instead of escalated |
+| `workspaces.<id>.recovery.enabled` | `true` (default) | `team` | the same, for this project |
 
 The other local gotchas:
 
-- **Images.** The dev model (Muse-Glimmer) and the QA model (Gemma) read images, so the kit has no
+- **Images.** The dev model (Muse-Glimmer) and the QA model (Gemma) read images, so the preset needs no
   `qa.promptNotes.screenshotFallback`. The fallback (Laguna-XS) has no vision label in Lemonade, so a fallback
   sibling that reads a screenshot gets a no-images rejection. Recovery clears and resends an image a model rejects
   (too large or no vision).
@@ -655,21 +810,21 @@ The other local gotchas:
   `agents.cline.lemonadeContextSync` stop it), `kanban doctor`'s "cline lemonade models" row compares them, and
   `kanban setup-provider lemonade` (the user or the Kanban orchestrator runs it) fixes the rest of the record's metadata. Beyond that,
   recovery (mode `on`) clears an overflowed history.
-- **Models.** `kanban doctor` also warns when Lemonade doesn't list a model the kit routes to, hasn't downloaded it,
-  or doesn't mark it tool-calling. It reports INFO when Lemonade is down.
+- **Models.** `kanban doctor` also warns when Lemonade doesn't list a model the preset routes to, hasn't downloaded
+  it, or doesn't mark it tool-calling. It reports INFO when Lemonade is down.
 
-### Applying it to a new project
+#### Applying it to a new project
 
 ```sh
-kanban project create /projects/<name> --kit team-local   # or: kanban project add /projects/<name> --kit team-local --landing qa
-kanban kit apply team-local --project /projects/<name> --landing qa --dry-run   # landing qa, which the kit recommends
-kanban kit apply team-local --project /projects/<name> --landing qa
-kanban task reassign --column backlog --project-path /projects/<name>   # existing Backlog cards onto the kit
+kanban project create /projects/<name> --kit team --preset lemonade   # or: kanban project add /projects/<name> --kit team --preset lemonade --landing qa
+kanban kit apply team --preset lemonade --project /projects/<name> --landing qa --dry-run   # landing qa, which the kit recommends
+kanban kit apply team --preset lemonade --project /projects/<name> --landing qa
+kanban task reassign --column backlog --project-path /projects/<name>   # existing Backlog cards onto the preset
 kanban kit show --project /projects/<name>                # routing + "Settings this kit needs"
 kanban doctor /projects/<name>                            # warns about unmet settings and missing models
 ```
 
-### Calibrating it
+#### Calibrating it
 
 `kanban bench calibrate` runs the same QA review, on fixed snapshots, by every QA candidate. It needs finished dev
 work: a few dev cards on the project whose commits (`ref`), bases (`base`) and card ids (`fromCard`) become the
@@ -703,68 +858,29 @@ Results go to `results.md` in that directory. Calibration compares QA models onl
 compared on real cards: the scoreboard and `kanban bench tiers`. Once a model is picked, set it as the project's
 role model: `kanban kit set roles.qa.model <id> --project <ws>` (likewise `roles.dev.model`, `roles.fallback.model`).
 
-### The team features
+## Custom team
 
-They are built in (`src/kits/team/`) and run only for projects whose kit lists them in `features`.
+`team` without a preset (`kit: { name: "team", preset: null }`): the team workflow on the project's own models. The
+project sets each role through the project settings (`roles.<role>.agent|provider|model`, [Project
+settings](#project-settings)), at apply time with `--set` or later with `kanban kit set`, by the user or the project's
+own orchestrator.
 
-| Feature | What | Data |
-|---|---|---|
-| `scoreboard` | one line per recorded verdict, escalation and Approve & land (events `verdictRecorded`, `escalated`, `landed`); rebuilds the Markdown table | `data/<ws>/scoreboard.jsonl`, `scoreboard.md` |
-| `bench` | card metrics (turns, tokens, list-price cost), `kanban bench metrics|record-verdict|scoreboard|reset`, the daily AWS price check (a watchdog feature job) | `data/prices/` |
-| `runoffs` | holds the PASS of every card in an open runoff, decides once all have passed or escalated (mean QA score, then fewer FAIL rounds, then lower cost), lands the winner and tags and discards the losers through the Done workflow; `benchOnly` lands nothing | `data/<ws>/runoffs.json` |
-| `calibration` | `kanban bench calibrate <spec>`: the same QA review on fixed snapshots by several QA models | `data/<ws>/calibration/<name>/` |
-| `tiers` | a fallback by tier (`roles.fallback.tier`: a sibling card on that tier's model), `kanban bench tiers` | |
-
-The scoreboard is the team kit's score of its routing decisions. It is not the core's record of verdicts (that is
-`pipeline-state.json`), and no core decision reads it.
-
-## The `team-cline` kit
-
-`kits/team-cline.json`: the team workflow on ClinePass, Cline's subscription provider, through the Cline CLI with
-provider `cline-pass` (model ids `cline-pass/<model>`). Every role is `cline + cline-pass`
-(`test/runtime/kits/team-cline-kit.test.ts` checks every model and agent). All four models passed `kanban models vet`
-for dev and QA (2026-10-12, cline 3.0.70; none was vetted for plan, [MODELS.md](MODELS.md#clinepass-cline-pass)). Its
-models must be in Cline's models.json for Cline to select them, and the key must be stored with
-`kanban setup-provider cline-pass` ([cline-pass-auth.md](../fork/cline-pass-auth.md)).
-
-| Role | Model | Vendor (`getModelVendor()`) |
-|---|---|---|
-| Dev (`roles.dev`: tier `dev`) | `cline-pass/glm-5.3` | zai |
-| QA (`roles.qa`) | `cline-pass/qwen3.8-max` | qwen |
-| Plan cards (`roles.plan`, Cline `--plan`) | `cline-pass/minimax-m3` | minimax |
-| Fallback dev model (`roles.fallback`: tier `senior`) | `cline-pass/kimi-k3` (ClinePass: "will consume usage faster than others") | moonshotai |
-
-`qa.requireDifferentVendor` stays on: the vendor is read from the id after `cline-pass/`, so the dev and the
-fallback models are both reviewed by qwen3.8-max. No `qa.routes`, so a card someone builds on a qwen model gets no
-QA (`kit show` warns). The other ClinePass models that passed the vet are candidates in `tiers` (`mimo-v2.6-pro`,
-`mimo-v2.6-flash`, `deepseek-v4.1-flash`, `muse-spark-1.3-contributor` for dev; `minimax-m3`, `mimo-v2.6-pro`
-for QA).
-
-- **FAIL:** team-local's flow: same-model rework for 3 rounds (conflicts too), then a sibling card on kimi-k3 takes the
-  task over and starts at once (`requireApproval: false`: a ClinePass run costs $0). A fallback sibling that fails
-  in turn goes to the orchestrator.
-- **Outage:** `fallback.on.outage: false`. Recovery holds the card and gives it to the orchestrator at
-  `pipeline.recovery.outage.maxMin`; a takeover would not help, since every model is on the same subscription.
-  ClinePass's account answers (no subscription, an organization account) escalate at once, and its usage-limit
-  answer gets the provider retries and then escalates (provider errors, MODELS.md).
-- **QA slots:** ClinePass is a cloud provider, so its QA cards take a cloud QA slot (`pipeline.qa.slots`), unlike
-  Lemonade's.
-- **Features:** `scoreboard`, `bench`, `calibration` and `tiers` (the fallback is a tier), as team-local. Dropped:
-  - `runoffs` races sibling cards on several models at once for the same task, which multiplies the subscription's
-    usage for one card;
-  - the `bench` feature's daily AWS price check (`prices.autoSync: false`): ClinePass models have no AWS price, and
-    the check skips unmetered providers anyway.
-- **Costs:** a turn on provider `cline-pass` costs 0 whatever the model id (`SUBSCRIPTION_PROVIDER_IDS` in
-  `src/kits/team/bench/prices.ts`), so the scoreboard and `kanban bench metrics` show `$0.00`.
-- **Settings it needs** (`recommends.settings`, never applied): `pipeline.recovery.mode = on` and the project's
-  `recovery.enabled` (default `true`), so the ClinePass retries, escalations and outage holds above happen.
-- **Recommends** landing `qa`.
+- **Dev and QA agents are required.** `kanban kit apply team --custom`, `project create|add --kit team --custom` and
+  the browser's custom rows refuse a custom team without `roles.dev.agent` and `roles.qa.agent`, and `kanban doctor`
+  warns about a stored one that lacks either: without a QA agent `qaPolicy` answers `none`, and no card would be
+  QA'd. No model means the agent's own default model.
+- **The fallback is optional.** Without `roles.fallback` a trigger that fires goes to the orchestrator. With one it
+  starts at once, without approval, like every team: choose a free fallback model if a paid one's cost worries you.
+- **No tiers.** The team kit has none, so `roles.<role>.tier` and `tiers.*` keys are refused; name models directly.
+- **The vendor rule holds:** pick a QA model from another vendor than the dev and fallback models, or their cards get
+  no QA (`kit show` warns).
 
 ```sh
-kanban kit apply team-cline --project /projects/<name> --landing qa --dry-run
-kanban kit apply team-cline --project /projects/<name> --landing qa
-kanban kit show --project /projects/<name>
-kanban doctor /projects/<name>     # warns about unmet settings and models Cline's models.json doesn't list
+kanban kit apply team --custom --project /projects/<name> --landing qa \
+  --set roles.dev.agent=codex --set roles.qa.agent=claude --set roles.plan.agent=claude \
+  --set roles.fallback.agent=codex --set roles.fallback.provider=bedrock --set roles.fallback.model=us.moonshotai.kimi-k3
+kanban kit set roles.qa.model haiku --project /projects/<name>               # change one role later
+kanban kit show --project /projects/<name>                                   # sources: project, team, default
 ```
 
 ## Writing a user kit
@@ -773,12 +889,14 @@ User kits are made and changed only by the user, with two commands (an agent ses
 `USER_ONLY_COMMANDS` in `src/isolation/cli-scope.ts`; an orchestrator asks the user). Code:
 `src/kits/user-kit-edit.ts`.
 
-- `kanban kit create <name> --from <kit> [--set <key>=<value> ...] [--description <text>] [--dry-run]` writes
-  `<home>/kits/<name>.json`: the `--from` kit as it resolves over `default`, so the file is a complete copy (kits
-  don't inherit, see below), with the `--set` keys applied the way the resolver applies them (a role's `model`
-  replaces its `tier` and back). It prints every key that differs from `--from`. Refused: a taken name (`default`,
-  `team-cloud`, `team-local`, an existing user kit, a refused kit file of that name), a name that isn't a file name, and
-  a key or value the full kit schema refuses.
+- `kanban kit create <name> --from <kit> [--preset <name>] [--set <key>=<value> ...] [--description <text>] [--dry-run]`
+  writes `<home>/kits/<name>.json`: the `--from` kit as it resolves over `default` (with `--from team`, plus the
+  `--preset`'s models), so the file is a complete, flattened copy (kits don't inherit and user kits have no presets,
+  see below), with the `--set` keys applied the way the resolver applies them (a role's `model` replaces its `tier`
+  and back). This is the way to a workflow of your own: the copy is a full kit, so `kit edit` can change its flow. It
+  prints every key that differs from `--from`. Refused: a taken name (`default`, `team`, the old `team-cloud`,
+  `team-local`, `team-cline`, an existing user kit, a refused kit file of that name), a name that isn't a file name,
+  an old kit name as `--from` (answered with its new form), and a key or value the full kit schema refuses.
 - `kanban kit edit <name> --set <key>=<value> ... [--unset <key> ...] [--dry-run]` changes keys of an existing
   **user** kit (a built-in kit changes only with a Kanban release: copy it with `kit create`). `--unset` removes a
   key from the file, so the `default` kit's value applies. The result is validated, the old file copied to
@@ -794,16 +912,18 @@ edit is logged to `<home>/data/kit-history.jsonl` (`at`, `kitName`, `key`, `from
 (`via: "kit edit"`), so `kanban kit show --project` shows it.
 
 ```sh
-kanban kit create claude-qa --from team-cloud --set roles.dev.agent=claude --set onFail.reworkRounds=1 --dry-run
+kanban kit create claude-qa --from team --preset cloud --set roles.dev.agent=claude --set onFail.reworkRounds=1 --dry-run
 kanban kit apply claude-qa --project <ws> --dry-run   # then without --dry-run; --landing qa to switch landing too
 kanban kit show --project <ws>                          # every value and its source; then kanban doctor <path>
 ```
 
-**foo: team-cloud with three fallback triggers off.** foo ran on `team-cloud` (then named `team`) with overrides from before the team/project
-split. `migrate-overrides` turns them into project settings plus a user kit named by `--into` (its legacy
-`escalate.*` / `onOutage.then` keys are dropped as redundant, since `team-cloud` already has every trigger on and no
-approval, so no stored trigger override is left to shadow the kit), then the edit turns the three triggers off. The
-`qaFails` and `outage` triggers and everything else stay as foo has them:
+**foo: the team workflow with three fallback triggers off.** foo ran on `team-cloud` (the built-in team kit of the
+time, before that named `team`) with overrides from before the team/project split. `migrate-overrides` turned them
+into project settings plus a user kit named by `--into` (its legacy `escalate.*` / `onOutage.then` keys were dropped
+as redundant, since `team-cloud` already had every trigger on and no approval, so no stored trigger override was left
+to shadow the kit), then the edit turned the three triggers off. The `qaFails` and `outage` triggers and everything
+else stay as foo has them. `team-foo` is a full user kit, so the move to `team` and its presets changed nothing for
+foo; moving foo onto `team` (a custom team) would turn those triggers back on, and is the user's call:
 
 ```sh
 kanban kit migrate-overrides --project foo --into team-foo --dry-run   # then without --dry-run
@@ -838,7 +958,7 @@ write complete copies:
 
 Per-project models and facts belong in project settings, not in a copy of the kit: `kanban kit set` (the user or
 the project's orchestrator, [Project settings](#project-settings)), or at apply time
-`kanban kit apply team-cloud --project foo --set qa.blurb="Project: Pawsome…" --set 'land.postLand=[…]'` (`--set` takes
+`kanban kit apply team --preset cloud --project foo --set qa.blurb="Project: Pawsome…" --set 'land.postLand=[…]'` (`--set` takes
 only project settings; `--unset <key>` removes any stored key).
 
 What a kit can't do, on purpose:
@@ -847,5 +967,6 @@ What a kit can't do, on purpose:
   switches on by name. A hook API gets added only when a real kit needs one.
 - **No mechanics.** Landing mode, shadow, check scripts, limits and timings are core settings
   ([CONFIG.md](CONFIG.md)).
-- **No inheritance.** A kit is resolved only over `default`, never over another user kit or another workspace.
-  `kanban kit create --from` copies a kit instead, so a later change to the original doesn't reach the copy.
+- **No inheritance.** A kit is resolved only over `default` (`team` also with its preset), never over another user
+  kit or another workspace. `kanban kit create --from` copies a kit instead, so a later change to the original (or
+  its preset) doesn't reach the copy.

@@ -1,7 +1,7 @@
 {
 	"kit": 1,
-	"name": "team-cloud",
-	"description": "Cline juniors on tier-3 models, cross-vendor QA, same-model rework, then a fallback sibling on the tier-2 model (no approval), then the orchestrator",
+	"name": "legacy-team",
+	"description": "Test fixture: the built-in team-cloud kit as it was before the team kit and presets (2026-10-12), a full kit with tiers, QA routes and runoffs",
 	"roles": {
 		"dev": {
 			"agent": "cline",

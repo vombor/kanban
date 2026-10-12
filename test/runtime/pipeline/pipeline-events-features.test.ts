@@ -1,15 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { getBuiltInKits, getDefaultKit } from "../../../src/kits/resolve-kit";
+import { getDefaultKit } from "../../../src/kits/resolve-kit";
 import { createPipelineEventBus, type PipelineEventMap } from "../../../src/pipeline/events";
 import { createPipelineFeatureRegistry } from "../../../src/pipeline/features";
+import { getLegacyTeamKit } from "../../utilities/team-kits";
 
 function landedEvent(workspaceId: string): PipelineEventMap["landed"] {
 	return { workspaceId, taskId: "dev-1", at: 1, baseRef: "main", commit: "abc", via: "qa" };
 }
 
 function teamKit() {
-	const kit = getBuiltInKits().get("team-cloud");
+	const kit = getLegacyTeamKit();
 	if (!kit) {
 		throw new Error("team kit missing");
 	}

@@ -12,6 +12,7 @@
 // On resume all of that acts on the next evaluation, which the route asks for at once. The machine-wide
 // `pipeline.paused` is different: it stops the worker for every workspace, recovery included.
 import { type LandingMode, updateWorkspacePipelineEntry } from "../config/pipeline-config";
+import { formatKitSelection } from "../kits/renamed-kits";
 import { DEFAULT_KIT_NAME } from "../kits/resolve-kit";
 import type { PipelineDecisionLog } from "./decision-log";
 
@@ -23,6 +24,7 @@ export interface WorkspacePauseChange {
 	/** ISO time of the pause in force, or null. */
 	pausedAt: string | null;
 	landingMode: LandingMode;
+	/** The kit as shown: its name, or `team (<preset>)` / `team (custom)`. */
 	kitName: string;
 }
 
@@ -70,7 +72,10 @@ export async function setWorkspacePipelinePaused(input: SetWorkspacePauseInput):
 		},
 		input.configPath,
 	);
-	const kitName = settings.kit?.name ?? DEFAULT_KIT_NAME;
+	const kitName = formatKitSelection({
+		name: settings.kit?.name ?? DEFAULT_KIT_NAME,
+		preset: settings.kit?.preset ?? null,
+	});
 	if (changed) {
 		const reason = input.reason?.trim();
 		await input.decisionLog.append([

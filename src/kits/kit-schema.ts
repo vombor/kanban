@@ -15,6 +15,10 @@
 // is the team: a project gets another team by using another kit (`kanban kit apply`, by the user or the project's
 // orchestrator); kits themselves are made and edited only by the user.
 //
+// The built-in `team` kit is the one team workflow (user 2026-10-12); its models come from a preset
+// (`kitPresetSchema` below, `kits/presets/<name>.json`), which has no workflow key, or for a custom team from the
+// project's own role settings. So every preset and custom team runs the same flow.
+//
 // Legacy keys (`dev.agent`/`dev.model`, `qa.default`, `plan.agent`/`plan.model`, `escalate.*`, `onOutage.*`) still
 // parse in kit files and overrides; the resolver translates each layer into `roles`/`fallback` before merging
 // (src/kits/kit-legacy-keys.ts), so a resolved kit never has them and no reader looks at them.
@@ -390,6 +394,38 @@ export const kitDocumentObjectSchema = z
 	.strict();
 
 export type KitDocument = z.infer<typeof kitDocumentObjectSchema>;
+
+export const PRESET_SCHEMA_VERSION = 1;
+
+/**
+ * A preset of the `team` kit (`kits/presets/<name>.json`, user request 2026-10-12): only the models. Per role the
+ * agent, provider and model (or a tier of its own), the tier lists with their notes, plan candidates, the price region
+ * and the core settings its provider needs (`recommends.settings`, e.g. Lemonade's turn detector). The schema has no
+ * workflow key (onFail, fallback triggers or approval, QA rules, features, ...): those belong to the team kit alone,
+ * so a preset can't change them. It resolves as a layer between the team kit and the project settings (resolve-kit.ts).
+ */
+export const kitPresetSchema = z
+	.object({
+		preset: z.literal(PRESET_SCHEMA_VERSION),
+		name: kitNameSchema,
+		description: z.string().optional(),
+		roles: kitDocumentObjectSchema.shape.roles,
+		plan: z
+			.object({ candidates: z.array(kitPlanCandidateSchema).optional(), note: z.string().optional() })
+			.strict()
+			.optional(),
+		tiers: z.record(z.string(), z.array(kitTierEntrySchema)).optional(),
+		dropped: z.array(kitDroppedModelSchema).optional(),
+		tierRules: z.record(z.string(), z.string()).optional(),
+		tierNotes: z.record(z.string(), z.string()).optional(),
+		prices: z.object({ region: z.string().optional() }).strict().optional(),
+		recommends: z
+			.object({ settings: z.array(kitRecommendedSettingSchema).optional() })
+			.strict()
+			.optional(),
+	})
+	.strict();
+export type KitPreset = z.infer<typeof kitPresetSchema>;
 
 export interface KitIssue {
 	path: string;

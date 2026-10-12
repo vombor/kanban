@@ -7,9 +7,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTask, reassignTasks, registerTaskCommand } from "../../../src/commands/task";
 import type { RuntimeBoardCard, RuntimeTaskSessionSummary } from "../../../src/core/api-contract";
 import { DEV_ASSIGNMENT_LOG_FILENAME, resolveDevAssignment } from "../../../src/kits/dev-assignment";
-import { getKanbanGlobalConfigPath, getKanbanWorkspaceDataPath } from "../../../src/state/kanban-home";
+import {
+	getKanbanGlobalConfigPath,
+	getKanbanKitsPath,
+	getKanbanWorkspaceDataPath,
+} from "../../../src/state/kanban-home";
 import type * as WorkspaceStateModule from "../../../src/state/workspace-state";
 import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
+import { readLegacyTeamKitText } from "../../utilities/team-kits";
 import {
 	createBoard,
 	createCard,
@@ -53,6 +58,9 @@ const TEAM_TIER3 = { providerId: "bedrock", modelId: "us.openai.gpt-6.1-sol" };
 function writeKit(kit: string | null, extra: Record<string, unknown> = {}): void {
 	const path = getKanbanGlobalConfigPath();
 	mkdirSync(dirname(path), { recursive: true });
+	// A kit with tiers (cline on the tier3 pick): the legacy-team fixture as a user kit.
+	mkdirSync(getKanbanKitsPath(), { recursive: true });
+	writeFileSync(join(getKanbanKitsPath(), "legacy-team.json"), readLegacyTeamKitText());
 	const workspace = { ...(kit ? { kit: { name: kit } } : {}), ...extra };
 	writeFileSync(path, JSON.stringify({ workspaces: { [WORKSPACE_ID]: workspace } }));
 }
@@ -104,7 +112,7 @@ describe("kanban task reassign", () => {
 			expect(storedCard(taskId)?.agentId).toBeUndefined();
 			expect(readLog()).toEqual([]);
 
-			writeKit("team-cloud");
+			writeKit("legacy-team");
 			const revision = harness.store?.stored.revision;
 			const result = await reassign();
 			expect(statuses(result)).toEqual([[taskId, "reassigned"]]);
@@ -113,7 +121,7 @@ describe("kanban task reassign", () => {
 			expect(readLog()).toEqual([
 				expect.objectContaining({
 					taskId,
-					kit: "team-cloud",
+					kit: "legacy-team",
 					outcome: "applied",
 					source: "reassign",
 					created: { agentId: "cline", agentSettings: TEAM_TIER3 },
@@ -125,7 +133,7 @@ describe("kanban task reassign", () => {
 
 	it("keeps a card's own agent or model pick, and a reasoning effort alone is no pick", async () => {
 		await withTemporaryKanbanHome(async () => {
-			writeKit("team-cloud");
+			writeKit("legacy-team");
 			useStore({
 				backlog: [
 					createCard({ id: "claude", agentId: "claude" }),
@@ -151,7 +159,7 @@ describe("kanban task reassign", () => {
 
 	it("moves a card still on an older kit's assignment onto the current kit's, but not one the user changed", async () => {
 		await withTemporaryKanbanHome(async () => {
-			writeKit("team-cloud");
+			writeKit("legacy-team");
 			useStore({});
 			const first = (await createTask({ cwd: "/repo", title: "A", prompt: "A" })) as { task: { id: string } };
 			const second = (await createTask({ cwd: "/repo", title: "B", prompt: "B" })) as { task: { id: string } };
@@ -164,7 +172,7 @@ describe("kanban task reassign", () => {
 
 			writeKit("team-local");
 			const expected = await resolveDevAssignment({ workspaceId: WORKSPACE_ID, title: "A", prompt: "A" });
-			expect(expected).toMatchObject({ kitName: "team-local", outcome: "applied", agentId: "cline" });
+			expect(expected).toMatchObject({ kitName: "team (lemonade)", outcome: "applied", agentId: "cline" });
 			expect(expected.agentSettings?.modelId).not.toBe(TEAM_TIER3.modelId);
 
 			const result = await reassign();
@@ -189,7 +197,7 @@ describe("kanban task reassign", () => {
 
 	it("never changes a started card or a non-dev card", async () => {
 		await withTemporaryKanbanHome(async () => {
-			writeKit("team-cloud");
+			writeKit("legacy-team");
 			useStore(
 				{
 					backlog: [createCard({ id: "ranbefore" }), createCard({ id: "qa", role: "qa" })],
@@ -214,12 +222,12 @@ describe("kanban task reassign", () => {
 
 	it("--dry-run reports what each card would get and changes and logs nothing", async () => {
 		await withTemporaryKanbanHome(async () => {
-			writeKit("team-cloud");
+			writeKit("legacy-team");
 			useStore({ backlog: [createCard({ id: "a" })] });
 			const result = await reassign({ dryRun: true });
 			expect(result).toMatchObject({
 				dryRun: true,
-				kit: "team-cloud",
+				kit: "legacy-team",
 				tasks: [
 					{
 						id: "a",
@@ -237,7 +245,7 @@ describe("kanban task reassign", () => {
 
 	it("shadow: logs the proposal and leaves the card; the default kit has nothing to give", async () => {
 		await withTemporaryKanbanHome(async () => {
-			writeKit("team-cloud", { pipeline: { shadow: true } });
+			writeKit("legacy-team", { pipeline: { shadow: true } });
 			useStore({ backlog: [createCard({ id: "a" })] });
 			expect(statuses(await reassign())).toEqual([["a", "shadow"]]);
 			expect(storedCard("a")?.agentId).toBeUndefined();
@@ -251,7 +259,7 @@ describe("kanban task reassign", () => {
 
 	it("refuses an unknown task id without changing any card", async () => {
 		await withTemporaryKanbanHome(async () => {
-			writeKit("team-cloud");
+			writeKit("legacy-team");
 			useStore({ backlog: [createCard({ id: "a" })] });
 			await expect(reassign({ target: { taskIds: ["a", "missing"] } })).rejects.toThrow(
 				'Task "missing" was not found',
@@ -289,13 +297,13 @@ describe("the task commands' reassign wiring", () => {
 
 	it("task update --agent-id default on a kit-routed Backlog card says how to get the kit's agent", async () => {
 		await withTemporaryKanbanHome(async () => {
-			writeKit("team-cloud");
+			writeKit("legacy-team");
 			useStore({ backlog: [createCard({ id: "a", agentId: "claude" })] });
 			await run("update", "--task-id", "a", "--agent-id", "default", "--provider", "default", "--model", "default");
 			expect(storedCard("a")?.agentId).toBeUndefined();
 			expect(stderr).toHaveBeenCalledWith(
 				expect.stringContaining(
-					"Card a now runs on the selected agent. Kit team-cloud assigns cline on us.openai.gpt-6.1-sol",
+					"Card a now runs on the selected agent. Kit legacy-team assigns cline on us.openai.gpt-6.1-sol",
 				),
 			);
 

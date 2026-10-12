@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { getModelVendor, type QaPolicyAnswer } from "../../../src/kits/policy";
-import { getBuiltInKits, getDefaultKit, resolveKitLayers } from "../../../src/kits/resolve-kit";
 import { createCardHistory, createEffectiveCard } from "../../utilities/effective-card";
 import { createTeamPolicy, toFooEffectiveCard } from "../../utilities/legacy-team-fixtures";
+import { resolveLegacyTeamKit, resolveTeamKit } from "../../utilities/team-kits";
 
 // Ported from archive/devteam-kit:test/qa-route.test.cjs@9828540 (user rule 10/06: the QA vendor differs from the dev
 // vendor). OpenAI-built cards get Haiku 5.5 on Cline (4.5 until 2026-10-12) plus the "drive" rule; every other card gets the default QA
-// agent (Codex, with its own model config). Here the answers come from the built-in `team-cloud` kit alone.
+// agent (Codex, with its own model config). Here the answers come from foo's team routing alone (the legacy-team fixture, the built-in team-cloud kit before presets).
 const HAIKU = "us.anthropic.claude-haiku-5-5";
 const haiku = { kind: "qa", agentId: "cline", model: { provider: "bedrock", model: HAIKU }, route: "qa.routes[0]" };
 const codex = { kind: "qa", agentId: "codex", model: null, route: null };
@@ -26,13 +26,10 @@ function ruleNames(answer: QaPolicyAnswer): string[] {
 
 describe("team kit QA routing", () => {
 	it("names Haiku 5.5 wherever it named Haiku 4.5, and no route QAs a card from its own vendor", () => {
-		const team = getBuiltInKits().get("team-cloud");
-		const resolved = team ? resolveKitLayers(getDefaultKit(), team, {}) : null;
-		if (!resolved?.ok) {
-			throw new Error("team-cloud does not resolve");
-		}
-		const { kit } = resolved;
+		const kit = resolveLegacyTeamKit();
 		expect(JSON.stringify(kit)).not.toMatch(/haiku-4-5/u);
+		expect(JSON.stringify(resolveTeamKit("cloud"))).not.toMatch(/haiku-4-5/u);
+		expect(resolveTeamKit("cloud").roles?.qa?.model).toBe(HAIKU);
 		expect(kit.qa?.routes?.map((route) => route.model)).toEqual([HAIKU]);
 		expect(kit.tiers?.qa?.map((entry) => entry.model)).toContain(HAIKU);
 		expect(kit.qa?.requireDifferentVendor).toBe(true);

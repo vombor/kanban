@@ -46,9 +46,9 @@ recovery stays `report`, the watchdog stays `off`, and foo is not on landing `qa
 
 | Role | Who | Why |
 |---|---|---|
-| Dev cards | whatever the project's kit assigns at creation (`team-cloud`: Cline on the tier-3 model), else the selected agent | cheap, and comparable across models when every round is scored |
-| QA cards | the kit's `qaPolicy`: `team-cloud` picks by the dev card's model vendor (OpenAI-built cards → Cline on Haiku 5.5 plus a "drive the changed path" step, everything else → Codex). The QA vendor must differ from the dev vendor (user rule 2026-10-06) | an independent reviewer from another vendor. Haiku won calibration for OpenAI-built cards but once missed a defect on a path it never exercised, hence the drive step |
-| Plan cards | the kit's `plan` section (`team-cloud`: Claude on its CLI's default model, starting in plan mode; `default`: none) | the architect: turns a requirement into a reviewed spec and a card breakdown (§13). Separate from the orchestrator (user 2026-10-07), so planners can be benchmarked later |
+| Dev cards | whatever the project's kit assigns at creation (`team`: its preset's dev role, e.g. `cloud`: Codex on GPT-6.1 Sol, or a custom team's own; KITS.md "Presets"), else the selected agent | cheap, and comparable across models when every round is scored |
+| QA cards | the kit's `qaPolicy`: on `team`, `roles.qa` for every dev card (`cloud`: Cline on Claude Haiku 5.5); a user kit may route by the dev card's model vendor (`qa.routes`). The QA vendor must differ from the dev vendor (user rule 2026-10-06) | an independent reviewer from another vendor |
+| Plan cards | the kit's `plan` section (`team`: `roles.plan`, starting in plan mode, e.g. `cloud`: Cline on Claude Opus 5.5; `default`: none) | the architect: turns a requirement into a reviewed spec and a card breakdown (§13). Separate from the orchestrator (user 2026-10-07), so planners can be benchmarked later |
 | Orchestrator | the agent selected in Kanban settings, in the sidebar (`__home_agent__:<ws>:<agent>`), never a hard-coded id | the scrum master: escalations, starting cards, expanding approved plans, tooling |
 | Moving cards, landing, rework, nudges | the server and the pipeline worker, no LLM | deterministic, free and always on |
 
@@ -143,7 +143,7 @@ dev card stops ─▶ Review (settled) ─▶ snapshot refs/kanban/snapshots/<id
   would switch model is refused and escalated.
 - **Escalation to the orchestrator:** `qaflow.escalated`, `## ESCALATE` in the QA log, and the card to Backlog as
   `BLOCKED: …`. The watchdog writes ATTENTION.md and wakes the orchestrator. **The fallback** (the kit's
-  `roles.fallback` when the cause's `fallback.on` trigger is on; team, team-local and team-cline by default): the work is
+  `roles.fallback` when the cause's `fallback.on` trigger is on; every trigger on the `team` kit, for every preset and custom team): the work is
   tagged `preserve/<id>-<model>`, and a sibling card takes the task over on that model (left in Backlog when
   `fallback.requireApproval`). A takeover onto the model the card already runs on, or by a card
   that took its task over itself, goes to the orchestrator instead, so a fallback never hands the task on and on.
@@ -311,7 +311,7 @@ it also resumes Claude cards with `claude --continue` and a short resume note), 
   cost count twice. Models come from the session files, not the board, because board settings get edited after the
   work is done.
 - Lemonade loads one model at a time (`models.providerCapacity.lemonade.maxLoadedModels: 1`): recovery's work and
-  QA card starts on another Lemonade model wait while In Progress cards hold one (KITS.md, the `team-local` kit).
+  QA card starts on another Lemonade model wait while In Progress cards hold one (KITS.md, the `lemonade` preset).
   Lemonade QA cards use that capacity, never a cloud QA slot (§ "Two QA pools").
 
 ## 12. Where it runs
@@ -334,8 +334,8 @@ Planning is the architect's job and orchestration the scrum master's (user decis
 the code and writes the plan, and the orchestrator turns the approved plan into cards and runs them.
 
 1. **Requirement → plan card.** `kanban task create --role plan --title "Coupons" --prompt "<the requirement>"`.
-   The kit's `plan` section picks the planner's agent, model and plan mode (`team-cloud`: Claude, no model pin, plan
-   mode on). The card's prompt is the plan template (`src/kits/plan-prompt.ts`) around the requirement. The plan is
+   The kit's `plan` section picks the planner's agent, model and plan mode (`team`: `roles.plan` from its preset or
+   the project, plan mode on). The card's prompt is the plan template (`src/kits/plan-prompt.ts`) around the requirement. The plan is
    recorded in `data/<ws>/plans.json` with its slug. On a kit with `plan.enabled` off (`default`) this is
    refused: the one agent plans its own work, as before.
 2. **The planner** reads the codebase, then writes `docs/specs/<slug>.md` (problem, goals, non-goals,

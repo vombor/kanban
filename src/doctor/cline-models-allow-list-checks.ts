@@ -90,7 +90,7 @@ export async function checkClineModelsAllowList(context: ClineModelsAllowListChe
 				findings.push({
 					level: "warn",
 					area: "project",
-					message: `${workspaceId}: kit ${resolution.kitName} ${route.label} puts Cline cards on ${missing.provider} + ${missing.model}, which ${missing.provider}'s models record in Cline's models.json doesn't list, so Cline couldn't select it`,
+					message: `${workspaceId}: kit ${resolution.kitLabel} ${route.label} puts Cline cards on ${missing.provider} + ${missing.model}, which ${missing.provider}'s models record in Cline's models.json doesn't list, so Cline couldn't select it`,
 					hint: hintFor(missing.provider, context.modelsPath),
 				});
 			}

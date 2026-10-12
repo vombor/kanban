@@ -4,7 +4,7 @@ import { isKitProposalSelected } from "@/hooks/use-kit-dev-assignment";
 import type { RuntimeAgentId, RuntimeDevAssignmentResponse, RuntimeTaskAgentSettings } from "@/runtime/types";
 
 /**
- * Says where the create dialog's agent/model came from: "from kit `team-cloud`", or a shadow kit's unapplied proposal.
+ * Says where the create dialog's agent/model came from: "from kit `team (cloud)`", or a shadow kit's unapplied proposal.
  * Any agent and model may be picked: Kanban doesn't check the choice.
  */
 export function TaskKitAssignmentHint({

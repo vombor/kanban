@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { RuntimeBoardCard, RuntimeBoardColumnId } from "../../../../src/core/api-contract";
-import { getBuiltInKits, getDefaultKit } from "../../../../src/kits/resolve-kit";
+import { getDefaultKit } from "../../../../src/kits/resolve-kit";
 import { createRunoffsFeature, RUNOFF_ACTION_ATTEMPTS } from "../../../../src/kits/team/runoffs/runoffs-feature";
 import { readRunoffs } from "../../../../src/kits/team/runoffs/runoffs-store";
 import { createPipelineEventBus } from "../../../../src/pipeline/events";
@@ -14,11 +14,12 @@ import type { PipelineWorkspaceState } from "../../../../src/pipeline/pipeline-s
 import type { QaVerdict } from "../../../../src/pipeline/qa-verdict";
 import { createEffectiveCard } from "../../../utilities/effective-card";
 import { createPipelineWorkerHarness, createSnapshot } from "../../../utilities/pipeline-worker";
+import { getLegacyTeamKit } from "../../../utilities/team-kits";
 import { createTempDir } from "../../../utilities/temp-dir";
 import { createBoard, createCard } from "../../../utilities/workspace-state-store";
 
 function teamKit() {
-	const kit = getBuiltInKits().get("team-cloud");
+	const kit = getLegacyTeamKit();
 	if (!kit) {
 		throw new Error("team kit missing");
 	}

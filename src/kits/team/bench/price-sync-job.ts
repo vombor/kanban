@@ -3,7 +3,7 @@
 // Prices are machine-wide (one `data/prices/`), but which models matter and where a change is reported are per
 // workspace: every workspace whose resolved kit lists `bench` contributes its kit's tier and dropped models and its
 // ATTENTION.md. With no such workspace (the pod today: every project is on `default`), `kanban models prices sync`
-// falls back to the built-in `team-cloud` kit's models and reports to no ATTENTION.md.
+// falls back to the built-in `team` kit's cloud preset models and reports to no ATTENTION.md.
 //
 // The daily check (was review-watch's PRICE_SYNC toggle, archive/devteam-kit:services/review-watch.mjs@6da71597)
 // is a job the `bench` feature registers for each of its workspaces (bench-feature.ts); the watchdog runs it only in
@@ -14,13 +14,21 @@ import { readFile } from "node:fs/promises";
 import { type PipelineConfig, readPipelineConfig } from "../../../config/pipeline-config";
 import type { PipelineFeatureJob } from "../../../pipeline/features";
 import { getPricesDataPaths, getTeamBenchWorkspacePaths, type PricesDataPaths } from "../../../state/kanban-home";
+import { listKitRoles } from "../../kit-roles";
 import type { KitDocument } from "../../kit-schema";
-import { type KitCatalog, loadKitCatalog, resolveKitByName, resolveWorkspaceKit } from "../../resolve-kit";
+import {
+	type KitCatalog,
+	loadKitCatalog,
+	resolveKitByName,
+	resolveWorkspaceKit,
+	TEAM_KIT_NAME,
+} from "../../resolve-kit";
 import { type PriceSyncResult, runPriceSync } from "./price-sync";
 import { isUnmeteredProvider, loadPriceTable } from "./prices";
 
 const DEFAULT_PRICES_REGION = "us-west-2";
-const TEAM_KIT_NAME = "team-cloud";
+/** With no project on a bench kit, the price check proposes the cloud preset's models (the paid ones). */
+const PRICED_PRESET_NAME = "cloud";
 export const PRICE_CHECK_JOB_NAME = "prices-check";
 export const PRICE_CHECK_EVERY_MIN = 24 * 60;
 // A job that comes due a little early (worker restarts, clock drift) doesn't fetch twice in one day.
@@ -42,7 +50,10 @@ export interface BenchPriceContext {
  * ClinePass) cost nothing per token, skipped.
  */
 export function listKitModels(kit: KitDocument): string[] {
-	const models = [...Object.values(kit.tiers ?? {}).flat(), ...(kit.dropped ?? [])]
+	const roleModels = listKitRoles(kit).flatMap((role) =>
+		role.model ? [{ provider: role.model.provider, model: role.model.model }] : [],
+	);
+	const models = [...roleModels, ...Object.values(kit.tiers ?? {}).flat(), ...(kit.dropped ?? [])]
 		.filter((entry) => !isUnmeteredProvider(entry.provider))
 		.map((entry) => entry.model);
 	return [...new Set(models)];
@@ -57,7 +68,7 @@ export function collectBenchPriceContext(config: PipelineConfig, catalog: KitCat
 		}
 	}
 	if (!kits.length) {
-		const team = resolveKitByName(catalog, TEAM_KIT_NAME);
+		const team = resolveKitByName(catalog, TEAM_KIT_NAME, {}, PRICED_PRESET_NAME);
 		const kit = team.ok ? team.kit : null;
 		return {
 			workspaceIds: [],
@@ -72,7 +83,8 @@ export function collectBenchPriceContext(config: PipelineConfig, catalog: KitCat
 		region: kits.find((entry) => entry.kit.prices?.region)?.kit.prices?.region ?? DEFAULT_PRICES_REGION,
 		kitModels: [...new Set(kits.flatMap((entry) => listKitModels(entry.kit)))],
 		attentionFiles: kits.map((entry) => getTeamBenchWorkspacePaths(entry.workspaceId).attention),
-		autoSync: kits.some((entry) => entry.kit.prices?.autoSync !== false),
+		// A kit with only $0 models (local or subscription providers) has nothing to price.
+		autoSync: kits.some((entry) => entry.kit.prices?.autoSync !== false && listKitModels(entry.kit).length > 0),
 	};
 }
 

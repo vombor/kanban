@@ -131,7 +131,7 @@ async function loadTarget(specArgument: string, options: CalibrateOptions): Prom
 	const kit = resolution.kit;
 	if (!(kit.features ?? []).includes("calibration") && !options.force && !options.print) {
 		throw new Error(
-			`workspace ${target.workspaceId} is on kit ${resolution.kitName}, which doesn't list the calibration feature (--force to run anyway)`,
+			`workspace ${target.workspaceId} is on kit ${resolution.kitLabel}, which doesn't list the calibration feature (--force to run anyway)`,
 		);
 	}
 	const capacityIssue = findCalibrationCapacityIssue(spec, config.models.providerCapacity);
@@ -143,7 +143,7 @@ async function loadTarget(specArgument: string, options: CalibrateOptions): Prom
 		const unknown = model.rules.filter((rule) => !Object.hasOwn(known, rule));
 		if (unknown.length > 0) {
 			throw new Error(
-				`model ${model.key}: rule ${unknown.join(", ")} is not in kit ${resolution.kitName}'s qa.rules (${Object.keys(known).join(", ") || "none"})`,
+				`model ${model.key}: rule ${unknown.join(", ")} is not in kit ${resolution.kitLabel}'s qa.rules (${Object.keys(known).join(", ") || "none"})`,
 			);
 		}
 	}

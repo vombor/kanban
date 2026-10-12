@@ -61,7 +61,7 @@ Nothing is inherited from another workspace.
 | `checks.enabled` | null | scripted checks on each submitted snapshot. null = on only with landing `qa` on a kit other than `default` |
 | `checks.scripts` | `typecheck`, `lint`, `test`, `build` | the project's npm scripts to run (missing ones are skipped) |
 | `recovery.enabled` | `true` | recovery (nudges, outage holds, restart resumes) for this workspace, once `pipeline.recovery.mode` is `on` |
-| `kit` | null (= `default`) | `{ name, overrides }`; overrides are dotted kit keys ([KITS.md](KITS.md)). The project's settings: every model the kit names and project facts, set by the user or the project's orchestrator (`kanban kit set`); the name changes with `kanban kit apply`, by the user or the project's orchestrator; flow changes need another kit, and kits are made and edited only by the user |
+| `kit` | null (= `default`) | `{ name, preset, overrides }`; overrides are dotted kit keys ([KITS.md](KITS.md)). `preset` is the `team` kit's model preset (`cloud`, `cline`, `lemonade`) or `null` (default): `team` with `null` is a custom team whose role models are its overrides, and every other kit must have `null`; it changes only with `kanban kit apply team --preset <name>` / `--custom`, never as an override. The project's settings: every model the kit names and project facts, set by the user or the project's orchestrator (`kanban kit set`); the name changes with `kanban kit apply`, by the user or the project's orchestrator; flow changes need another kit, and kits are made and edited only by the user |
 | `guardrails.enabled` | null (= `guardrails.enabled`) | task-card guardrails for this workspace |
 | `guardrails.extraDenyCommands`, `.extraWritableDirs` | `[]` | added to the machine-wide lists; a workspace can only tighten them |
 | `isolation.mode` | null (= `isolation.mode`) | project isolation for this workspace: `off`, `report`, `enforce` ([project-isolation.md](../fork/project-isolation.md)) |
@@ -205,7 +205,7 @@ session `__home_agent__:<ws>:<selected agent>` of the workspace the items are ab
 | `models.lists.lemonade.url`, `.requireLabels` | `http://localhost:13305`, `["tool-calling"]` | the model-lists route `GET /api/model-lists/lemonade` (read on every request). Cline is not pointed at it: its Lemonade `models` record in models.json is the allow list ([MODELS.md](MODELS.md)) |
 | `models.lists.lemonade.include` | null | the models the model-lists route lists, a non-empty list of model ids (the models stay installed on Lemonade). null = every model that passes `requireLabels`; a list = only those ids, and only while they still pass it. It no longer reaches Cline: Cline offers its models.json `models` record, which the Kanban orchestrator curates and `kanban setup-provider lemonade` never adds to or removes from. Set it with `kanban config set models.lists.lemonade.include <ids...>`, remove it with `kanban config unset models.lists.lemonade.include` (the user's commands; `config set` takes only this key) |
 | `workspaces.<id>.models.allowProvisional` | removed | the vetted model registry's provisional switch (removed 2026-10-12): still parsed and ignored; `kanban doctor` warns and `--fix` deletes it. Any model may be on any role ([MODELS.md](MODELS.md)) |
-| `workspaces.<id>.kit.name` `"team"` | renamed | the built-in kit `team` is `team-cloud` since 2026-10-12: an old entry naming `team` runs on `team-cloud`; `kanban doctor` warns and `--fix` (and `kanban config import-kit`) rewrites the name ([KITS.md](KITS.md#the-team-cloud-kit)) |
+| `workspaces.<id>.kit.name` `"team-cloud"`, `"team-local"`, `"team-cline"` | renamed | the built-in kits were replaced on 2026-10-12 by `team` with a preset: an old entry runs on `team` + `cloud`, `lemonade` or `cline` (overrides unchanged); `kanban doctor` warns and `--fix` (and `kanban config import-kit`) rewrites it to `{ name: "team", preset: … }` ([KITS.md](KITS.md#renamed-kits)). A stored `team` is the team kit itself again (the same day's `team` → `team-cloud` rename is gone) |
 | `agents.pretrust` | `true` | pre-trust every workspace's main repo root for Claude Code and Codex |
 | `agents.cline.dataDir` | null (`~/.cline/data`) | Cline's sessions and providers |
 | `agents.cline.turnDetector.mode` | `report` | Cline CLI turn-end detector and session sync's idle-TUI check: `off` / `report` / `on`. `report` while the legacy column-sync logic is still the reference |
@@ -289,7 +289,7 @@ Model providers' Cline settings, written by `kanban setup-provider <provider>`
 ## From kit.config.json
 
 `kanban config import-kit [--dry-run]` maps the legacy kit's config (plan §3.5). Each project with QA on gets kit
-`team-cloud` (values that differ become overrides), landing `qa` and shadow. Every other project gets `default` with
+`team` with preset `cloud` (values that differ become overrides), landing `qa` and shadow. Every other project gets `default` with
 landing `off`. Top-level routing is never copied onto a project. The main renames:
 
 | kit.config.json | config.json |

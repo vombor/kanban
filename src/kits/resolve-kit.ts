@@ -1,7 +1,8 @@
 // The one place kit files and workspace overrides are read and merged (plan §3.4).
 //
 // A value comes from, first match wins: the workspace's project settings (`kit.overrides`, dotted key → value,
-// src/kits/project-settings.ts) → the named kit → the `default` kit. Objects merge key by key; arrays and scalars are replaced, not merged. Nothing is inherited from
+// src/kits/project-settings.ts) → the preset (`team` kit only, `kits/presets/<name>.json`: its models) → the named
+// kit → the `default` kit. Objects merge key by key; arrays and scalars are replaced, not merged. Nothing is inherited from
 // another workspace or a top-level key: a workspace without a `kit` entry gets `default`, which answers "no" to
 // every routing question. That is the structural fix for the 2026-10-06 incident (a new board got the dev-team
 // kit's routing because a project entry inherited the top-level toggles, archive/devteam-kit:lib/config.cjs).
@@ -12,24 +13,38 @@
 // reference the same way). An override key can name a list entry by its index (`tiers.dev.0.model`,
 // `qa.routes.1.agent`): it changes that entry of the merged list and never adds one.
 //
-// Built-in kits (`default`, `team-cloud`, `team-local`, `team-cline`) ship in the package (`kits/*.json`). User kits are data
-// files in `$KANBAN_HOME/kits/<name>.json`; a user kit with a built-in name, or the old name of a renamed one
-// (renamed-kits.ts), is refused.
+// Built-in kits (`default`, `team`) and the team kit's presets (`cloud`, `cline`, `lemonade`) ship in the package
+// (`kits/*.json`, `kits/presets/*.json`). The team kit is the one workflow every team shares (user 2026-10-12); a
+// preset only names models (kitPresetSchema has no workflow key), and `team` without a preset is a custom team whose
+// models are the project's role settings. User kits are data files in `$KANBAN_HOME/kits/<name>.json`; a user kit
+// with a built-in name, or the old name of a renamed one (renamed-kits.ts), is refused.
 import { readdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
 import defaultKitJson from "../../kits/default.json" with { type: "json" };
-import teamClineKitJson from "../../kits/team-cline.json" with { type: "json" };
-import teamCloudKitJson from "../../kits/team-cloud.json" with { type: "json" };
-import teamLocalKitJson from "../../kits/team-local.json" with { type: "json" };
+import clinePresetJson from "../../kits/presets/cline.json" with { type: "json" };
+import cloudPresetJson from "../../kits/presets/cloud.json" with { type: "json" };
+import lemonadePresetJson from "../../kits/presets/lemonade.json" with { type: "json" };
+import teamKitJson from "../../kits/team.json" with { type: "json" };
 import { getWorkspacePipelineSettings, type PipelineConfig } from "../config/pipeline-config";
 import { getKanbanKitsPath } from "../state/kanban-home";
 import { translateLegacyKitLayer, translateLegacyOverrides } from "./kit-legacy-keys";
-import { formatKitIssues, type KitDocument, kitDocumentObjectSchema, kitDocumentSchema } from "./kit-schema";
-import { describeRenamedKit, getRenamedKitName, RENAMED_BUILT_IN_KITS } from "./renamed-kits";
+import {
+	formatKitIssues,
+	type KitDocument,
+	type KitPreset,
+	kitDocumentObjectSchema,
+	kitDocumentSchema,
+	kitPresetSchema,
+} from "./kit-schema";
+import { describeRenamedKit, formatKitSelection, getRenamedKit, RENAMED_BUILT_IN_KITS } from "./renamed-kits";
 
 export const DEFAULT_KIT_NAME = "default";
-export const BUILT_IN_KIT_NAMES: readonly string[] = ["default", "team-cloud", "team-local", "team-cline"];
+/** The kit that holds the team workflow; the only kit with presets. */
+export const TEAM_KIT_NAME = "team";
+export const BUILT_IN_KIT_NAMES: readonly string[] = [DEFAULT_KIT_NAME, TEAM_KIT_NAME];
+/** The team kit's presets, in the order a picker offers them. */
+export const BUILT_IN_PRESET_NAMES: readonly string[] = ["cloud", "cline", "lemonade"];
 
 /** True for a built-in kit's name or a renamed one's old name: no user kit may have it. */
 export function isReservedKitName(name: string): boolean {
@@ -37,7 +52,7 @@ export function isReservedKitName(name: string): boolean {
 }
 
 /** Keys a workspace override may not set: they identify the kit. */
-const NON_OVERRIDABLE_KEYS: ReadonlySet<string> = new Set(["kit", "name"]);
+const NON_OVERRIDABLE_KEYS: ReadonlySet<string> = new Set(["kit", "name", "preset"]);
 
 export type KitOrigin = { kind: "built-in" } | { kind: "user"; path: string };
 
@@ -48,6 +63,8 @@ export interface KitCatalogEntry {
 
 export interface KitCatalog {
 	kits: Map<string, KitCatalogEntry>;
+	/** The team kit's presets (built-in only). */
+	presets: Map<string, KitPreset>;
 	/** User kit files that were refused, with the reason. */
 	errors: Array<{ path: string; error: string }>;
 }
@@ -55,7 +72,12 @@ export interface KitCatalog {
 /** The source of a value a workspace's project settings set. */
 export const PROJECT_SETTING_SOURCE = "project";
 
-/** Where a resolved value came from: `"project"` (a project setting), the named kit's name, or `"default"`. */
+/** The source of a value a preset sets: `preset:<name>`. */
+export function getPresetSettingSource(preset: string): string {
+	return `preset:${preset}`;
+}
+
+/** Where a resolved value came from: `"project"` (a project setting), `preset:<name>`, the named kit's name, or `"default"`. */
 export type KitValueSource = string;
 
 export interface ResolvedKit {
@@ -72,6 +94,12 @@ export interface WorkspaceKitResolution extends ResolvedKit {
 	requestedKitName: string | null;
 	/** The kit actually used (`default` when the requested one is missing or invalid). */
 	kitName: string;
+	/** The preset in the workspace's config, or null (no preset: a custom team, or another kit). */
+	requestedPresetName: string | null;
+	/** The preset actually used (null when the kit fell back to `default`). */
+	presetName: string | null;
+	/** The kit as shown: its name, or `team (<preset>)` / `team (custom)` (formatKitSelection). */
+	kitLabel: string;
 	/** The project settings as stored (`workspaces.<id>.kit.overrides`, legacy keys included). */
 	overrides: Record<string, unknown>;
 	issues: string[];
@@ -95,12 +123,43 @@ let builtInKits: Map<string, KitDocument> | null = null;
 
 export function getBuiltInKits(): Map<string, KitDocument> {
 	builtInKits ??= new Map([
-		["default", parseBuiltInKit(defaultKitJson, "default")],
-		["team-cloud", parseBuiltInKit(teamCloudKitJson, "team-cloud")],
-		["team-local", parseBuiltInKit(teamLocalKitJson, "team-local")],
-		["team-cline", parseBuiltInKit(teamClineKitJson, "team-cline")],
+		[DEFAULT_KIT_NAME, parseBuiltInKit(defaultKitJson, DEFAULT_KIT_NAME)],
+		[TEAM_KIT_NAME, parseBuiltInKit(teamKitJson, TEAM_KIT_NAME)],
 	]);
 	return builtInKits;
+}
+
+function parseBuiltInPreset(raw: unknown, name: string): KitPreset {
+	const parsed = kitPresetSchema.safeParse(raw);
+	if (!parsed.success) {
+		throw new Error(`Built-in preset ${name} is invalid: ${formatKitIssues(parsed.error)}`);
+	}
+	if (parsed.data.name !== name) {
+		throw new Error(`Built-in preset ${name} is named "${parsed.data.name}"`);
+	}
+	return parsed.data;
+}
+
+let builtInPresets: Map<string, KitPreset> | null = null;
+
+/** The team kit's presets; each must resolve over the team kit (checked here, so a broken preset fails at once). */
+export function getBuiltInPresets(): Map<string, KitPreset> {
+	if (!builtInPresets) {
+		const presets = new Map([
+			["cloud", parseBuiltInPreset(cloudPresetJson, "cloud")],
+			["cline", parseBuiltInPreset(clinePresetJson, "cline")],
+			["lemonade", parseBuiltInPreset(lemonadePresetJson, "lemonade")],
+		]);
+		const team = getBuiltInKits().get(TEAM_KIT_NAME);
+		for (const [name, preset] of presets) {
+			const resolved = team ? resolveKitLayers(getDefaultKit(), team, {}, preset) : null;
+			if (!resolved?.ok) {
+				throw new Error(`Built-in preset ${name} does not resolve: ${resolved ? resolved.error : "no team kit"}`);
+			}
+		}
+		builtInPresets = presets;
+	}
+	return builtInPresets;
 }
 
 export function getDefaultKit(): KitDocument {
@@ -121,11 +180,11 @@ export function parseUserKit(
 		return { ok: false, error: formatKitIssues(parsed.error) };
 	}
 	if (isReservedKitName(parsed.data.name)) {
-		const renamed = getRenamedKitName(parsed.data.name);
+		const renamed = getRenamedKit(parsed.data.name);
 		return {
 			ok: false,
 			error: renamed
-				? `"${parsed.data.name}" is the old name of the built-in kit ${renamed}; a user kit can't take it`
+				? `"${parsed.data.name}" is the old name of a built-in kit (${describeRenamedKit(parsed.data.name, renamed)}); a user kit can't take it`
 				: `"${parsed.data.name}" is a built-in kit name; a user kit can't replace it`,
 		};
 	}
@@ -146,6 +205,7 @@ export async function loadKitCatalog(kitsDir: string = getKanbanKitsPath()): Pro
 	for (const [name, kit] of getBuiltInKits()) {
 		kits.set(name, { kit, origin: { kind: "built-in" } });
 	}
+	const presets = new Map(getBuiltInPresets());
 	const errors: KitCatalog["errors"] = [];
 	let fileNames: string[];
 	try {
@@ -155,7 +215,7 @@ export async function loadKitCatalog(kitsDir: string = getKanbanKitsPath()): Pro
 		if (!isMissingFileError(error)) {
 			errors.push({ path: kitsDir, error: error instanceof Error ? error.message : String(error) });
 		}
-		return { kits, errors };
+		return { kits, presets, errors };
 	}
 	for (const fileName of fileNames) {
 		const path = join(kitsDir, fileName);
@@ -173,7 +233,7 @@ export async function loadKitCatalog(kitsDir: string = getKanbanKitsPath()): Pro
 			errors.push({ path, error: parsed.error });
 		}
 	}
-	return { kits, errors };
+	return { kits, presets, errors };
 }
 
 function mergeLayers(base: unknown, layer: unknown): unknown {
@@ -213,7 +273,25 @@ function mergeKitLayer(base: PlainObject, layer: PlainObject): PlainObject {
 			dropReplacedRoleChoice(role, hasModel ? "model" : "tier");
 		}
 	}
+	// A layer's recommended settings add to the ones below (a preset's provider settings next to the team's recovery
+	// settings); the same key is the layer's.
+	const baseSettings = readRecommendedSettings(base);
+	const layerSettings = readRecommendedSettings(layer);
+	if (baseSettings.length > 0 && layerSettings.length > 0) {
+		const layerKeys = new Set(layerSettings.map((setting) => setting.key));
+		(merged.recommends as PlainObject).settings = [
+			...structuredClone(baseSettings.filter((setting) => !layerKeys.has(setting.key))),
+			...structuredClone(layerSettings),
+		];
+	}
 	return merged;
+}
+
+function readRecommendedSettings(layer: PlainObject): Array<PlainObject & { key: unknown }> {
+	const settings = isPlainObject(layer.recommends) ? layer.recommends.settings : undefined;
+	return Array.isArray(settings)
+		? settings.filter((setting): setting is PlainObject & { key: unknown } => isPlainObject(setting))
+		: [];
 }
 
 function splitOverrideKey(key: string): string[] | string {
@@ -323,17 +401,26 @@ function listLeafPaths(value: unknown, prefix: string[] = []): string[][] {
 	return Object.entries(value).flatMap(([key, child]) => listLeafPaths(child, [...prefix, key]));
 }
 
+/** A preset as a kit layer: its document without the `preset`/`name`/`description` keys, which identify it. */
+function toPresetLayer(preset: KitPreset): PlainObject {
+	const { preset: _version, name: _name, description: _description, ...layer } = preset;
+	return layer as PlainObject;
+}
+
 /**
- * Merges `default` ← `kit` ← `overrides` and validates the result with the full (strict) kit schema, so an unknown
- * override key or a tier without a usable model is an error here.
+ * Merges `default` ← `kit` ← `preset` ← `overrides` and validates the result with the full (strict) kit schema, so
+ * an unknown override key or a tier without a usable model is an error here.
  */
 export function resolveKitLayers(
 	defaultKit: KitDocument,
 	kit: KitDocument,
 	overrides: Record<string, unknown>,
+	preset: KitPreset | null = null,
 ): KitResolution {
 	const kitLayer = translateLegacyKitLayer(kit as unknown as PlainObject).layer;
-	const merged = mergeKitLayer(translateLegacyKitLayer(defaultKit as unknown as PlainObject).layer, kitLayer);
+	const presetLayer = preset ? toPresetLayer(preset) : null;
+	const kitMerged = mergeKitLayer(translateLegacyKitLayer(defaultKit as unknown as PlainObject).layer, kitLayer);
+	const merged = presetLayer ? mergeKitLayer(kitMerged, presetLayer) : kitMerged;
 	const projectSettings = translateLegacyOverrides(overrides).overrides;
 	for (const [key, value] of Object.entries(projectSettings)) {
 		const error = applyOverride(merged, key, value);
@@ -360,6 +447,8 @@ export function resolveKitLayers(
 			)
 		) {
 			sources[key] = PROJECT_SETTING_SOURCE;
+		} else if (preset && presetLayer && hasPath(presetLayer, segments)) {
+			sources[key] = getPresetSettingSource(preset.name);
 		} else if (kit.name !== defaultKit.name && hasPath(kitLayer, segments)) {
 			sources[key] = kit.name;
 		} else {
@@ -369,27 +458,54 @@ export function resolveKitLayers(
 	return { ok: true, kit: parsed.data, sources };
 }
 
-/** A kit by name from the catalog, resolved over `default` with optional overrides. */
+/** Why `preset` can't be used with kit `name`, or null. */
+export function describePresetMisuse(catalog: KitCatalog, name: string, preset: string | null): string | null {
+	if (preset === null) {
+		return null;
+	}
+	if (name !== TEAM_KIT_NAME) {
+		return `kit "${name}" has no presets (only the ${TEAM_KIT_NAME} kit has: ${[...catalog.presets.keys()].join(", ")})`;
+	}
+	if (!catalog.presets.has(preset)) {
+		return `unknown preset "${preset}" (known: ${[...catalog.presets.keys()].join(", ")})`;
+	}
+	return null;
+}
+
+/**
+ * A kit by name from the catalog, resolved over `default` with optional overrides; `preset` picks the team kit's
+ * models (null: none, the custom team for `team`).
+ */
 export function resolveKitByName(
 	catalog: KitCatalog,
 	name: string,
 	overrides: Record<string, unknown> = {},
+	preset: string | null = null,
 ): KitResolution {
 	const entry = catalog.kits.get(name);
-	const renamed = getRenamedKitName(name);
+	const renamed = getRenamedKit(name);
 	if (!entry && renamed) {
 		return { ok: false, error: describeRenamedKit(name, renamed) };
 	}
 	if (!entry) {
 		return { ok: false, error: `unknown kit "${name}" (known: ${[...catalog.kits.keys()].join(", ")})` };
 	}
-	return resolveKitLayers(getDefaultKit(), entry.kit, overrides);
+	const misuse = describePresetMisuse(catalog, name, preset);
+	if (misuse) {
+		return { ok: false, error: misuse };
+	}
+	return resolveKitLayers(
+		getDefaultKit(),
+		entry.kit,
+		overrides,
+		preset ? (catalog.presets.get(preset) ?? null) : null,
+	);
 }
 
 /**
- * The kit a workspace runs on. Falls back to `default` (with an issue) when the configured kit is missing or its
- * overrides don't validate: `default` answers "no" to everything, which is the safe direction. A config that still
- * names a renamed built-in kit already reads as its new name (workspaceKitRefSchema).
+ * The kit a workspace runs on. Falls back to `default` (with an issue) when the configured kit or preset is missing
+ * or its overrides don't validate: `default` answers "no" to everything, which is the safe direction. A config that
+ * still names a renamed built-in kit already reads as the kit and preset that replaced it (workspaceKitRefSchema).
  */
 export function resolveWorkspaceKit(
 	config: PipelineConfig,
@@ -398,14 +514,27 @@ export function resolveWorkspaceKit(
 ): WorkspaceKitResolution {
 	const kitRef = getWorkspacePipelineSettings(config, workspaceId).kit;
 	const requestedKitName = kitRef?.name ?? null;
+	const requestedPresetName = kitRef?.preset ?? null;
 	const overrides = kitRef?.overrides ?? {};
 	const issues: string[] = [];
 	if (requestedKitName !== null) {
-		const resolved = resolveKitByName(catalog, requestedKitName, overrides);
+		const resolved = resolveKitByName(catalog, requestedKitName, overrides, requestedPresetName);
 		if (resolved.ok) {
-			return { workspaceId, requestedKitName, kitName: requestedKitName, overrides, issues, ...resolved };
+			return {
+				workspaceId,
+				requestedKitName,
+				kitName: requestedKitName,
+				requestedPresetName,
+				presetName: requestedPresetName,
+				kitLabel: formatKitSelection({ name: requestedKitName, preset: requestedPresetName }),
+				overrides,
+				issues,
+				...resolved,
+			};
 		}
-		issues.push(`workspaces.${workspaceId}.kit (${requestedKitName}): ${resolved.error}; using the default kit`);
+		const label =
+			requestedPresetName === null ? requestedKitName : `${requestedKitName}, preset ${requestedPresetName}`;
+		issues.push(`workspaces.${workspaceId}.kit (${label}): ${resolved.error}; using the default kit`);
 	}
 	const fallback = resolveKitLayers(getDefaultKit(), getDefaultKit(), {});
 	if (!fallback.ok) {
@@ -415,6 +544,9 @@ export function resolveWorkspaceKit(
 		workspaceId,
 		requestedKitName,
 		kitName: DEFAULT_KIT_NAME,
+		requestedPresetName,
+		presetName: null,
+		kitLabel: DEFAULT_KIT_NAME,
 		overrides,
 		issues,
 		kit: fallback.kit,

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { parsePipelineConfig } from "../../../../../src/config/pipeline-config";
-import { getBuiltInKits, getDefaultKit } from "../../../../../src/kits/resolve-kit";
+import { getDefaultKit } from "../../../../../src/kits/resolve-kit";
 import type { CardMetrics } from "../../../../../src/kits/team/bench/card-metrics";
 import { createScoreboardFeature } from "../../../../../src/kits/team/scoreboard/scoreboard-feature";
 import {
@@ -18,6 +18,7 @@ import { getUnscoredCardRole } from "../../../../../src/kits/team/scoreboard/sco
 import { createPipelineEventBus, type PipelineEventMap } from "../../../../../src/pipeline/events";
 import { createPipelineFeatureRegistry } from "../../../../../src/pipeline/features";
 import { getTeamBenchWorkspacePaths } from "../../../../../src/state/kanban-home";
+import { getLegacyTeamKit } from "../../../../utilities/team-kits";
 import { createTempDir } from "../../../../utilities/temp-dir";
 
 function metricsFor(devId: string, model = "us.moonshotai.kimi-k3"): CardMetrics {
@@ -66,7 +67,7 @@ function line(devId: string, round: number, verdict: ScoreboardLine["verdict"], 
 }
 
 function teamKit() {
-	const kit = getBuiltInKits().get("team-cloud");
+	const kit = getLegacyTeamKit();
 	if (!kit) {
 		throw new Error("team kit missing");
 	}

@@ -2,6 +2,7 @@ import type { Command } from "commander";
 
 import { readPipelineConfig } from "../config/pipeline-config";
 import { setKanbanRuntimePort } from "../core/runtime-endpoint";
+import { formatKitSelection } from "../kits/renamed-kits";
 import { type AddProjectResult, addProject } from "../projects/project-add";
 import { type CreateProjectResult, createProject, DEFAULT_INITIAL_BRANCH } from "../projects/project-create";
 import { resolveProjectInputPath } from "../projects/project-path";
@@ -10,7 +11,7 @@ import { syncProjectSections } from "../projects/project-sections";
 import { formatUnlinkIgnoredResults, runProjectUnlinkIgnored } from "../projects/project-unlink-ignored";
 import { createProcProcessTableReader, isProcessTableSupported } from "../server/process-table";
 import { loadWorktreeLinkRule } from "../workspace/worktree-link-rule";
-import { parseLandingMode } from "./kit";
+import { parseLandingMode, parsePresetOption, parseSetAssignments } from "./kit";
 import { createTerminalKitPrompt } from "./project-kit-prompt";
 import { resolveWorkspaceTarget } from "./workspace-target";
 
@@ -33,7 +34,7 @@ function formatAddResult(result: AddProjectResult): string[] {
 	lines.push(...result.warnings.map((warning) => `note: ${warning}`));
 	lines.push(
 		"",
-		`Kit ${result.kitName}, landing ${result.landingMode}.`,
+		`Kit ${formatKitSelection({ name: result.kitName, preset: result.presetName })}, landing ${result.landingMode}.`,
 		`  kanban kit show --project ${result.workspaceId}   what the kit decides for this project`,
 		`  kanban doctor ${result.repoPath}   check it`,
 	);
@@ -109,6 +110,25 @@ function formatRenameResult(result: ProjectRenameIdResult, dryRun: boolean): str
 	return lines;
 }
 
+function collect(value: string, previous: string[]): string[] {
+	return [...previous, value];
+}
+
+/** `--preset`/`--custom`/`--set` of project add|create, as the kit picks of the new project. */
+function readKitPickOptions(options: { kit?: string; preset?: string; custom?: boolean; set: string[] }): {
+	preset?: string | null;
+	roleSettings?: Record<string, unknown>;
+} {
+	const preset = parsePresetOption(options);
+	if (options.kit === undefined && (preset !== undefined || options.set.length > 0)) {
+		throw new Error("--preset, --custom and --set pick the models of --kit team; give --kit team too.");
+	}
+	return {
+		...(preset !== undefined ? { preset } : {}),
+		...(options.set.length > 0 ? { roleSettings: parseSetAssignments(options.set) } : {}),
+	};
+}
+
 export function registerProjectCommand(program: Command): void {
 	const project = program.command("project").description("Add Kanban projects and keep their managed files current.");
 
@@ -125,6 +145,17 @@ export function registerProjectCommand(program: Command): void {
 			"--kit <name>",
 			"Routing kit for a new project (kanban kit list; default: default, asked on a terminal). An unknown kit is refused before the project is added.",
 		)
+		.option("--preset <name>", "The team kit's models: a preset (kanban kit presets).")
+		.option(
+			"--custom",
+			"The team kit with your own models: --set roles.dev.agent=... --set roles.qa.agent=... (required).",
+		)
+		.option(
+			"--set <key=value>",
+			"A custom team's role model: roles.<role>.agent|provider|model=<value>. Repeatable.",
+			collect,
+			[],
+		)
 		.option("--landing <mode>", "Landing mode: off, commit, pr or qa (default off).")
 		.option("--base <branch>", "The branch cards land on (default: detected).")
 		.option("--name <name>", "Display name (default: the repo directory name).")
@@ -137,6 +168,9 @@ export function registerProjectCommand(program: Command): void {
 				path: string,
 				options: {
 					kit?: string;
+					preset?: string;
+					custom?: boolean;
+					set: string[];
 					landing?: string;
 					base?: string;
 					name?: string;
@@ -149,6 +183,7 @@ export function registerProjectCommand(program: Command): void {
 					const result = await addProject({
 						repoPath: resolveProjectInputPath(path, process.cwd()),
 						kit: options.kit,
+						...readKitPickOptions(options),
 						chooseKit: createTerminalKitPrompt(),
 						landing: parseLandingMode(options.landing),
 						base: options.base,
@@ -181,17 +216,38 @@ export function registerProjectCommand(program: Command): void {
 			"--kit <name>",
 			"Routing kit (kanban kit list; default: default, asked on a terminal). An unknown kit is refused before anything is created.",
 		)
+		.option("--preset <name>", "The team kit's models: a preset (kanban kit presets).")
+		.option(
+			"--custom",
+			"The team kit with your own models: --set roles.dev.agent=... --set roles.qa.agent=... (required).",
+		)
+		.option(
+			"--set <key=value>",
+			"A custom team's role model: roles.<role>.agent|provider|model=<value>. Repeatable.",
+			collect,
+			[],
+		)
 		.option("--json", "Print the result as JSON.")
 		.action(
 			async (
 				path: string,
-				options: { name?: string; branch: string; initialCommit: boolean; kit?: string; json?: boolean },
+				options: {
+					name?: string;
+					branch: string;
+					initialCommit: boolean;
+					kit?: string;
+					preset?: string;
+					custom?: boolean;
+					set: string[];
+					json?: boolean;
+				},
 			) => {
 				try {
 					const result = await createProject({
 						path: resolveProjectInputPath(path, process.cwd()),
 						name: options.name,
 						kit: options.kit,
+						...readKitPickOptions(options),
 						chooseKit: createTerminalKitPrompt(),
 						initialBranch: options.branch,
 						initialCommit: options.initialCommit,

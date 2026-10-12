@@ -27,7 +27,8 @@ export function NewProjectMode({
 	onBusyChange,
 	onCancel,
 	onAdded,
-	kitName,
+	kitRequest,
+	kitBlockedReason,
 	kitPicker,
 }: AddProjectModeProps): ReactElement {
 	const [projectName, setProjectName] = useState("");
@@ -48,7 +49,11 @@ export function NewProjectMode({
 	const status = useProjectNameCheck({ root, name: effectiveDirectory, workspaceId, enabled: true });
 	const targetPath = toServerAbsolute(root, effectiveDirectory);
 	const canCreate =
-		!isCreating && projectName.trim().length > 0 && initialBranch.trim().length > 0 && isProjectNameUsable(status);
+		!isCreating &&
+		kitBlockedReason === null &&
+		projectName.trim().length > 0 &&
+		initialBranch.trim().length > 0 &&
+		isProjectNameUsable(status);
 
 	const handleCreate = async () => {
 		if (!canCreate) {
@@ -63,7 +68,7 @@ export function NewProjectMode({
 				name: projectName.trim(),
 				initialBranch: initialBranch.trim(),
 				initialCommit,
-				kit: kitName,
+				...kitRequest,
 			});
 			if (!created.ok || !created.project) {
 				setError(created.error ?? "Could not create the project.");

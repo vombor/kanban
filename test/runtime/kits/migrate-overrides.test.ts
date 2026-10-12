@@ -10,6 +10,7 @@ import { readKitSettingsHistory } from "../../../src/kits/project-settings";
 import { loadKitCatalog, resolveWorkspaceKit } from "../../../src/kits/resolve-kit";
 import { getKanbanKitsPath, getKitSettingsHistoryPath } from "../../../src/state/kanban-home";
 import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
+import { readLegacyTeamKitText } from "../../utilities/team-kits";
 
 // foo's overrides as `kanban kit show --project /projects/foo` listed them on 2026-10-09 (notes shortened). Never
 // the real foo: the fixture is copied into a temporary Kanban home.
@@ -20,11 +21,14 @@ const FOO_OVERRIDES = JSON.parse(
 function writeConfig(path: string, config: unknown): void {
 	mkdirSync(dirname(path), { recursive: true });
 	writeFileSync(path, JSON.stringify(config));
+	// foo's kit with tiers: the legacy-team fixture (the built-in team-cloud kit before presets) as a user kit.
+	mkdirSync(getKanbanKitsPath(), { recursive: true });
+	writeFileSync(join(getKanbanKitsPath(), "legacy-team.json"), readLegacyTeamKitText());
 }
 
 const fooConfig = () => ({
 	workspaces: {
-		foo: { landing: { mode: "qa" }, kit: { name: "team-cloud", overrides: structuredClone(FOO_OVERRIDES) } },
+		foo: { landing: { mode: "qa" }, kit: { name: "legacy-team", overrides: structuredClone(FOO_OVERRIDES) } },
 	},
 });
 
@@ -115,7 +119,7 @@ describe("kanban kit migrate-overrides (foo-like fixture)", () => {
 			const history = await readKitSettingsHistory(getKitSettingsHistoryPath("foo"));
 			expect(history[0]).toMatchObject({
 				key: "(kit)",
-				from: "team-cloud",
+				from: "legacy-team",
 				to: "foo-team",
 				via: "kit migrate-overrides",
 			});
@@ -135,14 +139,17 @@ describe("kanban kit migrate-overrides (foo-like fixture)", () => {
 	});
 
 	it("doctor warns about foo's team keys and legacy keys before the migration, pointing at the user's command", async () => {
-		const findings = checkKitProjectSettings({
-			config: parsePipelineConfig(fooConfig()).config,
-			catalog: await loadKitCatalog(join(import.meta.dirname, "no-kits-here")),
-			entries: [{ workspaceId: "foo" }],
+		const findings = await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
+			writeConfig(globalConfigPath, fooConfig());
+			return checkKitProjectSettings({
+				config: parsePipelineConfig(fooConfig()).config,
+				catalog: await loadKitCatalog(),
+				entries: [{ workspaceId: "foo" }],
+			});
 		});
 		expect(findings.map((finding) => finding.level)).toEqual(["warn", "warn"]);
 		expect(findings[0]?.message).toContain(
-			"change kit team-cloud's team definition (description, fallback.on.conflict",
+			"change kit legacy-team's team definition (description, fallback.on.conflict",
 		);
 		expect(findings[0]?.message).toContain("they still apply");
 		expect(findings[1]?.message).toContain("legacy override key(s) dev.agent (= roles.dev.agent)");
@@ -157,20 +164,20 @@ describe("kanban kit migrate-overrides (foo-like fixture)", () => {
 				workspaces: {
 					bar: {
 						kit: {
-							name: "team-cloud",
+							name: "legacy-team",
 							overrides: { "escalate.to": { agent: "codex", model: "m1" }, "escalate.requireApproval": false },
 						},
 					},
 				},
 			});
 			const result = await migrateWorkspaceOverrides({ workspaceId: "bar" });
-			expect(result.toKit).toBe("team-cloud");
+			expect(result.toKit).toBe("legacy-team");
 			expect(result.userKit).toBeNull();
 			expect(
 				(JSON.parse(readFileSync(globalConfigPath, "utf8")) as { workspaces: { bar: { kit: unknown } } }).workspaces
 					.bar.kit,
 			).toEqual({
-				name: "team-cloud",
+				name: "legacy-team",
 				overrides: {
 					"roles.fallback.agent": "codex",
 					"roles.fallback.model": "m1",
@@ -179,7 +186,7 @@ describe("kanban kit migrate-overrides (foo-like fixture)", () => {
 			});
 
 			writeConfig(globalConfigPath, {
-				workspaces: { bar: { kit: { name: "team-cloud", overrides: { "onFail.reworkRounds": 1 } } } },
+				workspaces: { bar: { kit: { name: "legacy-team", overrides: { "onFail.reworkRounds": 1 } } } },
 			});
 			await expect(migrateWorkspaceOverrides({ workspaceId: "bar", into: "team-local" })).rejects.toThrow(
 				/not a user kit name/u,

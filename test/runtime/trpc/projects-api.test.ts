@@ -475,14 +475,10 @@ describe("projects roots over tRPC: create, checkName, roots, open folder", () =
 			const response = await api.listKitChoices();
 			expect(runtimeProjectKitChoicesResponseSchema.parse(response)).toEqual(response);
 			expect(response.defaultKitName).toBe("default");
-			expect(response.kits.map((kit) => kit.name)).toEqual([
-				"default",
-				"team-cloud",
-				"team-local",
-				"team-cline",
-				"team-foo",
-			]);
-			expect(response.kits[4]).toMatchObject({ origin: "user", description: "Foo" });
+			expect(response.teamKitName).toBe("team");
+			expect(response.kits.map((kit) => kit.name)).toEqual(["default", "team", "team-foo"]);
+			expect(response.kits[2]).toMatchObject({ origin: "user", description: "Foo" });
+			expect(response.presets.map((preset) => preset.name)).toEqual(["cloud", "cline", "lemonade"]);
 		});
 	});
 
@@ -493,12 +489,22 @@ describe("projects roots over tRPC: create, checkName, roots, open folder", () =
 			expect(refused.error).toContain('unknown kit "nope"');
 			expect(readdirSync(root)).toEqual([]);
 
-			expect(await api.createProject(null, { path: join(root, "local"), kit: "team-local" })).toMatchObject({
-				ok: true,
+			const halfCustom = await api.createProject(null, {
+				path: join(root, "half"),
+				kit: "team",
+				preset: null,
+				roleSettings: { "roles.dev.agent": "codex" },
 			});
+			expect(halfCustom).toMatchObject({ ok: false, project: null });
+			expect(halfCustom.error).toContain("needs roles.qa.agent");
+			expect(readdirSync(root)).toEqual([]);
+
+			expect(
+				await api.createProject(null, { path: join(root, "local"), kit: "team", preset: "lemonade" }),
+			).toMatchObject({ ok: true });
 			const { workspaceId } = await loadWorkspaceContext(join(root, "local"));
 			const { config } = await readPipelineConfig(globalConfigPath);
-			expect(config.workspaces[workspaceId]?.kit?.name).toBe("team-local");
+			expect(config.workspaces[workspaceId]?.kit).toMatchObject({ name: "team", preset: "lemonade" });
 		});
 	});
 
@@ -515,18 +521,29 @@ describe("projects roots over tRPC: create, checkName, roots, open folder", () =
 			expect(unknown.error).toContain('unknown kit "nope"');
 			expect(deps.rememberWorkspace).not.toHaveBeenCalled();
 
-			const added = await api.addProject(null, { path: picked, kit: "team-cloud" });
+			const added = await api.addProject(null, {
+				path: picked,
+				kit: "team",
+				preset: null,
+				roleSettings: { "roles.dev.agent": "codex", "roles.qa.agent": "cline" },
+			});
 			expect(added).toMatchObject({ ok: true });
 			expect(added.notes?.join(" ")).toContain('recommends landing "qa"');
 			expect(await api.addProject(null, { path: plain, kit: "default" })).toMatchObject({ ok: true });
 			// A registered project keeps its kit, whatever is picked (even an unknown name).
 			expect(await api.addProject(null, { path: picked, kit: "nope" })).toMatchObject({ ok: true });
-			expect(await api.addProject(null, { path: picked, kit: "team-local" })).toMatchObject({ ok: true });
+			expect(await api.addProject(null, { path: picked, kit: "team", preset: "lemonade" })).toMatchObject({
+				ok: true,
+			});
 
 			const { config } = await readPipelineConfig(globalConfigPath);
 			const pickedId = (await loadWorkspaceContext(picked)).workspaceId;
 			const plainId = (await loadWorkspaceContext(plain)).workspaceId;
-			expect(config.workspaces[pickedId]?.kit?.name).toBe("team-cloud");
+			expect(config.workspaces[pickedId]?.kit).toEqual({
+				name: "team",
+				preset: null,
+				overrides: { "roles.dev.agent": "codex", "roles.qa.agent": "cline" },
+			});
 			expect(Object.hasOwn(config.workspaces, plainId)).toBe(false);
 		});
 	});

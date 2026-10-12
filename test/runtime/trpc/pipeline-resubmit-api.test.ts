@@ -132,7 +132,7 @@ describe("resubmit api", () => {
 				workspaceId: "foo",
 				taskId: "f0ba7",
 				stage: "resubmit",
-				kit: "team-cloud",
+				kit: "team (cloud)",
 				landingMode: "qa",
 				role: "dev",
 				outcome: "acted",

@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { getBuiltInKits, getDefaultKit, resolveKitLayers } from "../../../../src/kits/resolve-kit";
+import { getDefaultKit, resolveKitLayers } from "../../../../src/kits/resolve-kit";
 import {
 	buildRunoffEntry,
 	getTierContenders,
@@ -22,6 +22,7 @@ import {
 	reopenRunoffWithoutWinner,
 	updateRunoffs,
 } from "../../../../src/kits/team/runoffs/runoffs-store";
+import { getLegacyTeamKit } from "../../../utilities/team-kits";
 import { createTempDir } from "../../../utilities/temp-dir";
 
 function passed(id: string, overrides: Partial<RunoffCardFacts> = {}): RunoffCardFacts {
@@ -211,7 +212,7 @@ describe("runoffs.json", () => {
 
 describe("runoff create", () => {
 	const team = (() => {
-		const kit = getBuiltInKits().get("team-cloud");
+		const kit = getLegacyTeamKit();
 		if (!kit) {
 			throw new Error("team kit missing");
 		}
@@ -253,7 +254,7 @@ describe("runoff create", () => {
 		expect(getTierContenders(novaDropped, "qa", "cline").map((contender) => contender.model)).toEqual([
 			"us.anthropic.claude-haiku-5-5",
 		]);
-		expect(() => getTierContenders(team, "tier9", "cline")).toThrow('tier "tier9" is not in kit "team-cloud"');
+		expect(() => getTierContenders(team, "tier9", "cline")).toThrow('tier "tier9" is not in kit "legacy-team"');
 	});
 
 	it("plans one card per model on the same prompt and base, and refuses a bad runoff", () => {

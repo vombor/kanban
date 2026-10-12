@@ -149,7 +149,7 @@ export function createPipelineResubmitApi(deps: CreatePipelineResubmitApiDepende
 					workspaceId,
 					taskId,
 					stage: "resubmit",
-					kit: resolution.kitName,
+					kit: resolution.kitLabel,
 					landingMode: settings.landing.mode,
 					shadow,
 					effectiveAgent: null,

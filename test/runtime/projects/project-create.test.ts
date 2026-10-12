@@ -290,13 +290,37 @@ describe("kanban project create", () => {
 		});
 	});
 
-	it("--kit puts the new project on that kit", async () => {
+	it("--kit (with the team kit's --preset, or --custom and its role settings) puts the new project on that kit", async () => {
 		await withProjectsRoot(async ({ root, globalConfigPath }) => {
-			const result = await runCli(["create", join(root, "kit-app"), "--kit", "team-cloud", "--json"]);
-			const payload = JSON.parse(result.stdout) as { project: { workspaceId: string; kitName: string } };
-			expect(payload.project.kitName).toBe("team-cloud");
+			const result = await runCli(["create", join(root, "kit-app"), "--kit", "team", "--preset", "cloud", "--json"]);
+			const payload = JSON.parse(result.stdout) as {
+				project: { workspaceId: string; kitName: string; presetName: string | null };
+			};
+			expect(payload.project).toMatchObject({ kitName: "team", presetName: "cloud" });
+			const custom = await runCli([
+				"create",
+				join(root, "custom-app"),
+				"--kit",
+				"team",
+				"--custom",
+				"--set",
+				"roles.dev.agent=codex",
+				"--set",
+				"roles.qa.agent=cline",
+				"--json",
+			]);
+			const customPayload = JSON.parse(custom.stdout) as { project: { workspaceId: string } };
 			const { config } = await readPipelineConfig(globalConfigPath);
-			expect(config.workspaces[payload.project.workspaceId]?.kit?.name).toBe("team-cloud");
+			expect(config.workspaces[payload.project.workspaceId]?.kit).toMatchObject({ name: "team", preset: "cloud" });
+			expect(config.workspaces[customPayload.project.workspaceId]?.kit).toEqual({
+				name: "team",
+				preset: null,
+				overrides: { "roles.dev.agent": "codex", "roles.qa.agent": "cline" },
+			});
+			const refused = await runCli(["create", join(root, "half"), "--kit", "team", "--custom"]);
+			expect(refused.exitCode).toBe(1);
+			expect(refused.stderr).toContain("needs roles.dev.agent and roles.qa.agent");
+			expect(existsSync(join(root, "half"))).toBe(false);
 		});
 	});
 
@@ -315,12 +339,12 @@ describe("kanban project create", () => {
 	it("without --kit on a terminal asks for the kit, default preselected", async () => {
 		await withProjectsRoot(async ({ root }) => {
 			terminal.questions.length = 0;
-			terminal.answers.splice(0, terminal.answers.length, "team-local");
+			terminal.answers.splice(0, terminal.answers.length, "team", "lemonade");
 			const asked = await withStdinTty(true, () => runCli(["create", join(root, "asked")]));
 			expect(asked.stderr).toContain("Routing kit for the new project");
 			expect(asked.stderr).toContain("  1) default (built-in) [default]");
-			expect(terminal.questions).toEqual(["Kit [1, default]: "]);
-			expect(asked.stdout).toContain("Kit team-local, landing off.");
+			expect(terminal.questions).toEqual(["Kit [1, default]: ", "Preset: "]);
+			expect(asked.stdout).toContain("Kit team (lemonade), landing off.");
 
 			terminal.answers.splice(0, terminal.answers.length, "");
 			const enter = await withStdinTty(true, () => runCli(["create", join(root, "enter")]));
@@ -371,23 +395,23 @@ describe("kanban project add --kit", () => {
 			expect(refused.stderr).toContain('unknown kit "nope"');
 			expect(await listWorkspaceIndexEntries()).toEqual([]);
 
-			expect((await runCli(["add", join(root, "a"), "--kit", "team-cline"])).stdout).toContain(
-				"Kit team-cline, landing off.",
+			expect((await runCli(["add", join(root, "a"), "--kit", "team", "--preset", "cline"])).stdout).toContain(
+				"Kit team (cline), landing off.",
 			);
 			const quiet = await withStdinTty(false, () => runCli(["add", join(root, "b")]));
 			expect(quiet.stdout).toContain("Kit default, landing off.");
 			expect(quiet.stderr).not.toContain("Routing kit");
 
-			terminal.answers.splice(0, terminal.answers.length, "2");
+			terminal.answers.splice(0, terminal.answers.length, "2", "1");
 			const asked = await withStdinTty(true, () => runCli(["add", join(root, "c")]));
-			expect(asked.stdout).toContain("Kit team-cloud, landing off.");
+			expect(asked.stdout).toContain("Kit team (cloud), landing off.");
 			// An added project is never asked again.
 			terminal.questions.length = 0;
 			await withStdinTty(true, () => runCli(["add", join(root, "c")]));
 			expect(terminal.questions).toEqual([]);
 
 			const { config } = await readPipelineConfig(globalConfigPath);
-			expect(Object.values(config.workspaces).map((entry) => entry.kit?.name)).toEqual(["team-cline", "team-cloud"]);
+			expect(Object.values(config.workspaces).map((entry) => entry.kit?.preset)).toEqual(["cline", "cloud"]);
 		});
 	});
 });

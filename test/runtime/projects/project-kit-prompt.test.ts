@@ -37,24 +37,36 @@ describe("the project kit prompt", () => {
 		expect(lines).toContain(
 			"       dev: the selected agent · qa: none (no QA) · plan: the selected agent · fallback: none",
 		);
-		expect(lines.some((line) => line.startsWith("  2) team-cloud (built-in)"))).toBe(true);
+		expect(lines.some((line) => line.startsWith("  2) team (built-in)"))).toBe(true);
+		expect(lines).toContain("       models: a preset (cloud, cline, lemonade), asked next");
 	});
 
-	it("takes a number or a name, and default for an empty answer or ended input", async () => {
+	it("takes a number or a name, then the team kit's preset, and default for an empty answer or ended input", async () => {
 		const choices = await builtInChoices();
-		const byNumber = scripted(["3"]);
-		expect(await askProjectKit(choices, byNumber.io)).toBe("team-local");
-		expect(byNumber.questions).toEqual(["Kit [1, default]: "]);
-		expect(await askProjectKit(choices, scripted(["team-cline"]).io)).toBe("team-cline");
-		expect(await askProjectKit(choices, scripted([""]).io)).toBe("default");
-		expect(await askProjectKit(choices, scripted([null]).io)).toBe("default");
+		const byNumber = scripted(["2", "3"]);
+		expect(await askProjectKit(choices, byNumber.io)).toEqual({ name: "team", preset: "lemonade", roleSettings: {} });
+		expect(byNumber.questions).toEqual(["Kit [1, default]: ", "Preset: "]);
+		expect(byNumber.written).toContain(
+			"Models for the team kit (the fallback starts without asking, so a paid fallback model runs and costs without approval):",
+		);
+		expect(byNumber.written.some((line) => line.includes("--kit team --custom --set roles.dev.agent="))).toBe(true);
+		expect(await askProjectKit(choices, scripted(["team", "cline"]).io)).toEqual({
+			name: "team",
+			preset: "cline",
+			roleSettings: {},
+		});
+		const none = { name: "default", preset: null, roleSettings: {} };
+		expect(await askProjectKit(choices, scripted([""]).io)).toEqual(none);
+		expect(await askProjectKit(choices, scripted([null]).io)).toEqual(none);
 	});
 
 	it("asks again after an answer that is no listed kit, and gives up after three", async () => {
 		const choices = await builtInChoices();
-		const retry = scripted(["nope", "99", "2"]);
-		expect(await askProjectKit(choices, retry.io)).toBe("team-cloud");
+		const retry = scripted(["nope", "99", "2", "custom", "1"]);
+		expect(await askProjectKit(choices, retry.io)).toEqual({ name: "team", preset: "cloud", roleSettings: {} });
 		expect(retry.written.filter((line) => line.includes("is not one of the kits above"))).toHaveLength(2);
+		expect(retry.written.filter((line) => line.includes("is not one of the presets above"))).toHaveLength(1);
 		await expect(askProjectKit(choices, scripted(["x", "y", "z"]).io)).rejects.toThrow("No kit chosen.");
+		await expect(askProjectKit(choices, scripted(["2", "x", "y", "z"]).io)).rejects.toThrow("No preset chosen.");
 	});
 });

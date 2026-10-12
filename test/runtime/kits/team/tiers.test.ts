@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { createRoutingPolicy } from "../../../../src/kits/policy";
-import { getBuiltInKits, getDefaultKit, resolveKitLayers } from "../../../../src/kits/resolve-kit";
+import { getDefaultKit, resolveKitLayers } from "../../../../src/kits/resolve-kit";
 import { buildTiersReport, formatTiersReport } from "../../../../src/kits/team/tiers/tiers-report";
 import { createCardHistory, createEffectiveCard } from "../../../utilities/effective-card";
+import { getLegacyTeamKit } from "../../../utilities/team-kits";
 
 function team(overrides: Record<string, unknown> = {}) {
-	const kit = getBuiltInKits().get("team-cloud");
+	const kit = getLegacyTeamKit();
 	if (!kit) {
 		throw new Error("team kit missing");
 	}
@@ -79,7 +80,7 @@ describe("tiers feature", () => {
 		});
 
 		const text = formatTiersReport(report).join("\n");
-		expect(text).toContain("Kit team-cloud: tiers feature on");
+		expect(text).toContain("Kit legacy-team: tiers feature on");
 		expect(text).toContain("tier3: picks bedrock/us.openai.gpt-6.1-sol");
 		expect(text).toContain("  - bedrock/us.amazon.nova-2-lite-v1:0: candidate; dropped 2026-10-05");
 		expect(text).not.toContain("[DROPPED]");

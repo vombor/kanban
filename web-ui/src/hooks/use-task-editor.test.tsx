@@ -523,7 +523,7 @@ describe("useTaskEditor", () => {
 		}
 
 		it("preselects the team kit's agent and model, and again after each create", async () => {
-			kitHarness.response = { kitName: "team-cloud", outcome: "applied", proposal: TEAM_PROPOSAL };
+			kitHarness.response = { kitName: "team (cloud)", outcome: "applied", proposal: TEAM_PROPOSAL };
 			const snapshot = await renderAndOpen();
 			expect(snapshot().newTaskAgentId).toBe("cline");
 			expect(snapshot().newTaskAgentSettings).toEqual(TEAM_PROPOSAL.agentSettings);
@@ -543,7 +543,7 @@ describe("useTaskEditor", () => {
 		});
 
 		it("keeps the user's own choice, Default included", async () => {
-			kitHarness.response = { kitName: "team-cloud", outcome: "applied", proposal: TEAM_PROPOSAL };
+			kitHarness.response = { kitName: "team (cloud)", outcome: "applied", proposal: TEAM_PROPOSAL };
 			const snapshot = await renderAndOpen();
 			await act(async () => {
 				snapshot().setNewTaskAgentId(undefined);
@@ -564,7 +564,7 @@ describe("useTaskEditor", () => {
 		});
 
 		it("preselects nothing for a shadow proposal", async () => {
-			kitHarness.response = { kitName: "team-cloud", outcome: "shadow", proposal: TEAM_PROPOSAL };
+			kitHarness.response = { kitName: "team (cloud)", outcome: "shadow", proposal: TEAM_PROPOSAL };
 			const snapshot = await renderAndOpen();
 			expect(snapshot().newTaskAgentId).toBeUndefined();
 			expect(snapshot().newTaskAgentSettings).toBeUndefined();

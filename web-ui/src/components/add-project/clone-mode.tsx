@@ -35,7 +35,8 @@ export function CloneMode({
 	onBusyChange,
 	onCancel,
 	onAdded,
-	kitName,
+	kitRequest,
+	kitBlockedReason,
 	kitPicker,
 }: AddProjectModeProps): ReactElement {
 	const [gitUrl, setGitUrl] = useState("");
@@ -54,7 +55,7 @@ export function CloneMode({
 	const effectiveDirectory = directoryName || derivedName;
 	const status = useProjectNameCheck({ root, name: effectiveDirectory, workspaceId, enabled: true });
 	const targetPath = toServerAbsolute(root, effectiveDirectory);
-	const canClone = !isCloning && gitUrl.trim().length > 0 && isProjectNameUsable(status);
+	const canClone = !isCloning && kitBlockedReason === null && gitUrl.trim().length > 0 && isProjectNameUsable(status);
 
 	const handleClone = async () => {
 		if (!canClone) {
@@ -67,7 +68,7 @@ export function CloneMode({
 			const added = await getRuntimeTrpcClient(workspaceId).projects.add.mutate({
 				gitUrl: gitUrl.trim(),
 				path: targetPath,
-				kit: kitName,
+				...kitRequest,
 			});
 			if (!added.ok || !added.project) {
 				setError(added.error ?? "Clone failed.");

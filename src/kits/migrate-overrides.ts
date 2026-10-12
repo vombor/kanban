@@ -4,7 +4,7 @@
 //   - legacy model keys become their `roles.*` keys (`dev.agent` → `roles.dev.agent`);
 //   - role models and facts stay project settings;
 //   - team keys the kit already has with the same value are dropped (foo's `escalate.requireApproval: false` once
-//     team-cloud.json's fallback needs no approval);
+//     team.json's fallback needs no approval);
 //   - the other team keys go into a new user kit (`$KANBAN_HOME/kits/<into>.json`: the project's kit with them
 //     applied), and the workspace is switched to it.
 // The plan is refused unless the new kit + project settings resolve to exactly the kit the workspace resolves to now
@@ -29,6 +29,7 @@ import {
 	parseUserKit,
 	readKitValue,
 	resolveKitByName,
+	TEAM_KIT_NAME,
 } from "./resolve-kit";
 
 export type OverrideMigrationTarget =
@@ -48,6 +49,8 @@ export interface OverrideMigrationPlan {
 	workspaceId: string;
 	fromKit: string;
 	toKit: string;
+	/** The team kit's preset after the migration (null: none). */
+	toPreset: string | null;
 	rows: OverrideMigrationRow[];
 	projectSettings: Record<string, unknown>;
 	/** The new user kit, or null when every team key was redundant. */
@@ -71,16 +74,19 @@ export function planOverrideMigration(input: {
 	workspaceId: string;
 	catalog: KitCatalog;
 	kitName: string;
+	/** The team kit's preset of the workspace (null: none). */
+	preset?: string | null;
 	overrides: Record<string, unknown>;
 	into?: string;
 	kitsDir?: string;
 }): OverrideMigrationPlan {
 	const { catalog, kitName, overrides, workspaceId } = input;
-	const team = resolveKitByName(catalog, kitName);
+	const preset = input.preset ?? null;
+	const team = resolveKitByName(catalog, kitName, {}, preset);
 	if (!team.ok) {
 		throw new Error(`kit ${kitName} does not resolve: ${team.error}`);
 	}
-	const current = resolveKitByName(catalog, kitName, overrides);
+	const current = resolveKitByName(catalog, kitName, overrides, preset);
 	if (!current.ok) {
 		throw new Error(`${workspaceId}'s overrides don't resolve on kit ${kitName}: ${current.error}`);
 	}
@@ -91,7 +97,7 @@ export function planOverrideMigration(input: {
 		);
 	}
 	// Team keys the kit (with the project settings) already resolves to the same value are redundant.
-	const withProject = resolveKitByName(catalog, kitName, classified.project);
+	const withProject = resolveKitByName(catalog, kitName, classified.project, preset);
 	if (!withProject.ok) {
 		throw new Error(`${workspaceId}'s project settings alone don't resolve on kit ${kitName}: ${withProject.error}`);
 	}
@@ -117,7 +123,7 @@ export function planOverrideMigration(input: {
 			throw new Error(`kit ${intoName} already exists; pick another name with --into`);
 		}
 		const { description: keptDescription, ...keptTeam } = kept;
-		const merged = resolveKitByName(catalog, kitName, keptTeam);
+		const merged = resolveKitByName(catalog, kitName, keptTeam, preset);
 		if (!merged.ok) {
 			throw new Error(`kit ${kitName} with ${workspaceId}'s team keys does not resolve: ${merged.error}`);
 		}
@@ -141,10 +147,13 @@ export function planOverrideMigration(input: {
 					...catalog.kits,
 					[intoName, { kit: userKit, origin: { kind: "user", path: `${getKanbanKitsPath()}/${intoName}.json` } }],
 				]),
+				presets: catalog.presets,
 				errors: catalog.errors,
 			}
 		: catalog;
-	const after = resolveKitByName(nextCatalog, toKit, classified.project);
+	// A new user kit is a full copy (the preset's models included); staying on the kit keeps the preset.
+	const toPreset = toKit === kitName ? preset : null;
+	const after = resolveKitByName(nextCatalog, toKit, classified.project, toPreset);
 	if (!after.ok || !isDeepStrictEqual(routingOf(after.kit), routingOf(current.kit))) {
 		throw new Error(
 			`the migration would change ${workspaceId}'s routing${after.ok ? "" : ` (${after.error})`}; nothing written. Report this as a Kanban bug.`,
@@ -171,6 +180,7 @@ export function planOverrideMigration(input: {
 		workspaceId,
 		fromKit: kitName,
 		toKit,
+		toPreset,
 		rows,
 		projectSettings: classified.project,
 		userKit,
@@ -199,6 +209,7 @@ export async function migrateWorkspaceOverrides(input: {
 		workspaceId: input.workspaceId,
 		catalog,
 		kitName,
+		preset: settings.kit?.preset ?? null,
 		overrides,
 		into: input.into,
 		kitsDir: input.kitsDir,
@@ -217,7 +228,10 @@ export async function migrateWorkspaceOverrides(input: {
 			if (!isDeepStrictEqual(currentKit.overrides ?? {}, overrides)) {
 				throw new Error(`workspaces.${input.workspaceId}.kit changed while migrating; run the command again.`);
 			}
-			entry.kit = { name: plan.toKit, overrides: plan.projectSettings };
+			entry.kit =
+				plan.toPreset !== null || plan.toKit === TEAM_KIT_NAME
+					? { name: plan.toKit, preset: plan.toPreset, overrides: plan.projectSettings }
+					: { name: plan.toKit, overrides: plan.projectSettings };
 			return entry;
 		},
 		input.configPath,

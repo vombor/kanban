@@ -1,0 +1,82 @@
+{
+	"kit": 1,
+	"name": "team",
+	"description": "The team workflow: a dev builds, a QA reviewer of another vendor reviews, same-model rework for 3 rounds, then the fallback dev model takes the task over on a sibling card at once (no approval, paid or free); only when the fallback fails too does the card go to the orchestrator. The models come from a preset (cloud, cline, lemonade) or the project's own role settings (a custom team)",
+	"roles": {
+		"dev": {
+			"note": "builds new dev cards; the model comes from the preset or the project's roles.dev settings"
+		},
+		"qa": {
+			"note": "reviews every dev card; must be another vendor than the dev card's model (requireDifferentVendor)"
+		},
+		"plan": {
+			"note": "plans plan cards in the agent's plan mode"
+		},
+		"fallback": {
+			"note": "takes a dev card's task over on a sibling card when a fallback trigger fires; starts at once without approval, so a paid fallback model runs and costs without asking"
+		}
+	},
+	"qa": {
+		"enabled": true,
+		"requireDifferentVendor": true,
+		"skip": {
+			"roles": [
+				"qa",
+				"triage",
+				"calibration",
+				"plan"
+			],
+			"effectiveAgents": []
+		},
+		"routes": [],
+		"rules": {
+			"drive": "DRIVE THE CHANGED PATH (required): log in as needed (a seeded user; the seed script has the credentials), then actually use every user path this card adds or changes in the browser with npm run browse (click and fill through it to the end, not just load the page), and screenshot each step's result into {outbox}. Rendering a page is not exercising it: a UI card whose changed path you did not drive can not PASS."
+		}
+	},
+	"plan": {
+		"enabled": true,
+		"startInPlanMode": true,
+		"rules": {},
+		"candidates": []
+	},
+	"onFail": {
+		"rework": "same-model",
+		"reworkRounds": 3,
+		"conflict": "rework",
+		"then": "escalate",
+		"runoff": null
+	},
+	"fallback": {
+		"on": {
+			"qaFails": true,
+			"qaStalled": true,
+			"unchanged": true,
+			"conflict": true,
+			"outage": true
+		},
+		"requireApproval": false,
+		"note": "One workflow for every team (user 2026-10-12): after reworkRounds QA FAILs, a QA stall, a rework that came back unchanged, a merge conflict its reworks didn't fix, or a provider outage hold that lasted pipeline.recovery.outage.maxMin, the fallback model takes the task over at once, without approval, paid or free (\"if you're worried about auto fallback cost don't choose a paid model\"). When the fallback fails too, the card goes to the orchestrator. The core never falls back onto the card's own model, never twice in one chain, and never from a runoff racer, so on a provider whose outage takes every model down (Lemonade, ClinePass) the fallback sibling waits on the same outage and then goes to the orchestrator."
+	},
+	"features": [
+		"scoreboard",
+		"bench",
+		"runoffs",
+		"calibration",
+		"tiers"
+	],
+	"recommends": {
+		"landingMode": "qa",
+		"settings": [
+			{
+				"key": "pipeline.recovery.mode",
+				"value": "on",
+				"why": "recovery must act for the team workflow: provider errors are retried, outages held and probed, stalled turns nudged, and account answers escalated"
+			},
+			{
+				"key": "workspace.recovery.enabled",
+				"value": true,
+				"why": "recovery must not be switched off for this project"
+			}
+		]
+	}
+}

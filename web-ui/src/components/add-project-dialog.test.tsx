@@ -45,15 +45,10 @@ const KITS = {
 			roles: [kitRole("dev"), kitRole("qa"), kitRole("plan"), kitRole("fallback")],
 		},
 		{
-			name: "team-local",
-			description: "The team workflow on local models",
+			name: "team",
+			description: "The team workflow: QA, rework, automatic fallback",
 			origin: "built-in",
-			roles: [
-				kitRole("dev", { defined: true, agentId: "cline", provider: "lemonade", model: "Muse-GGUF", tier: "dev" }),
-				kitRole("qa", { defined: true, agentId: "cline", provider: "lemonade", model: "gemma-GGUF" }),
-				kitRole("plan", { defined: true, agentId: "cline", provider: "lemonade", model: "Muse-GGUF" }),
-				kitRole("fallback", { defined: true, provider: "lemonade", model: "Laguna-GGUF" }),
-			],
+			roles: [kitRole("dev"), kitRole("qa"), kitRole("plan"), kitRole("fallback")],
 		},
 		{
 			name: "team-foo",
@@ -67,6 +62,30 @@ const KITS = {
 			],
 		},
 	],
+	teamKitName: "team",
+	presets: [
+		{
+			name: "lemonade",
+			description: "Local models on Lemonade",
+			roles: [
+				kitRole("dev", { defined: true, agentId: "cline", provider: "lemonade", model: "Muse-GGUF", tier: "dev" }),
+				kitRole("qa", { defined: true, agentId: "cline", provider: "lemonade", model: "gemma-GGUF" }),
+				kitRole("plan", { defined: true, agentId: "cline", provider: "lemonade", model: "Muse-GGUF" }),
+				kitRole("fallback", { defined: true, provider: "lemonade", model: "Laguna-GGUF" }),
+			],
+		},
+		{
+			name: "cloud",
+			description: "Cloud models on AWS Bedrock",
+			roles: [
+				kitRole("dev", { defined: true, agentId: "codex", provider: "bedrock", model: "gpt-sol" }),
+				kitRole("qa", { defined: true, agentId: "cline", provider: "bedrock", model: "haiku" }),
+				kitRole("plan", { defined: true, agentId: "cline", provider: "bedrock", model: "opus" }),
+				kitRole("fallback", { defined: true, agentId: "codex", provider: "bedrock", model: "kimi" }),
+			],
+		},
+	],
+	errors: [],
 };
 
 const PROJECT = { id: "p1", path: "/projects/my-app", name: "my-app", taskCounts: {} };
@@ -167,6 +186,13 @@ describe("AddProjectDialog", () => {
 			const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
 			setter?.call(input, value);
 			input.dispatchEvent(new Event("input", { bubbles: true }));
+		});
+	}
+
+	async function choose(select: HTMLSelectElement, value: string): Promise<void> {
+		await act(async () => {
+			select.value = value;
+			select.dispatchEvent(new Event("change", { bubbles: true }));
 		});
 	}
 
@@ -437,28 +463,36 @@ describe("AddProjectDialog", () => {
 				kitTrigger().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
 			});
 			await flush();
-			const local = body().querySelector('[data-testid="add-project-kit-option-team-local"]');
-			expect(local?.textContent).toContain("The team workflow on local models");
-			expect(local?.textContent).toContain("cline, Muse-GGUF (lemonade)");
-			expect(local?.textContent).toContain("the dev agent, Laguna-GGUF (lemonade)");
-			expect(body().querySelector('[data-testid="add-project-kit-option-team-foo"]')?.textContent).toContain(
-				"user kit",
-			);
+			const team = body().querySelector('[data-testid="add-project-kit-option-team"]');
+			expect(team?.textContent).toContain("The team workflow: QA, rework, automatic fallback");
+			expect(team?.textContent).toContain("models: lemonade, cloud or your own");
+			const foo = body().querySelector('[data-testid="add-project-kit-option-team-foo"]');
+			expect(foo?.textContent).toContain("user kit");
+			expect(foo?.textContent).toContain("claude");
 		});
 
 		it("sends the picked kit with New project, Open folder and Clone", async () => {
 			trpc.create.mockResolvedValue({ ok: true, project: PROJECT, notes: [] });
 			trpc.add.mockResolvedValue({ ok: true, project: PROJECT });
 			await openNewProject();
-			await pickKit("team-local");
-			expect(kitTrigger().textContent).toContain("team-local");
-			expect(body().querySelector('[data-testid="add-project-kit-summary"]')?.textContent).toContain(
+			await pickKit("team");
+			expect(kitTrigger().textContent).toContain("team");
+			// The first preset is preselected, with its four role models.
+			expect(byLabel<HTMLSelectElement>("Models").value).toBe("lemonade");
+			expect(body().querySelector('[data-testid="add-project-kit-preset-summary"]')?.textContent).toContain(
 				"cline, gemma-GGUF (lemonade)",
+			);
+			expect(body().querySelector('[data-testid="add-project-kit-fallback-note"]')?.textContent).toContain(
+				"a paid fallback model runs and costs without approval",
+			);
+			await choose(byLabel<HTMLSelectElement>("Models"), "cloud");
+			expect(body().querySelector('[data-testid="add-project-kit-preset-summary"]')?.textContent).toContain(
+				"codex, gpt-sol (bedrock)",
 			);
 			await type(byLabel("Project name"), "My App");
 			await flush(PROJECT_NAME_CHECK_DEBOUNCE_MS);
 			await click(button("Create Project"));
-			expect(trpc.create).toHaveBeenCalledWith(expect.objectContaining({ kit: "team-local" }));
+			expect(trpc.create).toHaveBeenCalledWith(expect.objectContaining({ kit: "team", preset: "cloud" }));
 
 			// The pick stays when switching modes.
 			await click(button("Open folder"));
@@ -473,6 +507,36 @@ describe("AddProjectDialog", () => {
 			await flush(PROJECT_NAME_CHECK_DEBOUNCE_MS);
 			await click(button("Clone & Add"));
 			expect(trpc.add).toHaveBeenLastCalledWith(expect.objectContaining({ kit: "team-foo" }));
+		});
+
+		it("a custom team needs its dev and QA agents and sends its role models", async () => {
+			trpc.create.mockResolvedValue({ ok: true, project: PROJECT, notes: [] });
+			await openNewProject();
+			await pickKit("team");
+			await choose(byLabel<HTMLSelectElement>("Models"), "custom");
+			await type(byLabel("Project name"), "My App");
+			await flush(PROJECT_NAME_CHECK_DEBOUNCE_MS);
+			expect(body().textContent).toContain("Pick the dev and qa agents of the custom team.");
+			expect(button("Create Project").disabled).toBe(true);
+			await choose(byLabel<HTMLSelectElement>("dev agent"), "codex");
+			await type(byLabel("dev provider"), "bedrock");
+			await type(byLabel("dev model"), "gpt-sol");
+			expect(body().textContent).toContain("Pick the qa agent of the custom team.");
+			await choose(byLabel<HTMLSelectElement>("qa agent"), "claude");
+			expect(button("Create Project").disabled).toBe(false);
+			await click(button("Create Project"));
+			expect(trpc.create).toHaveBeenCalledWith(
+				expect.objectContaining({
+					kit: "team",
+					preset: null,
+					roleSettings: {
+						"roles.dev.agent": "codex",
+						"roles.dev.model": "gpt-sol",
+						"roles.dev.provider": "bedrock",
+						"roles.qa.agent": "claude",
+					},
+				}),
+			);
 		});
 
 		it("falls back to default and says so when the kits can't be loaded", async () => {

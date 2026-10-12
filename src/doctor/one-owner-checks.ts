@@ -15,8 +15,10 @@ import {
 	legacyKitServiceOwns,
 	listLegacyKitProjects,
 } from "../config/legacy-kit-config";
+
 import { getWorkspacePipelineSettings, type PipelineConfig } from "../config/pipeline-config";
 import type { RuntimeBoardData } from "../core/api-contract";
+import { formatKitSelection } from "../kits/renamed-kits";
 import { getRecoveryScope } from "../pipeline/engine";
 import { isLegacyModelListsServiceUrl, isManagedModelsSourceUrl } from "../setup/cline-models-source";
 import type { RuntimeWorkspaceIndexEntry } from "../state/workspace-state";
@@ -300,7 +302,10 @@ async function checkLegacyKitOwners(
 		const kitLands = autolandOwns && (project.toggles.QA_CREATE || project.toggles.AUTO_DONE);
 		const settings = getWorkspacePipelineSettings(context.config, project.workspaceId);
 		const kanbanMode = settings.landing.mode;
-		const kanbanKit = settings.kit?.name ?? "default";
+		const kanbanKit = formatKitSelection({
+			name: settings.kit?.name ?? "default",
+			preset: settings.kit?.preset ?? null,
+		});
 		if (kitLands && kanbanMode !== "off" && !settings.pipeline.shadow) {
 			findings.push({
 				level: "fail",

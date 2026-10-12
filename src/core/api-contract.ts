@@ -630,6 +630,16 @@ export const runtimeProjectsResponseSchema = z.object({
 });
 export type RuntimeProjectsResponse = z.infer<typeof runtimeProjectsResponseSchema>;
 
+/**
+ * A new project's kit picks besides its name: the `team` kit's preset (null = a custom team) and a custom team's role
+ * settings (`roles.<role>.agent|provider|model` → value; dev and QA agents required). src/kits/kit-choices.ts checks
+ * them before anything is made.
+ */
+const runtimeProjectKitPicksShape = {
+	preset: z.string().nullable().optional(),
+	roleSettings: z.record(z.string(), z.unknown()).optional(),
+};
+
 export const runtimeProjectAddRequestSchema = z
 	.object({
 		path: z.string().optional(),
@@ -637,6 +647,7 @@ export const runtimeProjectAddRequestSchema = z
 		initializeGit: z.boolean().optional(),
 		/** The routing kit of a new registration (default `default`); a registered project keeps its own. */
 		kit: z.string().optional(),
+		...runtimeProjectKitPicksShape,
 	})
 	.refine((data) => data.path || data.gitUrl, { message: "Either path or gitUrl is required" });
 export type RuntimeProjectAddRequest = z.infer<typeof runtimeProjectAddRequestSchema>;
@@ -681,6 +692,7 @@ export const runtimeProjectCreateRequestSchema = z.object({
 	initialCommit: z.boolean().optional(),
 	/** The routing kit (default `default`). */
 	kit: z.string().optional(),
+	...runtimeProjectKitPicksShape,
 });
 export type RuntimeProjectCreateRequest = z.infer<typeof runtimeProjectCreateRequestSchema>;
 
@@ -711,9 +723,20 @@ export const runtimeProjectKitChoiceSchema = z.object({
 });
 export type RuntimeProjectKitChoice = z.infer<typeof runtimeProjectKitChoiceSchema>;
 
+/** A preset of the `team` kit: its four role models. */
+export const runtimeProjectKitPresetChoiceSchema = z.object({
+	name: z.string(),
+	description: z.string().nullable(),
+	roles: z.array(runtimeProjectKitChoiceRoleSchema),
+});
+export type RuntimeProjectKitPresetChoice = z.infer<typeof runtimeProjectKitPresetChoiceSchema>;
+
 export const runtimeProjectKitChoicesResponseSchema = z.object({
 	defaultKitName: z.string(),
+	/** The kit whose models come from a preset or a custom team. */
+	teamKitName: z.string(),
 	kits: z.array(runtimeProjectKitChoiceSchema),
+	presets: z.array(runtimeProjectKitPresetChoiceSchema),
 	error: z.string().optional(),
 });
 export type RuntimeProjectKitChoicesResponse = z.infer<typeof runtimeProjectKitChoicesResponseSchema>;

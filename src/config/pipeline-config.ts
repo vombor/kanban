@@ -12,7 +12,7 @@ import { z } from "zod";
 
 import { type RuntimeLandingMode, runtimeLandingModeSchema } from "../core/api-contract";
 import { lockedFileSystem } from "../fs/locked-file-system";
-import { getRenamedKitName } from "../kits/renamed-kits";
+import { getRenamedKit, type KitSelection } from "../kits/renamed-kits";
 import { setConfiguredOpenAiCompatibleProviders } from "../models/openai-compatible-providers";
 import { getKanbanGlobalConfigPath, KANBAN_HOME_MARKER_VERSION } from "../state/kanban-home";
 import {
@@ -35,18 +35,23 @@ export const recoveryModeSchema = z.enum(["off", "report", "on"]);
 export type RecoveryMode = z.infer<typeof recoveryModeSchema>;
 export type LandingMode = RuntimeLandingMode;
 
-/** The kit a workspace uses. Overrides are dotted kit keys (`"qa.blurb"`) → value (§3.4). */
+/**
+ * The kit a workspace uses. `preset` picks the `team` kit's models (`kits/presets/<name>.json`; null = a custom team,
+ * whose models are the project's own role settings). Overrides are dotted kit keys (`"qa.blurb"`) → value (§3.4).
+ */
 export const workspaceKitRefSchema = z
 	.object({
-		// A renamed built-in kit's old name reads as its new one (src/kits/renamed-kits.ts); doctor warns and
-		// migrateLegacyConfigKeys() rewrites the file.
-		name: z
-			.string()
-			.min(1)
-			.transform((name) => getRenamedKitName(name) ?? name),
+		name: z.string().min(1),
+		preset: z.string().min(1).nullable().default(null),
 		overrides: z.record(z.string(), z.unknown()).default({}),
 	})
-	.strict();
+	.strict()
+	// A renamed built-in kit's old name reads as the kit and preset that replaced it (src/kits/renamed-kits.ts); doctor
+	// warns and migrateLegacyConfigKeys() rewrites the file.
+	.transform((ref) => {
+		const renamed = getRenamedKit(ref.name);
+		return renamed ? { ...ref, name: renamed.name, preset: ref.preset ?? renamed.preset } : ref;
+	});
 export type WorkspaceKitRef = z.infer<typeof workspaceKitRefSchema>;
 
 /**
@@ -571,18 +576,18 @@ export function readRemovedWorkspaceModelsKeys(config: Record<string, unknown>):
 	});
 }
 
-/** A workspace whose `kit.name` still names a renamed built-in kit, with the old and the new name. */
+/** A workspace whose `kit.name` still names a renamed built-in kit, with the old name and the kit and preset now. */
 export interface RenamedWorkspaceKit {
 	key: string;
 	from: string;
-	to: string;
+	to: KitSelection;
 }
 
 /** The workspaces whose raw config.json entry names a renamed built-in kit (`workspaces.<id>.kit.name`). */
 export function readRenamedWorkspaceKits(config: Record<string, unknown>): RenamedWorkspaceKit[] {
 	return Object.entries(asRecord(config.workspaces) ?? {}).flatMap(([workspaceId, entry]) => {
 		const name = asRecord(asRecord(entry)?.kit)?.name;
-		const to = typeof name === "string" ? getRenamedKitName(name) : null;
+		const to = typeof name === "string" ? getRenamedKit(name) : null;
 		return typeof name === "string" && to ? [{ key: `workspaces.${workspaceId}.kit.name`, from: name, to }] : [];
 	});
 }
@@ -646,8 +651,13 @@ export function migrateLegacyConfigKeys(config: Record<string, unknown>): {
 			Object.entries(asRecord(next.workspaces) ?? {}).map(([workspaceId, entry]) => {
 				const record = asRecord(entry);
 				const kit = asRecord(record?.kit);
-				const to = typeof kit?.name === "string" ? getRenamedKitName(kit.name) : null;
-				return [workspaceId, record && kit && to ? { ...record, kit: { ...kit, name: to } } : entry];
+				const to = typeof kit?.name === "string" ? getRenamedKit(kit.name) : null;
+				return [
+					workspaceId,
+					record && kit && to
+						? { ...record, kit: { ...kit, name: to.name, preset: kit.preset ?? to.preset } }
+						: entry,
+				];
 			}),
 		);
 		next = { ...next, workspaces };

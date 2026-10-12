@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { parsePipelineConfig } from "../../../src/config/pipeline-config";
 import type { RuntimeAgentId } from "../../../src/core/api-contract";
 import { createRoutingPolicy, type FailCause } from "../../../src/kits/policy";
-import { getBuiltInKits, getDefaultKit, resolveWorkspaceKit } from "../../../src/kits/resolve-kit";
+import { getBuiltInKits, getBuiltInPresets, getDefaultKit, resolveWorkspaceKit } from "../../../src/kits/resolve-kit";
 import { createCardHistory, createEffectiveCard } from "../../utilities/effective-card";
 
 // The default kit answers "no" to every routing question (plan §4.0): no assignment, no QA, no rework, land.
@@ -50,11 +50,12 @@ describe("default kit", () => {
 	});
 
 	it("is what a workspace without a kit resolves to, even next to a team workspace", () => {
-		const { config } = parsePipelineConfig({ workspaces: { foo: { kit: { name: "team-cloud" } } } });
+		const { config } = parsePipelineConfig({ workspaces: { foo: { kit: { name: "team", preset: "cloud" } } } });
 		const catalog = {
 			kits: new Map(
 				[...getBuiltInKits()].map(([name, kit]) => [name, { kit, origin: { kind: "built-in" as const } }]),
 			),
+			presets: getBuiltInPresets(),
 			errors: [],
 		};
 		const resolved = resolveWorkspaceKit(config, "kanban-2uge", catalog);

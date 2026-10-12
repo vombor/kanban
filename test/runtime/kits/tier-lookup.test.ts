@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import { kitDocumentSchema } from "../../../src/kits/kit-schema";
-import { getBuiltInKits, getDefaultKit, resolveKitLayers } from "../../../src/kits/resolve-kit";
+import { getDefaultKit, resolveKitLayers } from "../../../src/kits/resolve-kit";
 import { lookupTierModel } from "../../../src/kits/tier-lookup";
+import { getLegacyTeamKit } from "../../utilities/team-kits";
 
 const kitWithTiers = (tiers: unknown, dropped: unknown = []) =>
 	kitDocumentSchema.parse({ kit: 1, name: "tiers", tiers, dropped });
@@ -34,7 +35,7 @@ describe("tier lookup", () => {
 	});
 
 	it("resolves the team kit's tier3 to gpt-6.1-sol", () => {
-		const team = getBuiltInKits().get("team-cloud");
+		const team = getLegacyTeamKit();
 		if (!team) {
 			throw new Error("team kit missing");
 		}
@@ -42,7 +43,7 @@ describe("tier lookup", () => {
 	});
 
 	it("makes a dev.model tier without a usable model a schema error", () => {
-		const team = getBuiltInKits().get("team-cloud");
+		const team = getLegacyTeamKit();
 		if (!team) {
 			throw new Error("team kit missing");
 		}

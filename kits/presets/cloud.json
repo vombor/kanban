@@ -1,0 +1,47 @@
+{
+	"preset": 1,
+	"name": "cloud",
+	"description": "Cloud models on AWS Bedrock (paid per token): GPT-6.1 Sol on Codex builds, Claude Haiku 5.5 on Cline reviews (another vendor), Claude Opus 5.5 on Cline plans, Kimi K3 on Codex is the fallback dev model. The fallback starts without asking, so Kimi K3 runs and costs without approval",
+	"roles": {
+		"dev": {
+			"agent": "codex",
+			"provider": "bedrock",
+			"model": "us.openai.gpt-6.1-sol",
+			"note": "every dev card: GPT-6.1 Sol on Codex (user 2026-10-12; won runoff tier3-multiregion and both mai-vs-sol runoffs on foo)"
+		},
+		"qa": {
+			"agent": "cline",
+			"provider": "bedrock",
+			"model": "us.anthropic.claude-haiku-5-5",
+			"note": "every QA card: Claude Haiku 5.5 on Cline (user 2026-10-12): another vendor (anthropic) than the Sol dev model (openai) and the Kimi fallback model (moonshotai)"
+		},
+		"plan": {
+			"agent": "cline",
+			"provider": "bedrock",
+			"model": "us.anthropic.claude-opus-5-5",
+			"note": "every plan card: Claude Opus 5.5 on Cline in its plan mode (--plan) (user 2026-10-12)"
+		},
+		"fallback": {
+			"agent": "codex",
+			"provider": "bedrock",
+			"model": "us.moonshotai.kimi-k3",
+			"note": "the fallback dev model: Kimi K3 on Codex (user 2026-10-12), a third vendor, so its sibling is still reviewed by Haiku; paid, and started without approval"
+		}
+	},
+	"plan": {
+		"candidates": [
+			{
+				"agent": "cline",
+				"model": {
+					"provider": "bedrock",
+					"model": "us.anthropic.claude-opus-5-5"
+				},
+				"note": "in use (user 2026-10-12)"
+			}
+		],
+		"note": "Plans run on roles.plan (Claude Opus 5.5 on Cline) in Cline's plan mode (--plan)."
+	},
+	"prices": {
+		"region": "us-west-2"
+	}
+}

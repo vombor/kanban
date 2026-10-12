@@ -6,8 +6,8 @@ import { mapLegacyKitConfig } from "../../src/config/import-kit";
 import { type RuntimeAgentId, type RuntimeBoardCard, runtimeBoardCardSchema } from "../../src/core/api-contract";
 import { readClineDefaultModel } from "../../src/core/effective-agent";
 import { createRoutingPolicy, type EffectiveCard, type RoutingPolicy } from "../../src/kits/policy";
-import { getBuiltInKits, getDefaultKit, resolveKitLayers } from "../../src/kits/resolve-kit";
 import { toEffectiveCard } from "../../src/pipeline/engine";
+import { resolveLegacyTeamKit } from "./team-kits";
 
 // Fixtures taken from the legacy kit before cutover (test/runtime/kits/fixtures/legacy-team/generate.cjs): a copy of
 // the live kit.config.json (2026-10-07), the cards, and what the legacy code answered for them.
@@ -65,23 +65,18 @@ export function getFooImportedOverrides(): Record<string, unknown> {
 	const foo = mapLegacyKitConfig(readLegacyKitConfig(), "kit.config.json").workspaces.find(
 		(workspace) => workspace.workspaceId === "foo",
 	);
-	if (!foo || foo.kit !== "team-cloud") {
+	if (!foo || foo.kit !== "team" || foo.preset !== "cloud") {
 		throw new Error("the live kit.config.json no longer maps foo to the team kit");
 	}
 	return foo.overrides;
 }
 
-/** The `team-cloud` kit with `overrides`, resolved over `default` (as resolveWorkspaceKit does). */
+/**
+ * The team routing foo ran under the legacy kit (the built-in team-cloud kit before the team kit and its presets,
+ * test/runtime/kits/fixtures/legacy-team-kit.json) with `overrides`, resolved over `default`.
+ */
 export function createTeamPolicy(overrides: Record<string, unknown> = {}): RoutingPolicy {
-	const team = getBuiltInKits().get("team-cloud");
-	if (!team) {
-		throw new Error("team kit missing");
-	}
-	const resolved = resolveKitLayers(getDefaultKit(), team, overrides);
-	if (!resolved.ok) {
-		throw new Error(resolved.error);
-	}
-	return createRoutingPolicy(resolved.kit);
+	return createRoutingPolicy(resolveLegacyTeamKit(overrides));
 }
 
 /**

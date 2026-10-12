@@ -152,7 +152,7 @@ export function TaskCreateDialog({
 	onAgentSettingsChange?: (value: RuntimeTaskAgentSettings | undefined) => void;
 	/** Default agent ID from runtimeConfig.selectedAgentId, used to show "Default (AgentName)" in picker */
 	defaultAgentId?: RuntimeAgentId | null;
-	/** The project kit's proposal, for the "from kit `team-cloud`" hint under the picker. */
+	/** The project kit's proposal, for the "from kit `team (cloud)`" hint under the picker. */
 	kitDevAssignment?: RuntimeDevAssignmentResponse | null;
 }): ReactElement {
 	const [mode, setMode] = useState<"single" | "multi">("single");

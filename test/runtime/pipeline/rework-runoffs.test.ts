@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { moveTaskToColumn, trashTaskAndGetReadyLinkedTaskIds } from "../../../src/core/task-board-mutations";
 import { createRoutingPolicy, type OnFailAnswer } from "../../../src/kits/policy";
-import { getBuiltInKits, getDefaultKit, resolveKitLayers } from "../../../src/kits/resolve-kit";
+import { getDefaultKit, resolveKitLayers } from "../../../src/kits/resolve-kit";
 import type { PipelineActionRequest } from "../../../src/pipeline/actions";
 import type {
 	PipelineRunoffGroup,
@@ -17,6 +17,7 @@ import { releaseHold } from "../../../src/pipeline/hold";
 import { readEscalationRecord, readQaflow } from "../../../src/pipeline/rework";
 import { createPipelineActionRunner } from "../../../src/server/pipeline-actions";
 import { createReworkHarness, failVerdict, REWORK_T0, type ReworkHarnessOptions } from "../../utilities/rework-stage";
+import { getLegacyTeamKit } from "../../utilities/team-kits";
 import {
 	createBoard,
 	createCard,
@@ -42,7 +43,7 @@ function kinds(actions: ReturnType<typeof createReworkHarness>["actions"]) {
 }
 
 function teamPolicy(overrides: Record<string, unknown>) {
-	const team = getBuiltInKits().get("team-cloud");
+	const team = getLegacyTeamKit();
 	if (!team) {
 		throw new Error("team kit missing");
 	}

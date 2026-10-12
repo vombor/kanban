@@ -4,7 +4,7 @@
 // any git repo, so it never takes over existing work: those go through Open folder.
 import { lstat, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import type { KitChoiceList } from "../kits/kit-choices";
+import type { KitChoiceList, NewProjectKitSelection } from "../kits/kit-choices";
 import { runGit } from "../workspace/git-utils";
 import { type AddProjectResult, addProject, chooseNewProjectKit } from "./project-add";
 import {
@@ -31,8 +31,12 @@ export interface CreateProjectInput {
 	initialCommit?: boolean;
 	/** The routing kit (default `default`); refused before anything is made when it doesn't resolve. */
 	kit?: string;
+	/** The `team` kit's preset; null = a custom team (`roleSettings` name its models). */
+	preset?: string | null;
+	/** A custom team's `roles.<role>.agent|provider|model` (dev and QA agents required). */
+	roleSettings?: Record<string, unknown>;
 	/** Asks for the kit when none is given (the CLI's terminal prompt), after the directory checks. */
-	chooseKit?: (choices: KitChoiceList) => Promise<string>;
+	chooseKit?: (choices: KitChoiceList) => Promise<NewProjectKitSelection>;
 	/** Resolved roots (default: config.json's `projects.roots`). */
 	projectRoots?: ProjectRoots;
 }
@@ -205,7 +209,7 @@ export async function createProject(input: CreateProjectInput): Promise<CreatePr
 	const existed = await assertNewProjectDirectory(repoPath, root);
 	await assertGitAvailable(root);
 	await assertValidBranchName(root, initialBranch);
-	let kit: string | undefined;
+	let kit: NewProjectKitSelection | undefined;
 	try {
 		kit = await chooseNewProjectKit(input);
 	} catch (error) {
@@ -235,7 +239,9 @@ export async function createProject(input: CreateProjectInput): Promise<CreatePr
 	const project = await addProject({
 		repoPath,
 		name: name !== basename(repoPath) ? name : undefined,
-		kit,
+		kit: kit?.name,
+		preset: kit?.preset,
+		roleSettings: kit?.roleSettings,
 		allowUnbornHead: !initialCommit,
 		projectRoots,
 	});

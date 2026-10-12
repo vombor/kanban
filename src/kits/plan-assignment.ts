@@ -43,20 +43,20 @@ export type PlanAssignmentDecision =
 export function decidePlanAssignment(input: {
 	request: PlanAssignmentRequest;
 	config: PipelineConfig;
-	resolved: Pick<WorkspaceKitResolution, "kit" | "kitName" | "issues">;
+	resolved: Pick<WorkspaceKitResolution, "kit" | "kitLabel" | "issues">;
 }): PlanAssignmentDecision {
 	const { request, resolved } = input;
 	const answer = answerPlanAssignment(resolved.kit);
 	if (answer.kind === "disabled") {
 		return {
 			ok: false,
-			kitName: resolved.kitName,
-			error: `${answer.reason}, so this project makes no plan cards: its agent plans its own work. To use a planner, set the kit override plan.enabled (kanban kit apply ... --set plan.enabled=true) or use a kit with a plan section (team-cloud).`,
+			kitName: resolved.kitLabel,
+			error: `${answer.reason}, so this project makes no plan cards: its agent plans its own work. To use a planner, set the kit override plan.enabled (kanban kit apply ... --set plan.enabled=true) or use a kit with a plan section (team).`,
 			issues: resolved.issues,
 		};
 	}
 	const startInPlanMode = request.startInPlanMode ?? answer.startInPlanMode;
-	const base = { ok: true as const, kitName: resolved.kitName, startInPlanMode, rules: answer.rules };
+	const base = { ok: true as const, kitName: resolved.kitLabel, startInPlanMode, rules: answer.rules };
 	if (hasExplicitDevAssignment(request)) {
 		return {
 			...base,

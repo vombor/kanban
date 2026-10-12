@@ -207,7 +207,7 @@ describe("one-owner check", () => {
 		expect(shadow.some((finding) => finding.level === "fail")).toBe(false);
 		expect(levels(shadow)).toContainEqual([
 			"info",
-			"foo: the legacy kit lands; Kanban shadows it (landing qa, kit team-cloud, pipeline.shadow)",
+			"foo: the legacy kit lands; Kanban shadows it (landing qa, kit team (cloud), pipeline.shadow)",
 		]);
 		const disabled = await checkOneOwner(
 			context({

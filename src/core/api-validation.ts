@@ -181,6 +181,17 @@ export function parseWorkspaceStateSaveRequest(value: unknown): RuntimeWorkspace
 	return parseWithSchema(runtimeWorkspaceStateSaveRequestSchema, value);
 }
 
+/** A new project's preset and custom-team role settings, copied only when given. */
+function parseProjectKitPicks(parsed: { preset?: string | null; roleSettings?: Record<string, unknown> }): {
+	preset?: string | null;
+	roleSettings?: Record<string, unknown>;
+} {
+	return {
+		...(parsed.preset !== undefined ? { preset: parsed.preset === null ? null : parsed.preset.trim() || null } : {}),
+		...(parsed.roleSettings !== undefined ? { roleSettings: parsed.roleSettings } : {}),
+	};
+}
+
 export function parseProjectCreateRequest(value: unknown): RuntimeProjectCreateRequest {
 	const parsed = parseWithSchema(runtimeProjectCreateRequestSchema, value);
 	const path = parsed.path.trim();
@@ -193,6 +204,7 @@ export function parseProjectCreateRequest(value: unknown): RuntimeProjectCreateR
 		initialBranch: parsed.initialBranch?.trim() || undefined,
 		initialCommit: parsed.initialCommit,
 		kit: parsed.kit?.trim() || undefined,
+		...parseProjectKitPicks(parsed),
 	};
 }
 
@@ -213,6 +225,7 @@ export function parseProjectAddRequest(value: unknown): RuntimeProjectAddRequest
 		gitUrl,
 		initializeGit: parsed.initializeGit,
 		kit: parsed.kit?.trim() || undefined,
+		...parseProjectKitPicks(parsed),
 	};
 }
 

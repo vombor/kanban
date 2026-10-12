@@ -48,17 +48,18 @@ function onTeamLocal(extra: Record<string, unknown> = {}) {
 }
 
 describe("kit settings doctor rows", () => {
-	it("warns for every setting team-local needs and the config doesn't have, with the key to set", async () => {
+	it("warns for every setting team (lemonade) needs and the config doesn't have, with the key to set", async () => {
 		const findings = checkKitRecommendedSettings({
 			config: parsePipelineConfig(onTeamLocal()).config,
 			catalog: await builtInCatalog(),
 			entries: [{ workspaceId: "local" }, { workspaceId: "foo" }],
 		});
+		// The team kit's recovery settings first, then the lemonade preset's own (the turn detector).
 		expect(findings.map((finding) => [finding.level, finding.hint])).toEqual([
-			["warn", 'set agents.cline.turnDetector.mode to "on" in config.json (the kit never applies it)'],
 			["warn", 'set pipeline.recovery.mode to "on" in config.json (the kit never applies it)'],
+			["warn", 'set agents.cline.turnDetector.mode to "on" in config.json (the kit never applies it)'],
 		]);
-		expect(findings[0]?.message).toContain("local: kit team-local needs agents.cline.turnDetector.mode");
+		expect(findings[1]?.message).toContain("local: kit team (lemonade) needs agents.cline.turnDetector.mode");
 	});
 
 	it("passes once they are set, and says nothing about projects on the default kit", async () => {
@@ -68,7 +69,7 @@ describe("kit settings doctor rows", () => {
 			entries: [{ workspaceId: "local" }, { workspaceId: "foo" }],
 		});
 		expect(findings).toEqual([
-			{ level: "pass", area: "project", message: "local: the 3 setting(s) kit team-local needs are set" },
+			{ level: "pass", area: "project", message: "local: the 3 setting(s) kit team (lemonade) needs are set" },
 		]);
 	});
 
@@ -88,7 +89,7 @@ describe("kit settings doctor rows", () => {
 		expect(findings[0]).toMatchObject({
 			level: "warn",
 			message:
-				"local: kit team-local routes to Lemonade models it can't run: Laguna-XS-2.1-GGUF-Q4_K_M is not listed by Lemonade",
+				"local: kit team (lemonade) routes to Lemonade models it can't run: Laguna-XS-2.1-GGUF-Q4_K_M is not listed by Lemonade",
 		});
 		const down = await checkKitLemonadeModels({ ...context, fetch: createFakeLemonadeFetch({ down: true }) });
 		expect(down).toMatchObject([{ level: "info", message: expect.stringContaining("did not answer") }]);

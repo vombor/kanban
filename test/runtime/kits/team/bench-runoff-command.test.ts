@@ -5,8 +5,9 @@ import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { registerBenchCommand } from "../../../../src/commands/bench";
-import { getWatchdogWorkspacePaths } from "../../../../src/state/kanban-home";
+import { getKanbanKitsPath, getWatchdogWorkspacePaths } from "../../../../src/state/kanban-home";
 import { withTemporaryKanbanHome } from "../../../utilities/kanban-home";
+import { readLegacyTeamKitText } from "../../../utilities/team-kits";
 
 async function run(args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number | undefined }> {
 	const program = new Command();
@@ -39,12 +40,15 @@ describe("kanban bench runoff status / tiers", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("tiers --kit team-cloud prints the tier picks", async () => {
+	it("tiers --kit <kit> prints the tier picks", async () => {
 		await withTemporaryKanbanHome(async () => {
-			const result = await run(["tiers", "--kit", "team-cloud", "--json"]);
+			// A kit with tiers: the legacy-team fixture (the built-in team-cloud kit before presets) as a user kit.
+			mkdirSync(getKanbanKitsPath(), { recursive: true });
+			writeFileSync(join(getKanbanKitsPath(), "legacy-team.json"), readLegacyTeamKitText());
+			const result = await run(["tiers", "--kit", "legacy-team", "--json"]);
 			expect(result.exitCode).toBe(0);
 			const report = JSON.parse(result.stdout) as { kitName: string; tiers: Array<{ name: string; pick: unknown }> };
-			expect(report.kitName).toBe("team-cloud");
+			expect(report.kitName).toBe("legacy-team");
 			expect(report.tiers.find((tier) => tier.name === "tier3")?.pick).toEqual({
 				provider: "bedrock",
 				model: "us.openai.gpt-6.1-sol",

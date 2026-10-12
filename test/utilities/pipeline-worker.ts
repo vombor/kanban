@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { parsePipelineConfig } from "../../src/config/pipeline-config";
@@ -33,6 +33,7 @@ import type { SubmissionInspector } from "../../src/pipeline/submission-stage";
 import { createPipelineWorker, type PipelineWorkerDependencies } from "../../src/pipeline/worker";
 import type { PipelineFinishTaskRequest, PipelineWorkerMessage } from "../../src/pipeline/worker-protocol";
 import type { ClineSessionSize } from "../../src/terminal/cline-session-files";
+import { readLegacyTeamKitText } from "./team-kits";
 import { createTempDir } from "./temp-dir";
 
 /** What the QA gate asked the server for, in order. */
@@ -203,6 +204,10 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 			events.push({ name, event });
 		});
 	}
+	// The legacy-team fixture (the built-in team-cloud kit before presets, with tiers and a QA route) is a user kit
+	// here, for tests of routing that needs such a kit.
+	mkdirSync(join(temp.path, "kits"), { recursive: true });
+	writeFileSync(join(temp.path, "kits", "legacy-team.json"), readLegacyTeamKitText());
 	const worker = createPipelineWorker({
 		send: (message) => messages.push(message),
 		readConfig: async () => parsePipelineConfig(rawConfig),

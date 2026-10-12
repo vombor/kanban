@@ -5,7 +5,7 @@ import { evaluateKitRecommendedSettings } from "../../../src/kits/kit-recommenda
 import { buildKitReport, formatKitReport } from "../../../src/kits/kit-report";
 import { listKitRoutes } from "../../../src/kits/kit-routes";
 import { answerPlanAssignment, createRoutingPolicy } from "../../../src/kits/policy";
-import { getBuiltInKits, getDefaultKit, resolveKitLayers } from "../../../src/kits/resolve-kit";
+import { getBuiltInKits, getBuiltInPresets, getDefaultKit, resolveKitLayers } from "../../../src/kits/resolve-kit";
 import { listKitModels } from "../../../src/kits/team/bench/price-sync-job";
 import { createCardHistory, createEffectiveCard } from "../../utilities/effective-card";
 
@@ -13,12 +13,14 @@ const MUSE = { provider: "lemonade", model: "Muse-Glimmer-30B-GGUF-Q4_K_M" };
 const LAGUNA = { provider: "lemonade", model: "Laguna-XS-2.1-GGUF-Q4_K_M" };
 const GEMMA = { provider: "lemonade", model: "gemma-4-31B-it-qat-q4_0-gguf-Q4_0" };
 
+/** The team kit with the lemonade preset (what team-local was until 2026-10-12). */
 function resolveTeamLocal(overrides: Record<string, unknown> = {}) {
-	const kit = getBuiltInKits().get("team-local");
-	if (!kit) {
-		throw new Error("team-local kit missing");
+	const kit = getBuiltInKits().get("team");
+	const preset = getBuiltInPresets().get("lemonade");
+	if (!kit || !preset) {
+		throw new Error("team kit or lemonade preset missing");
 	}
-	const resolved = resolveKitLayers(getDefaultKit(), kit, overrides);
+	const resolved = resolveKitLayers(getDefaultKit(), kit, overrides, preset);
 	if (!resolved.ok) {
 		throw new Error(resolved.error);
 	}
@@ -43,7 +45,7 @@ function collectModelProviders(value: unknown, found: Array<{ provider: unknown;
 	return found;
 }
 
-describe("team-local kit", () => {
+describe("the team kit's lemonade preset", () => {
 	it("routes nothing to a paid provider: every model is on lemonade, every agent is cline", () => {
 		const { kit } = resolveTeamLocal();
 		const models = collectModelProviders(kit);
@@ -58,8 +60,8 @@ describe("team-local kit", () => {
 			...(kit.qa?.routes ?? []).map((r) => r.agent),
 		];
 		expect(new Set(agents)).toEqual(new Set(["cline"]));
-		expect(kit.features).toEqual(["scoreboard", "bench", "calibration", "tiers"]);
-		expect(kit.prices?.autoSync).toBe(false);
+		// The team kit's one workflow: every feature, the same as every other preset.
+		expect(kit.features).toEqual(["scoreboard", "bench", "runoffs", "calibration", "tiers"]);
 	});
 
 	it("assigns new dev and plan cards to Cline on the dev tier's local model", () => {
@@ -112,7 +114,7 @@ describe("team-local kit", () => {
 		).toMatchObject({ kind: "none", reason: expect.stringContaining("(google)") });
 	});
 
-	it("reworks on the same model, then hands the task to the fallback local model at once, and waits out Lemonade outages", () => {
+	it("reworks on the same model, then hands the task to the fallback local model at once, outages included", () => {
 		const policy = createRoutingPolicy(resolveTeamLocal().kit);
 		const dev = createEffectiveCard({ agentId: "cline", model: MUSE });
 		const limits = { maxFailRounds: 3 };
@@ -123,10 +125,18 @@ describe("team-local kit", () => {
 		expect(
 			policy.onFail({ dev, cause: "fail", verdict: null, history: createCardHistory([1, 2, 3]), limits }),
 		).toMatchObject({ action: "escalate", to: { agentId: "cline", model: LAGUNA }, requireApproval: false });
-		expect(policy.onOutage({ dev, heldMin: 400, maxMin: 360 })).toMatchObject({ action: "hold" });
+		// One workflow for every team (user 2026-10-12): an outage hold that lasted maxMin hands the task to the fallback
+		// too. On one Lemonade server the sibling waits on the same outage, then goes to the orchestrator (a fallback
+		// sibling never falls back again).
+		expect(policy.onOutage({ dev, heldMin: 200, maxMin: 360 })).toMatchObject({ action: "hold" });
+		expect(policy.onOutage({ dev, heldMin: 400, maxMin: 360 })).toMatchObject({
+			action: "escalate",
+			to: { agentId: "cline", model: LAGUNA },
+			requireApproval: false,
+		});
 	});
 
-	it("routes its roles to its local models with no overrides, as a fresh kit apply team-local does", () => {
+	it("routes its roles to its local models with no overrides, as a fresh kit apply team --preset lemonade does", () => {
 		const { kit } = resolveTeamLocal();
 		const onCline = (model: { provider: string; model: string }) => ({ agentId: "cline", ...model });
 		expect(listKitRoutes(kit)).toEqual([
@@ -176,7 +186,7 @@ describe("team-local kit", () => {
 	it("shows in kanban kit show, with the settings it needs", () => {
 		const resolved = resolveTeamLocal();
 		const report = buildKitReport({
-			kitName: "team-local",
+			kitName: "team (lemonade)",
 			resolved,
 			workspaceId: "local",
 			selectedAgentId: "claude",

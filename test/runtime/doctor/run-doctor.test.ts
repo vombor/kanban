@@ -239,20 +239,22 @@ describe("kanban doctor", () => {
 		});
 	});
 
-	it("warns about a workspace still on the renamed kit team; it runs on team-cloud, --fix rewrites it", async () => {
+	it("warns about a workspace still on the renamed kit team-local; it runs on team (lemonade), --fix rewrites it", async () => {
 		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
 			writeJson(globalConfigPath, {
 				selectedAgentId: "claude",
-				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team", overrides: { "qa.blurb": "x" } } } },
+				workspaces: {
+					foo: { landing: { mode: "qa" }, kit: { name: "team-local", overrides: { "qa.blurb": "x" } } },
+				},
 			});
 			const report = await runDoctor(DOCTOR);
-			const warning = find(report.findings, "home", 'has "workspaces.foo.kit.name": "team"');
+			const warning = find(report.findings, "home", 'has "workspaces.foo.kit.name": "team-local"');
 			expect(warning?.level).toBe("warn");
-			expect(warning?.message).toContain("renamed to team-cloud");
+			expect(warning?.message).toContain("is now team (lemonade)");
 			expect(warning?.hint).toBe("kanban doctor --fix rewrites it");
 			await runDoctor({ ...DOCTOR, fix: true });
 			expect(JSON.parse(readFileSync(globalConfigPath, "utf8")).workspaces).toEqual({
-				foo: { landing: { mode: "qa" }, kit: { name: "team-cloud", overrides: { "qa.blurb": "x" } } },
+				foo: { landing: { mode: "qa" }, kit: { name: "team", preset: "lemonade", overrides: { "qa.blurb": "x" } } },
 			});
 			expect(find((await runDoctor(DOCTOR)).findings, "home", "kit.name")).toBeUndefined();
 		});

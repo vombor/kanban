@@ -17,7 +17,13 @@ import {
 	updateWorkspacePipelineEntry,
 } from "../config/pipeline-config";
 import { applyWorkspaceKit } from "../kits/apply-kit";
-import { type KitChoiceList, listKitChoices, resolveNewProjectKitName } from "../kits/kit-choices";
+import {
+	type KitChoiceList,
+	listKitChoices,
+	type NewProjectKitSelection,
+	resolveNewProjectKit,
+} from "../kits/kit-choices";
+import { formatKitSelection, formatKitSelectionArgs, type KitSelection } from "../kits/renamed-kits";
 import { DEFAULT_KIT_NAME, loadKitCatalog } from "../kits/resolve-kit";
 import { fixWorkspaceTrust, readWorkspaceTrust } from "../setup/workspace-trust-report";
 import { listWorkspaceIndexEntries, loadWorkspaceContext } from "../state/workspace-state";
@@ -29,8 +35,12 @@ export interface AddProjectInput {
 	/** The repo's top directory. */
 	repoPath: string;
 	kit?: string;
+	/** The `team` kit's preset; null = a custom team (`roleSettings` name its models). */
+	preset?: string | null;
+	/** A custom team's `roles.<role>.agent|provider|model` (dev and QA agents required). */
+	roleSettings?: Record<string, unknown>;
 	/** Asks for the kit of a new registration given no `kit` (the CLI's terminal prompt); absent: `default`. */
-	chooseKit?: (choices: KitChoiceList) => Promise<string>;
+	chooseKit?: (choices: KitChoiceList) => Promise<NewProjectKitSelection>;
 	landing?: LandingMode;
 	base?: string;
 	name?: string;
@@ -52,6 +62,8 @@ export interface AddProjectResult {
 	agentsMd: ProjectSectionResult | null;
 	warnings: string[];
 	kitName: string;
+	/** The `team` kit's preset (null: none). */
+	presetName: string | null;
 	landingMode: LandingMode;
 }
 
@@ -95,37 +107,57 @@ export async function resolveProjectRepoPath(
 
 /** A new registration's kit: the named one, else the asked one, else `default`; refused if it doesn't resolve. */
 export async function chooseNewProjectKit(
-	input: Pick<AddProjectInput, "kit" | "chooseKit">,
-): Promise<string | undefined> {
+	input: Pick<AddProjectInput, "kit" | "preset" | "roleSettings" | "chooseKit">,
+): Promise<NewProjectKitSelection | undefined> {
 	if (input.kit === undefined && !input.chooseKit) {
 		return undefined;
 	}
 	const catalog = await loadKitCatalog();
-	const kitName = input.kit ?? (await input.chooseKit?.(listKitChoices(catalog)));
-	return resolveNewProjectKitName(catalog, kitName);
+	const picked =
+		input.kit !== undefined
+			? { kit: input.kit, preset: input.preset, roleSettings: input.roleSettings }
+			: await input.chooseKit?.(listKitChoices(catalog)).then((choice) => ({
+					kit: choice.name,
+					preset: choice.preset,
+					roleSettings: choice.roleSettings,
+				}));
+	return resolveNewProjectKit(catalog, picked ?? {});
 }
 
-function describeKeptKit(workspaceId: string, kitName: string, currentKitName: string): string {
-	return `kit ${kitName} not applied: ${workspaceId} already uses kit ${currentKitName} (change it with kanban kit apply ${kitName} --project ${workspaceId})`;
+function isSameKit(left: KitSelection, right: KitSelection): boolean {
+	return left.name === right.name && left.preset === right.preset;
+}
+
+function describeKeptKit(workspaceId: string, kit: KitSelection, current: KitSelection): string {
+	return `kit ${formatKitSelection(kit)} not applied: ${workspaceId} already uses kit ${formatKitSelection(current)} (change it with kanban kit apply ${formatKitSelectionArgs(kit)} --project ${workspaceId})`;
+}
+
+function readCurrentKit(settings: { kit: { name: string; preset: string | null } | null }): KitSelection {
+	return { name: settings.kit?.name ?? DEFAULT_KIT_NAME, preset: settings.kit?.preset ?? null };
 }
 
 /**
  * The kit picked for a project the browser just registered (Open folder, Clone), through `kanban kit apply`'s code:
  * `default` writes nothing, and a project that already has a config entry keeps its kit. Returns notes for the user.
  */
-export async function applyNewProjectKit(workspaceId: string, kitName: string): Promise<string[]> {
+export async function applyNewProjectKit(workspaceId: string, kit: NewProjectKitSelection): Promise<string[]> {
 	const { config } = await readPipelineConfig();
 	if (Object.hasOwn(config.workspaces, workspaceId)) {
-		const currentKitName = getWorkspacePipelineSettings(config, workspaceId).kit?.name ?? DEFAULT_KIT_NAME;
-		return kitName === currentKitName ? [] : [describeKeptKit(workspaceId, kitName, currentKitName)];
+		const current = readCurrentKit(getWorkspacePipelineSettings(config, workspaceId));
+		return isSameKit(kit, current) ? [] : [describeKeptKit(workspaceId, kit, current)];
 	}
-	if (kitName === DEFAULT_KIT_NAME) {
+	if (kit.name === DEFAULT_KIT_NAME) {
 		return [];
 	}
-	const applied = await applyWorkspaceKit({ workspaceId, kitName });
+	const applied = await applyWorkspaceKit({
+		workspaceId,
+		kitName: kit.name,
+		preset: kit.preset,
+		set: kit.roleSettings,
+	});
 	return applied.recommendedLandingMode && applied.recommendedLandingMode !== applied.landing.to
 		? [
-				`Kit ${kitName} recommends landing "${applied.recommendedLandingMode}" (kanban kit apply ${kitName} --project ${workspaceId} --landing ${applied.recommendedLandingMode}).`,
+				`Kit ${formatKitSelection(kit)} recommends landing "${applied.recommendedLandingMode}" (kanban kit apply ${formatKitSelectionArgs(kit)} --project ${workspaceId} --landing ${applied.recommendedLandingMode}).`,
 			]
 		: [];
 }
@@ -137,7 +169,7 @@ export async function addProject(input: AddProjectInput): Promise<AddProjectResu
 	if (before === null) {
 		await assertPathInsideProjectRoots(repoPath, input.projectRoots ?? (await readProjectRoots()));
 	}
-	const kit = before === null ? await chooseNewProjectKit(input) : input.kit;
+	const kit = before === null ? await chooseNewProjectKit(input) : undefined;
 	const context = await loadWorkspaceContext(repoPath);
 	const workspaceId = context.workspaceId;
 	const warnings: string[] = [];
@@ -146,34 +178,41 @@ export async function addProject(input: AddProjectInput): Promise<AddProjectResu
 	const { config } = await readPipelineConfig();
 	const configured = Object.hasOwn(config.workspaces, workspaceId);
 	const current = getWorkspacePipelineSettings(config, workspaceId);
-	const currentKitName = current.kit?.name ?? DEFAULT_KIT_NAME;
+	const currentKit = readCurrentKit(current);
+	const currentKitName = currentKit.name;
+	// A registered project given --kit keeps its own; the given kit only names what was asked for.
+	const askedKit: KitSelection | undefined =
+		kit ?? (input.kit !== undefined ? { name: input.kit, preset: input.preset ?? null } : undefined);
 
 	if (configured) {
-		if (kit !== undefined && kit !== currentKitName) {
-			warnings.push(describeKeptKit(workspaceId, kit, currentKitName));
+		if (askedKit !== undefined && !isSameKit(askedKit, currentKit)) {
+			warnings.push(describeKeptKit(workspaceId, askedKit, currentKit));
 		}
 		if (input.landing !== undefined && input.landing !== current.landing.mode) {
 			warnings.push(
-				`landing ${input.landing} not applied: ${workspaceId} is on landing ${current.landing.mode} (kanban kit apply ${currentKitName} --project ${workspaceId} --landing ${input.landing})`,
+				`landing ${input.landing} not applied: ${workspaceId} is on landing ${current.landing.mode} (kanban kit apply ${formatKitSelectionArgs(currentKit)} --project ${workspaceId} --landing ${input.landing})`,
 			);
 		}
 	} else if (
-		(kit !== undefined && kit !== DEFAULT_KIT_NAME) ||
+		(kit !== undefined && kit.name !== DEFAULT_KIT_NAME) ||
 		input.landing !== undefined ||
 		input.blurb !== undefined
 	) {
 		// `default` alone writes no entry (no entry is default), as without a kit.
-		const kitName = kit ?? DEFAULT_KIT_NAME;
+		const chosen: NewProjectKitSelection = kit ?? { name: DEFAULT_KIT_NAME, preset: null, roleSettings: {} };
 		const applied = await applyWorkspaceKit({
 			workspaceId,
-			kitName,
+			kitName: chosen.name,
+			preset: chosen.preset,
 			landing: input.landing,
-			set: input.blurb !== undefined ? { "qa.blurb": input.blurb } : {},
+			set: { ...chosen.roleSettings, ...(input.blurb !== undefined ? { "qa.blurb": input.blurb } : {}) },
 		});
-		configLines.push(`kit ${applied.kitName.to}, landing ${applied.landing.to}`);
+		configLines.push(
+			`kit ${formatKitSelection({ name: applied.kitName.to, preset: applied.preset.to })}, landing ${applied.landing.to}`,
+		);
 		if (applied.recommendedLandingMode && applied.recommendedLandingMode !== applied.landing.to) {
 			configLines.push(
-				`kit ${kitName} recommends landing "${applied.recommendedLandingMode}"; it is not applied without --landing ${applied.recommendedLandingMode}`,
+				`kit ${formatKitSelection(chosen)} recommends landing "${applied.recommendedLandingMode}"; it is not applied without --landing ${applied.recommendedLandingMode}`,
 			);
 		}
 	}
@@ -230,6 +269,7 @@ export async function addProject(input: AddProjectInput): Promise<AddProjectResu
 		agentsMd,
 		warnings,
 		kitName: settings.kit?.name ?? DEFAULT_KIT_NAME,
+		presetName: settings.kit?.preset ?? null,
 		landingMode: settings.landing.mode,
 	};
 }

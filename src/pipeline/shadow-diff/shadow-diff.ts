@@ -236,7 +236,7 @@ function compareQaRouting(
 					legacy,
 					pipeline: describeQaAnswer(view),
 					note: known
-						? "plan §12: Claude-built dev cards get QA on the team-cloud kit (set qa.skip.effectiveAgents to skip them)"
+						? "plan §12: Claude-built dev cards get QA on the team kit (set qa.skip.effectiveAgents to skip them)"
 						: null,
 				});
 			}

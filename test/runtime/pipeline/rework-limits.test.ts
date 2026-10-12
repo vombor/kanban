@@ -11,6 +11,7 @@ import type {
 import { handBackTask } from "../../../src/pipeline/handback";
 import { REWORK_STARTED_CHECK_MS, readEscalationRecord, readQaflow, readReworks } from "../../../src/pipeline/rework";
 import { createReworkHarness, failVerdict, REWORK_T0, type ReworkHarnessOptions } from "../../utilities/rework-stage";
+import { resolveTeamKit } from "../../utilities/team-kits";
 import { createCard } from "../../utilities/workspace-state-store";
 
 const DEV = createCard({
@@ -265,15 +266,8 @@ describe("rework limits", () => {
 		});
 	});
 
-	it("team-local: after its FAIL rounds a card goes to the fallback local model once, then to the orchestrator", async () => {
-		const kit = getBuiltInKits().get("team-local");
-		const resolved = kit
-			? resolveKitLayers(getDefaultKit(), kit, {})
-			: { ok: false as const, error: "no team-local kit" };
-		if (!resolved.ok) {
-			throw new Error(resolved.error);
-		}
-		const policy = createRoutingPolicy(resolved.kit);
+	it("team (lemonade): after its FAIL rounds a card goes to the fallback local model once, then to the orchestrator", async () => {
+		const policy = createRoutingPolicy(resolveTeamKit("lemonade"));
 		const muse = { providerId: "lemonade", modelId: "Muse-Glimmer-30B-GGUF-Q4_K_M" };
 		const dev = { ...DEV, agentSettings: muse };
 		const fails = [failVerdict(1), failVerdict(2), failVerdict(3)];

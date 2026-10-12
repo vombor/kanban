@@ -100,7 +100,7 @@ describe("kanban bench calibrate", () => {
 				},
 			]);
 			await expect(runCalibrateCommand(spec, { print: true })).rejects.toThrow(
-				/model haiku: rule nope is not in kit team-cloud's qa\.rules \(drive\)/u,
+				/model haiku: rule nope is not in kit team \(cloud\)'s qa\.rules \(drive\)/u,
 			);
 		});
 	});

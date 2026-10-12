@@ -12,6 +12,7 @@ import { cn } from "@/components/ui/cn";
 import { Dialog, DialogFooter, DialogHeader } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
 import { useProjectKitChoices } from "@/hooks/use-project-kit-choices";
+import { useProjectKitSelection } from "@/hooks/use-project-kit-selection";
 import { useProjectRoots } from "@/hooks/use-project-roots";
 
 type AddProjectMode = "open" | "clone" | "new";
@@ -43,13 +44,10 @@ export function AddProjectDialog({
 	const [mode, setMode] = useState<AddProjectMode>("open");
 	const [selectedRoot, setSelectedRoot] = useState<string | null>(null);
 	const [isBusy, setIsBusy] = useState(false);
-	const [selectedKitName, setSelectedKitName] = useState<string | null>(null);
 	const projectRoots = useProjectRoots(open, currentProjectId);
 	const kitChoices = useProjectKitChoices(open, currentProjectId);
-	const kitName =
-		selectedKitName && kitChoices.kits.some((kit) => kit.name === selectedKitName)
-			? selectedKitName
-			: kitChoices.defaultKitName;
+	const kitSelection = useProjectKitSelection(kitChoices);
+	const resetKitSelection = kitSelection.reset;
 	const root =
 		selectedRoot && projectRoots.roots.includes(selectedRoot) ? selectedRoot : (projectRoots.roots[0] ?? null);
 
@@ -59,9 +57,9 @@ export function AddProjectDialog({
 		}
 		setMode("open");
 		setSelectedRoot(null);
-		setSelectedKitName(null);
+		resetKitSelection();
 		setIsBusy(false);
-	}, [open]);
+	}, [open, resetKitSelection]);
 
 	const handleAdded = useCallback(
 		(projectId: string) => {
@@ -89,12 +87,14 @@ export function AddProjectDialog({
 				onBusyChange: setIsBusy,
 				onCancel: () => onOpenChange(false),
 				onAdded: handleAdded,
-				kitName,
+				kitRequest: kitSelection.request,
+				kitBlockedReason: kitSelection.blockedReason,
 				kitPicker: (
 					<ProjectKitPicker
 						kits={kitChoices.kits}
-						value={kitName}
-						onChange={setSelectedKitName}
+						teamKitName={kitChoices.teamKitName}
+						presets={kitChoices.presets}
+						selection={kitSelection}
 						error={kitChoices.error}
 						hint={mode === "open" ? "A project that is already added keeps its kit." : undefined}
 						disabled={isBusy}

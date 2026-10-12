@@ -3,7 +3,7 @@
 //     (`dev.agent` = `roles.dev.agent`) and team keys (onFail, escalate, onOutage, qa.routes, tiers, ...). Both still
 //     apply; the hint is the user's `kanban kit migrate-overrides`, never a --fix (it changes the project's team).
 // and for what it needs from the machine:
-//   - every `recommends.settings` entry the config doesn't meet (team-local: the Cline turn detector on, recovery on,
+//   - every `recommends.settings` entry the config doesn't meet (team: recovery on; its lemonade preset: the Cline turn detector on,
 //     ), as a warning with the key to set. Never fixed by --fix: they are machine-wide
 //     or user settings, and a kit never applies mechanics.
 //   - every local (Lemonade) model the kit routes to that Lemonade doesn't list, hasn't downloaded or doesn't mark
@@ -47,7 +47,7 @@ function listProjectKits(
 		const resolution = resolveWorkspaceKit(context.config, workspaceId, context.catalog);
 		return resolution.kitName === DEFAULT_KIT_NAME
 			? []
-			: [{ workspaceId, kitName: resolution.kitName, kit: resolution.kit }];
+			: [{ workspaceId, kitName: resolution.kitLabel, kit: resolution.kit }];
 	});
 }
 
@@ -58,7 +58,12 @@ export function checkKitProjectSettings(context: KitSettingsCheckContext): Docto
 		if (Object.keys(resolution.overrides).length === 0) {
 			continue;
 		}
-		const classified = describeProjectSettings(context.catalog, resolution.kitName, resolution.overrides);
+		const classified = describeProjectSettings(
+			context.catalog,
+			resolution.kitName,
+			resolution.overrides,
+			resolution.presetName,
+		);
 		if (!classified) {
 			continue;
 		}
@@ -68,7 +73,7 @@ export function checkKitProjectSettings(context: KitSettingsCheckContext): Docto
 			findings.push({
 				level: "warn",
 				area: "project",
-				message: `${workspaceId}: ${teamKeys.length} override(s) change kit ${resolution.kitName}'s team definition (${teamKeys.join(", ")}): they still apply, but a project only sets the models its kit names and project facts; pick or make a kit that has them`,
+				message: `${workspaceId}: ${teamKeys.length} override(s) change kit ${resolution.kitLabel}'s team definition (${teamKeys.join(", ")}): they still apply, but a project only sets the models its kit names and project facts; pick or make a kit that has them`,
 				hint,
 			});
 		}

@@ -1,12 +1,12 @@
 // `kanban config import-kit [kit.config.json]` (plan §3.5, used at cutover): maps the legacy kit's config onto
 // Kanban's config.json.
 //
-//   - A project whose own entry turns QA on (toggles.QA_CREATE) gets kit `team-cloud`, with every value that differs
-//     from kits/team-cloud.json as an override (its blurb, QA prompt notes, postLand, …), landing `qa` when it also has
+//   - A project whose own entry turns QA on (toggles.QA_CREATE) gets kit `team` with preset `cloud`, with every value that
+//     differs from kits/team.json + kits/presets/cloud.json as an override (its blurb, QA prompt notes, postLand, …), landing `qa` when it also has
 //     AUTO_DONE, and `pipeline.shadow: true` (the pipeline decides and logs, acts on nothing, until P5-2).
 //   - Every other project gets no kit (`default`) and landing `off`.
 //   - Top-level routing (devAgent, qaAgent, qaRoutes, benchmark, the project toggles) is never copied onto a
-//     project: it is compared only for the projects that get `team-cloud`. That is the 2026-10-06 incident rule (§4.0).
+//     project: it is compared only for the projects that get `team` (cloud). That is the 2026-10-06 incident rule (§4.0).
 //   - Machine-wide keys (qaSlots, thresholds, watchdog/orchestrator/provider keys) become core settings (§3.1).
 //
 // Only keys present in the file are mapped (the kit's built-in defaults are not imported), and the import changes
@@ -14,7 +14,16 @@
 import { basename } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { type KitDocument, kitQaPreviewSchema } from "../kits/kit-schema";
-import { getBuiltInKits, loadKitCatalog, readKitValue, resolveKitByName } from "../kits/resolve-kit";
+import {
+	getBuiltInKits,
+	getBuiltInPresets,
+	getDefaultKit,
+	loadKitCatalog,
+	readKitValue,
+	resolveKitByName,
+	resolveKitLayers,
+	TEAM_KIT_NAME,
+} from "../kits/resolve-kit";
 import { getKanbanGlobalConfigPath, getLegacyKitHomePath } from "../state/kanban-home";
 import { isPlainRecord, type LegacyKitRaw, listLegacyKitProjects, readLegacyKitConfig } from "./legacy-kit-config";
 import {
@@ -37,6 +46,8 @@ export interface ImportedWorkspace {
 	projectPath: string | null;
 	/** null: no kit entry (`default`). */
 	kit: string | null;
+	/** The team kit's preset (null: none). */
+	preset: string | null;
 	overrides: Record<string, unknown>;
 	landing: LandingMode;
 	shadow: boolean;
@@ -54,7 +65,8 @@ export interface ImportKitMapping {
 	warnings: string[];
 }
 
-const TEAM_KIT_NAME = "team-cloud";
+/** The team kit's preset a legacy QA project gets: the cloud models (what the legacy kit routed to). */
+const TEAM_IMPORT_PRESET = "cloud";
 
 // The legacy kit's built-in qaRoutes, used when the file sets none (legacy kit lib/config.cjs DEFAULTS.qaRoutes), with
 // its Haiku 4.5 replaced by Haiku 5.5 as in kits/team-cloud.json (user 2026-10-12), so an import never pins 4.5.
@@ -130,7 +142,7 @@ const CORE_KEY_MAP: ReadonlyArray<readonly [string, string, Convert?]> = [
 	["modelLists.requireLabels", "models.lists.lemonade.requireLabels"],
 ];
 
-// Keys whose job is gone or moved somewhere fixed (§3.1 "D" rows), and the routing keys that only feed `team-cloud`.
+// Keys whose job is gone or moved somewhere fixed (§3.1 "D" rows), and the routing keys that only feed `team` (cloud).
 const NOT_IMPORTED: Readonly<Record<string, string>> = {
 	kanbanUrl: "in-process: no client URL",
 	runtimeUrl: "in-process: no client URL",
@@ -149,12 +161,12 @@ const NOT_IMPORTED: Readonly<Record<string, string>> = {
 	wakeTarget: "removed: each workspace wakes only its own orchestrator (project isolation)",
 	"modelLists.port": "the model-lists route is on the Kanban server",
 	"providers.legacyUpstream": "dropped (upstream Kanban's embedded Cline only)",
-	devAgent: "routing: only compared for projects that get kit team-cloud (roles.dev.agent)",
-	qaAgent: "routing: only compared for projects that get kit team-cloud (roles.qa.agent)",
-	qaRoutes: "routing: only compared for projects that get kit team-cloud (qa.routes)",
-	benchmark: "routing: only compared for projects that get kit team-cloud (tiers, dropped, tierRules, tierNotes)",
-	pricesRegion: "team-cloud kit data: only compared for projects that get kit team-cloud (prices.region)",
-	"toggles.PRICE_SYNC": "team-cloud kit data: only compared for projects that get kit team-cloud (prices.autoSync)",
+	devAgent: "routing: only compared for projects that get kit team (cloud) (roles.dev.agent)",
+	qaAgent: "routing: only compared for projects that get kit team (cloud) (roles.qa.agent)",
+	qaRoutes: "routing: only compared for projects that get kit team (cloud) (qa.routes)",
+	benchmark: "routing: only compared for projects that get kit team (cloud) (tiers, dropped, tierRules, tierNotes)",
+	pricesRegion: "team kit data: only compared for projects that get kit team (cloud) (prices.region)",
+	"toggles.PRICE_SYNC": "team kit data: only compared for projects that get kit team (cloud) (prices.autoSync)",
 	"toggles.QA_CREATE": "never copied onto a project (no inheritance since K-1)",
 	"toggles.AUTO_REWORK": "never copied onto a project (no inheritance since K-1)",
 	"toggles.AUTO_DONE": "never copied onto a project (no inheritance since K-1)",
@@ -247,7 +259,7 @@ function projectOrTop(project: Record<string, unknown>, raw: LegacyKitRaw, key: 
 
 /**
  * The kit-schema values a legacy QA project's routing amounts to (dotted kit key → value). Each is compared with
- * kits/team-cloud.json; only the differences become overrides.
+ * the team kit with the cloud preset; only the differences become overrides.
  */
 function buildTeamEquivalent(
 	project: Record<string, unknown>,
@@ -386,19 +398,21 @@ function mapProject(raw: LegacyKitRaw, project: ReturnType<typeof listLegacyKitP
 		}
 		if (nonEmptyString(entry.projectBlurb)) {
 			notes.push(
-				"projectBlurb not imported: the default kit runs no QA (kanban kit apply team-cloud … --set qa.blurb=…)",
+				"projectBlurb not imported: the default kit runs no QA (kanban kit apply team --preset cloud … --set qa.blurb=…)",
 			);
 		}
-		return { ...base, kit: null, overrides: {}, landing: "off", shadow: false };
+		return { ...base, kit: null, preset: null, overrides: {}, landing: "off", shadow: false };
 	}
 	const team = getBuiltInKits().get(TEAM_KIT_NAME);
-	if (!team) {
-		throw new Error("The built-in team-cloud kit is missing.");
+	const preset = getBuiltInPresets().get(TEAM_IMPORT_PRESET);
+	const resolved = team && preset ? resolveKitLayers(getDefaultKit(), team, {}, preset) : null;
+	if (!resolved?.ok) {
+		throw new Error(`The built-in ${TEAM_KIT_NAME} kit with preset ${TEAM_IMPORT_PRESET} does not resolve.`);
 	}
-	const overrides = diffAgainstKit(team, buildTeamEquivalent(entry, raw, notes));
+	const overrides = diffAgainstKit(resolved.kit, buildTeamEquivalent(entry, raw, notes));
 	if (!AUTO_DONE) {
 		notes.push(
-			"AUTO_DONE is off (QA without auto-landing): landing qa would land after a PASS, so landing is off; the orchestrator lands (kanban kit apply team-cloud --landing qa to change)",
+			"AUTO_DONE is off (QA without auto-landing): landing qa would land after a PASS, so landing is off; the orchestrator lands (kanban kit apply team --preset cloud --landing qa to change)",
 		);
 	}
 	if (readDotted(entry, "scoreboard") !== undefined) {
@@ -407,6 +421,7 @@ function mapProject(raw: LegacyKitRaw, project: ReturnType<typeof listLegacyKitP
 	return {
 		...base,
 		kit: TEAM_KIT_NAME,
+		preset: TEAM_IMPORT_PRESET,
 		overrides,
 		landing: AUTO_DONE ? "qa" : "off",
 		// Shadow until the cutover switches the project (P5-2): decide and log, act on nothing.
@@ -454,7 +469,10 @@ function buildWorkspaceEntry(current: unknown, workspace: ImportedWorkspace): Re
 	if (workspace.kit === null) {
 		delete entry.kit;
 	} else {
-		entry.kit = { name: workspace.kit, overrides: workspace.overrides };
+		entry.kit =
+			workspace.preset !== null
+				? { name: workspace.kit, preset: workspace.preset, overrides: workspace.overrides }
+				: { name: workspace.kit, overrides: workspace.overrides };
 	}
 	if (workspace.shadow) {
 		entry.pipeline = { ...(isPlainRecord(entry.pipeline) ? entry.pipeline : {}), shadow: true };
@@ -530,7 +548,7 @@ export async function importLegacyKitConfig(input: {
 	const catalog = await loadKitCatalog();
 	for (const workspace of mapping.workspaces) {
 		if (workspace.kit !== null) {
-			const resolved = resolveKitByName(catalog, workspace.kit, workspace.overrides);
+			const resolved = resolveKitByName(catalog, workspace.kit, workspace.overrides, workspace.preset);
 			if (!resolved.ok) {
 				throw new Error(
 					`workspaces.${workspace.workspaceId}: kit ${workspace.kit} does not resolve: ${resolved.error}`,

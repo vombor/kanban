@@ -71,6 +71,7 @@ export type DevAssignmentOutcome =
 
 export interface DevAssignmentDecision {
 	workspaceId: string;
+	/** The kit as shown: its name, or `team (<preset>)` / `team (custom)`. */
 	kitName: string;
 	outcome: DevAssignmentOutcome;
 	proposal: DevAssignmentProposal | null;
@@ -143,7 +144,7 @@ export function decideDevAssignment(input: {
 		agentSettings: cloneRuntimeTaskAgentSettings(request.agentSettings),
 	};
 	const proposal = proposeDevAssignment({ request, resolved, models: config.models });
-	const base = { workspaceId: request.workspaceId, kitName: resolved.kitName, proposal, issues: resolved.issues };
+	const base = { workspaceId: request.workspaceId, kitName: resolved.kitLabel, proposal, issues: resolved.issues };
 	if (!proposal) {
 		return { ...base, outcome: "none", ...requested };
 	}

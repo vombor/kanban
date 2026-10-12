@@ -18,7 +18,7 @@ import {
 	parseProjectNameCheckRequest,
 	parseProjectRemoveRequest,
 } from "../core/api-validation";
-import { listKitChoices, resolveNewProjectKitName } from "../kits/kit-choices";
+import { listKitChoices, type NewProjectKitSelection, resolveNewProjectKit } from "../kits/kit-choices";
 import { loadKitCatalog } from "../kits/resolve-kit";
 import { applyNewProjectKit } from "../projects/project-add";
 import { createProject } from "../projects/project-create";
@@ -104,10 +104,10 @@ export function createProjectsApi(deps: CreateProjectsApiDependencies): RuntimeT
 	// did, as createProject does) and makes it active when nothing is.
 	const registerProject = async (
 		projectPath: string,
-		kitName?: string,
+		kit?: NewProjectKitSelection,
 	): Promise<{ summary: RuntimeProjectSummary; notes: string[] }> => {
 		const context = await loadWorkspaceContext(projectPath);
-		const notes = kitName === undefined ? [] : await applyNewProjectKit(context.workspaceId, kitName);
+		const notes = kit === undefined ? [] : await applyNewProjectKit(context.workspaceId, kit);
 		deps.rememberWorkspace(context.workspaceId, context.repoPath);
 		const projectsAfterAdd = await listWorkspaceIndexEntries();
 		const activeWorkspaceId = deps.getActiveWorkspaceId();
@@ -130,8 +130,11 @@ export function createProjectsApi(deps: CreateProjectsApiDependencies): RuntimeT
 	};
 
 	// A new project's kit, checked before anything is cloned, initialized or registered.
-	const resolveKit = async (name: string | undefined): Promise<string> =>
-		resolveNewProjectKitName(await loadKitCatalog(), name);
+	const resolveKit = async (body: {
+		kit?: string;
+		preset?: string | null;
+		roleSettings?: Record<string, unknown>;
+	}): Promise<NewProjectKitSelection> => resolveNewProjectKit(await loadKitCatalog(), body);
 
 	return {
 		listProjects: async (preferredWorkspaceId) => {
@@ -150,9 +153,9 @@ export function createProjectsApi(deps: CreateProjectsApiDependencies): RuntimeT
 			try {
 				const projectRoots = await readRoots();
 				let projectPath: string;
-				let kitName: string;
+				let kit: NewProjectKitSelection;
 				if (body.gitUrl) {
-					kitName = await resolveKit(body.kit);
+					kit = await resolveKit(body);
 					// Clone from Git URL into a new (or empty) directory inside a projects root. A custom path is the
 					// clone destination; otherwise it goes to <first root>/<repo name>.
 					const customDest = body.path
@@ -183,7 +186,7 @@ export function createProjectsApi(deps: CreateProjectsApiDependencies): RuntimeT
 							}),
 						} satisfies RuntimeProjectAddResponse;
 					}
-					kitName = await resolveKit(body.kit);
+					kit = await resolveKit(body);
 					// Open folder: a new registration must be inside a projects root.
 					const check = await resolvePathInsideProjectRoots(projectPath, projectRoots);
 					if (!check.ok) {
@@ -219,7 +222,7 @@ export function createProjectsApi(deps: CreateProjectsApiDependencies): RuntimeT
 						} satisfies RuntimeProjectAddResponse;
 					}
 				}
-				const registered = await registerProject(projectPath, kitName);
+				const registered = await registerProject(projectPath, kit);
 				return {
 					ok: true,
 					project: registered.summary,
@@ -243,6 +246,8 @@ export function createProjectsApi(deps: CreateProjectsApiDependencies): RuntimeT
 					initialBranch: body.initialBranch,
 					initialCommit: body.initialCommit,
 					kit: body.kit,
+					preset: body.preset,
+					roleSettings: body.roleSettings,
 					projectRoots: await readRoots(),
 				});
 				return {
@@ -264,12 +269,16 @@ export function createProjectsApi(deps: CreateProjectsApiDependencies): RuntimeT
 				const choices = listKitChoices(await loadKitCatalog());
 				return {
 					defaultKitName: choices.defaultKitName,
+					teamKitName: choices.teamKitName,
 					kits: choices.kits,
+					presets: choices.presets,
 				} satisfies RuntimeProjectKitChoicesResponse;
 			} catch (error) {
 				return {
 					defaultKitName: "default",
+					teamKitName: "team",
 					kits: [],
+					presets: [],
 					error: error instanceof Error ? error.message : String(error),
 				};
 			}

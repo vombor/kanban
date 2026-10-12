@@ -4,11 +4,19 @@ import { dirname } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { applyWorkspaceKit } from "../../../src/kits/apply-kit";
+import { getKanbanKitsPath } from "../../../src/state/kanban-home";
 import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
+import { readLegacyTeamKitText } from "../../utilities/team-kits";
 
 function writeConfig(path: string, config: unknown): void {
 	mkdirSync(dirname(path), { recursive: true });
 	writeFileSync(path, JSON.stringify(config));
+}
+
+/** A full kit with tiers and a QA route (the built-in team-cloud kit before presets), as a user kit. */
+function writeLegacyTeamKit(): void {
+	mkdirSync(getKanbanKitsPath(), { recursive: true });
+	writeFileSync(`${getKanbanKitsPath()}/legacy-team.json`, readLegacyTeamKitText());
 }
 
 function readConfig(path: string): Record<string, unknown> {
@@ -30,15 +38,20 @@ describe("applyWorkspaceKit", () => {
 				},
 			});
 			// Any model may be on any role: the team kit's defaults apply without a vetting check.
-			const result = await applyWorkspaceKit({ workspaceId: "foo", kitName: "team-cloud" });
+			const result = await applyWorkspaceKit({ workspaceId: "foo", kitName: "team", preset: "cloud" });
 			expect(result.written).toBe(true);
-			expect(result.kitName).toEqual({ from: "default", to: "team-cloud" });
+			expect(result.kitName).toEqual({ from: "default", to: "team" });
+			expect(result.preset).toEqual({ from: null, to: "cloud" });
 			expect(result.landing).toEqual({ from: "off", to: "off" });
 			expect(result.recommendedLandingMode).toBe("qa");
 			expect(result.changes.find((change) => change.key === "qa.enabled")).toMatchObject({
 				from: false,
 				to: true,
-				toSource: "team-cloud",
+				toSource: "team",
+			});
+			expect(result.changes.find((change) => change.key === "roles.dev.model")).toMatchObject({
+				to: "us.openai.gpt-6.1-sol",
+				toSource: "preset:cloud",
 			});
 			const config = readConfig(globalConfigPath);
 			expect(config.selectedAgentId).toBe("claude");
@@ -46,7 +59,7 @@ describe("applyWorkspaceKit", () => {
 			expect(config.workspaces).toEqual({
 				foo: {
 					landing: { mode: "off" },
-					kit: { name: "team-cloud", overrides: { "qa.blurb": "Project: Pawsome" } },
+					kit: { name: "team", preset: "cloud", overrides: { "qa.blurb": "Project: Pawsome" } },
 				},
 				other: { landing: { mode: "commit" } },
 			});
@@ -57,12 +70,13 @@ describe("applyWorkspaceKit", () => {
 		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
 			writeConfig(globalConfigPath, {
 				workspaces: {
-					foo: { kit: { name: "team-cloud", overrides: { "qa.blurb": "x" } } },
+					// A stored old name reads as team + its preset, and the write stores the new pair.
+					foo: { kit: { name: "team-local", overrides: { "qa.blurb": "x" } } },
 				},
 			});
 			await applyWorkspaceKit({
 				workspaceId: "foo",
-				kitName: "team-cloud",
+				kitName: "team",
 				landing: "qa",
 				set: { "qa.promptNotes.dbSetup": "npx prisma migrate deploy" },
 				unset: ["qa.blurb"],
@@ -70,7 +84,11 @@ describe("applyWorkspaceKit", () => {
 			expect(readConfig(globalConfigPath).workspaces).toEqual({
 				foo: {
 					landing: { mode: "qa" },
-					kit: { name: "team-cloud", overrides: { "qa.promptNotes.dbSetup": "npx prisma migrate deploy" } },
+					kit: {
+						name: "team",
+						preset: "lemonade",
+						overrides: { "qa.promptNotes.dbSetup": "npx prisma migrate deploy" },
+					},
 				},
 			});
 		});
@@ -81,46 +99,122 @@ describe("applyWorkspaceKit", () => {
 			const original = { workspaces: { foo: { landing: { mode: "off" } } } };
 			writeConfig(globalConfigPath, original);
 			await expect(
-				applyWorkspaceKit({ workspaceId: "foo", kitName: "team-cloud", set: { "qa.blurbz": "x" } }),
+				applyWorkspaceKit({ workspaceId: "foo", kitName: "team", preset: "lemonade", set: { "qa.blurbz": "x" } }),
 			).rejects.toThrow(/blurbz/u);
 			await expect(applyWorkspaceKit({ workspaceId: "foo", kitName: "nope" })).rejects.toThrow(/unknown kit/u);
 			await expect(
-				applyWorkspaceKit({ workspaceId: "foo", kitName: "team-cloud", set: { "roles.dev.tier": "tier1" } }),
+				applyWorkspaceKit({
+					workspaceId: "foo",
+					kitName: "team",
+					preset: "lemonade",
+					set: { "roles.dev.tier": "tier1" },
+				}),
 			).rejects.toThrow(/tier1/u);
+			await expect(applyWorkspaceKit({ workspaceId: "foo", kitName: "team", preset: "nope" })).rejects.toThrow(
+				/unknown preset "nope"/u,
+			);
+			await expect(applyWorkspaceKit({ workspaceId: "foo", kitName: "default", preset: "cloud" })).rejects.toThrow(
+				/has no presets/u,
+			);
 			// --set takes only project settings: legacy keys and the team definition are refused.
 			await expect(
-				applyWorkspaceKit({ workspaceId: "foo", kitName: "team-cloud", set: { "dev.agent": "codex" } }),
+				applyWorkspaceKit({
+					workspaceId: "foo",
+					kitName: "team",
+					preset: "lemonade",
+					set: { "dev.agent": "codex" },
+				}),
 			).rejects.toThrow(/legacy key; use roles\.dev\.agent/u);
 			await expect(
-				applyWorkspaceKit({ workspaceId: "foo", kitName: "team-cloud", set: { "onFail.reworkRounds": 5 } }),
+				applyWorkspaceKit({
+					workspaceId: "foo",
+					kitName: "team",
+					preset: "lemonade",
+					set: { "onFail.reworkRounds": 5 },
+				}),
 			).rejects.toThrow(/part of the team definition/u);
 			await expect(
-				applyWorkspaceKit({ workspaceId: "foo", kitName: "team-cloud", unset: ["qa.blurb"] }),
+				applyWorkspaceKit({ workspaceId: "foo", kitName: "team", preset: "lemonade", unset: ["qa.blurb"] }),
 			).rejects.toThrow(/no override/u);
 			expect(readConfig(globalConfigPath)).toEqual(original);
 		});
 	});
 
-	it("answers kit apply team with the new name and writes nothing", async () => {
+	it("answers a renamed kit with the team kit and preset, and asks the team kit for its models; writes nothing", async () => {
 		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
 			const original = { workspaces: { foo: { landing: { mode: "qa" } } } };
 			writeConfig(globalConfigPath, original);
+			await expect(applyWorkspaceKit({ workspaceId: "foo", kitName: "team-cloud" })).rejects.toThrow(
+				'kit "team-cloud" is now team (cloud) (2026-10-12); use team --preset cloud',
+			);
 			await expect(applyWorkspaceKit({ workspaceId: "foo", kitName: "team" })).rejects.toThrow(
-				'kit "team" was renamed to team-cloud (2026-10-12); use team-cloud',
+				/needs its models: a preset .* or a custom team/u,
 			);
 			expect(readConfig(globalConfigPath)).toEqual(original);
+		});
+	});
+
+	it("a custom team takes the workflow from the team kit and needs its dev and QA agents", async () => {
+		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
+			const original = { workspaces: { foo: { landing: { mode: "qa" } } } };
+			writeConfig(globalConfigPath, original);
+			await expect(
+				applyWorkspaceKit({
+					workspaceId: "foo",
+					kitName: "team",
+					preset: null,
+					set: { "roles.dev.agent": "codex" },
+				}),
+			).rejects.toThrow(/a custom team .* needs roles.qa.agent/u);
+			// The workflow stays the team kit's: a custom team can't change a flow key either.
+			await expect(
+				applyWorkspaceKit({
+					workspaceId: "foo",
+					kitName: "team",
+					preset: null,
+					set: { "roles.dev.agent": "codex", "roles.qa.agent": "cline", "fallback.requireApproval": true },
+				}),
+			).rejects.toThrow(/part of the team definition/u);
+			expect(readConfig(globalConfigPath)).toEqual(original);
+			const applied = await applyWorkspaceKit({
+				workspaceId: "foo",
+				kitName: "team",
+				preset: null,
+				set: {
+					"roles.dev.agent": "codex",
+					"roles.dev.model": "us.openai.gpt-6.1-sol",
+					"roles.qa.agent": "cline",
+					"roles.qa.provider": "lemonade",
+					"roles.qa.model": "gemma-4-31B-it-qat-q4_0-gguf-Q4_0",
+				},
+			});
+			expect(applied.preset).toEqual({ from: null, to: null });
+			expect((readConfig(globalConfigPath).workspaces as Record<string, { kit: unknown }>).foo.kit).toEqual({
+				name: "team",
+				preset: null,
+				overrides: {
+					"roles.dev.agent": "codex",
+					"roles.dev.model": "us.openai.gpt-6.1-sol",
+					"roles.qa.agent": "cline",
+					"roles.qa.provider": "lemonade",
+					"roles.qa.model": "gemma-4-31B-it-qat-q4_0-gguf-Q4_0",
+				},
+			});
+			// A later kit apply on the same kit keeps the custom team (no --preset/--custom needed).
+			const again = await applyWorkspaceKit({ workspaceId: "foo", kitName: "team", set: { "qa.blurb": "Foo" } });
+			expect(again.preset).toEqual({ from: null, to: null });
 		});
 	});
 
 	it("writes nothing on a dry run, and drops the kit entry for default without overrides", async () => {
 		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
 			writeConfig(globalConfigPath, {
-				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team-cloud" } } },
+				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team", preset: "cloud" } } },
 			});
 			const dryRun = await applyWorkspaceKit({ workspaceId: "foo", kitName: "default", dryRun: true });
 			expect(dryRun.written).toBe(false);
 			expect(readConfig(globalConfigPath).workspaces).toEqual({
-				foo: { landing: { mode: "qa" }, kit: { name: "team-cloud" } },
+				foo: { landing: { mode: "qa" }, kit: { name: "team", preset: "cloud" } },
 			});
 			await applyWorkspaceKit({ workspaceId: "foo", kitName: "default" });
 			expect(readConfig(globalConfigPath).workspaces).toEqual({
@@ -133,11 +227,12 @@ describe("applyWorkspaceKit", () => {
 describe("applyWorkspaceKit: switching kits", () => {
 	it("keeps the project settings that fit the new kit, drops and reports the others, keeps old team keys", async () => {
 		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
+			writeLegacyTeamKit();
 			writeConfig(globalConfigPath, {
 				workspaces: {
 					foo: {
 						kit: {
-							name: "team-cloud",
+							name: "legacy-team",
 							overrides: {
 								"qa.blurb": "Foo",
 								"roles.dev.model": "m-dev",
@@ -150,7 +245,12 @@ describe("applyWorkspaceKit: switching kits", () => {
 					},
 				},
 			});
-			const dryRun = await applyWorkspaceKit({ workspaceId: "foo", kitName: "team-local", dryRun: true });
+			const dryRun = await applyWorkspaceKit({
+				workspaceId: "foo",
+				kitName: "team",
+				preset: "lemonade",
+				dryRun: true,
+			});
 			expect(dryRun.written).toBe(false);
 			expect(dryRun.dropped.map(({ key }) => key).sort()).toEqual([
 				"qa.routes.0.model",
@@ -163,9 +263,10 @@ describe("applyWorkspaceKit: switching kits", () => {
 				"qa.routes has no entry 0",
 			);
 
-			await applyWorkspaceKit({ workspaceId: "foo", kitName: "team-local" });
+			await applyWorkspaceKit({ workspaceId: "foo", kitName: "team", preset: "lemonade" });
 			expect((readConfig(globalConfigPath).workspaces as Record<string, { kit: unknown }>).foo.kit).toEqual({
-				name: "team-local",
+				name: "team",
+				preset: "lemonade",
 				overrides: { "qa.blurb": "Foo", "roles.dev.model": "m-dev", "fallback.on.conflict": false },
 			});
 		});
@@ -175,24 +276,42 @@ describe("applyWorkspaceKit: switching kits", () => {
 		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
 			const original = {
 				workspaces: {
-					foo: { kit: { name: "team-cloud", overrides: { "qa.blurb": "Foo", "fallback.on.conflict": false } } },
+					foo: {
+						kit: {
+							name: "team",
+							preset: "cloud",
+							overrides: { "qa.blurb": "Foo", "fallback.on.conflict": false },
+						},
+					},
 				},
 			};
 			writeConfig(globalConfigPath, original);
 			const by = { kind: "orchestrator", taskId: "__home_agent__:foo:claude" } as const;
 			await expect(
-				applyWorkspaceKit({ workspaceId: "foo", kitName: "team-local", landing: "qa", by }),
+				applyWorkspaceKit({ workspaceId: "foo", kitName: "team", preset: "lemonade", landing: "qa", by }),
 			).rejects.toThrow(/landing mode is the user's/u);
 			await expect(
-				applyWorkspaceKit({ workspaceId: "foo", kitName: "team-cloud", unset: ["fallback.on.conflict"], by }),
+				applyWorkspaceKit({
+					workspaceId: "foo",
+					kitName: "team",
+					preset: "lemonade",
+					unset: ["fallback.on.conflict"],
+					by,
+				}),
 			).rejects.toThrow(/removing a stored team key is the user's/u);
 			await expect(
-				applyWorkspaceKit({ workspaceId: "foo", kitName: "team-local", set: { "onFail.reworkRounds": 1 }, by }),
+				applyWorkspaceKit({
+					workspaceId: "foo",
+					kitName: "team",
+					preset: "lemonade",
+					set: { "onFail.reworkRounds": 1 },
+					by,
+				}),
 			).rejects.toThrow(/part of the team definition/u);
 			expect(readConfig(globalConfigPath)).toEqual(original);
 			const applied = await applyWorkspaceKit({
 				workspaceId: "foo",
-				kitName: "team-cloud",
+				kitName: "team",
 				unset: ["qa.blurb"],
 				by,
 			});

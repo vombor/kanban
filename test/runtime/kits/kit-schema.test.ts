@@ -7,9 +7,13 @@ import {
 	type KitDocument,
 	kitDocumentObjectSchema,
 	kitDocumentSchema,
+	kitPresetSchema,
 	listLegacyKitKeys,
 } from "../../../src/kits/kit-schema";
-import { getBuiltInKits, parseUserKit } from "../../../src/kits/resolve-kit";
+import { createRoutingPolicy, getModelVendor } from "../../../src/kits/policy";
+import { getBuiltInKits, getBuiltInPresets, parseUserKit } from "../../../src/kits/resolve-kit";
+import { createCardHistory, createEffectiveCard } from "../../utilities/effective-card";
+import { resolveTeamKit } from "../../utilities/team-kits";
 
 const REPO_ROOT = join(import.meta.dirname, "..", "..", "..");
 
@@ -18,12 +22,33 @@ function readKitFile(name: string): unknown {
 }
 
 describe("kit schema", () => {
-	it("parses the built-in kits", () => {
+	it("parses the built-in kits and the team kit's presets", () => {
 		expect(kitDocumentSchema.safeParse(readKitFile("default")).success).toBe(true);
-		expect(kitDocumentSchema.safeParse(readKitFile("team-cloud")).success).toBe(true);
-		expect(kitDocumentSchema.safeParse(readKitFile("team-local")).success).toBe(true);
-		expect(kitDocumentSchema.safeParse(readKitFile("team-cline")).success).toBe(true);
-		expect([...getBuiltInKits().keys()]).toEqual(["default", "team-cloud", "team-local", "team-cline"]);
+		expect(kitDocumentSchema.safeParse(readKitFile("team")).success).toBe(true);
+		for (const preset of ["cloud", "cline", "lemonade"]) {
+			expect(kitPresetSchema.safeParse(readKitFile(`presets/${preset}`)).success).toBe(true);
+		}
+		expect([...getBuiltInKits().keys()]).toEqual(["default", "team"]);
+		expect([...getBuiltInPresets().keys()]).toEqual(["cloud", "cline", "lemonade"]);
+	});
+
+	it("a preset can't carry a workflow key: only models, tiers, plan candidates, the price region and its notes", () => {
+		const base = { preset: 1, name: "x", roles: { dev: { agent: "codex", model: "m" } } };
+		expect(kitPresetSchema.safeParse(base).success).toBe(true);
+		for (const workflow of [
+			{ onFail: { reworkRounds: 1 } },
+			{ fallback: { requireApproval: true } },
+			{ fallback: { on: { outage: false } } },
+			{ qa: { enabled: false } },
+			{ qa: { routes: [] } },
+			{ features: ["scoreboard"] },
+			{ plan: { startInPlanMode: false } },
+			{ prices: { autoSync: true } },
+			{ recommends: { landingMode: "off" } },
+			{ land: { postLand: [] } },
+		]) {
+			expect(kitPresetSchema.safeParse({ ...base, ...workflow }).success, JSON.stringify(workflow)).toBe(false);
+		}
 	});
 
 	it("rejects unknown keys at every level", () => {
@@ -100,44 +125,120 @@ describe("kit schema", () => {
 	});
 
 	it("refuses a user kit with a built-in name, or a name that isn't its file name", () => {
-		const team = parseUserKit({ kit: 1, name: "team-cloud" }, "team-cloud");
+		const team = parseUserKit({ kit: 1, name: "team" }, "team");
 		expect(team.ok).toBe(false);
 		expect(team.ok ? "" : team.error).toContain("built-in");
 		expect(parseUserKit({ kit: 1, name: "default" }, "default").ok).toBe(false);
-		const oldName = parseUserKit({ kit: 1, name: "team" }, "team");
-		expect(oldName.ok ? "" : oldName.error).toContain("old name of the built-in kit team-cloud");
+		for (const name of ["team-cloud", "team-local", "team-cline"]) {
+			const oldName = parseUserKit({ kit: 1, name }, name);
+			expect(oldName.ok ? "" : oldName.error).toContain(`"${name}" is the old name of a built-in kit`);
+		}
 		expect(parseUserKit({ kit: 1, name: "mine" }, "other").ok).toBe(false);
 		expect(
 			parseUserKit({ kit: 1, name: "mine", qa: { enabled: true, default: { agent: "codex" } } }, "mine").ok,
 		).toBe(true);
 	});
 
-	it("carries foo's live routing in the team kit", () => {
-		const team = getBuiltInKits().get("team-cloud");
-		expect(team?.roles?.dev).toMatchObject({ agent: "cline", tier: "tier3" });
-		expect(team?.tiers?.tier3?.find((entry) => entry.default)?.model).toBe("us.openai.gpt-6.1-sol");
-		expect(team?.roles?.qa).toMatchObject({ agent: "codex" });
-		expect(team?.roles?.qa?.model).toBeUndefined();
-		expect(team?.qa?.routes).toEqual([
-			expect.objectContaining({
-				devModel: "(^|\\.)openai\\.|^gpt-",
-				agent: "cline",
-				model: "us.anthropic.claude-haiku-5-5",
-				rules: ["drive"],
-			}),
-		]);
+	it("the team kit holds the one workflow and no models", () => {
+		const team = getBuiltInKits().get("team");
+		for (const role of ["dev", "qa", "plan", "fallback"] as const) {
+			expect(team?.roles?.[role]).toBeDefined();
+			expect(team?.roles?.[role]?.agent).toBeUndefined();
+			expect(team?.roles?.[role]?.model).toBeUndefined();
+			expect(team?.roles?.[role]?.tier).toBeUndefined();
+		}
+		expect(team?.tiers).toBeUndefined();
+		expect(team?.qa).toMatchObject({ enabled: true, requireDifferentVendor: true, routes: [] });
 		expect(team?.qa?.rules?.drive).toContain("DRIVE THE CHANGED PATH");
-		expect(team?.onFail).toMatchObject({ rework: "same-model", reworkRounds: 3, conflict: "rework" });
-		expect(team?.onFail?.then).toBe("escalate");
-		// The fallback is team definition since 2026-10-09 (formerly foo's escalate/onOutage overrides).
-		expect(team?.roles?.fallback).toMatchObject({ tier: "tier2" });
+		expect(team?.onFail).toMatchObject({
+			rework: "same-model",
+			reworkRounds: 3,
+			conflict: "rework",
+			// biome-ignore lint/suspicious/noThenProperty: the kit key onFail.then; plain data, never awaited.
+			then: "escalate",
+		});
+		// One fixed behaviour for every preset and custom team (user 2026-10-12): every trigger hands the task to the
+		// fallback, which starts at once without approval, paid or free.
 		expect(team?.fallback).toMatchObject({
 			on: { qaFails: true, qaStalled: true, unchanged: true, conflict: true, outage: true },
 			requireApproval: false,
 		});
-		for (const name of ["default", "team-cloud", "team-local", "team-cline"]) {
+		expect(team?.features).toEqual(["scoreboard", "bench", "runoffs", "calibration", "tiers"]);
+		expect(team?.plan).toMatchObject({ enabled: true, startInPlanMode: true });
+		expect(team?.recommends?.landingMode).toBe("qa");
+		for (const name of ["default", "team"]) {
 			expect(listLegacyKitKeys(getBuiltInKits().get(name) as KitDocument)).toEqual([]);
 		}
-		expect(team?.recommends?.landingMode).toBe("qa");
+	});
+
+	it("every preset resolves to the same workflow; only the models differ", () => {
+		const custom = resolveTeamKit(null);
+		const workflow = (kit: KitDocument) => {
+			const {
+				roles: _roles,
+				tiers: _tiers,
+				tierRules: _rules,
+				tierNotes: _notes,
+				plan,
+				prices,
+				recommends,
+				dropped: _dropped,
+				...rest
+			} = kit;
+			return {
+				...rest,
+				plan: { ...plan, candidates: undefined, note: undefined },
+				landingMode: recommends?.landingMode,
+				autoSync: prices?.autoSync,
+			};
+		};
+		for (const preset of ["cloud", "cline", "lemonade"]) {
+			expect(workflow(resolveTeamKit(preset)), preset).toEqual(workflow(custom));
+		}
+	});
+
+	it("the cloud preset: Sol on Codex builds, Haiku 5.5 on Cline reviews, Opus 5.5 on Cline plans, Kimi K3 on Codex falls back", () => {
+		const kit = resolveTeamKit("cloud");
+		expect(kit.roles).toMatchObject({
+			dev: { agent: "codex", provider: "bedrock", model: "us.openai.gpt-6.1-sol" },
+			qa: { agent: "cline", provider: "bedrock", model: "us.anthropic.claude-haiku-5-5" },
+			plan: { agent: "cline", provider: "bedrock", model: "us.anthropic.claude-opus-5-5" },
+			fallback: { agent: "codex", provider: "bedrock", model: "us.moonshotai.kimi-k3" },
+		});
+		expect(kit.qa?.routes).toEqual([]);
+		expect(kit.prices?.region).toBe("us-west-2");
+		const policy = createRoutingPolicy(kit);
+		// requireDifferentVendor holds: QA (anthropic) differs from dev (openai) and fallback (moonshotai).
+		for (const model of ["us.openai.gpt-6.1-sol", "us.moonshotai.kimi-k3"]) {
+			expect(getModelVendor(model)).not.toBe("anthropic");
+			expect(
+				policy.qaPolicy({
+					dev: createEffectiveCard({ agentId: "codex", model: { provider: "bedrock", model } }),
+					round: 1,
+					history: createCardHistory(),
+				}),
+			).toMatchObject({
+				kind: "qa",
+				agentId: "cline",
+				model: { model: "us.anthropic.claude-haiku-5-5" },
+				route: null,
+			});
+		}
+		expect(
+			policy.onFail({
+				dev: createEffectiveCard({
+					agentId: "codex",
+					model: { provider: "bedrock", model: "us.openai.gpt-6.1-sol" },
+				}),
+				cause: "fail",
+				verdict: null,
+				history: createCardHistory([1, 2, 3]),
+				limits: { maxFailRounds: 3 },
+			}),
+		).toMatchObject({
+			action: "escalate",
+			to: { agentId: "codex", model: { provider: "bedrock", model: "us.moonshotai.kimi-k3" } },
+			requireApproval: false,
+		});
 	});
 });

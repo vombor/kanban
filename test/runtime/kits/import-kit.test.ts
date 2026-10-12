@@ -94,23 +94,40 @@ describe("mapLegacyKitConfig", () => {
 		expect(odd?.notes.join("\n")).toContain("qaPreview is not { pidFile, start, stop }");
 	});
 
-	it("maps foo to team with only its project values as overrides, landing qa, in shadow", () => {
+	it("maps foo to team (cloud) with its project values and the legacy routing as overrides, landing qa, in shadow", () => {
 		const mapping = mapLegacyKitConfig(liveLikeKitConfig(), "kit.config.json");
 		const foo = mapping.workspaces.find((workspace) => workspace.workspaceId === "foo");
 		expect(foo).toMatchObject({
-			kit: "team-cloud",
+			kit: "team",
+			preset: "cloud",
 			landing: "qa",
 			shadow: true,
 			defaultBaseRef: "master",
 			name: "Pawsome",
 		});
-		// devAgent, qaAgent, the default qaRoutes, QAFLOW_MAX_FAILS and tier3 (deprecated provider → bedrock) all match
-		// kits/team-cloud.json, so they are not overrides.
-		expect(foo?.overrides).toEqual({
+		// QAFLOW_MAX_FAILS matches the team kit, so it is no override; the legacy routing (devAgent, qaAgent, the
+		// default qaRoutes, tier3 with the deprecated provider mapped to bedrock) differs from the cloud preset's one model
+		// per role, so the import keeps it as overrides and foo routes as it did.
+		expect(foo?.overrides).toMatchObject({
 			"qa.blurb": "Project: Pawsome, a pet shop.",
 			"qa.promptNotes.dbSetup": "npx prisma migrate deploy",
 			"land.postLand": [{ paths: "^prisma/", run: "npx prisma generate", stopUnder: ["server"] }],
+			"roles.dev.agent": "cline",
+			"roles.qa.agent": "codex",
+			"qa.routes": [expect.objectContaining({ agent: "cline", provider: "bedrock", rules: ["drive"] })],
+			"tiers.tier3": expect.arrayContaining([
+				expect.objectContaining({ provider: "bedrock", model: "us.openai.gpt-6.1-sol" }),
+			]),
 		});
+		expect(Object.keys(foo?.overrides ?? {}).sort()).toEqual([
+			"land.postLand",
+			"qa.blurb",
+			"qa.promptNotes.dbSetup",
+			"qa.routes",
+			"roles.dev.agent",
+			"roles.qa.agent",
+			"tiers.tier3",
+		]);
 		expect(foo?.notes.join("\n")).toContain("scoreboard path not imported");
 	});
 
@@ -129,7 +146,7 @@ describe("mapLegacyKitConfig", () => {
 		expect(fresh).toMatchObject({ kit: null, overrides: {}, landing: "off", shadow: false });
 	});
 
-	it("turns differences from kits/team-cloud.json into overrides", () => {
+	it("turns differences from the team kit with the cloud preset into overrides", () => {
 		const raw = liveLikeKitConfig();
 		raw.qaAgent = "claude";
 		(raw.thresholds as Record<string, unknown>).QAFLOW_MAX_FAILS = 5;
@@ -217,7 +234,8 @@ describe("importLegacyKitConfig", () => {
 			expect(config.workspaces["kanban-2uge"]?.kit).toBeNull();
 			const catalog = await loadKitCatalog(join(userHomePath, "no-user-kits"));
 			const foo = resolveWorkspaceKit(config, "foo", catalog);
-			expect(foo.kitName).toBe("team-cloud");
+			expect(foo.kitName).toBe("team");
+			expect(foo.presetName).toBe("cloud");
 			expect(foo.issues).toEqual([]);
 			expect(foo.kit.qa?.blurb).toBe("Project: Pawsome, a pet shop.");
 			expect(resolveWorkspaceKit(config, "newproj", catalog).kitName).toBe("default");

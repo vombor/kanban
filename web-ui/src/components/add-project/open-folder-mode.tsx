@@ -26,7 +26,8 @@ export function OpenFolderMode({
 	onBusyChange,
 	onCancel,
 	onAdded,
-	kitName,
+	kitRequest,
+	kitBlockedReason,
 	kitPicker,
 }: AddProjectModeProps): ReactElement {
 	const [entries, setEntries] = useState<RuntimeDirectoryListEntry[] | null>(null);
@@ -69,6 +70,10 @@ export function OpenFolderMode({
 	}, [root, workspaceId]);
 
 	const addPath = async (path: string, initializeGit: boolean) => {
+		if (kitBlockedReason) {
+			setError(kitBlockedReason);
+			return;
+		}
 		setIsAdding(true);
 		onBusyChange(true);
 		setError(null);
@@ -76,7 +81,7 @@ export function OpenFolderMode({
 			const added = await getRuntimeTrpcClient(workspaceId).projects.add.mutate({
 				path,
 				initializeGit,
-				kit: kitName,
+				...kitRequest,
 			});
 			if (!added.ok || !added.project) {
 				if (added.requiresGitInitialization) {
@@ -225,7 +230,7 @@ export function OpenFolderMode({
 						onClick={() => {
 							if (selectedPath) void addPath(selectedPath, false);
 						}}
-						disabled={!selectedPath || isAdding}
+						disabled={!selectedPath || isAdding || kitBlockedReason !== null}
 					>
 						{isAdding ? (
 							<>

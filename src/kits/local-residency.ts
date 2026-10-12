@@ -1,4 +1,4 @@
-// Does a local model server keep a kit's models loaded side by side? A kit like team-local runs its dev, QA and
+// Does a local model server keep a kit's models loaded side by side? A kit like team with the lemonade preset runs its dev, QA and
 // fallback models at the same time; each local provider keeps only so many resident and evicts the least recently
 // used one for the next request, so with fewer slots than models every dev ↔ QA switch reloads a model (Lemonade:
 // `max_models.llm` of /api/v1/health, its `max_loaded_models` setting, default 1).

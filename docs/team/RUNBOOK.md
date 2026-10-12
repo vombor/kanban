@@ -10,7 +10,7 @@ doctor` prints it): `KANBAN_HOME` if set, else `~/.kanban` of the user running K
 | What | Where |
 |---|---|
 | Settings (core + which kit each project uses) | `<home>/config.json` |
-| User routing kits | `<home>/kits/<name>.json` (built-in `default` and `team-cloud` ship in the package) |
+| User routing kits | `<home>/kits/<name>.json` (built-in `default` and `team` ship in the package, the `team` kit's model presets in `kits/presets/`) |
 | Board state | `<home>/workspaces/<id>/{board,sessions,meta}.json` |
 | Per-project pipeline data | `<home>/data/<ws>/`: `pipeline-state.json` (per-card history; `qaflow` keeps the legacy key names), `pipeline-decisions.jsonl` (every decision, rotated to `.1` at 5 MB), `qa-log.md`, `qa-artifacts/<dev>/r<n>/`, `ATTENTION.md`, `watchdog-state.json`, `watchdog-decisions.jsonl`, `dev-assignment.jsonl`, `restart-manifest.json`, `runoffs.json`, `scoreboard.jsonl/.md`, `calibration/<name>/` |
 | Prices | `<home>/data/prices/` (the package seed is `assets/prices.default.json`) |
@@ -52,9 +52,9 @@ Fix it before anything else.
   (`projects.roots`, see CONFIG.md; `/projects` in the container, the projects volume). Projects registered
   before keep working; `kanban doctor` warns about each one outside the root.
 - **Opt a project into the team workflow:** first set `workspaces.<ws>.pipeline.shadow: true` in config.json
-  (shadow is a core key, not a kit key), then `kanban kit apply team-cloud --project <ws> --landing qa --dry-run`, then
+  (shadow is a core key, not a kit key), then `kanban kit apply team --preset <cloud|cline|lemonade> --project <ws> --landing qa --dry-run` (or `--custom --set roles.dev.agent=… --set roles.qa.agent=…`), then
   without `--dry-run`. Watch the decision log for a while before turning shadow off (see "Shadow day").
-- **Project-specific QA text and postLand:** overrides, e.g. `kanban kit apply team-cloud --project foo --set
+- **Project-specific QA text and postLand:** overrides, e.g. `kanban kit apply team --preset cloud --project foo --set
   qa.blurb="Project: Pawsome…"`. `--unset <key>` removes one.
 - **Managed sections** (the `agents-qa` section in a project's AGENTS.md): `kanban project sync <path> [--dry-run]`
   rewrites only the text between the managed markers. The edit is an uncommitted change in the project; land it
@@ -264,7 +264,7 @@ Esc to each running agent. Only a container restart with an init as PID 1 clears
 
 Before a project is switched from the legacy autoland to the pipeline, both decide side by side for a day:
 
-1. `kanban config import-kit --dry-run`, then without `--dry-run`. foo gets kit `team-cloud` with its overrides, landing
+1. `kanban config import-kit --dry-run`, then without `--dry-run`. foo gets kit `team` with preset `cloud` and its overrides, landing
    `qa` and `pipeline.shadow: true`. Every other project gets `default` with landing `off`.
 2. `kanban kit show --project foo`: the resolved policy must be foo's live one (same QA agent per dev model, same
    rework rounds, same escalation).
@@ -302,13 +302,13 @@ arrives (`source: "browser"`). The browser line has the same shape: a fresh kit 
 agent (else the agent selected at that moment) and model. `applied` means the card kept the dialog's preselection,
 `explicit` that the user picked something else, `shadow` that nothing was preselected. Each task id is logged once,
 so re-saves don't add lines, and cards the pipeline, QA gate, calibration or runoffs create aren't logged at all.
-Only workspaces whose kit has a `devAssignment` (`team-cloud`) log anything. Lines written before this change have no
+Only workspaces whose kit has a `devAssignment` (`team` with a preset or a custom team's `roles.dev.agent`, or a user kit with a dev role) log anything. Lines written before this change have no
 `source` and all came from the CLI.
 
 How to read the report:
 
 - `SAME` items are only counted (`--verbose` lists them).
-- `KNOWN` items are differences the plan expects: Claude-built dev cards get QA on `team-cloud` (plan §12), the
+- `KNOWN` items are differences the plan expects: Claude-built dev cards get QA on the team kit (plan §12), the
   legacy kit reworks only Cline cards, and phantom restarts. Autoland takes the newest `node …/kanban … --port`
   process in /proc as the server, so a short-lived one (a second `kanban --port …` launch that finds the port taken
   and exits) reads as a new start, and about 15 s later autoland logs the real start again with the phantom as

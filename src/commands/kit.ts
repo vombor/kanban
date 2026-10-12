@@ -9,12 +9,14 @@ import {
 import { loadGlobalRuntimeConfig } from "../config/runtime-config";
 import { readSessionCredential } from "../isolation/cli-scope";
 import { applyWorkspaceKit } from "../kits/apply-kit";
+import { listKitChoices } from "../kits/kit-choices";
 import { buildKitReport, formatKitReport, formatRecommendedSettings, NO_WORKSPACE_ID } from "../kits/kit-report";
 import type { KitDocument } from "../kits/kit-schema";
 import { assessLocalResidency, type LocalResidencyFinding, listKitLocalWorkingSet } from "../kits/local-residency";
 import { migrateWorkspaceOverrides, type OverrideMigrationPlan } from "../kits/migrate-overrides";
 import { describeProjectSettings, readKitSettingsHistory } from "../kits/project-settings";
-import { loadKitCatalog, resolveKitByName, resolveWorkspaceKit } from "../kits/resolve-kit";
+import { formatKitSelection } from "../kits/renamed-kits";
+import { loadKitCatalog, resolveKitByName, resolveWorkspaceKit, TEAM_KIT_NAME } from "../kits/resolve-kit";
 import {
 	createUserKit,
 	editUserKit,
@@ -99,8 +101,18 @@ function fromWire(result: WireKitApplyResult): KitApplyResult {
 	};
 }
 
+/** `--preset <name>` / `--custom` as kit apply's preset (undefined: neither given). */
+export function parsePresetOption(options: { preset?: string; custom?: boolean }): string | null | undefined {
+	if (options.preset !== undefined && options.custom) {
+		throw new Error("--preset and --custom exclude each other: a preset names the models, --custom takes yours.");
+	}
+	return options.custom ? null : options.preset;
+}
+
 function formatApplyResult(result: KitApplyResult, dryRun: boolean): string[] {
-	const lines = [`Workspace ${result.workspaceId}: kit ${result.kitName.from} -> ${result.kitName.to}`];
+	const from = formatKitSelection({ name: result.kitName.from, preset: result.preset.from });
+	const to = formatKitSelection({ name: result.kitName.to, preset: result.preset.to });
+	const lines = [`Workspace ${result.workspaceId}: kit ${from} -> ${to}`];
 	lines.push(
 		result.landing.from === result.landing.to
 			? `Landing mode: ${result.landing.to} (unchanged)`
@@ -120,18 +132,18 @@ function formatApplyResult(result: KitApplyResult, dryRun: boolean): string[] {
 		}
 	}
 	if (result.dropped.length > 0) {
-		lines.push(`Dropped project settings that don't fit kit ${result.kitName.to}:`);
+		lines.push(`Dropped project settings that don't fit kit ${to}:`);
 		for (const dropped of result.dropped) {
 			lines.push(`  ${dropped.key}: ${JSON.stringify(dropped.value)} (${dropped.why})`);
 		}
 	}
 	if (result.recommendedLandingMode && result.recommendedLandingMode !== result.landing.to) {
 		lines.push(
-			`Kit ${result.kitName.to} recommends landing mode "${result.recommendedLandingMode}"; it is not applied without --landing ${result.recommendedLandingMode}.`,
+			`Kit ${to} recommends landing mode "${result.recommendedLandingMode}"; it is not applied without --landing ${result.recommendedLandingMode}.`,
 		);
 	}
 	if (result.unmetSettings.length > 0) {
-		lines.push(`Kit ${result.kitName.to} needs these config.json settings; it never applies them:`);
+		lines.push(`Kit ${to} needs these config.json settings; it never applies them:`);
 		lines.push(...formatRecommendedSettings(result.unmetSettings));
 	}
 	lines.push(
@@ -322,24 +334,51 @@ export function registerKitCommand(program: Command): void {
 		.action(async (options: { json?: boolean }) => {
 			try {
 				const [catalog, { config, issues }] = await Promise.all([loadKitCatalog(), readPipelineConfig()]);
-				const usedBy = new Map<string, string[]>();
+				const usedBy = new Map<string, Array<{ workspaceId: string; preset: string | null }>>();
 				for (const [workspaceId, settings] of Object.entries(config.workspaces)) {
 					const name = settings.kit?.name ?? "default";
-					usedBy.set(name, [...(usedBy.get(name) ?? []), workspaceId]);
+					usedBy.set(name, [...(usedBy.get(name) ?? []), { workspaceId, preset: settings.kit?.preset ?? null }]);
 				}
 				const kits = [...catalog.kits.values()].map(({ kit: document, origin }) => ({
 					name: document.name,
 					description: document.description ?? null,
 					origin: origin.kind === "built-in" ? "built-in" : origin.path,
-					workspaces: usedBy.get(document.name) ?? [],
+					workspaces: (usedBy.get(document.name) ?? []).map(({ workspaceId }) => workspaceId),
 				}));
+				const presets = [...catalog.presets.values()].map((preset) => ({
+					name: preset.name,
+					description: preset.description ?? null,
+					workspaces: (usedBy.get(TEAM_KIT_NAME) ?? [])
+						.filter((use) => use.preset === preset.name)
+						.map(({ workspaceId }) => workspaceId),
+				}));
+				const customTeams = (usedBy.get(TEAM_KIT_NAME) ?? [])
+					.filter((use) => use.preset === null)
+					.map(({ workspaceId }) => workspaceId);
 				if (options.json) {
-					printJson({ ok: true, kitsDir: getKanbanKitsPath(), kits, errors: catalog.errors, issues });
+					printJson({
+						ok: true,
+						kitsDir: getKanbanKitsPath(),
+						kits,
+						presets,
+						customTeams,
+						errors: catalog.errors,
+						issues,
+					});
 					return;
 				}
 				const lines = kits.map(
 					(entry) =>
 						`${entry.name}  (${entry.origin})${entry.description ? `  ${entry.description}` : ""}${entry.workspaces.length > 0 ? `\n    workspaces: ${entry.workspaces.join(", ")}` : ""}`,
+				);
+				lines.push("", `Presets of the ${TEAM_KIT_NAME} kit (its models; kanban kit presets shows their roles):`);
+				for (const preset of presets) {
+					lines.push(
+						`  ${preset.name}${preset.description ? `  ${preset.description}` : ""}${preset.workspaces.length > 0 ? `\n    workspaces: ${preset.workspaces.join(", ")}` : ""}`,
+					);
+				}
+				lines.push(
+					`  custom  the project's own role models (kanban kit apply ${TEAM_KIT_NAME} --custom --set roles.<role>.agent=...)${customTeams.length > 0 ? `\n    workspaces: ${customTeams.join(", ")}` : ""}`,
 				);
 				lines.push("", `User kits: ${getKanbanKitsPath()}/<name>.json. Workspaces without a kit use default.`);
 				for (const error of catalog.errors) {
@@ -360,85 +399,139 @@ export function registerKitCommand(program: Command): void {
 			"Show a kit's team definition (roles with their effective models and sources, the fallback and its triggers), the project's settings and their history, how it answers the routing questions, and every resolved value with its source.",
 		)
 		.argument("[name]", "Kit name. With --project and no name: the workspace's kit.")
+		.option("--preset <name>", `The ${TEAM_KIT_NAME} kit's preset to show (kanban kit presets).`)
+		.option("--custom", `The ${TEAM_KIT_NAME} kit without a preset (a custom team).`)
 		.option("--project <workspace>", "Workspace id or project path: resolve with that workspace's project settings.")
 		.option("--json", "Print as JSON.")
-		.action(async (name: string | undefined, options: { project?: string; json?: boolean }) => {
-			try {
-				const [catalog, { config, issues }, runtimeConfig] = await Promise.all([
-					loadKitCatalog(),
-					readPipelineConfig(),
-					loadGlobalRuntimeConfig(),
-				]);
-				// No name and no --project: the current directory's workspace if it is one, else the default kit.
-				const target =
-					options.project !== undefined
-						? await resolveWorkspaceTarget(options.project, { allowUnregistered: true })
-						: name === undefined
-							? await resolveWorkspaceTarget(undefined, { allowUnregistered: false }).catch(() => null)
+		.action(
+			async (
+				name: string | undefined,
+				options: { preset?: string; custom?: boolean; project?: string; json?: boolean },
+			) => {
+				try {
+					const [catalog, { config, issues }, runtimeConfig] = await Promise.all([
+						loadKitCatalog(),
+						readPipelineConfig(),
+						loadGlobalRuntimeConfig(),
+					]);
+					// No name and no --project: the current directory's workspace if it is one, else the default kit.
+					const target =
+						options.project !== undefined
+							? await resolveWorkspaceTarget(options.project, { allowUnregistered: true })
+							: name === undefined
+								? await resolveWorkspaceTarget(undefined, { allowUnregistered: false }).catch(() => null)
+								: null;
+					const workspace = target ? resolveWorkspaceKit(config, target.workspaceId, catalog) : null;
+					const presetOption = parsePresetOption(options);
+					const isWorkspaceKit =
+						workspace !== null &&
+						(name === undefined ||
+							(name === workspace.kitName &&
+								(presetOption === undefined || presetOption === workspace.presetName)));
+					let kitName: string;
+					let preset: string | null;
+					let resolution: ReturnType<typeof resolveKitByName>;
+					if (workspace && isWorkspaceKit) {
+						kitName = workspace.kitName;
+						preset = workspace.presetName;
+						resolution = { ok: true, kit: workspace.kit, sources: workspace.sources };
+					} else {
+						kitName = name ?? "default";
+						preset = presetOption ?? (workspace && kitName === workspace.kitName ? workspace.presetName : null);
+						// Another kit for a workspace: shown with the workspace's overrides, as `kit apply` would resolve it.
+						resolution = resolveKitByName(catalog, kitName, workspace?.overrides ?? {}, preset);
+					}
+					if (!resolution.ok) {
+						throw new Error(resolution.error);
+					}
+					const classified =
+						workspace && isWorkspaceKit
+							? describeProjectSettings(catalog, kitName, workspace.overrides, preset)
 							: null;
-				const workspace = target ? resolveWorkspaceKit(config, target.workspaceId, catalog) : null;
-				let kitName: string;
-				let resolution: ReturnType<typeof resolveKitByName>;
-				if (workspace && (name === undefined || name === workspace.kitName)) {
-					kitName = workspace.kitName;
-					resolution = { ok: true, kit: workspace.kit, sources: workspace.sources };
-				} else {
-					kitName = name ?? "default";
-					// Another kit for a workspace: shown with the workspace's overrides, as `kit apply` would resolve it.
-					resolution = resolveKitByName(catalog, kitName, workspace?.overrides ?? {});
-				}
-				if (!resolution.ok) {
-					throw new Error(resolution.error);
-				}
-				const classified =
-					workspace && kitName === workspace.kitName
-						? describeProjectSettings(catalog, kitName, workspace.overrides)
-						: null;
-				const historyPath = target ? getKitSettingsHistoryPath(target.workspaceId) : null;
-				const report = buildKitReport({
-					kitName,
-					resolved: resolution,
-					projectSettings:
-						target && classified && historyPath
-							? {
-									workspaceId: target.workspaceId,
-									classified,
-									historyPath,
-									history: await readKitSettingsHistory(historyPath),
-								}
-							: null,
-					workspaceId: target?.workspaceId ?? NO_WORKSPACE_ID,
-					selectedAgentId: runtimeConfig.selectedAgentId,
-					maxFailRounds: config.pipeline.rework.maxFailRounds,
-					outageMaxMin: config.pipeline.recovery.outage.maxMin,
-					config,
-					localResidency: await readLocalResidency(kitName, resolution.kit, config),
-				});
-				const landingMode = target ? getWorkspacePipelineSettings(config, target.workspaceId).landing.mode : null;
-				if (options.json) {
-					printJson({
-						ok: true,
-						workspaceId: target?.workspaceId ?? null,
-						landingMode,
-						issues: [...issues, ...(workspace?.issues ?? [])],
-						...report,
+					const kitLabel = formatKitSelection({ name: kitName, preset });
+					const historyPath = target ? getKitSettingsHistoryPath(target.workspaceId) : null;
+					const report = buildKitReport({
+						kitName: kitLabel,
+						description: preset !== null ? (catalog.presets.get(preset)?.description ?? null) : null,
+						resolved: resolution,
+						projectSettings:
+							target && classified && historyPath
+								? {
+										workspaceId: target.workspaceId,
+										classified,
+										historyPath,
+										history: await readKitSettingsHistory(historyPath),
+									}
+								: null,
+						workspaceId: target?.workspaceId ?? NO_WORKSPACE_ID,
+						selectedAgentId: runtimeConfig.selectedAgentId,
+						maxFailRounds: config.pipeline.rework.maxFailRounds,
+						outageMaxMin: config.pipeline.recovery.outage.maxMin,
+						config,
+						localResidency: await readLocalResidency(kitLabel, resolution.kit, config),
 					});
+					const landingMode = target
+						? getWorkspacePipelineSettings(config, target.workspaceId).landing.mode
+						: null;
+					if (options.json) {
+						printJson({
+							ok: true,
+							workspaceId: target?.workspaceId ?? null,
+							landingMode,
+							issues: [...issues, ...(workspace?.issues ?? [])],
+							...report,
+						});
+						return;
+					}
+					const lines: string[] = [];
+					if (target) {
+						lines.push(
+							`Workspace ${target.workspaceId}${target.repoPath ? ` (${target.repoPath})` : " (not registered)"}: kit ${workspace ? formatKitSelection({ name: workspace.kitName, preset: workspace.presetName }) : "default"}, landing mode ${landingMode}`,
+						);
+						for (const issue of workspace?.issues ?? []) {
+							lines.push(`Issue: ${issue}`);
+						}
+						lines.push("");
+					}
+					lines.push(...formatKitReport(report));
+					printLines(lines);
+				} catch (error) {
+					process.stderr.write(`Kit show failed: ${toErrorMessage(error)}\n`);
+					process.exitCode = 1;
+				}
+			},
+		);
+
+	kit.command("presets")
+		.description(
+			`List the ${TEAM_KIT_NAME} kit's presets: each one's four roles (agent, provider, model). A preset names only models; the workflow is the ${TEAM_KIT_NAME} kit's, the same for every preset and custom team.`,
+		)
+		.option("--json", "Print as JSON.")
+		.action(async (options: { json?: boolean }) => {
+			try {
+				const choices = listKitChoices(await loadKitCatalog());
+				if (options.json) {
+					printJson({ ok: true, presets: choices.presets });
 					return;
 				}
 				const lines: string[] = [];
-				if (target) {
-					lines.push(
-						`Workspace ${target.workspaceId}${target.repoPath ? ` (${target.repoPath})` : " (not registered)"}: kit ${workspace?.kitName ?? "default"}, landing mode ${landingMode}`,
-					);
-					for (const issue of workspace?.issues ?? []) {
-						lines.push(`Issue: ${issue}`);
+				for (const preset of choices.presets) {
+					lines.push(`${preset.name}${preset.description ? `  ${preset.description}` : ""}`);
+					for (const role of preset.roles) {
+						const model = role.model
+							? `${role.provider ? `${role.provider}/` : ""}${role.model}`
+							: "its default model";
+						lines.push(`  ${role.role.padEnd(9)} ${role.agentId ?? "the dev role's agent"} on ${model}`);
 					}
-					lines.push("");
 				}
-				lines.push(...formatKitReport(report));
+				lines.push(
+					"",
+					`Use one: kanban kit apply ${TEAM_KIT_NAME} --preset <name> --project <path>. Your own models: kanban kit apply ${TEAM_KIT_NAME} --custom --set roles.dev.agent=<agent> --set roles.qa.agent=<agent> [--set roles.<role>.provider|model=...].`,
+					"The fallback starts at once without approval: a paid fallback model runs and costs without asking.",
+				);
 				printLines(lines);
 			} catch (error) {
-				process.stderr.write(`Kit show failed: ${toErrorMessage(error)}\n`);
+				process.stderr.write(`Kit presets failed: ${toErrorMessage(error)}\n`);
 				process.exitCode = 1;
 			}
 		});
@@ -447,7 +540,12 @@ export function registerKitCommand(program: Command): void {
 		.description(
 			"Use a kit for a workspace (another team for the project). Only the user and the project's own orchestrator; never a card. Keeps the project settings that fit the new kit and reports the ones it drops; --set/--unset edit them (--set takes only model settings and project facts). The landing mode changes only with --landing (the user's).",
 		)
-		.argument("<name>", "Kit name.")
+		.argument("<name>", `Kit name (${TEAM_KIT_NAME} needs --preset <name> or --custom).`)
+		.option("--preset <name>", `The ${TEAM_KIT_NAME} kit's models: a preset (kanban kit presets).`)
+		.option(
+			"--custom",
+			`The ${TEAM_KIT_NAME} kit with the project's own models: needs --set roles.dev.agent=... and --set roles.qa.agent=... (and .provider/.model).`,
+		)
 		.option(
 			"--project <workspace>",
 			"Workspace id or project path. Defaults to the project containing the current directory.",
@@ -467,6 +565,8 @@ export function registerKitCommand(program: Command): void {
 			async (
 				name: string,
 				options: {
+					preset?: string;
+					custom?: boolean;
 					project?: string;
 					landing?: string;
 					set: string[];
@@ -477,8 +577,10 @@ export function registerKitCommand(program: Command): void {
 			) => {
 				try {
 					const target = await resolveWorkspaceTarget(options.project, { allowUnregistered: false });
+					const preset = parsePresetOption(options);
 					const result = await applyKitThroughServer(target.workspaceId, {
 						kitName: name,
+						...(preset !== undefined ? { preset } : {}),
 						landing: parseLandingMode(options.landing),
 						set: parseSetAssignments(options.set),
 						unset: options.unset,
@@ -535,6 +637,7 @@ export function registerKitCommand(program: Command): void {
 		)
 		.argument("<name>", "Name of the new kit (lowercase letters, digits, '-', '_'; not a built-in or existing kit).")
 		.requiredOption("--from <kit>", "The kit to copy (built-in or user).")
+		.option("--preset <name>", "With --from team: the preset whose models the copy gets (kanban kit presets).")
 		.option(
 			"--set <key=value>",
 			"Set a team-definition key (e.g. fallback.on.conflict=false; the value is JSON or text). Repeatable.",
@@ -547,12 +650,20 @@ export function registerKitCommand(program: Command): void {
 		.action(
 			async (
 				name: string,
-				options: { from: string; set: string[]; description?: string; dryRun?: boolean; json?: boolean },
+				options: {
+					from: string;
+					preset?: string;
+					set: string[];
+					description?: string;
+					dryRun?: boolean;
+					json?: boolean;
+				},
 			) => {
 				try {
 					const result = await createUserKit({
 						name,
 						from: options.from,
+						preset: options.preset,
 						set: parseSetAssignments(options.set),
 						description: options.description,
 						dryRun: options.dryRun === true,

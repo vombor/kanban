@@ -1,19 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { assessLocalResidency, listKitLocalWorkingSet } from "../../../src/kits/local-residency";
-import { getBuiltInKits, getDefaultKit, resolveKitLayers } from "../../../src/kits/resolve-kit";
-
-function resolveBuiltIn(name: string, overrides: Record<string, unknown> = {}) {
-	const kit = getBuiltInKits().get(name);
-	if (!kit) {
-		throw new Error(`${name} kit missing`);
-	}
-	const resolved = resolveKitLayers(getDefaultKit(), kit, overrides);
-	if (!resolved.ok) {
-		throw new Error(resolved.error);
-	}
-	return resolved.kit;
-}
+import { resolveTeamKit } from "../../utilities/team-kits";
 
 const TEAM_LOCAL_SET = [
 	"Muse-Glimmer-30B-GGUF-Q4_K_M",
@@ -22,10 +10,10 @@ const TEAM_LOCAL_SET = [
 ];
 
 describe("local residency", () => {
-	it("counts the local models team-local runs at once: dev (= plan), QA and fallback", () => {
-		expect(listKitLocalWorkingSet(resolveBuiltIn("team-local"))).toEqual(TEAM_LOCAL_SET);
-		expect(listKitLocalWorkingSet(resolveBuiltIn("team-cloud"))).toEqual([]);
-		expect(listKitLocalWorkingSet(resolveBuiltIn("team-local", { "escalate.to": "orchestrator" }))).toEqual(
+	it("counts the local models team (lemonade) runs at once: dev (= plan), QA and fallback", () => {
+		expect(listKitLocalWorkingSet(resolveTeamKit("lemonade"))).toEqual(TEAM_LOCAL_SET);
+		expect(listKitLocalWorkingSet(resolveTeamKit("cloud"))).toEqual([]);
+		expect(listKitLocalWorkingSet(resolveTeamKit("lemonade", { "escalate.to": "orchestrator" }))).toEqual(
 			TEAM_LOCAL_SET.slice(0, 2),
 		);
 	});

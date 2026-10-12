@@ -11,29 +11,48 @@ import {
 	toFooEffectiveCard,
 } from "../../utilities/legacy-team-fixtures";
 
-// The `team-cloud` kit plus foo's overrides from `kanban config import-kit` must answer like the legacy kit did for foo with
+// foo's team routing (the built-in team-cloud kit before the team kit and its presets, kept as the legacy-team fixture)
+// plus foo's overrides from `kanban config import-kit` must answer like the legacy kit did for foo with
 // the live kit.config.json (fixtures in fixtures/legacy-team, taken 2026-10-07 from legacy kit 9828540).
 const fooPolicy = () => createTeamPolicy(getFooImportedOverrides());
 const MAX_FAIL_ROUNDS = 3; // the live thresholds.QAFLOW_MAX_FAILS, imported as pipeline.rework.maxFailRounds
 
 describe("team kit parity with foo's legacy kit.config.json", () => {
-	it("imports foo as team with only its project values as overrides", () => {
+	it("imports foo as team (cloud) with its project values and the legacy routing the preset lacks as overrides", () => {
 		const live = readLegacyKitConfig();
 		const project = (live.projects as Array<Record<string, unknown>>).find(
 			(entry) => entry.workspaceId === "foo",
 		) as Record<string, unknown>;
-		// Everything foo inherits from the top level (devAgent, qaAgent, the built-in qaRoutes, benchmark tiers and
-		// dropped models with the deprecated openai-native provider mapped to bedrock) is what kits/team-cloud.json says,
-		// except Nova 2 Lite: kits/team-cloud.json brought it back on 2026-10-07 (tier3 candidate, qa), the legacy kit still
-		// drops it. So an import pins foo's legacy lists as overrides and foo keeps Nova dropped until the user says.
+		// The import maps a QA project onto the team kit with the cloud preset (2026-10-12) and keeps every legacy value
+		// that preset doesn't have as an override: foo's own project values, and the routing foo inherited from the top
+		// level (devAgent, qaAgent, the built-in qaRoutes, benchmark tiers and dropped models with the deprecated
+		// openai-native provider mapped to bedrock), which the cloud preset replaced with one model per role.
 		const overrides = getFooImportedOverrides();
 		expect(Object.keys(overrides).sort()).toEqual(
-			["qa.blurb", "qa.promptNotes.dbSetup", "land.postLand", "tiers.tier3", "tiers.qa", "dropped"].sort(),
+			[
+				"qa.blurb",
+				"qa.promptNotes.dbSetup",
+				"land.postLand",
+				"qa.routes",
+				"roles.dev.agent",
+				"roles.qa.agent",
+				"tiers.tier1",
+				"tiers.tier2",
+				"tiers.tier3",
+				"tiers.qa",
+				"tierRules.tier2",
+				"tierRules.tier3",
+				"tierNotes.qa",
+				"tierNotes.tier1",
+				"dropped",
+			].sort(),
 		);
 		expect(overrides).toMatchObject({
 			"qa.blurb": project.projectBlurb,
 			"qa.promptNotes.dbSetup": (project.qaPrompt as Record<string, unknown>).dbSetup,
 			"land.postLand": project.postLand,
+			"roles.dev.agent": "cline",
+			"roles.qa.agent": "codex",
 		});
 		const models = (key: string) => (overrides[key] as Array<{ model: string }>).map((entry) => entry.model);
 		expect(models("tiers.tier3")).toEqual(["us.openai.gpt-6.1-sol"]);

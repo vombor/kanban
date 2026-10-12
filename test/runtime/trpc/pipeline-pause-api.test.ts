@@ -106,7 +106,7 @@ describe("pipeline pause api", () => {
 				workspaceId: "notes",
 				taskId: null,
 				stage: "pause",
-				kit: "team-local",
+				kit: "team (lemonade)",
 				landingMode: "qa",
 				answer: { by: "orchestrator __home_agent__:notes:claude", paused: true, reason: "QA calibration" },
 				outcome: "acted",

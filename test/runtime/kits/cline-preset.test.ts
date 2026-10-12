@@ -7,9 +7,9 @@ import { parsePipelineConfig } from "../../../src/config/pipeline-config";
 import { evaluateKitRecommendedSettings } from "../../../src/kits/kit-recommendations";
 import { buildKitReport, formatKitReport } from "../../../src/kits/kit-report";
 import { listKitRoutes } from "../../../src/kits/kit-routes";
-import { kitDocumentSchema } from "../../../src/kits/kit-schema";
+import { kitPresetSchema } from "../../../src/kits/kit-schema";
 import { answerPlanAssignment, createRoutingPolicy, getModelVendor } from "../../../src/kits/policy";
-import { getBuiltInKits, getDefaultKit, resolveKitLayers } from "../../../src/kits/resolve-kit";
+import { getBuiltInKits, getBuiltInPresets, getDefaultKit, resolveKitLayers } from "../../../src/kits/resolve-kit";
 import { listKitModels } from "../../../src/kits/team/bench/price-sync-job";
 import { isLocalProvider, isUnmeteredProvider } from "../../../src/kits/team/bench/prices";
 import { createCardHistory, createEffectiveCard } from "../../utilities/effective-card";
@@ -19,12 +19,14 @@ const QWEN = { provider: "cline-pass", model: "cline-pass/qwen3.8-max" };
 const KIMI = { provider: "cline-pass", model: "cline-pass/kimi-k3" };
 const MINIMAX = { provider: "cline-pass", model: "cline-pass/minimax-m3" };
 
+/** The team kit with the cline preset (what team-cline was until 2026-10-12). */
 function resolveTeamCline(overrides: Record<string, unknown> = {}) {
-	const kit = getBuiltInKits().get("team-cline");
-	if (!kit) {
-		throw new Error("team-cline kit missing");
+	const kit = getBuiltInKits().get("team");
+	const preset = getBuiltInPresets().get("cline");
+	if (!kit || !preset) {
+		throw new Error("team kit or cline preset missing");
 	}
-	const resolved = resolveKitLayers(getDefaultKit(), kit, overrides);
+	const resolved = resolveKitLayers(getDefaultKit(), kit, overrides, preset);
 	if (!resolved.ok) {
 		throw new Error(resolved.error);
 	}
@@ -49,13 +51,13 @@ function collectModelProviders(value: unknown, found: Array<{ provider: unknown;
 	return found;
 }
 
-describe("team-cline kit", () => {
-	it("validates against the kit schema", () => {
-		const raw = JSON.parse(readFileSync(join(__dirname, "../../../kits/team-cline.json"), "utf8"));
-		expect(kitDocumentSchema.safeParse(raw).success).toBe(true);
+describe("the team kit's cline preset", () => {
+	it("validates against the preset schema", () => {
+		const raw = JSON.parse(readFileSync(join(__dirname, "../../../kits/presets/cline.json"), "utf8"));
+		expect(kitPresetSchema.safeParse(raw).success).toBe(true);
 	});
 
-	it("routes its four roles to its ClinePass models with no overrides, as a fresh kit apply team-cline does", () => {
+	it("routes its four roles to its ClinePass models with no overrides, as a fresh kit apply team --preset cline does", () => {
 		const { kit } = resolveTeamCline();
 		expect(listKitRoutes(kit).map(({ label, combination }) => [label, combination])).toEqual([
 			["roles.dev", { agentId: "cline", ...GLM }],
@@ -65,7 +67,7 @@ describe("team-cline kit", () => {
 		]);
 	});
 
-	it("runs everything on Cline with provider cline-pass, with team-local's features", () => {
+	it("runs everything on Cline with provider cline-pass, with the team kit's features", () => {
 		const { kit } = resolveTeamCline();
 		expect(collectModelProviders(kit).filter(({ provider }) => provider !== "cline-pass")).toEqual([]);
 		expect(collectModelProviders(kit).every(({ model }) => model.startsWith("cline-pass/"))).toBe(true);
@@ -73,8 +75,7 @@ describe("team-cline kit", () => {
 		expect(new Set([kit.roles?.dev?.agent, kit.roles?.qa?.agent, kit.roles?.plan?.agent])).toEqual(
 			new Set(["cline"]),
 		);
-		expect(kit.features).toEqual(["scoreboard", "bench", "calibration", "tiers"]);
-		expect(kit.prices?.autoSync).toBe(false);
+		expect(kit.features).toEqual(["scoreboard", "bench", "runoffs", "calibration", "tiers"]);
 		expect(listKitModels(kit)).toEqual([]);
 	});
 
@@ -118,7 +119,7 @@ describe("team-cline kit", () => {
 		expect(qaFor(QWEN)).toMatchObject({ kind: "none", reason: expect.stringContaining("(qwen)") });
 	});
 
-	it("reworks on the same model, then hands the task to kimi-k3 at once, and waits out outages", () => {
+	it("reworks on the same model, then hands the task to kimi-k3 at once, outages included", () => {
 		const policy = createRoutingPolicy(resolveTeamCline().kit);
 		const dev = createEffectiveCard({ agentId: "cline", model: GLM });
 		const limits = { maxFailRounds: 3 };
@@ -129,7 +130,13 @@ describe("team-cline kit", () => {
 		expect(
 			policy.onFail({ dev, cause: "fail", verdict: null, history: createCardHistory([1, 2, 3]), limits }),
 		).toMatchObject({ action: "escalate", to: { agentId: "cline", model: KIMI }, requireApproval: false });
-		expect(policy.onOutage({ dev, heldMin: 400, maxMin: 360 })).toMatchObject({ action: "hold" });
+		// One workflow for every team: after maxMin the fallback takes over (it then waits on the same subscription's
+		// outage and goes to the orchestrator, since a fallback sibling never falls back again).
+		expect(policy.onOutage({ dev, heldMin: 400, maxMin: 360 })).toMatchObject({
+			action: "escalate",
+			to: { agentId: "cline", model: KIMI },
+			requireApproval: false,
+		});
 	});
 
 	it("names the recovery settings it needs and shows in kanban kit show", () => {
@@ -142,7 +149,7 @@ describe("team-cline kit", () => {
 			"workspaces.cp.recovery.enabled": "met",
 		});
 		const report = buildKitReport({
-			kitName: "team-cline",
+			kitName: "team (cline)",
 			resolved,
 			workspaceId: "cp",
 			selectedAgentId: "claude",

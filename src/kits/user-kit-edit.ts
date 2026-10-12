@@ -32,7 +32,7 @@ import {
 	type KitSettingsHistoryEntry,
 	PROJECT_FACT_KEYS,
 } from "./project-settings";
-import { describeRenamedKit, getRenamedKitName } from "./renamed-kits";
+import { describeRenamedKit, formatKitSelection, getRenamedKit } from "./renamed-kits";
 import {
 	getDefaultKit,
 	isReservedKitName,
@@ -187,21 +187,25 @@ export function planUserKitCreate(input: {
 	catalog: KitCatalog;
 	name: string;
 	from: string;
+	/** The `--from` kit's preset (the team kit's models), copied into the new kit. */
+	preset?: string | null;
 	set?: Record<string, unknown>;
 	description?: string;
 	kitsDir?: string;
 }): UserKitCreatePlan {
-	const { catalog, name, from } = input;
+	const { catalog, name } = input;
+	const preset = input.preset ?? null;
+	const from = formatKitSelection({ name: input.from, preset });
 	const set = input.set ?? {};
 	const nameCheck = kitNameSchema.safeParse(name);
 	if (!nameCheck.success) {
 		throw new UserKitRefusedError(`${name}: not a kit name (lowercase letters, digits, '-', '_')`);
 	}
 	if (isReservedKitName(name)) {
-		const renamed = getRenamedKitName(name);
+		const renamed = getRenamedKit(name);
 		throw new UserKitRefusedError(
 			renamed
-				? `${name} is the old name of the built-in kit ${renamed}; pick another name`
+				? `${name} is the old name of a built-in kit (${describeRenamedKit(name, renamed)}); pick another name`
 				: `${name} is a built-in kit; pick another name`,
 		);
 	}
@@ -210,15 +214,20 @@ export function planUserKitCreate(input: {
 		throw new UserKitRefusedError(`kit ${name} already exists (${path}); pick another name or kanban kit edit it`);
 	}
 	assertTeamKitKeys(Object.keys(set), "--set");
-	const base = resolveKitByName(catalog, from);
+	const base = resolveKitByName(catalog, input.from, {}, preset);
 	if (!base.ok) {
 		throw new UserKitRefusedError(`--from ${from}: ${base.error}`);
 	}
-	const fromKit = catalog.kits.get(from)?.kit;
+	const fromKit = catalog.kits.get(input.from)?.kit;
 	if (!fromKit) {
 		throw new UserKitRefusedError(`--from ${from}: unknown kit`);
 	}
-	const resolved = resolveKitLayers(getDefaultKit(), fromKit, set);
+	const resolved = resolveKitLayers(
+		getDefaultKit(),
+		fromKit,
+		set,
+		preset ? (catalog.presets.get(preset) ?? null) : null,
+	);
 	if (!resolved.ok) {
 		throw new UserKitRefusedError(`kit ${from} with the --set keys does not resolve: ${resolved.error}`);
 	}
@@ -270,7 +279,7 @@ export function planUserKitEdit(input: {
 		throw new UserKitRefusedError("nothing to change: give --set <key>=<value> or --unset <key>");
 	}
 	const entry = catalog.kits.get(name);
-	const renamed = getRenamedKitName(name);
+	const renamed = getRenamedKit(name);
 	if (!entry && renamed) {
 		throw new UserKitRefusedError(describeRenamedKit(name, renamed));
 	}
@@ -300,6 +309,7 @@ export function planUserKitEdit(input: {
 	const changes = before.ok ? diffKitDocuments(before.kit, kit) : [];
 	const nextCatalog: KitCatalog = {
 		kits: new Map([...catalog.kits, [name, { kit, origin: entry.origin }]]),
+		presets: catalog.presets,
 		errors: catalog.errors,
 	};
 	const workspaces = listKitWorkspaces(config, name).map((workspaceId): KitWorkspaceUse => {
@@ -378,6 +388,7 @@ export async function createUserKit(
 	input: UserKitWriteOptions & {
 		name: string;
 		from: string;
+		preset?: string | null;
 		set?: Record<string, unknown>;
 		description?: string;
 	},
