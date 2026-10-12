@@ -30,6 +30,7 @@ export default defineConfig({
 			"@runtime-task-agent-settings": resolve(__dirname, "../src/core/task-agent-settings.ts"),
 			"@runtime-effective-agent": resolve(__dirname, "../src/core/effective-agent.ts"),
 			"@runtime-task-running-time": resolve(__dirname, "../src/core/task-running-time.ts"),
+			"@runtime-browser-page-origin": resolve(__dirname, "../src/core/browser-page-origin.ts"),
 		},
 		conditions: ["import", "module", "browser", "default"],
 	},

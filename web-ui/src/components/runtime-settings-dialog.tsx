@@ -15,6 +15,7 @@ import {
 	ExternalLink,
 	FolderOpen,
 	GitCommit,
+	Github,
 	Palette,
 	Plus,
 	Settings,
@@ -22,6 +23,7 @@ import {
 	X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { GitHubAppSettingsSection } from "@/components/github-app-settings-section";
 import {
 	getRuntimeShortcutIconComponent,
 	getRuntimeShortcutPickerOption,
@@ -84,7 +86,7 @@ export type RuntimeSettingsSection = "shortcuts";
 
 const SETTINGS_AGENT_ORDER: readonly RuntimeAgentId[] = ["cline", "claude", "codex", "droid", "kiro"];
 
-type SettingsNavId = "general" | "git-prompts" | "notifications" | "appearance" | "project";
+type SettingsNavId = "general" | "git-prompts" | "notifications" | "appearance" | "github" | "project";
 
 const SETTINGS_NAV_ITEMS: ReadonlyArray<{
 	id: SettingsNavId;
@@ -95,6 +97,7 @@ const SETTINGS_NAV_ITEMS: ReadonlyArray<{
 	{ id: "git-prompts", label: "Git Prompts", icon: <GitCommit size={16} /> },
 	{ id: "notifications", label: "Notifications", icon: <Bell size={16} /> },
 	{ id: "appearance", label: "Appearance", icon: <Palette size={16} /> },
+	{ id: "github", label: "GitHub App", icon: <Github size={16} /> },
 	{ id: "project", label: "Project", icon: <FolderOpen size={16} /> },
 ];
 
@@ -995,6 +998,15 @@ export function RuntimeSettingsDialog({
 							Reset sidebar, split pane, and terminal resize customizations back to their defaults.
 						</p>
 					</div>
+					{/* ---- GitHub App ---- */}
+					<div data-settings-section="github" />
+					<div className="sticky top-0 -mx-5 px-5 pt-4 pb-2 bg-surface-1 z-10">
+						<h2 className="flex items-center gap-2 text-base font-semibold text-text-primary m-0">
+							<Github size={16} className="text-text-secondary" />
+							GitHub App
+						</h2>
+					</div>
+					<GitHubAppSettingsSection enabled={open} />
 					<div data-settings-section="project" />
 					<div className="sticky top-0 -mx-5 px-5 pt-4 pb-2 bg-surface-1 z-10">
 						<h2 className="flex items-center gap-2 text-base font-semibold text-text-primary m-0">

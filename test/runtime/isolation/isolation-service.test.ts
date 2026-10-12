@@ -263,6 +263,23 @@ describe("isolation service: calls without a credential", () => {
 		});
 		expect(await service.resolveCaller(request)).toEqual({ kind: "user" });
 	});
+
+	it("finds the terminal a call comes from (where links it prints should point), in every mode", async () => {
+		const terminal = setup({ sessions: [liveSession({ agentId: null, taskId: "__detail_terminal__:t1" })] });
+		expect(await terminal.service.findCallingSession(request)).toEqual({
+			workspaceId: "a",
+			taskId: "__detail_terminal__:t1",
+		});
+		const ended = setup({ sessions: [liveSession({ agentId: null, live: false })] });
+		expect(await ended.service.findCallingSession(request)).toBeNull();
+		const reparented = setup({
+			sessions: [liveSession()],
+			reader: fakeReader([processEntry(10, 1), processEntry(200, 10), processEntry(300, 1)]),
+		});
+		expect(await reparented.service.findCallingSession(request)).toBeNull();
+		const noProc = setup({ sessions: [liveSession()], reader: null });
+		expect(await noProc.service.findCallingSession(request)).toBeNull();
+	});
 });
 
 describe("isolation service decisions", () => {

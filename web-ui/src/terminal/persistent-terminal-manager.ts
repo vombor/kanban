@@ -1,3 +1,4 @@
+import { BROWSER_PAGE_ORIGIN_QUERY_PARAM } from "@runtime-browser-page-origin";
 import { describeTerminalWsClose } from "@runtime-terminal-ws-close";
 import { ClipboardAddon } from "@xterm/addon-clipboard";
 import { FitAddon } from "@xterm/addon-fit";
@@ -93,6 +94,8 @@ function getTerminalIoWebSocketUrl(taskId: string, workspaceId: string, clientId
 	url.searchParams.set("taskId", taskId);
 	url.searchParams.set("workspaceId", workspaceId);
 	url.searchParams.set("clientId", clientId);
+	// The page this terminal is open in, for links a command run in it prints (browser-page-origin.ts).
+	url.searchParams.set(BROWSER_PAGE_ORIGIN_QUERY_PARAM, window.location.origin);
 	return url.toString();
 }
 
@@ -102,6 +105,8 @@ function getTerminalControlWebSocketUrl(taskId: string, workspaceId: string, cli
 	url.searchParams.set("taskId", taskId);
 	url.searchParams.set("workspaceId", workspaceId);
 	url.searchParams.set("clientId", clientId);
+	// The page this terminal is open in, for links a command run in it prints (browser-page-origin.ts).
+	url.searchParams.set(BROWSER_PAGE_ORIGIN_QUERY_PARAM, window.location.origin);
 	return url.toString();
 }
 

@@ -31,6 +31,11 @@ import {
 import { appendAttribution, formatAttributionLine } from "../../../src/github-app/attribution";
 import { createGitHubAppTokenSource } from "../../../src/github-app/installation-tokens";
 import type { RuntimeCaller } from "../../../src/isolation/session-identity";
+import {
+	type BrowserOriginTracker,
+	chooseBrowserOrigin,
+	createBrowserOriginTracker,
+} from "../../../src/server/browser-origins";
 import { createGitHubAppRequestHandler } from "../../../src/server/github-app-route";
 import { createGitHubApi, decideGitHubPoster } from "../../../src/trpc/github-api";
 import { createFakeGitHub, type FakeGitHub } from "../../utilities/fake-github";
@@ -84,7 +89,15 @@ afterEach(() => {
 	temp.cleanup();
 });
 
-function createApi(options: { app?: GitHubAppCredentials | null; pat?: string | null } = {}) {
+function createApi(
+	options: {
+		app?: GitHubAppCredentials | null;
+		pat?: string | null;
+		origins?: BrowserOriginTracker;
+		callingTerminal?: { workspaceId: string; taskId: string } | null;
+	} = {},
+) {
+	const origins = options.origins ?? createBrowserOriginTracker();
 	const app = options.app === undefined ? CREDENTIALS : options.app;
 	const tokenSource = createGitHubAppTokenSource({
 		readCredentials: async () => app,
@@ -100,6 +113,13 @@ function createApi(options: { app?: GitHubAppCredentials | null; pat?: string | 
 	return createGitHubApi({
 		tokenSource,
 		flow,
+		chooseOrigin: async ({ requested }) =>
+			chooseBrowserOrigin({
+				requested,
+				callingTerminal: options.callingTerminal ?? null,
+				tracker: origins,
+				fallback: () => "http://localhost:3485",
+			}),
 		log: async (_targets, record) => {
 			isolationLog.push(record);
 		},
@@ -124,6 +144,17 @@ describe("the app manifest", () => {
 		expect(manifest.public).toBe(false);
 		expect(manifest.redirect_url).toBe(`http://localhost:3485${GITHUB_APP_CALLBACK_PATH}`);
 		expect(manifest.setup_url).toBe("http://localhost:3485/api/github/app/installed");
+	});
+
+	it("sends GitHub back to the origin the user's browser uses, not localhost", () => {
+		const manifest = buildGitHubAppManifest({ name: "Kanban agents", origin: "https://pod.tail.ts.net:8443/" });
+		expect(manifest.redirect_url).toBe(`https://pod.tail.ts.net:8443${GITHUB_APP_CALLBACK_PATH}`);
+		expect(manifest.setup_url).toBe("https://pod.tail.ts.net:8443/api/github/app/installed");
+		const flow = createGitHubAppCreationFlow({ writeCredentials: async () => {}, now: () => NOW });
+		const started = flow.start({ name: "Kanban agents", origin: "https://pod.tail.ts.net:8443", org: null });
+		expect(started.startUrl.startsWith(`https://pod.tail.ts.net:8443${GITHUB_APP_START_PATH}?state=`)).toBe(true);
+		expect(started.manifest.redirect_url).toBe(`https://pod.tail.ts.net:8443${GITHUB_APP_CALLBACK_PATH}`);
+		expect(JSON.stringify(started.manifest)).not.toContain("localhost");
 	});
 
 	it("puts the local origin only in redirect_url and setup_url (GitHub refuses a local hook url, issue #37)", () => {
@@ -458,6 +489,52 @@ describe("github.issue", () => {
 		});
 		expect(started.ok && started.startUrl).toContain(GITHUB_APP_START_PATH);
 		expect(started.existing?.slug).toBe("kanban-agents");
+		expect(started).toMatchObject({ origin: "http://localhost:3485", originSource: "requested" });
+	});
+
+	it("picks the origin itself when the start names none: the calling terminal's page, the last browser, else localhost", async () => {
+		const origins = createBrowserOriginTracker();
+		const start = async (callingTerminal: { workspaceId: string; taskId: string } | null) =>
+			await createApi({ origins, callingTerminal }).startAppCreation({ caller: { kind: "user" }, request: {} });
+
+		expect(await start(null)).toMatchObject({ ok: true, origin: "http://localhost:3485", originSource: "default" });
+
+		origins.recordPage("https://kanban.example.net");
+		const fromBrowser = await start(null);
+		expect(fromBrowser).toMatchObject({ origin: "https://kanban.example.net", originSource: "browser" });
+		expect(fromBrowser.startUrl?.startsWith(`https://kanban.example.net${GITHUB_APP_START_PATH}?state=`)).toBe(true);
+
+		origins.recordTerminalViewer({
+			workspaceId: "kanban",
+			taskId: "__home_terminal__",
+			origin: "https://pod.tail.ts.net:8443",
+		});
+		origins.recordPage("http://localhost:3485");
+		const fromTerminal = await start({ workspaceId: "kanban", taskId: "__home_terminal__" });
+		expect(fromTerminal).toMatchObject({ origin: "https://pod.tail.ts.net:8443", originSource: "terminal" });
+
+		// --origin wins over everything the server has seen.
+		const requested = await createApi({
+			origins,
+			callingTerminal: { workspaceId: "kanban", taskId: "__home_terminal__" },
+		}).startAppCreation({ caller: { kind: "user" }, request: { origin: "https://other.example.org/" } });
+		expect(requested).toMatchObject({ origin: "https://other.example.org", originSource: "requested" });
+	});
+
+	it("tells only the user where their browser reaches Kanban", async () => {
+		const origins = createBrowserOriginTracker();
+		origins.recordPage("https://kanban.example.net");
+		const api = createApi({ origins });
+		expect(await api.appStatus({ caller: { kind: "user" } })).toMatchObject({
+			ok: true,
+			origin: "https://kanban.example.net",
+			originSource: "browser",
+		});
+		expect(await api.appStatus({ caller: session("notes", "orchestrator") })).toMatchObject({
+			ok: true,
+			origin: null,
+			originSource: null,
+		});
 	});
 });
 

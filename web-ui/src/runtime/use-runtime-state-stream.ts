@@ -1,3 +1,4 @@
+import { BROWSER_PAGE_ORIGIN_QUERY_PARAM } from "@runtime-browser-page-origin";
 import { useEffect, useReducer } from "react";
 
 import { getReconnectDelayMs } from "@/runtime/reconnect-backoff";
@@ -41,6 +42,8 @@ function getRuntimeStreamUrl(workspaceId: string | null): string {
 	if (workspaceId) {
 		url.searchParams.set("workspaceId", workspaceId);
 	}
+	// Where this page reaches Kanban: the server's headers say localhost behind a tunnel (browser-page-origin.ts).
+	url.searchParams.set(BROWSER_PAGE_ORIGIN_QUERY_PARAM, window.location.origin);
 	return url.toString();
 }
 

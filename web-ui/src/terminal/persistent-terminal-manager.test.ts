@@ -336,6 +336,14 @@ describe("persistent terminal reconnect", () => {
 		vi.restoreAllMocks();
 	});
 
+	it("names the page's own origin on both sockets (where links a command in this terminal prints should point)", async () => {
+		createTerminal();
+		await completeConnection({ snapshot: "" });
+		for (const socket of [latestSocket("stream"), latestSocket("control")]) {
+			expect(new URL(socket.url).searchParams.get("pageOrigin")).toBe(window.location.origin);
+		}
+	});
+
 	it("reconnects with backoff after the stream drops and restores the current screen once", async () => {
 		createTerminal();
 		await completeConnection({ snapshot: "hello " });

@@ -1186,17 +1186,32 @@ export const runtimeAppRouter = t.router({
 						ok: false,
 						startUrl: null,
 						expiresAt: null,
+						origin: null,
+						originSource: null,
 						existing: null,
 						error: "GitHub App creation is not available here.",
 					};
 				}
-				return await ctx.githubApi.startAppCreation({ caller: await readStrictCaller(ctx), request: input });
+				return await ctx.githubApi.startAppCreation({
+					caller: await readStrictCaller(ctx),
+					callerRequest: ctx.callerRequest ?? null,
+					request: input,
+				});
 			}),
 		appStatus: t.procedure.output(githubAppStatusResponseSchema).query(async ({ ctx }) => {
 			if (!ctx.githubApi) {
-				return { ok: false, app: null, error: "GitHub App status is not available here." };
+				return {
+					ok: false,
+					app: null,
+					origin: null,
+					originSource: null,
+					error: "GitHub App status is not available here.",
+				};
 			}
-			return await ctx.githubApi.appStatus({ caller: await readCaller(ctx) });
+			return await ctx.githubApi.appStatus({
+				caller: await readCaller(ctx),
+				callerRequest: ctx.callerRequest ?? null,
+			});
 		}),
 	}),
 	// Orchestrator messages between projects (src/isolation/messages.ts).

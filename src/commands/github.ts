@@ -12,11 +12,17 @@ import { readFile } from "node:fs/promises";
 
 import type { Command } from "commander";
 
-import { getKanbanRuntimePort, isKanbanRuntimeHttps } from "../core/runtime-endpoint";
+import { normalizeBrowserPageOrigin } from "../core/browser-page-origin";
 import { DEFAULT_GITHUB_APP_NAME, GITHUB_APP_LOGO_PATH } from "../github-app/app-manifest";
 import { getWebUiDir } from "../server/assets";
+import { getLocalBrowserOrigin } from "../server/browser-origins";
 import { getGitHubAppLogoFilePath } from "../server/github-app-route";
-import type { GitHubAppStatusResponse, GitHubIssueRequest, GitHubIssueResponse } from "../trpc/github-api";
+import type {
+	GitHubAppOriginSource,
+	GitHubAppStatusResponse,
+	GitHubIssueRequest,
+	GitHubIssueResponse,
+} from "../trpc/github-api";
 import { createRuntimeTrpcClient } from "./runtime-trpc-client";
 import { resolveWorkspaceTarget } from "./workspace-target";
 
@@ -32,9 +38,31 @@ function fail(label: string, error: unknown): void {
 	process.exitCode = 1;
 }
 
-/** The origin the user's browser reaches Kanban on: the runtime's port on localhost (the pod publishes it). */
-export function getDefaultBrowserOrigin(): string {
-	return `${isKanbanRuntimeHttps() ? "https" : "http"}://localhost:${getKanbanRuntimePort()}`;
+const ORIGIN_SOURCE_TEXT: Record<GitHubAppOriginSource, string> = {
+	requested: "from --origin",
+	terminal: "the address of the Kanban page this terminal is open in",
+	browser: "the address your browser last opened Kanban on",
+	default: "the default: no browser has opened Kanban since the server started",
+};
+
+/** Which origin the links use and how to change it (the CLI's default is the server's choice). */
+export function formatOriginChoice(origin: string, source: GitHubAppOriginSource): string[] {
+	return [
+		`Links use ${origin} (${ORIGIN_SOURCE_TEXT[source]}).`,
+		...(source === "requested" ? [] : ["  If your browser reaches Kanban on another address, pass --origin <url>."]),
+		"  Or create the app from the browser: Settings > GitHub App > Create Kanban GitHub App.",
+	];
+}
+
+function normalizeOriginOption(origin: string | undefined): string | null {
+	if (!origin?.trim()) {
+		return null;
+	}
+	const normalized = normalizeBrowserPageOrigin(origin);
+	if (!normalized) {
+		throw new Error(`--origin must be an http(s) address such as https://kanban.example.com, not "${origin}".`);
+	}
+	return normalized;
 }
 
 async function readBodyFile(path: string): Promise<string> {
@@ -157,25 +185,30 @@ export function registerGitHubCommand(program: Command): void {
 		.option("--org <org>", "Create it under this organization instead of your own account.")
 		.option(
 			"--origin <url>",
-			"Where your browser reaches this Kanban server (GitHub redirects there). Default: http://localhost:<runtime port>.",
+			"Where your browser reaches this Kanban server (GitHub redirects there). Default: the page this terminal is open in, else the address your browser last opened Kanban on, else http://localhost:<runtime port>.",
 		)
 		.option("--no-wait", "Print the link and return; don't wait for the app to be created.")
 		.action(async (options: { name?: string; org?: string; origin?: string; wait: boolean }) => {
 			try {
-				const origin = (options.origin?.trim() || getDefaultBrowserOrigin()).replace(/\/+$/u, "");
 				const client = createRuntimeTrpcClient(null);
 				const since = Date.now();
 				const started = await client.github.startAppCreation
-					.mutate({ name: options.name?.trim() || DEFAULT_GITHUB_APP_NAME, origin, org: options.org ?? null })
+					.mutate({
+						name: options.name?.trim() || DEFAULT_GITHUB_APP_NAME,
+						origin: normalizeOriginOption(options.origin),
+						org: options.org ?? null,
+					})
 					.catch((error: unknown) => {
 						throw new Error(
 							`the running Kanban server didn't answer (${toErrorMessage(error)}); start Kanban first, GitHub sends the app back to it`,
 						);
 					});
-				if (!started.ok || !started.startUrl) {
+				if (!started.ok || !started.startUrl || !started.origin) {
 					throw new Error(started.error ?? "refused");
 				}
+				const origin = started.origin;
 				const lines = [
+					...formatOriginChoice(origin, started.originSource ?? "default"),
 					...(started.existing
 						? [
 								`Note: this machine already has the app ${started.existing.slug}; creating another one replaces it in Kanban (delete the old one on GitHub: ${started.existing.settingsUrl}).`,
@@ -215,7 +248,7 @@ export function registerGitHubCommand(program: Command): void {
 				if (!status.ok) {
 					throw new Error(status.error ?? "unknown");
 				}
-				const origin = (options.origin?.trim() || getDefaultBrowserOrigin()).replace(/\/+$/u, "");
+				const origin = normalizeOriginOption(options.origin) ?? status.origin ?? getLocalBrowserOrigin();
 				process.stdout.write(
 					`${(status.app ? formatAppSetupSteps(status.app, origin) : ["No Kanban GitHub App on this machine yet: agents' issues and comments go out with the user's PAT. Create it with kanban github bot create."]).join("\n")}\n`,
 				);

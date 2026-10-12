@@ -101,6 +101,11 @@ export interface IsolationService {
 	 */
 	bindChildCredential: (request: CallerRequest, credential: string, pid: number) => Promise<ChildCredentialResult>;
 	resolveCaller: (request: CallerRequest, options?: { strict?: boolean }) => Promise<RuntimeCaller>;
+	/**
+	 * The live session whose PTY the calling process runs in (a shell terminal's or an agent's), from the /proc trace
+	 * of the loopback connection; null where it can't be traced. Says where a call comes from, never who may act.
+	 */
+	findCallingSession: (request: CallerRequest) => Promise<{ workspaceId: string; taskId: string } | null>;
 	/** The decision on a reach, not logged (listings, whoami). */
 	peekWorkspaceAccess: (
 		caller: RuntimeCaller,
@@ -412,6 +417,21 @@ export function createIsolationService(deps: IsolationServiceDependencies): Isol
 		return USER_CALLER;
 	};
 
+	const findCallingSession: IsolationService["findCallingSession"] = async (request) => {
+		const peer = await lookUpPeer(request);
+		if (!peer) {
+			return null;
+		}
+		const live = deps.listLiveSessions().filter((session) => session.live && session.pid !== null);
+		for (const pid of listParentChain(peer.pid, peer.processes)) {
+			const session = live.find((candidate) => candidate.pid === pid);
+			if (session) {
+				return { workspaceId: session.workspaceId, taskId: session.taskId };
+			}
+		}
+		return null;
+	};
+
 	/** The session calling from its own tree with its own (not a child) credential, and the calling process. */
 	const resolveCredentialOwner = async (
 		request: CallerRequest,
@@ -572,6 +592,7 @@ export function createIsolationService(deps: IsolationServiceDependencies): Isol
 		issueChildCredential,
 		bindChildCredential,
 		resolveCaller,
+		findCallingSession,
 		peekWorkspaceAccess,
 		checkWorkspaceAccess,
 		checkProjectChange,

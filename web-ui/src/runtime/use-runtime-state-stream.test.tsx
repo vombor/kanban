@@ -106,6 +106,12 @@ describe("useRuntimeStateStream reconnect", () => {
 
 	const current = () => FakeWebSocket.instances[FakeWebSocket.instances.length - 1] as FakeWebSocket;
 
+	it("names the page's own origin, which the server can't see behind a tunnel", () => {
+		const url = new URL(current().url);
+		expect(url.pathname).toBe("/api/runtime/ws");
+		expect(url.searchParams.get("pageOrigin")).toBe(window.location.origin);
+	});
+
 	it("reconnects at once when the page becomes visible with a dead socket, and resyncs from the new snapshot", () => {
 		act(() => {
 			current().open();

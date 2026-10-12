@@ -412,19 +412,22 @@ describe("createTerminalWebSocketBridge – project isolation", () => {
 			response.end();
 		});
 		const manager = new FakeTerminalManager();
+		const viewerUpgrades: Array<{ workspaceId: string; taskId: string; pageOrigin: string | null }> = [];
 		const isolatedBridge = createTerminalWebSocketBridge({
 			server: isolatedServer,
 			resolveTerminalManager: (workspaceId) => (workspaceId === WORKSPACE_ID ? manager : null),
 			isTerminalIoWebSocketPath: (pathname) => pathname === "/api/terminal/io",
 			isTerminalControlWebSocketPath: (pathname) => pathname === "/api/terminal/control",
 			authorizeUpgrade: authorizeWorkspaceUpgrade,
+			onViewerUpgrade: (_request, viewerUrl, terminal) =>
+				viewerUpgrades.push({ ...terminal, pageOrigin: viewerUrl.searchParams.get("pageOrigin") }),
 		});
 		isolatedServer.listen(0, "127.0.0.1");
 		await once(isolatedServer, "listening");
 		const address = isolatedServer.address() as AddressInfo;
 		const originalPort = getKanbanRuntimePort();
 		setKanbanRuntimePort(address.port);
-		const url = `ws://127.0.0.1:${address.port}/api/terminal/io?taskId=${TASK_ID}&workspaceId=${WORKSPACE_ID}`;
+		const url = `ws://127.0.0.1:${address.port}/api/terminal/io?taskId=${TASK_ID}&workspaceId=${WORKSPACE_ID}&pageOrigin=https%3A%2F%2Fpod.example`;
 		const upgrade = async (credential: string | null) =>
 			await new Promise<string>((resolve, reject) => {
 				const ws = new WebSocket(url, {
@@ -441,6 +444,11 @@ describe("createTerminalWebSocketBridge – project isolation", () => {
 			expect(await upgrade(otherCredential)).toBe("403");
 			expect(await upgrade(ownCredential)).toBe("101");
 			expect(await upgrade(null)).toBe("101");
+			// Only the upgrades that went ahead reach the server's page-origin record (browser-origins.ts).
+			expect(viewerUpgrades).toEqual([
+				{ workspaceId: WORKSPACE_ID, taskId: TASK_ID, pageOrigin: "https://pod.example" },
+				{ workspaceId: WORKSPACE_ID, taskId: TASK_ID, pageOrigin: "https://pod.example" },
+			]);
 		} finally {
 			setKanbanRuntimePort(originalPort);
 			await isolatedBridge.close();

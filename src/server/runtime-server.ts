@@ -84,6 +84,7 @@ import {
 	getTaskWorktreeCandidatePaths,
 } from "../workspace/task-worktree";
 import { getWebUiDir, normalizeRequestPath, readAsset } from "./assets";
+import { chooseBrowserOrigin, createBrowserOriginTracker, createBrowserUpgradeRecorder } from "./browser-origins";
 import { createClineLemonadeContextSyncMonitor } from "./cline-lemonade-context-sync-monitor";
 import { createGitHubAppRequestHandler } from "./github-app-route";
 import { handleHttpRequest, handleSocketUpgrade } from "./middleware";
@@ -260,7 +261,14 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 				),
 			warn: deps.warn,
 		});
-	const { resolveRequestScope, authorizeWorkspaceUpgrade } = createRequestCallerResolver(isolation);
+	const { resolveRequestScope, resolveRequestCaller, authorizeWorkspaceUpgrade } =
+		createRequestCallerResolver(isolation);
+	// Where the user's browser reaches this server (browser-origins.ts): only a browser's upgrade by the user counts.
+	const browserOrigins = createBrowserOriginTracker();
+	const recordBrowserUpgrade = createBrowserUpgradeRecorder({
+		tracker: browserOrigins,
+		resolveStrictCaller: async (request) => await resolveRequestCaller(request, true),
+	});
 	const processReaper = createProcessReaper({
 		reader: processTableReader,
 		getWorktreeRoots: getTaskWorktreeSearchRootPaths,
@@ -529,6 +537,13 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 	const githubApi = createGitHubApi({
 		tokenSource: githubAppTokenSource,
 		flow: githubAppCreationFlow,
+		chooseOrigin: async ({ requested, callerRequest }) =>
+			chooseBrowserOrigin({
+				requested,
+				callingTerminal:
+					callerRequest && !requested ? await isolation.findCallingSession(callerRequest).catch(() => null) : null,
+				tracker: browserOrigins,
+			}),
 		log: isolation.log,
 		warn: deps.warn,
 	});
@@ -899,6 +914,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 				return;
 			}
 			deps.runtimeStateHub.handleUpgrade(request, socket, head, { requestedWorkspaceId });
+			void recordBrowserUpgrade(request, requestUrl, null).catch(() => undefined);
 		});
 	});
 	const terminalWebSocketBridge = createTerminalWebSocketBridge({
@@ -914,6 +930,8 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 					}
 				: undefined,
 		authorizeUpgrade: async (request, workspaceId) => await authorizeWorkspaceUpgrade(request, workspaceId),
+		onViewerUpgrade: (request, url, terminal) =>
+			void recordBrowserUpgrade(request, url, terminal).catch(() => undefined),
 	});
 	server.on("upgrade", (request, socket) => {
 		const handled = (request as IncomingMessage & { __kanbanUpgradeHandled?: boolean }).__kanbanUpgradeHandled;

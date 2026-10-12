@@ -31,7 +31,8 @@
       "@runtime-task-state": ["../src/core/task-board-mutations.ts"],
       "@runtime-task-agent-settings": ["../src/core/task-agent-settings.ts"],
       "@runtime-effective-agent": ["../src/core/effective-agent.ts"],
-      "@runtime-task-running-time": ["../src/core/task-running-time.ts"]
+      "@runtime-task-running-time": ["../src/core/task-running-time.ts"],
+      "@runtime-browser-page-origin": ["../src/core/browser-page-origin.ts"]
     },
     "types": ["vitest/globals"]
   },

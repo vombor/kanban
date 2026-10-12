@@ -7,8 +7,9 @@
 //      app's id, slug and private key to the secrets file (app-credentials.ts) and redirects the browser to the app's
 //      installation page, where the user picks "All repositories" (or selected ones);
 //   5. GitHub sends the browser to `setup_url` after the install, which shows the last step: the logo.
-// The URLs point at the origin the user's browser reaches Kanban on (the published port, not the pod's 127.0.0.1),
-// which the CLI passes. GitHub's manifest has no logo field and no API sets an app's logo, so the user uploads the
+// The URLs point at the origin the user's browser reaches Kanban on (a tunnel's host name or the published port,
+// never the pod's 127.0.0.1): the settings dialog's own page, the CLI's --origin, else what the server has seen of
+// the user's browser (src/server/browser-origins.ts). GitHub's manifest has no logo field and no API sets an app's logo, so the user uploads the
 // Kanban icon on the app's settings page (Display information); the server serves it at GITHUB_APP_LOGO_PATH.
 import { randomBytes } from "node:crypto";
 
@@ -226,12 +227,16 @@ export function createGitHubAppCreationFlow(deps: GitHubAppCreationFlowDependenc
 				return {
 					ok: false,
 					status: 400,
-					error: "This app creation link is unknown or expired. Run kanban github bot create again.",
+					error: "This app creation link is unknown or expired. Start again: Settings > GitHub App in Kanban, or kanban github bot create.",
 				};
 			}
 			pending.delete(state);
 			if (!code) {
-				return { ok: false, status: 400, error: "GitHub sent no code. Run kanban github bot create again." };
+				return {
+					ok: false,
+					status: 400,
+					error: "GitHub sent no code. Start again: Settings > GitHub App in Kanban, or kanban github bot create.",
+				};
 			}
 			try {
 				const credentials = await exchangeGitHubAppManifestCode(code, deps);

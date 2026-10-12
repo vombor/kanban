@@ -11,7 +11,7 @@ import { z } from "zod";
 import { type GitHubSettings, readPipelineConfig } from "../config/pipeline-config";
 import { resolveCardRole } from "../core/card-role";
 import type { GitHubAppInfo } from "../github-app/app-credentials";
-import type { GitHubAppCreationFlow } from "../github-app/app-manifest";
+import { DEFAULT_GITHUB_APP_NAME, type GitHubAppCreationFlow } from "../github-app/app-manifest";
 import { describePosterRole, type GitHubPostAuthor } from "../github-app/attribution";
 import { type GitHubHttpOptions, GitHubRateLimitError } from "../github-app/github-http";
 import type { GitHubAppTokenSource } from "../github-app/installation-tokens";
@@ -20,7 +20,7 @@ import {
 	performGitHubIssueAction,
 	resolveIssueWriteCredential,
 } from "../github-app/issue-writer";
-import type { IsolationService } from "../isolation/isolation-service";
+import type { CallerRequest, IsolationService } from "../isolation/isolation-service";
 import { describeCaller, type RuntimeCaller } from "../isolation/session-identity";
 import type { IssueAuth } from "../issues/issue-auth";
 import { type GitRemote, listGitRemotes, listProviderRepos } from "../issues/issue-repo";
@@ -74,9 +74,19 @@ export const githubIssueResponseSchema = z.object({
 });
 export type GitHubIssueResponse = z.infer<typeof githubIssueResponseSchema>;
 
+/**
+ * Where the links GitHub sends the user back to point (src/server/browser-origins.ts): `requested` (the CLI's
+ * --origin, the browser's own page), `terminal` (the page the calling terminal is open in), `browser` (the origin the
+ * user's browser last reached the server on), `default` (localhost on the runtime port).
+ */
+export const githubAppOriginSourceSchema = z.enum(["requested", "terminal", "browser", "default"]);
+export type GitHubAppOriginSource = z.infer<typeof githubAppOriginSourceSchema>;
+
 export const githubAppStartRequestSchema = z.object({
-	name: z.string().trim().min(1).max(34),
-	origin: z.string().url(),
+	/** Absent: DEFAULT_GITHUB_APP_NAME. */
+	name: z.string().trim().min(1).max(34).optional(),
+	/** Absent: the server picks the user's browser origin (see githubAppOriginSourceSchema). */
+	origin: z.string().url().nullable().optional(),
 	org: z
 		.string()
 		.regex(/^[A-Za-z0-9-]+$/u)
@@ -99,6 +109,9 @@ export const githubAppStartResponseSchema = z.object({
 	ok: z.boolean(),
 	startUrl: z.string().nullable(),
 	expiresAt: z.string().nullable(),
+	/** The origin the start, callback and setup links use, and why that one. */
+	origin: z.string().nullable(),
+	originSource: githubAppOriginSourceSchema.nullable(),
 	/** An app already exists (creating another replaces it). */
 	existing: githubAppInfoSchema.nullable(),
 	error: z.string().optional(),
@@ -108,6 +121,9 @@ export type GitHubAppStartResponse = z.infer<typeof githubAppStartResponseSchema
 export const githubAppStatusResponseSchema = z.object({
 	ok: z.boolean(),
 	app: githubAppInfoSchema.nullable(),
+	/** The user's browser origin as the start would pick it (the logo link); null for anyone else. */
+	origin: z.string().nullable(),
+	originSource: githubAppOriginSourceSchema.nullable(),
 	error: z.string().optional(),
 });
 export type GitHubAppStatusResponse = z.infer<typeof githubAppStatusResponseSchema>;
@@ -159,14 +175,24 @@ export interface RuntimeGitHubApi {
 	}) => Promise<GitHubIssueResponse>;
 	startAppCreation: (input: {
 		caller: RuntimeCaller;
+		/** The request's connection, for the terminal it comes from (absent: no terminal lookup). */
+		callerRequest?: CallerRequest | null;
 		request: z.infer<typeof githubAppStartRequestSchema>;
 	}) => Promise<GitHubAppStartResponse>;
-	appStatus: (input: { caller: RuntimeCaller }) => Promise<GitHubAppStatusResponse>;
+	appStatus: (input: {
+		caller: RuntimeCaller;
+		callerRequest?: CallerRequest | null;
+	}) => Promise<GitHubAppStatusResponse>;
 }
 
 export interface CreateGitHubApiDependencies {
 	tokenSource: GitHubAppTokenSource;
 	flow: GitHubAppCreationFlow;
+	/** The origin for the app's links (src/server/browser-origins.ts chooseBrowserOrigin). */
+	chooseOrigin: (input: {
+		requested: string | null;
+		callerRequest: CallerRequest | null;
+	}) => Promise<{ origin: string; source: GitHubAppOriginSource }>;
 	log: IsolationService["log"];
 	warn?: (message: string) => void;
 	readSettings?: () => Promise<GitHubSettings>;
@@ -286,23 +312,58 @@ export function createGitHubApi(deps: CreateGitHubApiDependencies): RuntimeGitHu
 				return failure(message, retryAfter ? { retryAfter } : {});
 			}
 		},
-		startAppCreation: async ({ caller, request }) => {
+		startAppCreation: async ({ caller, callerRequest, request }) => {
 			const refusal = await refuseNonUser(caller, "github.startAppCreation");
 			if (refusal) {
-				return { ok: false, startUrl: null, expiresAt: null, existing: null, error: refusal };
+				return {
+					ok: false,
+					startUrl: null,
+					expiresAt: null,
+					origin: null,
+					originSource: null,
+					existing: null,
+					error: refusal,
+				};
 			}
 			const existing = await deps.tokenSource.getApp().catch(() => null);
-			const started = deps.flow.start({ name: request.name, origin: request.origin, org: request.org ?? null });
-			return { ok: true, startUrl: started.startUrl, expiresAt: started.expiresAt, existing: toAppInfo(existing) };
+			const chosen = await deps.chooseOrigin({
+				requested: request.origin ?? null,
+				callerRequest: callerRequest ?? null,
+			});
+			const started = deps.flow.start({
+				name: request.name ?? DEFAULT_GITHUB_APP_NAME,
+				origin: chosen.origin,
+				org: request.org ?? null,
+			});
+			return {
+				ok: true,
+				startUrl: started.startUrl,
+				expiresAt: started.expiresAt,
+				origin: chosen.origin,
+				originSource: chosen.source,
+				existing: toAppInfo(existing),
+			};
 		},
-		appStatus: async ({ caller }) => {
+		appStatus: async ({ caller, callerRequest }) => {
 			if (caller.kind === "unknown") {
-				return { ok: false, app: null, error: `${describeCaller(caller)} can't ask about the GitHub App.` };
+				return {
+					ok: false,
+					app: null,
+					origin: null,
+					originSource: null,
+					error: `${describeCaller(caller)} can't ask about the GitHub App.`,
+				};
 			}
+			// Where the user's browser reaches Kanban is the user's to know, not a session's.
+			const chosen =
+				caller.kind === "user"
+					? await deps.chooseOrigin({ requested: null, callerRequest: callerRequest ?? null }).catch(() => null)
+					: null;
+			const origin = { origin: chosen?.origin ?? null, originSource: chosen?.source ?? null };
 			try {
-				return { ok: true, app: toAppInfo(await deps.tokenSource.getApp()) };
+				return { ok: true, app: toAppInfo(await deps.tokenSource.getApp()), ...origin };
 			} catch (error) {
-				return { ok: false, app: null, error: error instanceof Error ? error.message : String(error) };
+				return { ok: false, app: null, ...origin, error: error instanceof Error ? error.message : String(error) };
 			}
 		},
 	};

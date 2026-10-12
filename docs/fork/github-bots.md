@@ -20,29 +20,40 @@ events. Commits, pushes, branches and PRs stay as they are (the user's PAT, [git
 
 ## One-time setup (the user)
 
-1. With Kanban running, in a shell outside any agent session:
+1. Start it from the browser or from a shell. GitHub sends you back to Kanban twice (after Create and after the
+   install), so the links must use the address *your browser* reaches Kanban on: a tunnel's host name on a phone,
+   not the pod's `localhost`.
+   - **Browser** (simplest, on any device): **Settings > GitHub App > Create Kanban GitHub App**. It uses the
+     address the page is open on, opens GitHub in a new tab (or tap **Open GitHub** if the tab was blocked), and
+     shows the app once GitHub sent it back.
+   - **Shell**, outside any agent session:
 
-   ```sh
-   kanban github bot create            # --name "<name>" to pick another app name, --org <org> for an org's app
-   ```
+     ```sh
+     kanban github bot create            # --name "<name>" to pick another app name, --org <org> for an org's app
+     ```
 
-   It prints a link to the Kanban server (`http://localhost:3485/api/github/app/new?state=…`; `--origin <url>` when
-   your browser reaches Kanban on another address). Open it: GitHub opens with the app filled in. Check the name
-   (it must be unique on GitHub; you can change it on that page) and click **Create GitHub App**.
+     It prints a link to the Kanban server and says which address it used: `--origin <url>` if given, else the
+     address of the Kanban page whose terminal you run it in, else the address your browser last opened Kanban on
+     (since the server started), else `http://localhost:<runtime port>`. Pass `--origin <url>` when that's not the
+     one your browser uses.
+
+   GitHub opens with the app filled in. Check the name (it must be unique on GitHub; you can change it on that page)
+   and click **Create GitHub App**.
 2. GitHub sends you back to Kanban, which stores the app and sends you on to its installation page. Pick **All
    repositories** (so every project, present and future, is covered without another click) and **Install**. With
    "Only select repositories", pick each project's repository and `vombor/kanban` (bug reports); `kanban doctor`
    lists any project whose repository isn't covered, with the install link.
 3. The logo. GitHub's manifest has no logo field and no API sets an app's logo, so upload it by hand: save the
-   Kanban icon from `http://localhost:3485/api/github/app/logo.png` (the file is `web-ui/public/assets/icon-512.png`
+   Kanban icon from `<your Kanban address>/api/github/app/logo.png` (the file is `web-ui/public/assets/icon-512.png`
    in the source, `dist/web-ui/assets/icon-512.png` in the package; 512×512 PNG, 6 KB, so square and under GitHub's
    1 MB), open `https://github.com/settings/apps/<slug>` and upload it under **Display information**. The page Kanban
    shows after the install, and `kanban github bot status`, give the exact links.
 4. `kanban doctor` shows the app, its file's mode and which repositories it covers.
 
-`kanban github bot create` is the user's: it is in `USER_ONLY_COMMANDS` (refused from every agent session), and the
-server's `github.startAppCreation` refuses any caller that isn't the user (strict caller lookup). Running it again
-creates a new app and replaces the stored one; delete the old one on GitHub.
+Creating the app is the user's: `kanban github bot create` is in `USER_ONLY_COMMANDS` (refused from every agent
+session), and the server's `github.startAppCreation`, which the CLI and the settings dialog both call, refuses any
+caller that isn't the user (strict caller lookup). Creating it again makes a new app and replaces the stored one;
+delete the old one on GitHub.
 
 ## How it works
 
@@ -54,6 +65,18 @@ creates a new app and replaces the stored one; delete the old one on GitHub.
   webhook secrets aren't needed and are never stored. These routes are served ahead of the passcode gate, because
   GitHub's redirect is a cross-site navigation without the `SameSite=Strict` session cookie: the state is what
   authorizes them.
+- **The origin** (`src/server/browser-origins.ts`, `src/core/browser-page-origin.ts`): the start page,
+  `redirect_url` and `setup_url` all use one origin, and GitHub sends the manifest code to it, so an agent must never
+  pick it. Behind a tunnel or a forwarded port the server's Host and Origin headers still say localhost (the host
+  and CORS gates allow only that), so only the page knows its address: the web UI names `window.location.origin` as
+  `pageOrigin` on the state stream and on every terminal WebSocket. The server keeps it in memory only, and only
+  for a browser's upgrade (it carries an Origin header and passed the gates and the passcode) whose strict caller is
+  the user: the last page origin, and per terminal the page its latest viewer was open in. When the start names no
+  origin (the CLI without `--origin`), the server takes the page of the terminal the calling process runs in (the
+  isolation service's `findCallingSession`, the /proc trace of the loopback connection), else the last page origin,
+  else `http://localhost:<runtime port>`, and answers which one (`originSource`), which the CLI prints. The settings
+  dialog always sends its own page's origin. `github.appStatus` tells the user (not a session) the same choice, for
+  `bot status`'s logo link.
 - **The key** (`src/github-app/app-credentials.ts`): `<home>/secrets/github-app.json`, mode 0600 in a 0700 dir,
   written atomically. One file for the machine (not per workspace, so `project rename-id` doesn't touch it). Never in
   config.json, a project repo, a log, an error message, or an agent's env or prompt; only the server reads it, to

@@ -4,8 +4,9 @@
 //   GET /api/github/app/installed           GitHub's setup_url after the install: the logo step;
 //   GET /api/github/app/logo.png            the Kanban icon to upload as the app's logo.
 // Served ahead of the passcode gate: GitHub's redirect is a cross-site navigation, which doesn't carry the
-// SameSite=Strict session cookie. The one-time `state` (from the user's `kanban github bot create`, in server memory)
-// is what authorizes the start page and the callback; the setup page and the logo show nothing secret.
+// SameSite=Strict session cookie. The one-time `state` (from the user's `kanban github bot create` or the settings
+// dialog's Create Kanban GitHub App, in server memory) is what authorizes the start page and the callback; the setup
+// page and the logo show nothing secret.
 import { readFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
@@ -84,7 +85,7 @@ export function createGitHubAppRequestHandler(
 				page ??
 					renderHtmlPage(
 						"Link expired",
-						"<p>This app creation link is unknown or expired. Run <code>kanban github bot create</code> again.</p>",
+						"<p>This app creation link is unknown or expired. Start again: <b>Settings <p>This app creation link is unknown or expired. Run <code>kanban github bot create</code> again.</p>gt; GitHub App</b> in Kanban, or <code>kanban github bot create</code>.</p>",
 					),
 			);
 			return true;

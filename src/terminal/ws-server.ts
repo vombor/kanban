@@ -46,6 +46,8 @@ export interface CreateTerminalWebSocketBridgeRequest {
 	 * session may only attach to its own project's terminals. Absent = every upgrade may.
 	 */
 	authorizeUpgrade?: (request: IncomingMessage, workspaceId: string) => Promise<boolean>;
+	/** An upgrade that went ahead, with its URL (the server records the page origin a browser names there). */
+	onViewerUpgrade?: (request: IncomingMessage, url: URL, terminal: { workspaceId: string; taskId: string }) => void;
 	/**
 	 * Interval between viewer liveness pings. Defaults to
 	 * TERMINAL_WS_HEARTBEAT_INTERVAL_MS. Exposed so tests can use a short interval.
@@ -285,6 +287,7 @@ export function createTerminalWebSocketBridge({
 	isTerminalControlWebSocketPath,
 	validateUpgradeSession,
 	authorizeUpgrade,
+	onViewerUpgrade,
 	heartbeatIntervalMs,
 	ackStallTimeoutMs,
 	viewerPauseBudgetBytes,
@@ -765,6 +768,7 @@ export function createTerminalWebSocketBridge({
 			const clientId = getTerminalClientId(url);
 			const upgrade = () =>
 				targetServer.handleUpgrade(request, socket, head, (ws: WebSocket) => {
+					onViewerUpgrade?.(request, url, { workspaceId, taskId });
 					targetServer.emit("connection", ws, { taskId, workspaceId, clientId, terminalManager });
 				});
 			if (!authorizeUpgrade) {
