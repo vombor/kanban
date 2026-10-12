@@ -55,13 +55,13 @@ export function useVoiceInput(workspaceId: string | null, taskId: string): Voice
 		recognition.start();
 	}, [draft, recognition.start]);
 
+	// X and Escape: the text goes, and a session still listening goes on into the empty draft.
 	const discard = useCallback(() => {
-		recognition.reset();
-		wasListeningRef.current = false;
+		recognition.clear();
 		baseDraftRef.current = "";
 		setDraft("");
 		setSendError(null);
-	}, [recognition.reset]);
+	}, [recognition.clear]);
 
 	const send = useCallback(async () => {
 		const text = draft.trim();
@@ -80,9 +80,14 @@ export function useVoiceInput(workspaceId: string | null, taskId: string): Voice
 		return true;
 	}, [draft, isSending, listening, starting, taskId, workspaceId]);
 
+	// Another session's bar: nothing heard for the previous one may reach it.
 	useEffect(() => {
-		discard();
-	}, [discard, taskId]);
+		recognition.reset();
+		wasListeningRef.current = false;
+		baseDraftRef.current = "";
+		setDraft("");
+		setSendError(null);
+	}, [recognition.reset, taskId]);
 
 	return {
 		supported: recognition.supported,

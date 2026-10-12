@@ -48,6 +48,10 @@ interface RecognitionSession {
 	recognition: SpeechRecognitionLike;
 	started: boolean;
 	stopRequested: boolean;
+	/** Length of the session's result list at its last result event. */
+	resultCount: number;
+	/** Results before this index were cleared (clear()): they are never shown or kept. */
+	clearedBefore: number;
 	timer: ReturnType<typeof setTimeout> | null;
 }
 
@@ -70,6 +74,11 @@ export interface SpeechRecognitionControls {
 	start: () => void;
 	/** Stops listening; the recognizer still delivers the final text of what was already heard. */
 	stop: () => void;
+	/**
+	 * Clears the transcript and the error only: a session keeps listening, and what it hears from now on fills the
+	 * empty transcript. Ending the session here would make the next start wait for the browser to end it.
+	 */
+	clear: () => void;
 	/** Ends the session without its results and clears the transcript. */
 	reset: () => void;
 }
@@ -129,7 +138,14 @@ export function useSpeechRecognition(): SpeechRecognitionControls {
 	const launch = useCallback(
 		(Recognition: SpeechRecognitionConstructor) => {
 			const recognition = new Recognition();
-			const session: RecognitionSession = { recognition, started: false, stopRequested: false, timer: null };
+			const session: RecognitionSession = {
+				recognition,
+				started: false,
+				stopRequested: false,
+				resultCount: 0,
+				clearedBefore: 0,
+				timer: null,
+			};
 			const isCurrent = () => sessionRef.current === session;
 			recognition.continuous = true;
 			recognition.interimResults = true;
@@ -143,9 +159,15 @@ export function useSpeechRecognition(): SpeechRecognitionControls {
 				setStatus("listening");
 			};
 			recognition.onresult = (event) => {
-				if (isCurrent()) {
-					setTranscript(readSpeechTranscript(event.results));
+				if (!isCurrent()) {
+					return;
 				}
+				session.resultCount = event.results.length;
+				// A list shorter than the cleared part is a new one: the browser didn't keep the session's results.
+				if (session.resultCount < session.clearedBefore) {
+					session.clearedBefore = 0;
+				}
+				setTranscript(readSpeechTranscript(event.results, session.clearedBefore));
 			};
 			recognition.onerror = (event) => {
 				if (!isCurrent()) {
@@ -213,6 +235,15 @@ export function useSpeechRecognition(): SpeechRecognitionControls {
 		session.timer = setTimeout(() => giveUp(session, null), RECOGNITION_STOP_TIMEOUT_MS);
 	}, [dropSession, giveUp]);
 
+	const clear = useCallback(() => {
+		const session = sessionRef.current;
+		if (session) {
+			session.clearedBefore = session.resultCount;
+		}
+		setTranscript(EMPTY_TRANSCRIPT);
+		setError(null);
+	}, []);
+
 	const reset = useCallback(() => {
 		dropSession();
 		setStatus("idle");
@@ -236,6 +267,7 @@ export function useSpeechRecognition(): SpeechRecognitionControls {
 		error,
 		start,
 		stop,
+		clear,
 		reset,
 	};
 }

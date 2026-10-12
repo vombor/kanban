@@ -22,11 +22,15 @@ dependency or secret for it. Shell terminals don't get the bar.
   has started it). An error ends listening with its message, including "No speech was heard" and "was interrupted"
   (those two stay quiet after your own stop). A session that doesn't start within 15 s, or doesn't end within 3 s of
   a stop, is aborted with a message, so the bar never says it listens while nothing does.
-- Discarding (X, Escape) or closing the bar aborts the recognition, but the browser ends a session (and lets go of
-  the mic) a moment later, and a phone's recognizer serves one session at a time. So the page keeps one live
-  session until its `end` (`web-ui/src/voice/live-recognition.ts`), and the next start waits for that (at most 2 s,
-  then it aborts the old one again and starts anyway). Before this, recording again after a discard and reopening
-  showed "Listening…" with no speech recognised until the page was reloaded (phone report, 2026-10-12).
+- Discarding (X, Escape) clears only the text: while listening, the mic keeps listening and what you say next fills
+  the empty preview (the recognizer's results from before the clear are skipped by index, the words being said at
+  that moment included). Closing the bar, or switching it to another session, aborts the recognition, but the
+  browser ends a session (and lets go of the mic) a moment later, and a phone's recognizer serves one session at a
+  time. So the page keeps one live session until its `end` (`web-ui/src/voice/live-recognition.ts`), and the next
+  start waits for that (at most 2 s, then it aborts the old one again and starts anyway). Before this, recording
+  again after a discard showed "Listening…" with no speech recognised until the page was reloaded (phone reports,
+  2026-10-12): a discard used to abort too, and a tap on the mic right after it started a session while the
+  aborted one was still ending.
 
 ## Speech out
 

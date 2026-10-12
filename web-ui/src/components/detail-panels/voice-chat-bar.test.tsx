@@ -230,7 +230,105 @@ describe("VoiceChatBar", () => {
 		vi.useRealTimers();
 	});
 
-	it("records again after clearing the text and closing the bar while listening (phone report, 2026-10-12)", async () => {
+	it("X while listening clears the text and keeps listening, without sending (phone report, 2026-10-12 night)", async () => {
+		vi.useFakeTimers();
+		vi.stubGlobal("webkitSpeechRecognition", FakeSpeechRecognition);
+		render();
+		tapMic("Talk to the agent");
+		const first = FakeSpeechRecognition.latest();
+		act(() => first.emitStart());
+		act(() => first.emitResults([{ transcript: "fix the bug", isFinal: true }]));
+		expect(preview()?.value).toBe("fix the bug");
+
+		act(() => button("Discard voice message").click());
+		// The session goes on: no abort the next start would have to wait for.
+		expect(first.aborted).toBe(false);
+		expect(preview()?.value).toBe("");
+		expect(container.textContent).toContain("Listening…");
+		expect(button("Stop listening").getAttribute("aria-pressed")).toBe("true");
+		// Even a browser that takes long to end an aborted session changes nothing here.
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(5_000);
+		});
+
+		act(() =>
+			first.emitResults([
+				{ transcript: "fix the bug", isFinal: true },
+				{ transcript: "add a test", isFinal: true },
+			]),
+		);
+		expect(preview()?.value).toBe("add a test");
+		tapMic("Stop listening");
+		act(() => first.emitEnd());
+		expect(preview()?.value).toBe("add a test");
+		expect(deliverTaskInputMock).not.toHaveBeenCalled();
+
+		// Recording again starts a fresh session at once, which hears and appends.
+		tapMic("Talk to the agent");
+		const second = FakeSpeechRecognition.latest();
+		expect(second).not.toBe(first);
+		expect(second.blocked).toBe(false);
+		act(() => second.emitStart());
+		act(() => second.emitResults([{ transcript: "please", isFinal: true }]));
+		expect(container.textContent).toContain("Listening…");
+		act(() => second.emitEnd());
+		await act(async () => {
+			button("Send voice message").click();
+		});
+		expect(deliverTaskInputMock).toHaveBeenCalledWith({
+			workspaceId: "ws-1",
+			taskId: "task-1",
+			text: "add a test please",
+		});
+		vi.useRealTimers();
+	});
+
+	it("X after listening stopped, then record again, hears the new speech", () => {
+		vi.stubGlobal("webkitSpeechRecognition", FakeSpeechRecognition);
+		render();
+		tapMic("Talk to the agent");
+		const first = FakeSpeechRecognition.latest();
+		act(() => first.emitStart());
+		act(() => first.emitResults([{ transcript: "never mind", isFinal: true }]));
+		tapMic("Stop listening");
+		act(() => first.emitEnd());
+		expect(preview()?.value).toBe("never mind");
+
+		act(() => button("Discard voice message").click());
+		expect(preview()).toBeNull();
+
+		tapMic("Talk to the agent");
+		const second = FakeSpeechRecognition.latest();
+		expect(second).not.toBe(first);
+		expect(second.blocked).toBe(false);
+		act(() => second.emitStart());
+		act(() => second.emitResults([{ transcript: "the real request", isFinal: true }]));
+		expect(container.textContent).toContain("Listening…");
+		expect(preview()?.value).toBe("the real request");
+	});
+
+	it("Escape while listening clears like X", () => {
+		vi.stubGlobal("webkitSpeechRecognition", FakeSpeechRecognition);
+		render();
+		tapMic("Talk to the agent");
+		const recognition = FakeSpeechRecognition.latest();
+		act(() => recognition.emitStart());
+		act(() => recognition.emitResults([{ transcript: "oops", isFinal: true }]));
+		act(() => {
+			preview()?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
+		});
+		expect(recognition.aborted).toBe(false);
+		expect(preview()?.value).toBe("");
+		act(() =>
+			recognition.emitResults([
+				{ transcript: "oops", isFinal: true },
+				{ transcript: "okay", isFinal: true },
+			]),
+		);
+		expect(preview()?.value).toBe("okay");
+	});
+
+	it("records again after X and closing the bar while listening (phone report, 2026-10-12)", async () => {
 		vi.stubGlobal("webkitSpeechRecognition", FakeSpeechRecognition);
 		render();
 		tapMic("Talk to the agent");
@@ -240,13 +338,13 @@ describe("VoiceChatBar", () => {
 		expect(preview()?.value).toBe("fix the bug");
 
 		act(() => button("Discard voice message").click());
-		expect(first.aborted).toBe(true);
-		expect(preview()).toBeNull();
-		expect(container.textContent).not.toContain("Listening…");
+		expect(preview()?.value).toBe("");
 
-		// Close the bar before the browser has ended the aborted session, then open it again.
+		// Close the bar while still listening: that aborts, and the browser ends the session later. Then open it again.
 		act(() => root.render(<TooltipProvider>{null}</TooltipProvider>));
+		expect(first.aborted).toBe(true);
 		render();
+		expect(preview()).toBeNull();
 		tapMic("Talk to the agent");
 		expect(container.textContent).toContain("Starting…");
 		expect(container.textContent).not.toContain("Listening…");
@@ -260,6 +358,25 @@ describe("VoiceChatBar", () => {
 		act(() => second.emitResults([{ transcript: "heard this time", isFinal: true }]));
 		expect(container.textContent).toContain("Listening…");
 		expect(preview()?.value).toBe("heard this time");
+	});
+
+	it("ends the session when the bar switches to another task", () => {
+		vi.stubGlobal("webkitSpeechRecognition", FakeSpeechRecognition);
+		render();
+		tapMic("Talk to the agent");
+		const recognition = FakeSpeechRecognition.latest();
+		act(() => recognition.emitStart());
+		act(() => recognition.emitResults([{ transcript: "for task one", isFinal: true }]));
+		act(() => {
+			root.render(
+				<TooltipProvider>
+					<VoiceChatBar taskId="task-2" workspaceId="ws-1" summary={null} />
+				</TooltipProvider>,
+			);
+		});
+		expect(recognition.aborted).toBe(true);
+		expect(preview()).toBeNull();
+		expect(container.textContent).not.toContain("Listening…");
 	});
 
 	it("shows why listening ended when the recognizer stops on its own", () => {

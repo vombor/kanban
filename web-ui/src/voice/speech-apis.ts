@@ -60,11 +60,14 @@ function joinWords(parts: string[]): string {
 		.join(" ");
 }
 
-/** Splits a result list into its final and interim text (best alternative of each result). */
-export function readSpeechTranscript(results: SpeechRecognitionResultList): SpeechTranscript {
+/**
+ * Splits a result list into its final and interim text (best alternative of each result), from `fromIndex` on: the
+ * results before it were cleared by the user while the session kept listening.
+ */
+export function readSpeechTranscript(results: SpeechRecognitionResultList, fromIndex = 0): SpeechTranscript {
 	const finalParts: string[] = [];
 	const interimParts: string[] = [];
-	for (let index = 0; index < results.length; index += 1) {
+	for (let index = fromIndex; index < results.length; index += 1) {
 		const result = results[index];
 		const transcript = result?.[0]?.transcript ?? "";
 		(result?.isFinal ? finalParts : interimParts).push(transcript);

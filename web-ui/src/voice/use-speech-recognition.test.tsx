@@ -154,7 +154,145 @@ describe("useSpeechRecognition", () => {
 		expect(controls().error).toBeNull();
 	});
 
-	it("clear while listening aborts the session, and the next start waits for its end", async () => {
+	it("clear while listening keeps the session, and what it hears next fills the empty transcript", () => {
+		mount();
+		const recognition = startListening();
+		act(() =>
+			recognition.emitResults([
+				{ transcript: "drop me", isFinal: true },
+				{ transcript: "and m", isFinal: false },
+			]),
+		);
+
+		act(() => controls().clear());
+		expect(recognition.aborted).toBe(false);
+		expect(recognition.stopped).toBe(false);
+		expect(controls().listening).toBe(true);
+		expect(controls().transcript).toEqual({ finalText: "", interimText: "" });
+
+		// What was being said at the clear is cleared too, even once it becomes final.
+		act(() =>
+			recognition.emitResults([
+				{ transcript: "drop me", isFinal: true },
+				{ transcript: "and me", isFinal: true },
+				{ transcript: "new wor", isFinal: false },
+			]),
+		);
+		expect(controls().transcript).toEqual({ finalText: "", interimText: "new wor" });
+		act(() =>
+			recognition.emitResults([
+				{ transcript: "drop me", isFinal: true },
+				{ transcript: "and me", isFinal: true },
+				{ transcript: "new words", isFinal: true },
+			]),
+		);
+		act(() => controls().stop());
+		act(() => recognition.emitEnd());
+		expect(controls().listening).toBe(false);
+		expect(controls().transcript).toEqual({ finalText: "new words", interimText: "" });
+
+		// The session ended by itself: the next start is at once, inside the tap.
+		act(() => controls().start());
+		const next = FakeSpeechRecognition.latest();
+		expect(next).not.toBe(recognition);
+		expect(next.blocked).toBe(false);
+		act(() => next.emitStart());
+		act(() => next.emitResults([{ transcript: "third", isFinal: true }]));
+		expect(controls().transcript.finalText).toBe("third");
+	});
+
+	it("clear twice in one session skips everything heard before the last clear", () => {
+		mount();
+		const recognition = startListening();
+		act(() => recognition.emitResults([{ transcript: "one", isFinal: true }]));
+		act(() => controls().clear());
+		act(() =>
+			recognition.emitResults([
+				{ transcript: "one", isFinal: true },
+				{ transcript: "two", isFinal: true },
+			]),
+		);
+		expect(controls().transcript.finalText).toBe("two");
+		act(() => controls().clear());
+		act(() =>
+			recognition.emitResults([
+				{ transcript: "one", isFinal: true },
+				{ transcript: "two", isFinal: true },
+				{ transcript: "three", isFinal: true },
+			]),
+		);
+		expect(controls().transcript.finalText).toBe("three");
+	});
+
+	it("reads a result list shorter than the cleared part as a new one", () => {
+		mount();
+		const recognition = startListening();
+		act(() =>
+			recognition.emitResults([
+				{ transcript: "a", isFinal: true },
+				{ transcript: "b", isFinal: true },
+			]),
+		);
+		act(() => controls().clear());
+		act(() => recognition.emitResults([{ transcript: "fresh", isFinal: true }]));
+		expect(controls().transcript.finalText).toBe("fresh");
+	});
+
+	it("clear after the session ended leaves nothing to wait for", () => {
+		mount();
+		const first = startListening();
+		act(() => first.emitResults([{ transcript: "said", isFinal: true }]));
+		act(() => controls().stop());
+		act(() => first.emitEnd());
+		act(() => controls().clear());
+		expect(controls().transcript).toEqual({ finalText: "", interimText: "" });
+
+		act(() => controls().start());
+		const second = FakeSpeechRecognition.latest();
+		expect(second).not.toBe(first);
+		expect(second.blocked).toBe(false);
+		act(() => second.emitStart());
+		act(() => second.emitResults([{ transcript: "again", isFinal: true }]));
+		expect(controls().listening).toBe(true);
+		expect(controls().transcript.finalText).toBe("again");
+	});
+
+	it("clear while a stopped session is ending keeps only what it finalises after the clear", () => {
+		mount();
+		const recognition = startListening();
+		act(() => recognition.emitResults([{ transcript: "gone", isFinal: false }]));
+		act(() => controls().stop());
+		act(() => controls().clear());
+		expect(recognition.aborted).toBe(false);
+		act(() => recognition.emitResults([{ transcript: "gone now", isFinal: true }]));
+		act(() => recognition.emitEnd());
+		expect(controls().listening).toBe(false);
+		expect(controls().transcript).toEqual({ finalText: "", interimText: "" });
+		expect(controls().error).toBeNull();
+	});
+
+	it("clear while starting lets the session start and listen", () => {
+		mount();
+		act(() => controls().start());
+		const recognition = FakeSpeechRecognition.latest();
+		act(() => controls().clear());
+		expect(controls().starting).toBe(true);
+		act(() => recognition.emitStart());
+		act(() => recognition.emitResults([{ transcript: "heard", isFinal: true }]));
+		expect(controls().listening).toBe(true);
+		expect(controls().transcript.finalText).toBe("heard");
+	});
+
+	it("clear also clears the error", () => {
+		mount();
+		const recognition = startListening();
+		act(() => recognition.emitError("no-speech"));
+		expect(controls().error).not.toBeNull();
+		act(() => controls().clear());
+		expect(controls().error).toBeNull();
+	});
+
+	it("reset while listening aborts the session, and the next start waits for its end", async () => {
 		mount();
 		const first = startListening();
 		act(() => first.emitResults([{ transcript: "drop me", isFinal: false }]));
@@ -180,6 +318,26 @@ describe("useSpeechRecognition", () => {
 		act(() => second.emitResults([{ transcript: "heard again", isFinal: true }]));
 		expect(controls().listening).toBe(true);
 		expect(controls().transcript.finalText).toBe("heard again");
+	});
+
+	it("clear while listening, then close and reopen: the new start waits for the closed session's end", async () => {
+		mount();
+		const first = startListening();
+		act(() => first.emitResults([{ transcript: "hello", isFinal: true }]));
+		act(() => controls().clear());
+		unmount();
+		expect(first.aborted).toBe(true);
+
+		mount();
+		act(() => controls().start());
+		expect(FakeSpeechRecognition.instances).toHaveLength(1);
+		act(() => first.emitEnd());
+		await flush();
+		const second = FakeSpeechRecognition.latest();
+		expect(second.blocked).toBe(false);
+		act(() => second.emitStart());
+		act(() => second.emitResults([{ transcript: "after reopen", isFinal: true }]));
+		expect(controls().transcript.finalText).toBe("after reopen");
 	});
 
 	it("close while listening, then reopen and record again", async () => {
