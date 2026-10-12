@@ -1,6 +1,7 @@
 import { Draggable } from "@hello-pangea/dnd";
 import { getRuntimeAgentCatalogEntry } from "@runtime-agent-catalog";
 import { isKanbanLandedCard } from "@runtime-card-role";
+import { resolveEffectiveAgent } from "@runtime-effective-agent";
 import type { TaskPrerequisiteStatus } from "@runtime-task-state";
 import { buildTaskWorktreeDisplayPath } from "@runtime-task-worktree-path";
 import { formatToolCallLabel } from "@runtime-tool-call-display";
@@ -18,6 +19,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import { useKanbanPaths } from "@/stores/kanban-paths-store";
 import { useLandingMode } from "@/stores/landing-mode-store";
+import { useSelectedAgentId } from "@/stores/selected-agent-store";
 import { useTaskWorkspaceSnapshotValue } from "@/stores/workspace-metadata-store";
 import type { BoardCard as BoardCardModel, BoardColumnId } from "@/types";
 import { getTaskAutoReviewCancelButtonLabel, getTaskRoleBadgeLabel } from "@/types";
@@ -466,10 +468,15 @@ export const BoardCard = memo(function BoardCard({
 	const isAnyGitActionLoading = isCommitLoading || isOpenPrLoading;
 	const cancelAutomaticActionLabel =
 		!isTrashCard && card.autoReviewEnabled ? getTaskAutoReviewCancelButtonLabel(card.autoReviewMode) : null;
-	const agentOverrideLabel = useMemo(
-		() => (card.agentId ? (getRuntimeAgentCatalogEntry(card.agentId)?.label ?? card.agentId) : null),
-		[card.agentId],
-	);
+	// Every card names the agent CLI that runs it: the effective agent (session > card > the selected agent), so a card
+	// with no agentId, as on a default-kit board, shows the selected agent. Before the config loads, only a named one.
+	const selectedAgentId = useSelectedAgentId();
+	const effectiveAgentId = selectedAgentId
+		? resolveEffectiveAgent(card, sessionSummary, { selectedAgentId })
+		: (sessionSummary?.agentId ?? card.agentId ?? null);
+	const agentLabel = effectiveAgentId
+		? (getRuntimeAgentCatalogEntry(effectiveAgentId)?.label ?? effectiveAgentId)
+		: null;
 	const modelOverrideLabel = useMemo(() => {
 		if (card.agentSettings === undefined) {
 			return null;
@@ -486,10 +493,7 @@ export const BoardCard = memo(function BoardCard({
 		}
 		return effortLabel ? `${modelId} (${effortLabel})` : modelId;
 	}, [card.agentSettings]);
-	const taskAgentSettingsLabel = useMemo(() => {
-		const parts = [agentOverrideLabel, modelOverrideLabel].filter((value): value is string => Boolean(value));
-		return parts.length > 0 ? parts.join(" · ") : null;
-	}, [agentOverrideLabel, modelOverrideLabel]);
+	const agentPillTitle = [agentLabel, modelOverrideLabel].filter(Boolean).join(" · ");
 
 	const activeDescriptionDisplay = isDescriptionExpanded ? descriptionDisplay.expanded : descriptionDisplay.collapsed;
 
@@ -760,9 +764,12 @@ export const BoardCard = memo(function BoardCard({
 									) : null}
 								</div>
 							) : null}
-							<div className="mt-1 flex items-center gap-2" data-testid="board-card-meta-row">
-								{taskAgentSettingsLabel ? (
+							<div className="mt-1 flex min-w-0 items-center gap-2" data-testid="board-card-meta-row">
+								<BoardCardTaskId taskId={card.id} />
+								{agentPillTitle ? (
 									<span
+										data-testid="board-card-agent"
+										title={agentPillTitle}
 										className={cn(
 											"inline-flex min-w-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-xs",
 											isTrashCard
@@ -771,15 +778,26 @@ export const BoardCard = memo(function BoardCard({
 										)}
 									>
 										<Bot size={12} className="shrink-0" />
-										<span className="truncate">{taskAgentSettingsLabel}</span>
+										{agentLabel ? <span className="min-w-0 shrink-[0.01] truncate">{agentLabel}</span> : null}
+										{/* A space between flex items isn't drawn (gap-1 spaces them), but screen readers and copies read "Cline · model". */}
+										{agentLabel && modelOverrideLabel ? " " : null}
+										{modelOverrideLabel ? (
+											<span className="min-w-0 truncate">
+												{agentLabel ? "· " : null}
+												{modelOverrideLabel}
+											</span>
+										) : null}
 									</span>
 								) : null}
-								{prerequisiteLabel ? (
+							</div>
+							{/* The centered second row: a Backlog card's prerequisites. In Progress and Review cards have none yet. */}
+							{columnId === "backlog" && prerequisiteLabel ? (
+								<div className="mt-1 flex justify-center" data-testid="board-card-second-row">
 									<Tooltip side="bottom" content={prerequisiteLabel.detail}>
 										<span
 											data-testid="board-card-prerequisites"
 											className={cn(
-												"inline-flex min-w-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-xs",
+												"inline-flex min-w-0 max-w-full items-center gap-1 rounded-md border px-1.5 py-0.5 text-xs",
 												prerequisiteLabel.tone === "done" && "border-status-green/30 text-status-green",
 												prerequisiteLabel.tone === "waiting" && "border-border text-text-secondary",
 												prerequisiteLabel.tone === "blocked" &&
@@ -790,9 +808,8 @@ export const BoardCard = memo(function BoardCard({
 											<span className="truncate">{prerequisiteLabel.text}</span>
 										</span>
 									</Tooltip>
-								) : null}
-								<BoardCardTaskId taskId={card.id} />
-							</div>
+								</div>
+							) : null}
 							{columnId === "review" || columnId === "in_progress" ? (
 								<BoardCardPipelineStage taskId={card.id} />
 							) : null}

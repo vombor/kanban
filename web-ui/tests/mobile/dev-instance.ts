@@ -22,6 +22,8 @@ export interface DevInstance {
 	// Stops the runtime as a restart does (SIGTERM, so its shutdown runs) and
 	// starts it again on the same port and Kanban home. Vite keeps running.
 	restartRuntime: () => Promise<void>;
+	// Runs the kanban CLI against this instance (its home, HOME and runtime port) in the project dir.
+	runCli: (args: string[]) => { status: number | null; stdout: string; stderr: string };
 	stop: () => Promise<void>;
 }
 
@@ -195,5 +197,17 @@ export async function startDevInstance(options: DevInstanceOptions = {}): Promis
 		runtime = startRuntime();
 		await waitForOutput(runtime, /Kanban running at/, "Kanban runtime");
 	};
-	return { baseUrl: `http://127.0.0.1:${webPort}`, rootDir, projectDir, restartRuntime, stop };
+	const runCli = (args: string[]) => {
+		const result = spawnSync(join(repoDir, "node_modules/.bin/tsx"), [join(repoDir, "src/cli.ts"), ...args], {
+			cwd: projectDir,
+			env: createIsolatedEnv(rootDir, {
+				KANBAN_HOME: kanbanHome,
+				KANBAN_RUNTIME_PORT: String(runtimePort),
+				PATH: `${binDir}:${process.env.PATH ?? ""}`,
+			}),
+			encoding: "utf8",
+		});
+		return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+	};
+	return { baseUrl: `http://127.0.0.1:${webPort}`, rootDir, projectDir, restartRuntime, runCli, stop };
 }

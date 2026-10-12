@@ -23,6 +23,7 @@ import { join } from "node:path";
 import { RUNTIME_AGENT_CATALOG } from "../core/agent-catalog";
 import type { RuntimeAgentId } from "../core/api-contract";
 import { getClineDataDirPath } from "../state/kanban-home";
+import { getClaudeProjectTranscriptDir } from "./agent-token-usage";
 import { isClaudeWorkspaceTrusted } from "./claude-workspace-trust";
 import {
 	type ClineSessionSize,
@@ -85,7 +86,7 @@ async function findLiveClaudeTranscript(
 	projectPath: string,
 	options: { liveMs: number; now: number; homeDir: string },
 ): Promise<LiveInteractiveSession | null> {
-	const dir = join(options.homeDir, ".claude", "projects", projectPath.replace(/[^A-Za-z0-9]/gu, "-"));
+	const dir = getClaudeProjectTranscriptDir(join(options.homeDir, ".claude", "projects"), projectPath);
 	let names: string[];
 	try {
 		names = (await readdir(dir)).filter((name) => name.endsWith(".jsonl"));

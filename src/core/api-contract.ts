@@ -439,6 +439,23 @@ export const runtimeOrchestratorWaitResponseSchema = z.object({
 });
 export type RuntimeOrchestratorWaitResponse = z.infer<typeof runtimeOrchestratorWaitResponseSchema>;
 
+/** A card's token counts over every agent session run in its worktree (src/terminal/agent-token-usage.ts). */
+export const runtimeTaskTokenUsageSchema = z.object({
+	taskId: z.string(),
+	/** Input tokens not read from or written to the prompt cache. */
+	input: z.number(),
+	output: z.number(),
+	cacheRead: z.number(),
+	cacheWrite: z.number(),
+});
+export type RuntimeTaskTokenUsage = z.infer<typeof runtimeTaskTokenUsageSchema>;
+
+export const runtimeTaskTokenUsageResponseSchema = z.object({
+	/** Cards with at least one counted token; cards in Backlog are never measured. */
+	usage: z.array(runtimeTaskTokenUsageSchema),
+});
+export type RuntimeTaskTokenUsageResponse = z.infer<typeof runtimeTaskTokenUsageResponseSchema>;
+
 export const runtimeProjectSummarySchema = z.object({
 	id: z.string(),
 	path: z.string(),

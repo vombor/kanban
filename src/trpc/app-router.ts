@@ -56,6 +56,7 @@ import type {
 	RuntimeTaskSessionStartResponse,
 	RuntimeTaskSessionStopRequest,
 	RuntimeTaskSessionStopResponse,
+	RuntimeTaskTokenUsageResponse,
 	RuntimeTaskTrashRequest,
 	RuntimeTaskTrashResponse,
 	RuntimeTaskWorkspaceInfoRequest,
@@ -124,6 +125,7 @@ import {
 	runtimeTaskSessionStartResponseSchema,
 	runtimeTaskSessionStopRequestSchema,
 	runtimeTaskSessionStopResponseSchema,
+	runtimeTaskTokenUsageResponseSchema,
 	runtimeTaskTrashRequestSchema,
 	runtimeTaskTrashResponseSchema,
 	runtimeTaskWorkspaceInfoRequestSchema,
@@ -366,6 +368,7 @@ export interface RuntimeTrpcContext {
 		) => Promise<RuntimeWorkspaceFileSearchResponse>;
 		loadState: (scope: RuntimeTrpcWorkspaceScope) => Promise<RuntimeWorkspaceStateResponse>;
 		loadOrchestratorWait: (scope: RuntimeTrpcWorkspaceScope) => Promise<RuntimeOrchestratorWaitResponse>;
+		loadTaskTokenUsage: (scope: RuntimeTrpcWorkspaceScope) => Promise<RuntimeTaskTokenUsageResponse>;
 		notifyStateUpdated: (scope: RuntimeTrpcWorkspaceScope) => Promise<RuntimeWorkspaceStateNotifyResponse>;
 		saveState: (
 			scope: RuntimeTrpcWorkspaceScope,
@@ -677,6 +680,10 @@ export const runtimeAppRouter = t.router({
 		// What the project's orchestrator asks the user (the project summaries say only that it waits).
 		getOrchestratorWait: workspaceProcedure.output(runtimeOrchestratorWaitResponseSchema).query(async ({ ctx }) => {
 			return await ctx.workspaceApi.loadOrchestratorWait(ctx.workspaceScope);
+		}),
+		// The board cards' token counts, read from the agents' own session files.
+		getTaskTokenUsage: workspaceProcedure.output(runtimeTaskTokenUsageResponseSchema).query(async ({ ctx }) => {
+			return await ctx.workspaceApi.loadTaskTokenUsage(ctx.workspaceScope);
 		}),
 		notifyStateUpdated: workspaceProcedure
 			.output(runtimeWorkspaceStateNotifyResponseSchema)

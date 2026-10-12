@@ -10,6 +10,8 @@ import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import { setKanbanPaths } from "@/stores/kanban-paths-store";
 import { setLandingMode } from "@/stores/landing-mode-store";
 import { setPipelineCardStages } from "@/stores/pipeline-card-stage-store";
+import { setSelectedAgentId } from "@/stores/selected-agent-store";
+import { setTaskTokenUsage } from "@/stores/task-token-usage-store";
 import type { ReviewTaskWorkspaceSnapshot } from "@/types";
 
 let mockWorkspaceSnapshot: ReviewTaskWorkspaceSnapshot | undefined;
@@ -190,6 +192,8 @@ describe("BoardCard", () => {
 		setKanbanPaths(null);
 		setLandingMode(null);
 		setPipelineCardStages([]);
+		setSelectedAgentId(null);
+		setTaskTokenUsage([]);
 		vi.restoreAllMocks();
 		container.remove();
 		if (previousActEnvironment === undefined) {
@@ -884,32 +888,163 @@ describe("BoardCard", () => {
 		expect(container.textContent).not.toContain("Agent:");
 	});
 
-	it("shows the task id at the end of the agent/model row", async () => {
+	const renderCard = async (node: ReactNode) => {
 		await act(async () => {
-			renderWithTooltips(
-				<BoardCard
-					card={createCard({ id: "7ad4d", agentId: "cline", agentSettings: { modelId: "gpt-x" } })}
-					index={0}
-					columnId="backlog"
-				/>,
-			);
+			renderWithTooltips(node);
 		});
+	};
+	const agentPill = (taskId: string) =>
+		container.querySelector(`[data-task-id="${taskId}"] [data-testid="board-card-agent"]`);
 
-		const taskId = container.querySelector('[data-testid="board-card-task-id"]');
-		expect(taskId?.textContent).toBe("7ad4d");
-		const row = taskId?.closest('[data-testid="board-card-meta-row"]');
-		expect(row?.textContent).toContain("Cline · gpt-x");
-		expect(row?.lastElementChild).toBe(taskId);
-	});
-
-	it("shows the task id on cards without an agent/model row", async () => {
-		await act(async () => {
-			renderWithTooltips(<BoardCard card={createCard({ id: "b31c9" })} index={0} columnId="backlog" />);
-		});
+	it("starts the agent row with the task id, then the agent pill, and shows no token count there", async () => {
+		setSelectedAgentId("claude");
+		setTaskTokenUsage([{ taskId: "7ad4d", input: 1_000, output: 20_000, cacheRead: 1_150_000, cacheWrite: 30_000 }]);
+		await renderCard(
+			<BoardCard
+				card={createCard({ id: "7ad4d", agentId: "cline", agentSettings: { modelId: "gpt-x" } })}
+				index={0}
+				columnId="review"
+			/>,
+		);
 
 		const row = container.querySelector('[data-testid="board-card-meta-row"]');
-		expect(row?.children).toHaveLength(1);
-		expect(row?.querySelector('[data-testid="board-card-task-id"]')?.textContent).toBe("b31c9");
+		const taskId = row?.querySelector('[data-testid="board-card-task-id"]');
+		const pill = row?.querySelector('[data-testid="board-card-agent"]');
+		expect(taskId?.textContent).toBe("7ad4d");
+		expect(pill?.textContent).toBe("Cline · gpt-x");
+		expect(pill?.getAttribute("title")).toBe("Cline · gpt-x");
+		// The card has a count, but the second row takes it (In Progress and Review): never the agent line.
+		expect(container.querySelector('[data-testid="board-card-token-usage"]')).toBeNull();
+		expect(Array.from(row?.children ?? [])).toEqual([taskId, pill]);
+		// The id and pill share one line that never wraps: only the model text truncates.
+		expect(taskId?.className).toContain("whitespace-nowrap");
+		expect(taskId?.className).toContain("shrink-0");
+		// The model gives way first: the agent name barely shrinks (shrink-[0.01]) and truncates only after it.
+		const [agentName, model] = Array.from(pill?.querySelectorAll(".truncate") ?? []);
+		expect(agentName?.textContent).toBe("Cline");
+		expect(agentName?.className).toContain("shrink-[0.01]");
+		expect(model?.textContent).toBe("· gpt-x");
+		expect(row?.className).not.toContain("flex-wrap");
+	});
+
+	it("puts the task id in a bordered pill shaped like the agent pill, on the left of the line", async () => {
+		setSelectedAgentId("claude");
+		await renderCard(<BoardCard card={createCard({ id: "7ad4d" })} index={0} columnId="backlog" />);
+
+		const row = container.querySelector('[data-testid="board-card-meta-row"]');
+		const taskId = row?.querySelector('[data-testid="board-card-task-id"]');
+		expect(taskId?.parentElement?.firstElementChild).toBe(taskId);
+		for (const name of ["rounded-md", "border", "border-border", "px-1.5", "py-0.5", "text-xs"]) {
+			expect(taskId?.className.split(" ")).toContain(name);
+			expect(agentPill("7ad4d")?.className.split(" ")).toContain(name === "border-border" ? "border" : name);
+		}
+	});
+
+	const prerequisites = { total: 2, done: 1, waitingOnTaskIds: ["aaaa1"], missingTaskIds: [] };
+
+	it("shows a Backlog card's prerequisites in the centered second row, not on the id line", async () => {
+		setSelectedAgentId("claude");
+		await renderCard(
+			<BoardCard
+				card={createCard({ id: "b31c9" })}
+				prerequisiteStatus={prerequisites}
+				index={0}
+				columnId="backlog"
+			/>,
+		);
+
+		const secondRow = container.querySelector('[data-testid="board-card-second-row"]');
+		expect(secondRow?.className).toContain("justify-center");
+		expect(secondRow?.querySelector('[data-testid="board-card-prerequisites"]')?.textContent).toBe(
+			"Waiting on 1 of 2",
+		);
+		const metaRow = container.querySelector('[data-testid="board-card-meta-row"]');
+		expect(metaRow?.querySelector('[data-testid="board-card-prerequisites"]')).toBeNull();
+		expect(metaRow?.compareDocumentPosition(secondRow as Node)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+	});
+
+	it("shows no second row on Backlog cards without prerequisites or on cards past Backlog", async () => {
+		setSelectedAgentId("claude");
+		setTaskTokenUsage([{ taskId: "c41d0", input: 5, output: 5, cacheRead: 0, cacheWrite: 0 }]);
+		await renderCard(
+			<>
+				<BoardCard card={createCard({ id: "b31c9" })} index={0} columnId="backlog" />
+				<BoardCard
+					card={createCard({ id: "c41d0" })}
+					prerequisiteStatus={prerequisites}
+					index={1}
+					columnId="in_progress"
+				/>
+				<BoardCard
+					card={createCard({ id: "d51e1" })}
+					prerequisiteStatus={prerequisites}
+					index={2}
+					columnId="review"
+				/>
+			</>,
+		);
+
+		expect(container.querySelector('[data-testid="board-card-second-row"]')).toBeNull();
+		expect(container.querySelector('[data-testid="board-card-prerequisites"]')).toBeNull();
+	});
+
+	it("shows the selected agent on a card with no agent of its own (default kit)", async () => {
+		setSelectedAgentId("claude");
+		await renderCard(<BoardCard card={createCard({ id: "b31c9" })} index={0} columnId="backlog" />);
+
+		expect(agentPill("b31c9")?.textContent).toBe("Claude Code");
+	});
+
+	it("shows the agent on every card of a board where all cards use the same agent", async () => {
+		setSelectedAgentId("codex");
+		await renderCard(
+			<>
+				<BoardCard card={createCard({ id: "aaaa1" })} index={0} columnId="backlog" />
+				<BoardCard card={createCard({ id: "aaaa2" })} index={1} columnId="in_progress" />
+				<BoardCard card={createCard({ id: "aaaa3", agentId: "codex" })} index={2} columnId="review" />
+			</>,
+		);
+
+		expect(["aaaa1", "aaaa2", "aaaa3"].map((id) => agentPill(id)?.textContent)).toEqual([
+			"OpenAI Codex",
+			"OpenAI Codex",
+			"OpenAI Codex",
+		]);
+	});
+
+	it("shows the card's own agent and model over the selected agent, and the session's agent over both", async () => {
+		setSelectedAgentId("claude");
+		await renderCard(
+			<>
+				<BoardCard
+					card={createCard({ id: "own01", agentId: "copilot", agentSettings: { modelId: "mai-code-1.1-flash" } })}
+					index={0}
+					columnId="backlog"
+				/>
+				<BoardCard
+					card={createCard({ id: "ses01", agentId: "copilot" })}
+					sessionSummary={createSummary("running", { taskId: "ses01", agentId: "cline" })}
+					index={1}
+					columnId="in_progress"
+				/>
+			</>,
+		);
+
+		expect(agentPill("own01")?.textContent).toBe("GitHub Copilot · mai-code-1.1-flash");
+		expect(agentPill("ses01")?.textContent).toBe("Cline");
+	});
+
+	it("shows only a named agent before the config has loaded", async () => {
+		await renderCard(
+			<>
+				<BoardCard card={createCard({ id: "b31c9" })} index={0} columnId="backlog" />
+				<BoardCard card={createCard({ id: "c41d0", agentId: "cline" })} index={1} columnId="backlog" />
+			</>,
+		);
+
+		const row = container.querySelector('[data-task-id="b31c9"] [data-testid="board-card-meta-row"]');
+		expect(row?.textContent).toBe("b31c9");
+		expect(agentPill("c41d0")?.textContent).toBe("Cline");
 	});
 
 	it("copies the task id without opening or dragging the card", async () => {

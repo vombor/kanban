@@ -58,6 +58,7 @@ import { useTaskBranchOptions } from "@/hooks/use-task-branch-options";
 import { useTaskEditor } from "@/hooks/use-task-editor";
 import { useTaskSessions } from "@/hooks/use-task-sessions";
 import { useTaskStartActions } from "@/hooks/use-task-start-actions";
+import { useTaskTokenUsagePolling } from "@/hooks/use-task-token-usage-polling";
 import { useTerminalPanels } from "@/hooks/use-terminal-panels";
 import { useWorkspaceSync } from "@/hooks/use-workspace-sync";
 import { LayoutCustomizationsProvider } from "@/resize/layout-customizations";
@@ -74,6 +75,7 @@ import { setCurrentWorkspaceId } from "@/stores/current-workspace-store";
 import { setKanbanPaths } from "@/stores/kanban-paths-store";
 import { setLandingMode } from "@/stores/landing-mode-store";
 import { useOrchestratorWaitNotificationsEnabled } from "@/stores/orchestrator-wait-notifications-store";
+import { setSelectedAgentId } from "@/stores/selected-agent-store";
 import {
 	getTaskWorkspaceInfo,
 	getTaskWorkspaceSnapshot,
@@ -141,7 +143,9 @@ export default function App(): ReactElement {
 			setKanbanPaths(runtimeProjectConfig.kanbanPaths);
 		}
 		setLandingMode(runtimeProjectConfig?.landingMode ?? null);
+		setSelectedAgentId(runtimeProjectConfig?.selectedAgentId ?? null);
 	}, [runtimeProjectConfig]);
+	useTaskTokenUsagePolling(currentProjectId, isDocumentVisible);
 	useEffect(() => {
 		setCurrentWorkspaceId(currentProjectId);
 	}, [currentProjectId]);

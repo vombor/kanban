@@ -24,7 +24,7 @@ export function BoardCardTaskId({ taskId }: { taskId: string }): React.ReactElem
 				type="button"
 				data-testid="board-card-task-id"
 				aria-label={`Copy task id ${taskId}`}
-				className="ml-auto shrink-0 cursor-pointer whitespace-nowrap rounded-sm border-0 bg-transparent px-1 py-0.5 font-mono text-[11px] leading-none text-text-tertiary hover:bg-surface-4 hover:text-text-secondary"
+				className="inline-flex shrink-0 cursor-pointer items-center whitespace-nowrap rounded-md border border-border bg-surface-1 px-1.5 py-0.5 font-mono text-xs text-text-secondary hover:bg-surface-3 hover:text-text-primary"
 				onMouseDown={stopEvent}
 				onClick={(event) => {
 					stopEvent(event);

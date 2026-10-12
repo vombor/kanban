@@ -27,6 +27,7 @@ import { recordBrowserDevAssignments } from "../kits/browser-dev-assignment-log"
 import { resolveDevAssignment } from "../kits/dev-assignment";
 import { findOrchestratorWait } from "../server/orchestrator-wait";
 import type { PreparedWorktreeReap } from "../server/process-reaper";
+import { createTaskTokenUsageLoader, type LoadTaskTokenUsage } from "../server/task-token-usage";
 import { appendTaskHistory, readTaskHistory, startTaskHistoryCallerLookup } from "../state/task-history-log";
 import { saveWorkspaceStateReportingAddedCards, WorkspaceStateConflictError } from "../state/workspace-state";
 import type { TerminalSessionManager } from "../terminal/session-manager";
@@ -63,6 +64,8 @@ export interface CreateWorkspaceApiDependencies {
 	/** Reads the task history; default the home's log. */
 	readTaskHistory?: typeof readTaskHistory;
 	now?: () => number;
+	/** The board cards' token counts; default src/server/task-token-usage.ts. */
+	loadTaskTokenUsage?: LoadTaskTokenUsage;
 	/** Process reaping before the worktree is deleted (src/server/process-reaper.ts). */
 	prepareTaskProcessReap?: (
 		scope: { workspaceId: string; workspacePath: string },
@@ -194,6 +197,7 @@ function isMissingTaskWorktreeError(error: unknown): boolean {
 
 export function createWorkspaceApi(deps: CreateWorkspaceApiDependencies): RuntimeTrpcContext["workspaceApi"] {
 	const recordTaskHistory = deps.recordTaskHistory ?? (async (entry) => await appendTaskHistory(entry));
+	const loadTaskTokenUsage = deps.loadTaskTokenUsage ?? createTaskTokenUsageLoader();
 	return {
 		loadGitSummary: async (workspaceScope, input) => {
 			try {
@@ -439,6 +443,13 @@ export function createWorkspaceApi(deps: CreateWorkspaceApiDependencies): Runtim
 				workspaceScope.workspacePath,
 			);
 			return { wait: findOrchestratorWait(terminalManager, workspaceScope.workspaceId) };
+		},
+		loadTaskTokenUsage: async (workspaceScope) => {
+			const terminalManager = await deps.ensureTerminalManagerForWorkspace(
+				workspaceScope.workspaceId,
+				workspaceScope.workspacePath,
+			);
+			return await loadTaskTokenUsage(workspaceScope, terminalManager.listSummaries());
 		},
 		notifyStateUpdated: async (workspaceScope) => {
 			void deps.broadcastRuntimeWorkspaceStateUpdated(workspaceScope.workspaceId, workspaceScope.workspacePath);

@@ -29,7 +29,8 @@
       "@runtime-card-role": ["../src/core/card-role.ts"],
       "@runtime-task-worktree-path": ["../src/workspace/task-worktree-path.ts"],
       "@runtime-task-state": ["../src/core/task-board-mutations.ts"],
-      "@runtime-task-agent-settings": ["../src/core/task-agent-settings.ts"]
+      "@runtime-task-agent-settings": ["../src/core/task-agent-settings.ts"],
+      "@runtime-effective-agent": ["../src/core/effective-agent.ts"]
     },
     "types": ["vitest/globals"]
   },
