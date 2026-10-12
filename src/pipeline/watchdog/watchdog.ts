@@ -1054,7 +1054,7 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 			case "headless":
 				return "headless";
 			case "sidebar":
-				return continuedSessions.has(target.sessionId) ? "continued_live" : "fresh_live";
+				return continuedSessions.has(target.sessionId) ? "continued_live" : "unknown_live";
 			case "start-sidebar":
 				return target.continueConversation ? "start_continued" : "start_fresh";
 		}

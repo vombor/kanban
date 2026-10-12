@@ -396,7 +396,7 @@ describe("restart wake", () => {
 			{ handleRequest: async (request) => (request.kind === "deliverInput" ? await handle(request) : undefined) },
 		);
 		manager.writeInput(taskId, Buffer.from("half a message"), { fromViewer: true });
-		// The browser started this sidebar after the restart: a fresh conversation.
+		// The browser started this sidebar after the restart: Kanban can't tell whether it continued (issue #38).
 		observeRestarted(harness, "foo", [
 			{
 				taskId,
@@ -427,7 +427,9 @@ describe("restart wake", () => {
 		expect(await hold.flush()).toBe(1);
 		expect(delivered).toHaveLength(1);
 		expect(delivered[0]).toContain("Kanban restarted at 2026-10-07 11:59:30Z");
-		expect(delivered[0]).toContain("this orchestrator session is fresh");
+		expect(delivered[0]).not.toContain("is fresh");
+		expect(delivered[0]).not.toContain("no memory");
+		expect(delivered[0]).not.toContain("continues your conversation");
 	});
 });
 

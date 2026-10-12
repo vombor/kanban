@@ -140,8 +140,12 @@ export function summarizeRestartRecords(records: readonly PipelineDecisionRecord
 export type RestartWakeSession =
 	/** A headless run (a running one's queue, or a new run): never the sidebar's conversation. */
 	| "headless"
-	/** A live sidebar session this server started without the earlier conversation (the browser's start, for one). */
-	| "fresh_live"
+	/**
+	 * A live sidebar session the watchdog didn't start for the wake (the browser's or the user's start, for one).
+	 * Kanban can't tell whether it continued the earlier conversation (issue #38: a browser-started Claude sidebar
+	 * did), so the wake says nothing about its memory.
+	 */
+	| "unknown_live"
 	/** A live sidebar session that continues the conversation from before the restart. */
 	| "continued_live"
 	/** The sidebar is started for the wake and continues its earlier conversation (agentContinuesConversationOnResume). */
@@ -217,12 +221,12 @@ function formatSession(session: RestartWakeSession | null): string | null {
 	switch (session) {
 		case "headless":
 			return "this is a headless run, without the sidebar's conversation";
-		case "fresh_live":
 		case "start_fresh":
 			return "this orchestrator session is fresh: it has no memory of the conversation before the restart";
 		case "continued_live":
 		case "start_continued":
 			return "this session continues your conversation from before the restart";
+		case "unknown_live":
 		case null:
 			return null;
 	}
