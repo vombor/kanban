@@ -11,7 +11,6 @@ import type {
 import { handBackTask } from "../../../src/pipeline/handback";
 import { REWORK_STARTED_CHECK_MS, readEscalationRecord, readQaflow, readReworks } from "../../../src/pipeline/rework";
 import { createReworkHarness, failVerdict, REWORK_T0, type ReworkHarnessOptions } from "../../utilities/rework-stage";
-import { PROVISIONAL_ALLOWED } from "../../utilities/routing-vetting";
 import { createCard } from "../../utilities/workspace-state-store";
 
 const DEV = createCard({
@@ -274,7 +273,7 @@ describe("rework limits", () => {
 		if (!resolved.ok) {
 			throw new Error(resolved.error);
 		}
-		const policy = createRoutingPolicy(resolved.kit, PROVISIONAL_ALLOWED);
+		const policy = createRoutingPolicy(resolved.kit);
 		const qwen = { providerId: "lemonade", modelId: "Qwen3.8-27B-GGUF-UD-Q4_K_XL" };
 		const dev = { ...DEV, agentSettings: qwen };
 		const fails = [failVerdict(1), failVerdict(2), failVerdict(3)];

@@ -24,7 +24,7 @@ import { createBoard } from "../../../utilities/workspace-state-store";
 const MIN = 60_000;
 const SERVER_STARTED_AT = WATCHDOG_NOW - 30_000;
 const PREVIOUS_SERVER_STARTED_AT = WATCHDOG_NOW - 86_400_000;
-const QA_FOO = { foo: { landing: { mode: "qa" }, kit: { name: "team" }, models: { allowProvisional: true } } };
+const QA_FOO = { foo: { landing: { mode: "qa" }, kit: { name: "team" } } };
 const SIDEBAR_CONFIG = { watchdog: { mode: "on" }, orchestrator: { wake: { mode: "sidebar" } }, workspaces: QA_FOO };
 
 const harnesses: Array<{ cleanup: () => void }> = [];

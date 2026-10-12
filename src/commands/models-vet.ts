@@ -1,10 +1,7 @@
-// `kanban models list|vet|allow-provisional`: the vetted model registry (src/models/vetted-registry.ts,
-// docs/team/MODELS.md).
-//   - `list` shows what's vetted for which role, provisional, rejected and why (with `--project`, what that project
-//     may route to);
-//   - `vet` runs the smoke-test card for one combination and role (src/models/vetting/) and writes a report plus a
-//     proposed registry entry; it never edits the registry (the Kanban orchestrator commits the proposal);
-//   - `allow-provisional` is the user's switch for a project's provisional combinations.
+// `kanban models vet` (docs/team/MODELS.md "Vetting"): the Kanban orchestrator's smoke test for one agent + provider
+// + model and role (src/models/vetting/). It writes a report under `<home>/data/models/vetting/<run>` and changes
+// nothing else: Kanban keeps no list of allowed models. Cline's models.json is the allow list, and the orchestrator
+// puts a model there by hand once it passed.
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readdir, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -12,32 +9,22 @@ import { join } from "node:path";
 
 import type { Command } from "commander";
 import { readLemonadeModelListSettings } from "../config/model-lists-config";
-import {
-	getWorkspacePipelineSettings,
-	readPipelineConfig,
-	updateWorkspacePipelineEntry,
-} from "../config/pipeline-config";
+import { readPipelineConfig } from "../config/pipeline-config";
 import { loadGlobalRuntimeConfig } from "../config/runtime-config";
 import { getRuntimeAgentCatalogEntry } from "../core/agent-catalog";
 import { type RuntimeAgentId, runtimeAgentIdEnumSchema } from "../core/api-contract";
 import { createGitProcessEnv } from "../core/git-process-env";
-import { listAllowedCombinations } from "../kits/card-routing-check";
-import { loadKitCatalog, resolveWorkspaceKit } from "../kits/resolve-kit";
 import { measureCard } from "../kits/team/scoreboard/scoreboard-store";
 import { fetchLemonadeModelLoaded, lemonadeApiBaseUrl } from "../models/lemonade-models";
-import { LEMONADE_PROVIDER_ID } from "../models/model-probe";
 import {
 	describeCombination,
-	getEntryRoleStatus,
-	getVettedRegistry,
 	type ModelCombination,
-	VETTING_ROLES,
-	type VettedEntry,
 	type VettingRole,
 	vettingRoleSchema,
-} from "../models/vetted-registry";
+} from "../models/model-combination";
+import { LEMONADE_PROVIDER_ID } from "../models/model-probe";
 import { createVetProbe } from "../models/vetting/vet-probe";
-import { buildVetProposal, formatVetReport } from "../models/vetting/vet-report";
+import { describeVetSummary, formatVetReport } from "../models/vetting/vet-report";
 import { DEFAULT_VET_LIMITS, runVet, type VetLimits } from "../models/vetting/vet-runner";
 import { createVetTask, readTextIfExists, type VetCheckDeps, writeScratchFiles } from "../models/vetting/vet-tasks";
 import { createAgentToolProcessFinder } from "../server/process-reaper";
@@ -57,102 +44,6 @@ function toErrorMessage(error: unknown): string {
 
 function printJson(payload: unknown): void {
 	process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
-}
-
-function describeRole(entry: VettedEntry, role: VettingRole): string {
-	const vetting = entry.roles[role];
-	const status = getEntryRoleStatus(entry, role);
-	if (status === "unknown") {
-		return `${role}: -`;
-	}
-	const when = vetting ? ` ${vetting.at}${vetting.cliVersion ? ` cli ${vetting.cliVersion}` : ""}` : "";
-	return `${role}: ${status}${when}`;
-}
-
-export function formatRegistryList(
-	entries: readonly VettedEntry[],
-	role: VettingRole | null,
-	allowed: ReadonlySet<VettedEntry> | null,
-): string[] {
-	const roles = role ? [role] : [...VETTING_ROLES];
-	const lines: string[] = [];
-	const rejected = entries.filter((entry) => entry.rejected);
-	const listed = entries.filter((entry) => !entry.rejected && roles.some((name) => entry.roles[name]));
-	for (const entry of listed) {
-		const combination = { agentId: entry.agent, provider: entry.provider, model: entry.model };
-		const mark = allowed ? (allowed.has(entry) ? "ok  " : "--  ") : "";
-		lines.push(`${mark}${describeCombination(combination)}`);
-		lines.push(`    ${roles.map((name) => describeRole(entry, name)).join("   ")}`);
-		for (const name of roles) {
-			const vetting = entry.roles[name];
-			if (vetting) {
-				lines.push(`    ${name}: ${vetting.reason ? `${vetting.reason}; ` : ""}${vetting.evidence.summary}`);
-			}
-		}
-	}
-	if (rejected.length > 0) {
-		lines.push("", "Rejected:");
-		for (const entry of rejected) {
-			const combination = { agentId: entry.agent, provider: entry.provider, model: entry.model };
-			const scope =
-				entry.rejected?.scope === "model"
-					? `${entry.model} on every agent and provider`
-					: describeCombination(combination);
-			lines.push(`  ${scope} (${entry.rejected?.at}): ${entry.rejected?.reason}`);
-		}
-	}
-	return lines;
-}
-
-async function runList(options: { project?: string; role?: string; json?: boolean }): Promise<number> {
-	const registry = getVettedRegistry();
-	const role = options.role ? vettingRoleSchema.parse(options.role) : null;
-	let allowed: Set<VettedEntry> | null = null;
-	let header: string | null = null;
-	if (options.project) {
-		const target = await resolveWorkspaceTarget(options.project, { allowUnregistered: false });
-		const [{ config }, catalog] = await Promise.all([readPipelineConfig(), loadKitCatalog()]);
-		const { kitName } = resolveWorkspaceKit(config, target.workspaceId, catalog);
-		const allowProvisional = getWorkspacePipelineSettings(config, target.workspaceId).models.allowProvisional;
-		allowed = new Set(
-			registry.entries.filter((entry) =>
-				(role ? [role] : VETTING_ROLES).some((name) => {
-					const status = getEntryRoleStatus(entry, name);
-					return status === "vetted" || (status === "provisional" && allowProvisional);
-				}),
-			),
-		);
-		header = `${target.workspaceId} (kit ${kitName}${listAllowedCombinations(config, target.workspaceId, kitName, "dev") === null ? ": routes nothing" : ""}): ok = it may route ${role ?? "some role's"} work there; provisional combinations ${allowProvisional ? "allowed" : "refused (the user's kanban models allow-provisional)"}`;
-	}
-	if (options.json) {
-		printJson({
-			ok: true,
-			entries: registry.entries.map((entry) => ({ ...entry, ...(allowed ? { allowed: allowed.has(entry) } : {}) })),
-		});
-		return 0;
-	}
-	const lines = formatRegistryList(registry.entries, role, allowed);
-	process.stdout.write(`${[header, ...lines].filter((line) => line !== null).join("\n")}\n`);
-	process.stdout.write(
-		"\nAn unlisted combination is refused for routing: vet it with kanban models vet --agent <a> [--provider <p>] [--model <m>] --role <dev|qa|plan>.\n",
-	);
-	return 0;
-}
-
-async function runAllowProvisional(state: string, options: { project?: string }): Promise<number> {
-	if (state !== "on" && state !== "off") {
-		throw new Error(`expected on or off, got ${state}`);
-	}
-	const target = await resolveWorkspaceTarget(options.project, { allowUnregistered: false });
-	await updateWorkspacePipelineEntry(target.workspaceId, (entry) => {
-		const models = entry.models && typeof entry.models === "object" ? entry.models : {};
-		entry.models = { ...models, allowProvisional: state === "on" };
-		return entry;
-	});
-	process.stdout.write(
-		`${target.workspaceId}: provisional combinations of the vetted model registry are ${state === "on" ? "allowed" : "refused"} for its routing.\n`,
-	);
-	return 0;
 }
 
 function readCliVersion(agentId: RuntimeAgentId): Promise<string | null> {
@@ -435,41 +326,25 @@ async function runVetCommand(options: VetOptions): Promise<number> {
 			log,
 		},
 	);
-	const proposal = buildVetProposal(getVettedRegistry(), result, await readCliVersion(agentId));
-	await writeFile(join(runDir, "result.json"), `${JSON.stringify({ result, proposal }, null, 2)}\n`);
-	await writeFile(join(runDir, "report.md"), formatVetReport(result, proposal, { repoPath }));
+	const cliVersion = await readCliVersion(agentId);
+	const summary = describeVetSummary(result);
+	await writeFile(join(runDir, "result.json"), `${JSON.stringify({ result, cliVersion, summary }, null, 2)}\n`);
+	await writeFile(join(runDir, "report.md"), formatVetReport(result, { repoPath }, cliVersion));
 	if (options.json) {
-		printJson({ ok: true, runDir, result, proposal });
+		printJson({ ok: true, runDir, result, cliVersion, summary });
 	} else {
-		const proposed = proposal.unchanged
-			? "Nothing to commit: the run was inconclusive (not the model's doing), so the registry entry stays as it is."
-			: `Proposed entry for models/vetted.json (the Kanban orchestrator commits it; nothing was changed):\n${JSON.stringify(proposal.entry, null, "\t")}`;
 		process.stdout.write(
-			`${result.outcome.toUpperCase()}: ${describeCombination(combination)} for ${role}${result.failure ? ` (${result.failure.kind}: ${result.failure.detail})` : ""}\nReport: ${join(runDir, "report.md")}\n${proposed}\n`,
+			`${result.outcome.toUpperCase()}: ${describeCombination(combination)} for ${role}${result.failure ? ` (${result.failure.kind}: ${result.failure.detail})` : ""}\n${summary}\nReport: ${join(runDir, "report.md")}\n`,
 		);
 	}
 	return result.outcome === "passed" ? 0 : result.outcome === "inconclusive" ? 2 : 1;
 }
 
-export function registerModelsRegistryCommands(models: Command): void {
-	models
-		.command("list")
-		.description("Show the vetted model registry: what's vetted for which role, provisional, rejected and why.")
-		.option("--project <project>", "Mark what this project may route to (its provisional switch included).")
-		.option("--role <role>", "Only this role: dev, qa or plan.")
-		.option("--json", "Print JSON.")
-		.action(async (options: { project?: string; role?: string; json?: boolean }) => {
-			try {
-				process.exitCode = await runList(options);
-			} catch (error) {
-				process.stderr.write(`Models list failed: ${toErrorMessage(error)}\n`);
-				process.exitCode = 1;
-			}
-		});
+export function registerModelsVetCommand(models: Command): void {
 	models
 		.command("vet")
 		.description(
-			"Run a throwaway smoke-test card (scratch repo in a temp dir, never landed) for one agent + provider + model and role, and write a report plus a proposed registry entry. Waits first for the provider's capacity (models.providerCapacity). Exit 0 when it passed, 1 when it failed, 2 when it was inconclusive (a harness or environment cause).",
+			"Run a throwaway smoke-test card (scratch repo in a temp dir, never landed) for one agent + provider + model and role, and write a report (passed, failed or inconclusive, with the tool-call counts). Changes nothing else. Waits first for the provider's capacity (models.providerCapacity). Exit 0 when it passed, 1 when it failed, 2 when it was inconclusive (a harness or environment cause).",
 		)
 		.requiredOption("--agent <agent>", "The agent CLI.")
 		.option("--provider <provider>", "The provider (none: the agent's own).")
@@ -488,21 +363,6 @@ export function registerModelsRegistryCommands(models: Command): void {
 				process.exitCode = await runVetCommand(options);
 			} catch (error) {
 				process.stderr.write(`Models vet failed: ${toErrorMessage(error)}\n`);
-				process.exitCode = 1;
-			}
-		});
-	models
-		.command("allow-provisional")
-		.description(
-			"The user's: allow (on) or refuse (off) the registry's provisional combinations for a project's routing.",
-		)
-		.argument("<state>", "on or off")
-		.option("--project <project>", "The project (default: this directory's).")
-		.action(async (state: string, options: { project?: string }) => {
-			try {
-				process.exitCode = await runAllowProvisional(state, options);
-			} catch (error) {
-				process.stderr.write(`Models allow-provisional failed: ${toErrorMessage(error)}\n`);
 				process.exitCode = 1;
 			}
 		});

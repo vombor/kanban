@@ -221,6 +221,24 @@ describe("kanban doctor", () => {
 		});
 	});
 
+	it("warns about the removed workspaces.<id>.models.allowProvisional; --fix removes it", async () => {
+		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
+			writeJson(globalConfigPath, {
+				selectedAgentId: "claude",
+				workspaces: { foo: { landing: { mode: "qa" }, models: { allowProvisional: true } } },
+			});
+			const report = await runDoctor(DOCTOR);
+			const warning = find(report.findings, "home", "vetted model registry and its provisional switch were removed");
+			expect(warning?.level).toBe("warn");
+			expect(warning?.message).toContain('"workspaces.foo.models"');
+			await runDoctor({ ...DOCTOR, fix: true });
+			expect(JSON.parse(readFileSync(globalConfigPath, "utf8")).workspaces).toEqual({
+				foo: { landing: { mode: "qa" } },
+			});
+			expect(find((await runDoctor(DOCTOR)).findings, "home", "provisional switch")).toBeUndefined();
+		});
+	});
+
 	it("reports worktrees missing the main checkout's pre-push hook, and --fix copies it", async () => {
 		await withTemporaryKanbanHome(async ({ userHomePath }) => {
 			const repo = createRepo(join(userHomePath, "app"));

@@ -11,6 +11,7 @@ import {
 	type PipelineConfig,
 	readLegacyWakeTarget,
 	readRemovedModelProviderKeys,
+	readRemovedWorkspaceModelsKeys,
 	updatePipelineConfigFile,
 } from "../config/pipeline-config";
 import { DEFAULT_KIT_NAME, type KitCatalog, resolveWorkspaceKit } from "../kits/resolve-kit";
@@ -421,6 +422,19 @@ export function checkLegacyConfigKeys(
 			fix: async () => {
 				await updatePipelineConfigFile((config) => migrateLegacyConfigKeys(config).config, configPath);
 				return removedProviderKeys.map((key) => `removed ${key}`);
+			},
+		});
+	}
+	const removedWorkspaceModelsKeys = readRemovedWorkspaceModelsKeys(rawConfig);
+	if (removedWorkspaceModelsKeys.length > 0) {
+		findings.push({
+			level: "warn",
+			area: "home",
+			message: `${configPath} has ${removedWorkspaceModelsKeys.map((key) => `"${key}"`).join(" and ")}; Kanban's vetted model registry and its provisional switch were removed (2026-10-12), so it is ignored: any model may be on any role, and Cline's models.json is the allow list`,
+			hint: "kanban doctor --fix removes it",
+			fix: async () => {
+				await updatePipelineConfigFile((config) => migrateLegacyConfigKeys(config).config, configPath);
+				return removedWorkspaceModelsKeys.map((key) => `removed ${key}`);
 			},
 		});
 	}

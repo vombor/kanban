@@ -133,12 +133,9 @@ export const workspacePipelineSettingsSchema = z
 			.strict()
 			.default({ enabled: true }),
 		kit: workspaceKitRefSchema.nullable().default(null),
-		// Which combinations of the vetted model registry this project may route to (src/kits/routing-vetting.ts):
-		// vetted ones always; provisional ones only when the user allows them (`kanban models allow-provisional`).
-		models: z
-			.object({ allowProvisional: z.boolean().default(false) })
-			.strict()
-			.default({ allowProvisional: false }),
+		// Removed with the vetted model registry (2026-10-12): an old `models.allowProvisional` still parses and is
+		// ignored; doctor --fix deletes it (migrateLegacyConfigKeys()).
+		models: z.unknown().optional(),
 		// Task-card guardrails (src/guardrails/): `enabled` overrides the machine-wide `guardrails.enabled` either
 		// way (null keeps it). The lists are added to the machine-wide ones: extra deny patterns tighten, extra
 		// writable dirs loosen.
@@ -179,7 +176,8 @@ export const workspacePipelineSettingsSchema = z
 			.strict()
 			.default({ wake: { enabled: null, mode: null, restart: null } }),
 	})
-	.strict();
+	.strict()
+	.transform(({ models: _removed, ...settings }) => settings);
 export type WorkspacePipelineSettings = z.infer<typeof workspacePipelineSettingsSchema>;
 
 // Ported from archive/devteam-kit:services/kanban-autoland.mjs@6da71597 (CHECK_ALLOW_SCRIPTS).
@@ -538,10 +536,21 @@ export function readRemovedModelProviderKeys(config: Record<string, unknown>): s
 }
 
 /**
+ * The workspaces whose entry still has the removed `models` section (`workspaces.<id>.models.allowProvisional`, from
+ * the vetted model registry, removed 2026-10-12), as dotted keys (empty when none).
+ */
+export function readRemovedWorkspaceModelsKeys(config: Record<string, unknown>): string[] {
+	return Object.entries(asRecord(config.workspaces) ?? {}).flatMap(([workspaceId, entry]) => {
+		const record = asRecord(entry);
+		return record && "models" in record ? [`workspaces.${workspaceId}.models`] : [];
+	});
+}
+
+/**
  * config.json with the keys an older build wrote in an older form rewritten: P2-1's boolean `sessionSync`, the
  * removed `orchestrator.wake.target` (deleted: every workspace now wakes its own orchestrator, so there is nothing to
- * carry it into) and the removed LocalAI provider's keys (deleted, nothing reads them). Returns the dotted keys it
- * changed; an absent key stays absent (its default applies).
+ * carry it into), the removed LocalAI provider's keys and the removed `workspaces.<id>.models` section (deleted,
+ * nothing reads them). Returns the dotted keys it changed; an absent key stays absent (its default applies).
  * A build from before the move (P2-1 up to P3-2) reads the new `sessionSync` object as invalid and uses the
  * default (on), so after a rollback to one, `"sessionSync": { "enabled": false }` must be written back as `false`.
  */
@@ -574,6 +583,21 @@ export function migrateLegacyConfigKeys(config: Record<string, unknown>): {
 		};
 		next = { ...next, models: { ...models, ...without("lists"), ...without("providerCapacity") } };
 		migrated.push(...removedProviderKeys);
+	}
+	const removedWorkspaceModelsKeys = readRemovedWorkspaceModelsKeys(config);
+	if (removedWorkspaceModelsKeys.length > 0) {
+		const workspaces = Object.fromEntries(
+			Object.entries(asRecord(config.workspaces) ?? {}).map(([workspaceId, entry]) => {
+				const record = asRecord(entry);
+				if (!record || !("models" in record)) {
+					return [workspaceId, entry];
+				}
+				const { models: _removed, ...rest } = record;
+				return [workspaceId, rest];
+			}),
+		);
+		next = { ...next, workspaces };
+		migrated.push(...removedWorkspaceModelsKeys);
 	}
 	return { config: next, migrated };
 }

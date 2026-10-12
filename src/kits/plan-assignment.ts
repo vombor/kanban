@@ -13,7 +13,6 @@ import { cloneRuntimeTaskAgentSettings } from "../core/task-agent-settings";
 import { hasExplicitDevAssignment, resolveProposalProvider } from "./dev-assignment";
 import { answerPlanAssignment } from "./policy";
 import { loadKitCatalog, resolveWorkspaceKit, type WorkspaceKitResolution } from "./resolve-kit";
-import { getWorkspaceRoutingVetting } from "./routing-vetting";
 
 export interface PlanAssignmentRequest {
 	workspaceId: string;
@@ -47,7 +46,7 @@ export function decidePlanAssignment(input: {
 	resolved: Pick<WorkspaceKitResolution, "kit" | "kitName" | "issues">;
 }): PlanAssignmentDecision {
 	const { request, resolved } = input;
-	const answer = answerPlanAssignment(resolved.kit, getWorkspaceRoutingVetting(input.config, request.workspaceId));
+	const answer = answerPlanAssignment(resolved.kit);
 	if (answer.kind === "disabled") {
 		return {
 			ok: false,
@@ -65,15 +64,6 @@ export function decidePlanAssignment(input: {
 			agentId: request.agentId ?? undefined,
 			agentSettings: cloneRuntimeTaskAgentSettings(request.agentSettings),
 			tier: null,
-			issues: resolved.issues,
-		};
-	}
-	// The kit's planner must be allowed by the vetted model registry (an explicit choice is checked by the creator).
-	if (answer.refused) {
-		return {
-			ok: false,
-			kitName: resolved.kitName,
-			error: `kit ${resolved.kitName}'s plan role is refused: ${answer.refused}. The orchestrator sets a vetted plan model (kanban kit set roles.plan.model ...), or the user picks one with --agent-id/--model.`,
 			issues: resolved.issues,
 		};
 	}

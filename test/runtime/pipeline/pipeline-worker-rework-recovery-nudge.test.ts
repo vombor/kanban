@@ -20,7 +20,7 @@ import { createBoard, createCard } from "../../utilities/workspace-state-store";
 
 const T0 = Date.parse("2026-10-07T10:00:00.000Z");
 const CONFIG = {
-	workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" }, models: { allowProvisional: true } } },
+	workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" } } },
 	pipeline: { recovery: { mode: "on" } },
 };
 const DEV = createCard({

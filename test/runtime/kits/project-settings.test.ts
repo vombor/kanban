@@ -16,7 +16,6 @@ import { getBuiltInKits, loadKitCatalog, resolveWorkspaceKit } from "../../../sr
 import { getKitSettingsHistoryPath } from "../../../src/state/kanban-home";
 import { createCardHistory, createEffectiveCard } from "../../utilities/effective-card";
 import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
-import { PROVISIONAL_ALLOWED } from "../../utilities/routing-vetting";
 
 const team = () => {
 	const kit = getBuiltInKits().get("team");
@@ -156,7 +155,7 @@ describe("project settings: set and unset", () => {
 	it("sets the scripted checks' environment and refuses an env file outside the project", async () => {
 		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
 			writeConfig(globalConfigPath, {
-				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" }, models: { allowProvisional: true } } },
+				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" } } },
 			});
 			const set = async (key: string, value: unknown) =>
 				await setProjectKitSetting({ workspaceId: "foo", key, value, by: { kind: "user" } });
@@ -184,7 +183,7 @@ describe("project settings: set and unset", () => {
 	it("sets a role's model at once (kit < project), logs who changed it, and unset brings the kit's value back", async () => {
 		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
 			writeConfig(globalConfigPath, {
-				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" }, models: { allowProvisional: true } } },
+				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" } } },
 			});
 			const result = await setProjectKitSetting({
 				workspaceId: "foo",
@@ -212,7 +211,7 @@ describe("project settings: set and unset", () => {
 			expect(resolved.sources["roles.fallback.model"]).toBe("project");
 			// The kit's flow still decides when; the project only picked the model.
 			expect(
-				createRoutingPolicy(resolved.kit, PROVISIONAL_ALLOWED).onFail({
+				createRoutingPolicy(resolved.kit).onFail({
 					dev: createEffectiveCard({ agentId: "cline", model: "us.openai.gpt-6.1-sol" }),
 					cause: "stalled",
 					verdict: null,
@@ -278,7 +277,6 @@ describe("project settings: set and unset", () => {
 				workspaces: {
 					foo: {
 						kit: { name: "team", overrides: { "dev.agent": "codex", "onOutage.then": "orchestrator" } },
-						models: { allowProvisional: true },
 					},
 				},
 			});

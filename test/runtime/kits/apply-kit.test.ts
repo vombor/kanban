@@ -29,11 +29,8 @@ describe("applyWorkspaceKit", () => {
 					other: { landing: { mode: "commit" } },
 				},
 			});
-			// The team kit's defaults are provisional in the vetted model registry: refused unless the user allows them.
-			await expect(applyWorkspaceKit({ workspaceId: "foo", kitName: "team" })).rejects.toThrow(
-				/vetted model registry refuses: roles\.dev: cline \+ bedrock \+ us\.openai\.gpt-6\.1-sol is only provisional/u,
-			);
-			const result = await applyWorkspaceKit({ workspaceId: "foo", kitName: "team", allowProvisional: true });
+			// Any model may be on any role: the team kit's defaults apply without a vetting check.
+			const result = await applyWorkspaceKit({ workspaceId: "foo", kitName: "team" });
 			expect(result.written).toBe(true);
 			expect(result.kitName).toEqual({ from: "default", to: "team" });
 			expect(result.landing).toEqual({ from: "off", to: "off" });
@@ -50,7 +47,6 @@ describe("applyWorkspaceKit", () => {
 				foo: {
 					landing: { mode: "off" },
 					kit: { name: "team", overrides: { "qa.blurb": "Project: Pawsome" } },
-					models: { allowProvisional: true },
 				},
 				other: { landing: { mode: "commit" } },
 			});
@@ -61,7 +57,7 @@ describe("applyWorkspaceKit", () => {
 		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
 			writeConfig(globalConfigPath, {
 				workspaces: {
-					foo: { kit: { name: "team", overrides: { "qa.blurb": "x" } }, models: { allowProvisional: true } },
+					foo: { kit: { name: "team", overrides: { "qa.blurb": "x" } } },
 				},
 			});
 			await applyWorkspaceKit({
@@ -75,7 +71,6 @@ describe("applyWorkspaceKit", () => {
 				foo: {
 					landing: { mode: "qa" },
 					kit: { name: "team", overrides: { "qa.promptNotes.dbSetup": "npx prisma migrate deploy" } },
-					models: { allowProvisional: true },
 				},
 			});
 		});
@@ -109,16 +104,16 @@ describe("applyWorkspaceKit", () => {
 	it("writes nothing on a dry run, and drops the kit entry for default without overrides", async () => {
 		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
 			writeConfig(globalConfigPath, {
-				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" }, models: { allowProvisional: true } } },
+				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" } } },
 			});
 			const dryRun = await applyWorkspaceKit({ workspaceId: "foo", kitName: "default", dryRun: true });
 			expect(dryRun.written).toBe(false);
 			expect(readConfig(globalConfigPath).workspaces).toEqual({
-				foo: { landing: { mode: "qa" }, kit: { name: "team" }, models: { allowProvisional: true } },
+				foo: { landing: { mode: "qa" }, kit: { name: "team" } },
 			});
 			await applyWorkspaceKit({ workspaceId: "foo", kitName: "default" });
 			expect(readConfig(globalConfigPath).workspaces).toEqual({
-				foo: { landing: { mode: "qa" }, models: { allowProvisional: true } },
+				foo: { landing: { mode: "qa" } },
 			});
 		});
 	});

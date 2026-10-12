@@ -86,7 +86,7 @@ function writeConfig(config: Record<string, unknown>): void {
 }
 
 function teamWorkspace(extra: Record<string, unknown> = {}): Record<string, unknown> {
-	return { workspaces: { [WORKSPACE_ID]: { kit: { name: "team" }, models: { allowProvisional: true }, ...extra } } };
+	return { workspaces: { [WORKSPACE_ID]: { kit: { name: "team" }, ...extra } } };
 }
 
 function request(overrides: Partial<DevAssignmentRequest> = {}): DevAssignmentRequest {
@@ -120,7 +120,7 @@ describe("resolveDevAssignment", () => {
 
 	it("never inherits another workspace's kit", async () => {
 		await withTemporaryKanbanHome(async () => {
-			writeConfig({ workspaces: { other: { kit: { name: "team" }, models: { allowProvisional: true } } } });
+			writeConfig({ workspaces: { other: { kit: { name: "team" } } } });
 			expect((await resolveDevAssignment(request())).outcome).toBe("none");
 		});
 	});
@@ -190,11 +190,9 @@ describe("resolveDevAssignment", () => {
 				workspaces: {
 					[WORKSPACE_ID]: {
 						kit: { name: "team", overrides: { "dev.model": { model: "us.anthropic.claude-opus-5-5" } } },
-						models: { allowProvisional: true },
 					},
 					plain: {
 						kit: { name: "team", overrides: { "dev.model": { model: "us.amazon.nova-2-lite-v1:0" } } },
-						models: { allowProvisional: true },
 					},
 					codex: {
 						kit: {
@@ -397,7 +395,6 @@ describe("workspace.getDevAssignment (the create dialog's preselection)", () => 
 				kitName: "default",
 				outcome: "none",
 				proposal: null,
-				vettedDev: null,
 			});
 			writeConfig(teamWorkspace());
 			const answer = await createCaller().workspace.getDevAssignment({ prompt: "x" });
@@ -406,16 +403,7 @@ describe("workspace.getDevAssignment (the create dialog's preselection)", () => 
 				outcome: "applied",
 				proposal: { agentId: "cline", agentSettings: TEAM_TIER3, tier: "tier3" },
 			});
-			// The dialog warns about a pick outside these (the project allows provisional ones).
-			expect(answer.vettedDev).toContainEqual({
-				agentId: "codex",
-				providerId: "bedrock",
-				modelId: "us.openai.gpt-6.1-sol",
-				status: "vetted",
-			});
-			expect(answer.vettedDev).toContainEqual(
-				expect.objectContaining({ agentId: "cline", modelId: "us.openai.gpt-6.1-sol", status: "provisional" }),
-			);
+			expect(answer).not.toHaveProperty("vettedDev");
 		});
 	});
 });

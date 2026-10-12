@@ -103,10 +103,10 @@ export function registerConfigCommand(program: Command): void {
 	config
 		.command("set")
 		.description(
-			`Set a config.json key. Only ${keys}: the Lemonade models Cline offers (Kanban's model-lists route and, after \`kanban setup-provider lemonade\`, Cline's models.json). The models stay installed on Lemonade.`,
+			`Set a config.json key. Only ${keys}: the Lemonade models Kanban's model-lists route lists (Cline offers its models.json record instead, curated by the Kanban orchestrator). The models stay installed on Lemonade.`,
 		)
 		.argument("<key>", `One of ${keys}.`)
-		.argument("<values...>", "The model ids, in the order Cline's default model is picked from.")
+		.argument("<values...>", "The model ids.")
 		.action(async (key: string, values: string[]) => {
 			try {
 				const result = await setModelListInclude(key, values);

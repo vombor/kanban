@@ -60,7 +60,6 @@ describe("watchdog: silent Cline stalls are only reported", () => {
 				foo: {
 					landing: { mode: "qa" },
 					kit: { name: "team" },
-					models: { allowProvisional: true },
 					...options.workspace,
 				},
 			},
@@ -164,7 +163,7 @@ describe("watchdog: a Cline run that never wrote a session file", () => {
 			watchdog: { mode: "on" },
 			orchestrator: { wake: { mode: "sidebar" } },
 			pipeline: { recovery: { mode: recoveryMode } },
-			workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" }, models: { allowProvisional: true } } },
+			workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" } } },
 			agents: { cline: { dataDir } },
 		});
 		if (options.providers !== undefined) {
@@ -259,7 +258,7 @@ describe("watchdog: a silent QA card", () => {
 			watchdog: { mode: "on" },
 			orchestrator: { wake: { mode: "sidebar" } },
 			pipeline: { recovery: { mode: "on", hungMin: 15 } },
-			workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" }, models: { allowProvisional: true } } },
+			workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" } } },
 			agents: { cline: { dataDir } },
 		});
 		const paths = harness.paths("foo");

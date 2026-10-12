@@ -10,7 +10,7 @@ import { loadGlobalRuntimeConfig } from "../config/runtime-config";
 import { resolveGitHubAuth } from "../issues/issue-auth";
 import { loadKitCatalog } from "../kits/resolve-kit";
 import { resolveProjectRoots } from "../projects/project-roots";
-import { buildLemonadeModelListUrl, planClineModelsSource } from "../setup/cline-models-source";
+import { planClineModelsSource } from "../setup/cline-models-source";
 import { planMachineSetup } from "../setup/machine-setup";
 import { getAgentTrustConfigPaths } from "../setup/workspace-trust-report";
 import {
@@ -25,6 +25,7 @@ import { readLiveKanbanServerLock } from "../state/kanban-server-lock";
 import { listWorkspaceIndexEntries, loadWorkspaceBoardById } from "../state/workspace-state";
 import { checkClineBedrockKey } from "./cline-bedrock-key-checks";
 import { checkKanbanFilesUnderClineDir } from "./cline-dir-checks";
+import { checkClineModelsAllowList } from "./cline-models-allow-list-checks";
 import { checkClineLemonadeModels } from "./cline-models-checks";
 import { checkClinePassKey } from "./cline-pass-key-checks";
 import { createDeepCheckDeps, type DeepCheckDeps, runDeepChecks } from "./deep-checks";
@@ -49,7 +50,7 @@ import { checkIssueImport, createIssueCheckDeps, type IssueCheckDeps } from "./i
 import { checkKitLemonadeModels, checkKitProjectSettings, checkKitRecommendedSettings } from "./kit-settings-checks";
 import { checkOneOwner } from "./one-owner-checks";
 import { checkProjectShortcuts, type ProjectShortcutCheckDeps } from "./project-shortcut-checks";
-import { checkRoutingVetting } from "./routing-vetting-checks";
+
 import { checkUncleanStopDamage } from "./unclean-stop-checks";
 import { checkWorktreeLinks } from "./worktree-link-checks";
 
@@ -161,7 +162,6 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
 	findings.push(
 		...(await checkClineLemonadeModels({
 			modelsPath: clineModelsPath,
-			origin: options.origin,
 			lemonadeModelList: (await readLemonadeModelListSettings()).settings,
 			contextSync: config.agents.cline.lemonadeContextSync,
 			historyPath: getClineLemonadeSyncHistoryPath(home.homePath),
@@ -170,7 +170,14 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
 	);
 	findings.push(...checkKitProjectSettings(projectContext));
 	findings.push(...checkKitRecommendedSettings(projectContext));
-	findings.push(...checkRoutingVetting(projectContext));
+	findings.push(
+		...(await checkClineModelsAllowList({
+			...projectContext,
+			modelsPath: clineModelsPath,
+			selectedAgentId: (await loadGlobalRuntimeConfig()).selectedAgentId,
+			loadBoard: async (workspaceId) => await loadWorkspaceBoardById(workspaceId).catch(() => null),
+		})),
+	);
 	findings.push(
 		...(await checkKitLemonadeModels({
 			...projectContext,
@@ -185,7 +192,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
 		})),
 	);
 
-	const modelsSource = await planClineModelsSource(clineModelsPath, buildLemonadeModelListUrl(options.origin));
+	const modelsSource = await planClineModelsSource(clineModelsPath);
 	findings.push(
 		...(await checkOneOwner({
 			legacyKit,

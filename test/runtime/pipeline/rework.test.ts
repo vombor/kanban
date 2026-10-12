@@ -320,7 +320,6 @@ describe("rework loop in the pipeline worker (team kit)", () => {
 					foo: {
 						landing: { mode: "qa" },
 						kit: { name: "team" },
-						models: { allowProvisional: true },
 						pipeline: { shadow: true },
 					},
 				},

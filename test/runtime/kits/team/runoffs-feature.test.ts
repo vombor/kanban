@@ -412,7 +412,7 @@ describe("runoffs feature in the pipeline worker", () => {
 		const releaseHold = vi.fn();
 		const harness = createPipelineWorkerHarness({
 			config: {
-				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" }, models: { allowProvisional: true } } },
+				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" } } },
 			},
 			snapshot: (taskId) => (taskId === "d1111" ? snapshot : `snap-${taskId}`),
 			createFeatures: ({ bus, appendQaLog, root }) => {
@@ -481,7 +481,7 @@ describe("runoffs feature in the pipeline worker", () => {
 		const releaseHold = vi.fn();
 		const harness = createPipelineWorkerHarness({
 			config: {
-				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" }, models: { allowProvisional: true } } },
+				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" } } },
 			},
 			snapshot: (taskId) => `snap-${taskId}-rebased`,
 			createFeatures: ({ bus, appendQaLog, root }) => {
@@ -564,7 +564,6 @@ describe("runoffs feature in the pipeline worker", () => {
 					foo: {
 						landing: { mode: "qa" },
 						kit: { name: "team" },
-						models: { allowProvisional: true },
 						pipeline: { shadow: true },
 					},
 				},

@@ -1,12 +1,13 @@
-// Where the Lemonade provider in Cline's models.json should get its model list: Kanban's model-lists route.
+// The Lemonade provider in Cline's models.json must not have a `modelsSourceUrl`.
 //
-// Cline offers every id the provider's `modelsSourceUrl` returns. The legacy kit pointed it at its own
-// model-lists service (http://127.0.0.1:13306/lemonade/models), which the route in
-// src/server/model-lists-route.ts replaces. That URL (or a missing one) should be the route; a URL the user chose
-// for something else is left alone. Read-only: Kanban writes nothing under ~/.cline (user rule, 2026-10-07; the Lemonade context windows are the one
-// exception, issue #31), so
-// `kanban setup` and doctor only report the drift, and `kanban setup-provider lemonade` (run by the user or the Kanban
-// orchestrator, src/setup/cline-lemonade-apply.ts) is the one thing that changes the file. The provider entry is never created.
+// Cline offers every id the provider's `modelsSourceUrl` returns, so a dynamic list (the legacy kit's model-lists
+// service at http://127.0.0.1:13306/lemonade/models, or Kanban's route in src/server/model-lists-route.ts) would offer
+// every model Lemonade has, vetted or not. The provider's `models` record is the allow list (docs/team/MODELS.md),
+// curated by the Kanban orchestrator, so any `modelsSourceUrl` is to be dropped. Read-only: Kanban writes nothing
+// under ~/.cline (user rule, 2026-10-07; the Lemonade context windows are the one exception, issue #31), so
+// `kanban setup` and doctor only report it, and `kanban setup-provider lemonade` (run by the user or the Kanban
+// orchestrator, src/setup/cline-lemonade-apply.ts) is the one thing that changes the file. The provider entry is never
+// created.
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
 
@@ -31,23 +32,17 @@ const clineModelsFileSchema = z
 export type ClineModelsSourceAction =
 	/** No models.json, or no Lemonade provider in it. */
 	| "skip"
+	/** No `modelsSourceUrl`: Cline offers only the `models` record. */
 	| "up-to-date"
-	| "update"
-	/** The URL points somewhere else on purpose; left alone. */
-	| "custom"
+	/** A `modelsSourceUrl` is set: to be dropped. */
+	| "remove"
 	| "error";
 
 export interface ClineModelsSourcePlan {
 	action: ClineModelsSourceAction;
 	modelsPath: string;
 	currentUrl: string | null;
-	targetUrl: string;
 	detail: string;
-}
-
-/** The route's URL on a Kanban server origin such as http://127.0.0.1:3484. */
-export function buildLemonadeModelListUrl(origin: string): string {
-	return `${new URL(origin).origin}${LEMONADE_MODEL_LIST_PATH}`;
 }
 
 /** True for the legacy kit's model-lists service URL. */
@@ -121,30 +116,23 @@ export async function readClineLemonadeEntry(modelsPath: string): Promise<ClineL
 	};
 }
 
-/** Where the Lemonade provider's `modelsSourceUrl` should point, given what it points at now. */
-export function planModelsSourceUrl(
-	currentUrl: string | null,
-	targetUrl: string,
-): { action: "up-to-date" | "update" | "custom"; detail: string } {
-	if (currentUrl === targetUrl) {
-		return { action: "up-to-date", detail: "Already points at the model-lists route." };
-	}
+/** Whether the Lemonade provider's `modelsSourceUrl` must go, given what it is now. */
+export function planModelsSourceUrl(currentUrl: string | null): { action: "up-to-date" | "remove"; detail: string } {
 	if (currentUrl === null) {
-		return { action: "update", detail: "No modelsSourceUrl yet." };
+		return { action: "up-to-date", detail: "No modelsSourceUrl: Cline offers only the models record." };
 	}
-	if (isManagedModelsSourceUrl(currentUrl)) {
-		return { action: "update", detail: "Points at the legacy model-lists service or another Kanban origin." };
-	}
-	return { action: "custom", detail: "Points at a URL Kanban doesn't manage; left alone." };
+	return {
+		action: "remove",
+		detail: "Cline would offer every model this URL lists, not only the models record (the allow list); drop it",
+	};
 }
 
-/** Reads models.json and says whether its Lemonade `modelsSourceUrl` should change. Never writes. */
-export async function planClineModelsSource(modelsPath: string, targetUrl: string): Promise<ClineModelsSourcePlan> {
+/** Reads models.json and says whether its Lemonade `modelsSourceUrl` must be dropped. Never writes. */
+export async function planClineModelsSource(modelsPath: string): Promise<ClineModelsSourcePlan> {
 	const read = await readClineLemonadeEntry(modelsPath);
 	if (read.kind !== "found") {
 		const action = read.kind === "absent" ? "skip" : "error";
-		return { action, modelsPath, currentUrl: null, targetUrl, detail: read.detail };
+		return { action, modelsPath, currentUrl: null, detail: read.detail };
 	}
-	const plan = planModelsSourceUrl(read.modelsSourceUrl, targetUrl);
-	return { ...plan, modelsPath, currentUrl: read.modelsSourceUrl, targetUrl };
+	return { ...planModelsSourceUrl(read.modelsSourceUrl), modelsPath, currentUrl: read.modelsSourceUrl };
 }

@@ -5,8 +5,8 @@
 // There is no inheritance (a kit resolves only over `default`), so `create` writes the `--from` kit as it resolves
 // over `default`, a complete copy, with the `--set` keys applied the way the resolver applies them (a role's `model`
 // replaces its `tier` and back). `edit` changes keys of an existing user kit, never a built-in one; workspaces on the
-// kit read it at their next routing decision, so the edit is refused when it would newly route one of them to a
-// combination the vetted model registry refuses (as `kit set` is). Only team-definition keys: `kit`/`name` identify
+// kit read it at their next routing decision, so the edit is refused when one of them would no longer resolve. Only
+// team-definition keys: `kit`/`name` identify
 // the kit, legacy keys have new names, and project facts are each project's (`kanban kit set`).
 //
 // Every create/edit goes to `<home>/data/kit-history.jsonl`; an edit also goes to the kit settings history of each
@@ -41,7 +41,6 @@ import {
 	resolveKitByName,
 	resolveKitLayers,
 } from "./resolve-kit";
-import { describeRefusedKitRoutes, getWorkspaceRoutingVetting } from "./routing-vetting";
 
 /** Thrown for a create/edit the user asked for that isn't allowed or doesn't validate (not for I/O failures). */
 export class UserKitRefusedError extends Error {}
@@ -298,14 +297,6 @@ export function planUserKitEdit(input: {
 		const after = resolveKitByName(nextCatalog, name, overrides);
 		if (!after.ok) {
 			throw new UserKitRefusedError(`${workspaceId} (on kit ${name}) would not resolve: ${after.error}`);
-		}
-		// Like kit set: no newly refused route (routes refused before the edit are doctor's to report).
-		const vetting = getWorkspaceRoutingVetting(config, workspaceId);
-		const current = resolveKitByName(catalog, name, overrides);
-		const refusedBefore = new Set(current.ok ? describeRefusedKitRoutes(current.kit, vetting) : []);
-		const newlyRefused = describeRefusedKitRoutes(after.kit, vetting).filter((line) => !refusedBefore.has(line));
-		if (newlyRefused.length > 0) {
-			throw new UserKitRefusedError(`${workspaceId} (on kit ${name}): ${newlyRefused.join("; ")}`);
 		}
 		const ownKeys = Object.keys(translateLegacyOverrides(overrides).overrides);
 		const shadowedBy = ownKeys

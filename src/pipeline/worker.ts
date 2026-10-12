@@ -33,7 +33,6 @@ import { createIssueSyncJobs, takeWorkspaceIssueWakeNotes } from "../issues/issu
 import type { IssueSyncDependencies } from "../issues/issue-sync";
 import { createRoutingPolicy } from "../kits/policy";
 import { type KitCatalog, loadKitCatalog, resolveWorkspaceKit } from "../kits/resolve-kit";
-import { getWorkspaceRoutingVetting } from "../kits/routing-vetting";
 import { registerTeamKitFeatures } from "../kits/team/features";
 import { readAgentDefaultModels } from "../models/cline-providers";
 import { getAgentClearCommand, readAgentSessionSize } from "../terminal/orchestrator-agents";
@@ -573,7 +572,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			});
 		}
 
-		const policy = createRoutingPolicy(resolution.kit, getWorkspaceRoutingVetting(parsed.config, workspaceId));
+		const policy = createRoutingPolicy(resolution.kit);
 		const agentDefaultModels = await loadAgentDefaultModels(parsed);
 		const shadow = settings.pipeline.shadow;
 		const recoveryDecisions = await recovery.evaluate({

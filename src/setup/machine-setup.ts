@@ -30,7 +30,7 @@ import {
 } from "./cline-bedrock-key";
 import { formatApplyLemonadeModelsHint } from "./cline-lemonade-apply";
 import { hasLemonadeModelsChanges, planClineLemonadeModels } from "./cline-lemonade-models";
-import { buildLemonadeModelListUrl, planClineModelsSource } from "./cline-models-source";
+import { planClineModelsSource } from "./cline-models-source";
 import { readManagedSectionStatus, writeManagedSection } from "./managed-section";
 
 export type SetupStepId = "npmrc" | "cline-providers" | "cline-models-source" | "cline-lemonade-models" | "claude-md";
@@ -53,7 +53,7 @@ export interface SetupStepPlan {
 }
 
 export interface MachineSetupOptions {
-	/** Kanban server origin for Cline's Lemonade model list. */
+	/** Kanban server origin agent CLIs call (`kanban setup` prints it). */
 	origin: string;
 	/** Write the CLAUDE.md section even while the legacy kit is installed. */
 	forceClaudeMd?: boolean;
@@ -205,25 +205,22 @@ export async function planClineProviders(
 }
 
 /**
- * Lemonade `modelsSourceUrl` in Cline's models.json. Read-only: when it should change the step is `manual` and says
- * which command the user runs (Kanban writes nothing under ~/.cline).
+ * Lemonade `modelsSourceUrl` in Cline's models.json, which must not be set (the models record is the allow list).
+ * Read-only: when it is set the step is `manual` and says which command the user runs (Kanban writes nothing under
+ * ~/.cline).
  */
-export async function planClineModelsSourceStep(paths: MachineSetupPaths, origin: string): Promise<SetupStepPlan> {
-	const targetUrl = buildLemonadeModelListUrl(origin);
-	const plan = await planClineModelsSource(paths.clineModels, targetUrl);
-	const current = plan.currentUrl ?? "(none)";
+export async function planClineModelsSourceStep(paths: MachineSetupPaths): Promise<SetupStepPlan> {
+	const plan = await planClineModelsSource(paths.clineModels);
 	const base = { id: "cline-models-source" as const, target: paths.clineModels };
 	switch (plan.action) {
-		case "update":
+		case "remove":
 			return {
 				...base,
 				status: "manual",
-				details: [`lemonade modelsSourceUrl: ${current} -> ${targetUrl}`, formatApplyLemonadeModelsHint(origin)],
+				details: [`lemonade modelsSourceUrl: ${plan.currentUrl}: ${plan.detail}`, formatApplyLemonadeModelsHint()],
 			};
 		case "up-to-date":
-			return { ...base, status: "ok", details: [`lemonade modelsSourceUrl: ${current}`] };
-		case "custom":
-			return { ...base, status: "ok", details: [`lemonade modelsSourceUrl: ${current} (${plan.detail})`] };
+			return { ...base, status: "ok", details: [`lemonade modelsSourceUrl: (none)`] };
 		case "error":
 			return { ...base, status: "error", details: [plan.detail] };
 		default:
@@ -237,12 +234,10 @@ export async function planClineModelsSourceStep(paths: MachineSetupPaths, origin
  */
 export async function planClineLemonadeModelsStep(
 	paths: MachineSetupPaths,
-	options: { origin: string; lemonadeModelList: LemonadeModelListSettings; fetch?: typeof fetch },
+	options: { lemonadeModelList: LemonadeModelListSettings; fetch?: typeof fetch },
 ): Promise<SetupStepPlan> {
 	const plan = await planClineLemonadeModels({
 		modelsPath: paths.clineModels,
-		requireLabels: options.lemonadeModelList.requireLabels,
-		include: options.lemonadeModelList.include,
 		lemonadeUrl: options.lemonadeModelList.url,
 		fetch: options.fetch,
 	});
@@ -251,7 +246,7 @@ export async function planClineLemonadeModelsStep(
 		return { ...base, status: plan.kind === "absent" ? "skipped" : "error", details: plan.details };
 	}
 	if (hasLemonadeModelsChanges(plan)) {
-		return { ...base, status: "manual", details: [...plan.details, formatApplyLemonadeModelsHint(options.origin)] };
+		return { ...base, status: "manual", details: [...plan.details, formatApplyLemonadeModelsHint()] };
 	}
 	// Lemonade down is not a setup failure: nothing can be compared, and the next run does.
 	return { ...base, status: plan.inSync ? "ok" : "skipped", details: plan.details };
@@ -311,14 +306,13 @@ export async function planMachineSetup(options: MachineSetupOptions): Promise<Se
 		{
 			id: "cline-models-source",
 			target: paths.clineModels,
-			plan: () => planClineModelsSourceStep(paths, options.origin),
+			plan: () => planClineModelsSourceStep(paths),
 		},
 		{
 			id: "cline-lemonade-models",
 			target: paths.clineModels,
 			plan: async () =>
 				planClineLemonadeModelsStep(paths, {
-					origin: options.origin,
 					lemonadeModelList: options.lemonadeModelList ?? (await readLemonadeModelListSettings()).settings,
 					fetch: options.fetch,
 				}),

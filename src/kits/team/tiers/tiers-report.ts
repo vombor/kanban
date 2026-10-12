@@ -9,7 +9,6 @@
 //
 // The data was the legacy kit's `benchmark.tiers`/`benchmark.dropped` (archive/devteam-kit:lib/config.cjs@6da71597),
 // which only people read; the lookup rules are in tier-lookup.ts and kit-schema.ts (getUsableTierEntries).
-import { getVettedRegistry, listModelWideRejections } from "../../../models/vetted-registry";
 import type { PipelineFeature } from "../../../pipeline/features";
 import type { KitDocument } from "../../kit-schema";
 import { lookupTierModel } from "../../tier-lookup";
@@ -18,7 +17,7 @@ export interface TierReportEntry {
 	provider: string | null;
 	model: string;
 	default: boolean;
-	/** Listed in `dropped` or rejected model-wide in the vetted model registry (never picked). */
+	/** Listed in the kit's `dropped` (never picked). */
 	dropped: boolean;
 	/** The model the tier lookup picks for this tier. */
 	picked: boolean;
@@ -45,21 +44,12 @@ export interface TiersReport {
 }
 
 export function buildTiersReport(kit: KitDocument): TiersReport {
-	// The kit's own dropped list (user kits) plus the models the vetted model registry rejects on every agent.
-	const dropped = [
-		...(kit.dropped ?? []).map((entry) => ({
-			provider: entry.provider ?? null,
-			model: entry.model,
-			at: entry.at ?? null,
-			why: entry.why ?? null,
-		})),
-		...listModelWideRejections(getVettedRegistry()).map((entry) => ({
-			provider: null,
-			model: entry.model,
-			at: entry.at,
-			why: `${entry.reason} (vetted model registry)`,
-		})),
-	];
+	const dropped = (kit.dropped ?? []).map((entry) => ({
+		provider: entry.provider ?? null,
+		model: entry.model,
+		at: entry.at ?? null,
+		why: entry.why ?? null,
+	}));
 	const droppedModels = new Set(dropped.map((entry) => entry.model));
 	const tiers = Object.entries(kit.tiers ?? {}).map(([name, entries]): TierReport => {
 		const lookup = lookupTierModel(kit, name);

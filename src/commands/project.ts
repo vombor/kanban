@@ -126,10 +126,7 @@ export function registerProjectCommand(program: Command): void {
 		.option("--name <name>", "Display name (default: the repo directory name).")
 		.option("--blurb <text>", "Project description for QA prompts (the kit override qa.blurb).")
 		.option("--agents-md", "Append the managed agents-qa section to the project's AGENTS.md.")
-		.option(
-			"--allow-provisional",
-			"Let the project route to the vetted model registry's provisional combinations (team-local's are all provisional).",
-		)
+
 		.option("--json", "Print the result as JSON.")
 		.action(
 			async (
@@ -141,7 +138,6 @@ export function registerProjectCommand(program: Command): void {
 					name?: string;
 					blurb?: string;
 					agentsMd?: boolean;
-					allowProvisional?: boolean;
 					json?: boolean;
 				},
 			) => {
@@ -154,7 +150,6 @@ export function registerProjectCommand(program: Command): void {
 						name: options.name,
 						blurb: options.blurb,
 						agentsMd: options.agentsMd === true,
-						allowProvisional: options.allowProvisional === true,
 					});
 					process.stdout.write(
 						options.json

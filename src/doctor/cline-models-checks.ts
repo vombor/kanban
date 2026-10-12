@@ -1,5 +1,6 @@
-// Doctor row: do Cline's Lemonade models (models.json) match what Lemonade reports now? Lists models to add or
-// remove and changed context windows, vision and the rest, with the command the user runs to apply them. Of those,
+// Doctor row: does the metadata of Cline's Lemonade models (models.json) match what Lemonade reports now? Lists
+// changed context windows, vision and the rest, with the command the user runs to apply them, and the record's
+// models Lemonade doesn't list (which models are in the record is the Kanban orchestrator's). Of those,
 // the server's Lemonade context sync (`agents.cline.lemonadeContextSync`, issue #31) writes the context windows
 // itself; the row says what it will do, or that it is off, so a difference that stays means the sync is off or
 // failed (its history: `<home>/data/models/cline-lemonade-sync.jsonl`). Cheap: one catalog round to Lemonade (its
@@ -9,7 +10,6 @@ import {
 	type ClineLemonadeContextSyncSettings,
 } from "../config/cline-lemonade-context-sync-config";
 import type { LemonadeModelListSettings } from "../config/model-lists-config";
-import { LEMONADE_MODEL_LIST_INCLUDE_KEY } from "../config/model-lists-config";
 import { formatApplyLemonadeModelsCommand } from "../setup/cline-lemonade-apply";
 import { planLemonadeContextSync } from "../setup/cline-lemonade-context-sync";
 import {
@@ -44,8 +44,6 @@ function describeContextSync(
 
 export async function checkClineLemonadeModels(options: {
 	modelsPath: string;
-	/** Kanban server origin, for the printed command. */
-	origin: string;
 	lemonadeModelList: LemonadeModelListSettings;
 	/** The server's context sync settings; without them the row doesn't mention the sync. */
 	contextSync?: Pick<ClineLemonadeContextSyncSettings, "mode" | "intervalSec">;
@@ -54,8 +52,6 @@ export async function checkClineLemonadeModels(options: {
 }): Promise<DoctorFinding[]> {
 	const plan = await planClineLemonadeModels({
 		modelsPath: options.modelsPath,
-		requireLabels: options.lemonadeModelList.requireLabels,
-		include: options.lemonadeModelList.include,
 		lemonadeUrl: options.lemonadeModelList.url,
 		fetch: options.fetch,
 		timeoutMs: LEMONADE_TIMEOUT_MS,
@@ -65,19 +61,6 @@ export async function checkClineLemonadeModels(options: {
 		return [];
 	}
 	const prefix = `cline lemonade models (${options.modelsPath})`;
-	// An include id Lemonade can't offer is the user's list to fix, even with the file in sync (with differences, the
-	// warning above lists it among them).
-	const include: DoctorFinding[] =
-		plan.unlistedIncluded.length > 0
-			? [
-					{
-						level: "warn",
-						area: "setup",
-						message: `${prefix}: ${LEMONADE_MODEL_LIST_INCLUDE_KEY} names models Lemonade can't offer: ${plan.unlistedIncluded.join("; ")}`,
-						hint: `pull the model in Lemonade, or change the list: kanban config set ${LEMONADE_MODEL_LIST_INCLUDE_KEY} <ids...>`,
-					},
-				]
-			: [];
 	if (hasLemonadeModelsChanges(plan)) {
 		const sync = options.contextSync
 			? describeContextSync(plan, options.contextSync, options.historyPath ?? getClineLemonadeSyncHistoryPath())
@@ -87,7 +70,7 @@ export async function checkClineLemonadeModels(options: {
 				level: "warn",
 				area: "setup",
 				message: `${prefix}: ${[...plan.details, ...sync].join("; ")}`,
-				hint: formatApplyLemonadeModelsCommand(options.origin),
+				hint: formatApplyLemonadeModelsCommand(),
 			},
 		];
 	}
@@ -95,5 +78,15 @@ export async function checkClineLemonadeModels(options: {
 	if (plan.unreachable) {
 		return [{ level: "info", area: "setup", message }];
 	}
-	return include.length > 0 ? include : [{ level: "pass", area: "setup", message }];
+	if (plan.unlisted.length > 0) {
+		return [
+			{
+				level: "warn",
+				area: "setup",
+				message,
+				hint: "pull the model in Lemonade, or take it out of models.json's lemonade record",
+			},
+		];
+	}
+	return [{ level: "pass", area: "setup", message }];
 }

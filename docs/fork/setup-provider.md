@@ -13,9 +13,15 @@ kanban setup-provider <provider> [--json]   # write it
 
 | Provider | Writes | Its own options | Details |
 |---|---|---|---|
-| `lemonade` | models.json, the `lemonade` entry: `modelsSourceUrl` (Kanban's `/api/model-lists/lemonade`) and each model's context window, maxTokens, vision and reasoning as Lemonade reports them | `--origin <url>` (default: the running server) | [MODELS.md](../team/MODELS.md), [RUNBOOK.md](../team/RUNBOOK.md) |
+| `lemonade` | models.json, the `lemonade` entry: drops its `modelsSourceUrl`, and fills in the context window, maxTokens, vision and reasoning of the models already in its `models` record as Lemonade reports them | | [MODELS.md](../team/MODELS.md), [RUNBOOK.md](../team/RUNBOOK.md) |
 | `bedrock` | providers.json, the `bedrock` entry: `apiKey` from `AWS_BEARER_TOKEN_BEDROCK`, and a region (`AWS_REGION`, else `models.bedrockRegion`) when none is stored | | [cline-bedrock-auth.md](cline-bedrock-auth.md) |
 | `cline-pass` | providers.json, the `cline-pass` entry: `apiKey` from `CLINE_API_KEY` | | [cline-pass-auth.md](cline-pass-auth.md) |
+
+A provider's `models` record in models.json is Cline's allow list, curated by the Kanban orchestrator by hand with
+models that passed `kanban models vet` ([MODELS.md](../team/MODELS.md)). So a provider's write keeps the records it
+finds and only fills in or refreshes their metadata (context window, maxTokens, vision, reasoning): it never adds or
+removes a model, and it drops a `modelsSourceUrl` (Cline offers every id that URL returns). A new provider type in
+the registry (e.g. an OpenAI-compatible one such as Triton) follows the same rule.
 
 Every provider changes only its own entry, copies the file as read into `<home>/backups/cline/` (0600) before writing,
 replaces the file atomically with its own mode, writes nothing when the file changed meanwhile, and never prints a key.

@@ -30,7 +30,6 @@ import { getRestartManifestPath } from "../../../src/state/kanban-home";
 import { KANBAN_CLINE_HUB_ABORT_REASONS } from "../../../src/terminal/cline-hub-abort-reason";
 import type { ClineSessionDetail } from "../../../src/terminal/cline-session-files";
 import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
-import { PROVISIONAL_ALLOWED } from "../../utilities/routing-vetting";
 
 const NOW = Date.parse("2026-10-07T12:00:00.000Z");
 const SERVER_START = NOW - 5 * 60_000;
@@ -363,7 +362,7 @@ describe("recovery stage", () => {
 		if (!resolved.ok) {
 			throw new Error(resolved.error);
 		}
-		const policy = createRoutingPolicy(resolved.kit, PROVISIONAL_ALLOWED);
+		const policy = createRoutingPolicy(resolved.kit);
 		const outage = (minutes: number) => ({
 			outage: {
 				since: new Date(NOW - minutes * 60_000).toISOString(),

@@ -12,8 +12,7 @@ import { getClineModelsSettingsPath } from "../../../src/state/kanban-home";
 import { createFakeLemonadeFetch } from "../../utilities/lemonade-fixtures";
 import { createTempDir } from "../../utilities/temp-dir";
 
-const ORIGIN = "http://127.0.0.1:3485";
-const TARGET = `${ORIGIN}/api/model-lists/lemonade`;
+const ROUTE = "http://127.0.0.1:3485/api/model-lists/lemonade";
 const NOW = new Date("2026-10-07T12:00:00.000Z");
 
 function clineModelsFile(modelsSourceUrl: string | undefined, models: unknown): Record<string, unknown> {
@@ -88,8 +87,6 @@ describe("kanban setup-provider lemonade", () => {
 	function apply(options: { dryRun?: boolean; fetch?: typeof fetch } = {}) {
 		return applyClineLemonadeEntry({
 			modelsPath,
-			origin: ORIGIN,
-			requireLabels: ["tool-calling"],
 			backupDir: getClineModelsBackupDir(homePath),
 			dryRun: options.dryRun ?? false,
 			fetch: options.fetch ?? createFakeLemonadeFetch(),
@@ -97,10 +94,8 @@ describe("kanban setup-provider lemonade", () => {
 		});
 	}
 
-	it("prints a command with the origin", () => {
-		expect(formatApplyLemonadeModelsCommand("http://127.0.0.1:3485/x")).toBe(
-			"kanban setup-provider lemonade --origin http://127.0.0.1:3485",
-		);
+	it("prints the command", () => {
+		expect(formatApplyLemonadeModelsCommand()).toBe("kanban setup-provider lemonade");
 	});
 
 	it("writes only the Lemonade entry, atomically with the file's mode, after a backup in the Kanban home", async () => {
@@ -111,8 +106,11 @@ describe("kanban setup-provider lemonade", () => {
 		const result = await apply();
 
 		expect(result.status).toBe("written");
-		expect(result.lines).toContain(`modelsSourceUrl: http://127.0.0.1:13306/lemonade/models -> ${TARGET}`);
-		expect(result.lines).toContain("Gone-GGUF: remove (Lemonade no longer lists it)");
+		expect(result.lines).toContainEqual(
+			expect.stringMatching(/^modelsSourceUrl: http:\/\/127\.0\.0\.1:13306\/lemonade\/models -> \(none\): /u),
+		);
+		// A model Lemonade doesn't list stays: the record is the orchestrator's.
+		expect(result.lines).toContainEqual(expect.stringMatching(/^Gone-GGUF: in the models record but Lemonade/u));
 		const backupDir = join(homePath, "backups", "cline");
 		expect(result.backupPath).toBe(join(backupDir, "models.json.20261007T120000Z"));
 		expect(readFileSync(result.backupPath ?? "", "utf8")).toBe(before);
@@ -122,10 +120,12 @@ describe("kanban setup-provider lemonade", () => {
 		expect(statSync(modelsPath).mode & 0o777).toBe(0o640);
 
 		const after = read();
-		const expected = clineModelsFile(TARGET, {}) as ModelsDocument;
+		const expected = clineModelsFile(undefined, {}) as ModelsDocument;
 		expect(after.providers.lemonade.provider).toEqual(expected.providers.lemonade.provider);
-		expect(Object.keys(after.providers.lemonade.models)).toHaveLength(6);
+		// Only the record's own models, never one Lemonade has on top.
+		expect(Object.keys(after.providers.lemonade.models)).toEqual(["GLM-4.7-Flash-GGUF", "Gone-GGUF"]);
 		expect(after.providers.lemonade.models["GLM-4.7-Flash-GGUF"]).toMatchObject({ contextWindow: 202752 });
+		expect(after.providers.lemonade.models["Gone-GGUF"]).toEqual({ id: "Gone-GGUF", name: "Gone-GGUF" });
 		expect(after.providers.other).toEqual(expected.providers.other);
 		expect(after.unrelatedTopLevel).toEqual({ keep: true });
 		expect(after.version).toBe(1);
@@ -151,17 +151,19 @@ describe("kanban setup-provider lemonade", () => {
 		expect(readdirSync(root.path)).not.toContain("kanban-home");
 	});
 
-	it("with Lemonade down keeps every model value and still points the URL", async () => {
+	it("with Lemonade down keeps every model value and still drops the URL, any URL", async () => {
 		const models = { "GLM-4.7-Flash-GGUF": { id: "GLM-4.7-Flash-GGUF", contextWindow: 202752 } };
-		write(clineModelsFile("https://models.example.com/mine", models));
-		const custom = await apply({ fetch: createFakeLemonadeFetch({ down: true }) });
-		expect(custom.status).toBe("in-sync");
-
 		write(clineModelsFile(undefined, models));
-		const result = await apply({ fetch: createFakeLemonadeFetch({ down: true }) });
-		expect(result.status).toBe("written");
-		expect(read().providers.lemonade.models).toEqual(models);
-		expect(read().providers.lemonade.provider.modelsSourceUrl).toBe(TARGET);
+		const none = await apply({ fetch: createFakeLemonadeFetch({ down: true }) });
+		expect(none.status).toBe("in-sync");
+
+		for (const url of [ROUTE, "https://models.example.com/mine"]) {
+			write(clineModelsFile(url, models));
+			const result = await apply({ fetch: createFakeLemonadeFetch({ down: true }) });
+			expect(result.status).toBe("written");
+			expect(read().providers.lemonade.models).toEqual(models);
+			expect(read().providers.lemonade.provider).not.toHaveProperty("modelsSourceUrl");
+		}
 	});
 
 	it("leaves a file alone that changed while Lemonade was asked", async () => {

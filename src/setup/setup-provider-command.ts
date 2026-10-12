@@ -13,7 +13,7 @@ export function isSetupProviderId(value: string): value is SetupProviderId {
 	return (SETUP_PROVIDER_IDS as readonly string[]).includes(value);
 }
 
-/** `kanban setup-provider <id>`, plus the provider's own options when given (e.g. `--origin <url>`). */
+/** `kanban setup-provider <id>`, plus the provider's own options when given. */
 export function formatSetupProviderCommand(id: SetupProviderId, options?: string): string {
 	return `${SETUP_PROVIDER_COMMAND} ${id}${options ? ` ${options}` : ""}`;
 }

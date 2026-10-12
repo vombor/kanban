@@ -18,12 +18,10 @@ A kit is the **team definition**: its roles with a default model each, and the f
 **project settings** on top (role models and project facts, [Project settings](#project-settings)); a different
 team is a different kit.
 
-Every agent + provider + model a kit or a project routes a role to must be in the **vetted model registry**
-(`models/vetted.json`, [MODELS.md](MODELS.md)) for that role: vetted, or provisional where the user allowed
-provisional combinations for the project. The kit gives each role a default; the project picks another within the
-registry. The built-in `team` kit's own defaults (Cline on sol, Codex's and Claude's default models) are provisional,
-so a project on them needs `--allow-provisional` (or its own vetted role models, as foo has). `team-local`'s routes
-(Qwen3.8 dev and plan, Gemma QA, Devstral-Small-2 fallback) are vetted (2026-10-10).
+Any model may be on any role ([MODELS.md](MODELS.md)): the kit gives each role a default, the project overrides it
+(`kanban kit set roles.<role>.*`), and Kanban doesn't refuse or warn about the choice. For Cline roles, Cline's
+models.json is the allow list: `kanban doctor` warns when a role names a model its provider's models.json record
+doesn't list (Cline couldn't select it).
 
 Code: `src/kits/kit-schema.ts` (schema), `src/kits/kit-roles.ts` (roles and the fallback flow),
 `src/kits/project-settings.ts` (what a project may set), `src/kits/kit-legacy-keys.ts` (keys from before the split), `src/kits/resolve-kit.ts` (resolver), `src/kits/policy.ts` (the one
@@ -180,7 +178,7 @@ user kit file), never a silent no-op. A missing key means "no answer", so the `d
 | `worktrees.symlinkIgnored.include`, `worktrees.symlinkIgnored.exclude` | glob lists | which git-ignored paths of the main checkout task worktrees link ([below](#task-worktrees-ignored-paths-worktreessymlinkignored)) | unset (the default excludes) | unset |
 | `features[]` | `scoreboard`, `bench`, `runoffs`, `calibration`, `tiers` | built-in team features that run for the project | `[]` | all five |
 | `tiers.<name>[]` | `{ provider?, model, default?, note? }` | `roles.<role>.tier`, `kanban bench tiers`, `bench runoff create --tier` | | `tier3`, `tier2`, `tier1`, `qa` |
-| `dropped[]` | `{ provider?, model, at?, why? }` | a user kit's own models no tier lookup returns, on any provider; the built-in kits' are rejected in the vetted model registry (`rejected.scope: "model"`) | | none (in the registry) |
+| `dropped[]` | `{ provider?, model, at?, why? }` | a user kit's own models no tier lookup returns, on any provider | | none |
 | `tierRules`, `tierNotes` | text per tier | shown by `kanban bench tiers` | | |
 | `prices.{region,autoSync}` | | the `bench` feature's daily AWS price check | | `us-west-2`, `true` |
 | `recommends.landingMode` | landing mode | shown by `kanban kit show/apply`, **never applied** without `--landing` | | `qa` |
@@ -237,7 +235,7 @@ kanban kit set land.postLand '[{"paths":"^prisma/","run":"npx prisma generate"}]
 kanban kit unset roles.dev.model --project /projects/foo       # the kit's dev model again
 kanban kit unset roles.fallback --project /projects/foo        # every field of the role
 kanban kit set onFail.reworkRounds 5 --project /projects/foo   # refused: part of the team definition (kit team)
-kanban kit set roles.dev.model gpt-9 --project /projects/foo          # refused: not in the vetted model registry for dev (kanban models vet ...)
+kanban kit set roles.dev.model gpt-9 --project /projects/foo          # any model; for Cline, doctor warns if models.json doesn't list it
 ```
 
 The value is JSON when it parses as JSON (`true`, `3`, `null`, `[…]`, `{…}`, `"text"`), else the text itself. A
@@ -377,8 +375,8 @@ A model id's vendor (for `qa.requireDifferentVendor`) is `getModelVendor()` in `
 `Qwen` → `qwen`, `Gemma` → `google`, `DeepSeek` → `deepseek`), named like the Bedrock vendors so a local and a
 Bedrock model of one family count as one vendor. An id it can't place gives no vendor, and the rule doesn't refuse.
 
-A tier lookup returns the tier's `default` entry, else its first usable one, and skips `dropped` models and the
-models the vetted model registry rejects on every agent (`src/kits/tier-lookup.ts`).
+A tier lookup returns the tier's `default` entry, else its first usable one, and skips the kit's `dropped` models
+(`src/kits/tier-lookup.ts`).
 
 ## How the evaluator answers
 
@@ -480,20 +478,19 @@ override (plan §12).
 
 `kits/team-local.json`: the team workflow on the local Lemonade server (http://localhost:13305/api/v1, OpenAI
 compatible) through the Cline CLI with provider `lemonade`. No paid or cloud provider appears anywhere in it
-(`test/runtime/kits/team-local-kit.test.ts` checks every model and agent). Every route is **vetted** for its role
-(`kanban models vet`, 2026-10-10, cline 3.0.70); `kanban bench calibrate` can still compare candidates on the project.
+(`test/runtime/kits/team-local-kit.test.ts` checks every model and agent). Every route passed `kanban models vet` for its role
+(2026-10-10, cline 3.0.70; its models must be in Cline's models.json record); `kanban bench calibrate` can still compare candidates on the project.
 
-| Role | Model (vetted) | Why |
+| Role | Model (passed `kanban models vet`) | Why |
 |---|---|---|
-| Dev (`roles.dev`: tier `dev`), plan cards (`roles.plan`, Cline `--plan`) | `Qwen3.8-27B-GGUF-UD-Q4_K_XL` | tool-calling + vision; a dense 27B (17.2 GB), 65536 context as Lemonade loads it (max 262144). Plans on the dev model need no model swap. Replaced `GLM-4.7-Flash-GGUF`, which the user removed from the vetted model registry (2026-10-11) |
+| Dev (`roles.dev`: tier `dev`), plan cards (`roles.plan`, Cline `--plan`) | `Qwen3.8-27B-GGUF-UD-Q4_K_XL` | tool-calling + vision; a dense 27B (17.2 GB), 65536 context as Lemonade loads it (max 262144). Plans on the dev model need no model swap. Replaced `GLM-4.7-Flash-GGUF`, which the user dropped (2026-10-11) |
 | QA (`roles.qa`) | `gemma-4-31B-it-qat-q4_0-gguf-Q4_0` | another family (google) than the dev and fallback models, vision + tool-calling; 17.6 GB, 98304 context as Lemonade loads it. Replaced `Gemma-4-12B-it-GGUF` (2026-10-11, no longer on the pod's Lemonade). No `qa.routes`, so a card someone builds on Gemma itself gets no QA (`kit show` warns) |
 | Fallback dev model (`roles.fallback`: tier `senior`) | `Devstral-Small-2-24B-Instruct-2512-GGUF-Q4_K_M` | a third family (Mistral), neither the dev nor the QA model, so its sibling is still reviewed by Gemma. 14.2 GB, 65536 context as Lemonade loads it |
 
 These are the defaults the notes project already set as overrides (2026-10-10). The other coding models are
 candidates in `tiers` (`Devstral-Small-2507`, `Qwen3.6` and `DeepSeek-V4-Flash-0731-GGUF-BF16` for dev;
-`Devstral-Small-2507` and `Qwen3.6` for QA). `LMX-Omni-52B-Halo` is
-rejected in the vetted model registry: it is a Lemonade collection (Qwen3.6 + image + speech models) without the tool-calling label, so Cline's
-Lemonade list doesn't offer it.
+`Devstral-Small-2507` and `Qwen3.6` for QA). `LMX-Omni-52B-Halo` is not one: it is a Lemonade collection (Qwen3.6
++ image + speech models) without the tool-calling label, so it doesn't belong in Cline's models.json record.
 
 - **FAIL:** same-model rework for 3 rounds (conflicts too), then the fallback: a sibling card on Devstral-Small-2 takes the
   task over and starts at once (`requireApproval: false`: a local run costs nothing). The core never hands a task
@@ -557,11 +554,12 @@ been worked out for these three (the old GLM/Gemma-12B/Qwen3.6 set came to about
 check the free memory with all three loaded before raising a context. `--save-options` replaces the model's stored
 options, so repeat the backend. Cline's models.json follows by itself: the server's Lemonade context sync
 (`agents.cline.lemonadeContextSync`, on by default) writes the new `contextWindow`/`maxTokens` within 30 s and
-before the next Cline launch. Models to add or remove are still the user's command:
+before the next Cline launch. Which models are in the record is the Kanban orchestrator's (by hand, with models that
+passed `kanban models vet`); `kanban setup-provider lemonade` fills in their metadata:
 
 ```sh
 lemonade load Qwen3.8-27B-GGUF-UD-Q4_K_XL --ctx-size 65536 --llamacpp vulkan --save-options
-kanban setup-provider lemonade --origin <kanban origin>    # only for models added or removed; doctor prints it
+kanban setup-provider lemonade    # metadata of the record's models, drops a modelsSourceUrl; doctor prints it
 ```
 
 ### Settings team-local needs
@@ -583,7 +581,7 @@ The other local gotchas:
 - **Context overflow.** Cline compacts at 0.9 × the `contextWindow` in its models.json, so that window must be the
   one Lemonade really loads. The server's Lemonade context sync keeps it so after a reload (`report`/`off` in
   `agents.cline.lemonadeContextSync` stop it), `kanban doctor`'s "cline lemonade models" row compares them, and
-  `kanban setup-provider lemonade --origin <origin>` (the user or the Kanban orchestrator runs it) fixes the rest of models.json. Beyond that,
+  `kanban setup-provider lemonade` (the user or the Kanban orchestrator runs it) fixes the rest of the record's metadata. Beyond that,
   recovery (mode `on`) clears an overflowed history.
 - **Models.** `kanban doctor` also warns when Lemonade doesn't list a model the kit routes to, hasn't downloaded it,
   or doesn't mark it tool-calling. It reports INFO when Lemonade is down.
@@ -593,7 +591,7 @@ The other local gotchas:
 ```sh
 kanban project create /projects/<name>                    # or: kanban project add /projects/<name>
 kanban kit apply team-local --project /projects/<name> --landing qa --dry-run
-kanban kit apply team-local --project /projects/<name> --landing qa   # every route is vetted
+kanban kit apply team-local --project /projects/<name> --landing qa
 kanban task reassign --column backlog --project-path /projects/<name>   # existing Backlog cards onto the kit
 kanban kit show --project /projects/<name>                # routing + "Settings this kit needs"
 kanban doctor /projects/<name>                            # warns about unmet settings and missing models
@@ -665,8 +663,7 @@ User kits are made and changed only by the user, with two commands (an agent ses
   key from the file, so the `default` kit's value applies. The result is validated, the old file copied to
   `<home>/backups/kits/<name>.json.<UTC time>`, and the new one written atomically. It prints the workspaces on the
   kit: they pick the change up at once (and it names any changed key a workspace's own stored override still wins
-  for). Refused when it would newly route a workspace on the kit to a combination the vetted model registry refuses,
-  like `kit set`.
+  for).
 
 Both take only team-definition keys: `kit` and `name` identify the kit, legacy keys (`escalate.*`, `dev.*`, ...)
 have new names, and project facts (`qa.blurb`, `land.postLand`, `checks.*`, ...) are each project's

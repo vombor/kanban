@@ -1,37 +1,18 @@
-// What `kanban models vet` leaves behind: `report.md` (people) and `result.json` (the run and the proposed registry
-// entry) in `<home>/data/models/vetting/<run>/`. The proposal is the combination's current entry with this role's
-// vetting replaced: `vetted` after a passed run, `rejected` with the failure as the reason after a failed one (one
-// failure may be bad luck; the orchestrator decides what to commit). An `inconclusive` run (`failure.harness`: sign-in,
-// provider and transport errors, a context overflow, no capacity, Kanban) says nothing about the model, so no false
-// rejection is ever proposed: a role already vetted, provisional or rejected keeps its vetting (nothing to commit),
-// and a role without one gets `provisional` with the reason. Capabilities the run saw are merged in.
-import {
-	describeCombination,
-	lookupVetting,
-	type RoleVetting,
-	type VettedEntry,
-	type VettedRegistry,
-	vettedEntrySchema,
-} from "../vetted-registry";
+// What `kanban models vet` leaves behind: `report.md` (people) and `result.json` (the run and its summary) in
+// `<home>/data/models/vetting/<run>/`. The summary says passed, failed or inconclusive with the tool-call counts. An
+// `inconclusive` run (`failure.harness`: sign-in, provider and transport errors, a context overflow, no capacity,
+// Kanban) says nothing about the model. Nothing is written anywhere else: the Kanban orchestrator decides whether the
+// model goes into Cline's models.json (docs/team/MODELS.md).
+import { describeCombination } from "../model-combination";
 import type { VetRunResult } from "./vet-runner";
 
-export interface VetProposal {
-	/** The entry as models/vetted.json should hold it after this run. */
-	entry: VettedEntry;
-	/** The entry it replaces, or null for a new one. */
-	replaces: VettedEntry | null;
-	/** An inconclusive run left the role's recorded vetting as it was: there is nothing to commit. */
-	unchanged: boolean;
-}
-
-function isoDay(ms: number): string {
-	return new Date(ms).toISOString().slice(0, 10);
-}
-
-function describeEvidence(result: VetRunResult): string {
+/** One line about the run: its outcome, how long it took, its cost and its tool calls. */
+export function describeVetSummary(result: VetRunResult): string {
 	const duration = Math.round((result.finishedAt - result.startedAt) / 60_000);
 	const cost = result.costUSD === null ? "cost unknown" : `$${result.costUSD.toFixed(2)}`;
-	const tools = result.toolUse ? `, ${result.toolUse.native} native tool call(s)` : "";
+	const tools = result.toolUse
+		? `, ${result.toolUse.native} native tool call(s), ${result.toolUse.textual} as text`
+		: ", tool calls not readable";
 	if (result.outcome === "inconclusive") {
 		return `kanban models vet ${result.role} smoke test inconclusive after ${duration} min (${cost}${tools}), for a harness or environment reason (not the model's): ${result.failure?.kind}: ${result.failure?.detail}`;
 	}
@@ -42,73 +23,30 @@ function describeEvidence(result: VetRunResult): string {
 	return `kanban models vet ${result.role} smoke test failed${by} after ${duration} min (${cost}${tools}): ${result.failure?.kind}: ${result.failure?.detail}`;
 }
 
-export function buildVetProposal(
-	registry: VettedRegistry,
+export function formatVetReport(
 	result: VetRunResult,
-	cliVersion: string | null,
-): VetProposal {
-	const { combination } = result;
-	const verdict = lookupVetting(registry, combination, result.role);
-	// Only an entry for exactly this combination is updated; a model-wide rejection or a provider-less entry is not.
-	const current =
-		verdict.entry &&
-		verdict.entry.agent === combination.agentId &&
-		verdict.entry.provider === combination.provider &&
-		verdict.entry.model === combination.model
-			? verdict.entry
-			: null;
-	const recorded = current?.roles[result.role];
-	if (result.outcome === "inconclusive" && current && recorded) {
-		return { entry: current, replaces: current, unchanged: true };
-	}
-	const status =
-		result.outcome === "passed" ? "vetted" : result.outcome === "inconclusive" ? "provisional" : "rejected";
-	const vetting: RoleVetting = {
-		status,
-		at: isoDay(result.finishedAt),
-		cliVersion,
-		evidence: { run: result.runId, summary: describeEvidence(result) },
-		...(result.outcome === "passed" ? {} : { reason: `${result.failure?.kind}: ${result.failure?.detail}` }),
-	};
-	const capabilities = {
-		...current?.capabilities,
-		// A run the environment cut short (GLM, 2026-10-09: no reply while Lemonade loaded it) shows no tool calls of
-		// the model's, which is no sign it can't make any.
-		...(result.toolUse && (result.toolUse.native > 0 || !result.failure?.harness)
-			? { toolUse: result.toolUse.native > 0 }
-			: {}),
-		...(result.sawImageRejection ? { images: false } : {}),
-		...(result.outcome === "passed" || result.turnEnded ? { turnEnd: result.turnEnded } : {}),
-	};
-	const entry = vettedEntrySchema.parse({
-		agent: combination.agentId,
-		provider: combination.provider,
-		model: combination.model,
-		roles: { ...current?.roles, [result.role]: vetting },
-		...(Object.keys(capabilities).length > 0 ? { capabilities } : {}),
-		...(current?.note ? { note: current.note } : {}),
-	});
-	return { entry, replaces: current, unchanged: false };
-}
-
-export function formatVetReport(result: VetRunResult, proposal: VetProposal, paths: { repoPath: string }): string {
+	paths: { repoPath: string },
+	cliVersion: string | null = null,
+): string {
 	const lines = [
 		`# Vetting ${result.runId}: ${describeCombination(result.combination)} for ${result.role}`,
 		"",
 		`Outcome: **${result.outcome.toUpperCase()}**${result.failure ? ` (${result.failure.kind}: ${result.failure.detail})` : ""}`,
 		"",
+		describeVetSummary(result),
+		"",
 		...(result.outcome === "inconclusive"
 			? [
-					proposal.unchanged
-						? "The harness or the environment caused this failure, not the model: the role keeps its recorded vetting. Run it again once the cause is gone."
-						: "The harness or the environment caused this failure, not the model: the proposal keeps the role provisional. Run it again once the cause is gone.",
+					"The harness or the environment caused this failure, not the model. Run it again once the cause is gone.",
 					"",
 				]
 			: []),
 		`- card: ${result.taskId ?? "none"} (discarded, never landed)`,
+		`- agent CLI: ${cliVersion ?? "version unknown"}`,
 		`- started ${new Date(result.startedAt).toISOString()}, finished ${new Date(result.finishedAt).toISOString()}`,
 		`- cost: ${result.costUSD === null ? "unknown" : `$${result.costUSD.toFixed(2)}`}`,
 		`- tool calls: ${result.toolUse ? `${result.toolUse.native} native, ${result.toolUse.textual} as text, ${result.toolUse.turns} turn(s)` : "not readable for this agent"}`,
+		`- images: ${result.sawImageRejection ? "rejected" : "no rejection seen"}`,
 		`- turn ended: ${result.turnEnded ? "yes" : "no"}`,
 		`- scratch repo: ${paths.repoPath}`,
 		"",
@@ -121,21 +59,5 @@ export function formatVetReport(result: VetRunResult, proposal: VetProposal, pat
 			"",
 		);
 	}
-	lines.push(
-		"## Proposed registry entry",
-		"",
-		proposal.unchanged
-			? "Nothing to commit: the combination's entry in models/vetted.json stays as it is:"
-			: proposal.replaces
-				? "Replaces the combination's entry in models/vetted.json:"
-				: "A new entry for models/vetted.json:",
-		"",
-		"```json",
-		JSON.stringify(proposal.entry, null, "\t"),
-		"```",
-		"",
-		"The registry changes only through the Kanban repo: the Kanban orchestrator commits this on fork/stack.",
-		"",
-	);
 	return lines.join("\n");
 }

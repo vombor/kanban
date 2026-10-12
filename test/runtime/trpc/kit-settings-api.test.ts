@@ -42,10 +42,7 @@ describe("kit settings caller rules", () => {
 	it("applies an allowed change at once and logs a refused one, writing nothing for it", async () => {
 		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
 			mkdirSync(dirname(globalConfigPath), { recursive: true });
-			writeFileSync(
-				globalConfigPath,
-				JSON.stringify({ workspaces: { foo: { kit: { name: "team" }, models: { allowProvisional: true } } } }),
-			);
+			writeFileSync(globalConfigPath, JSON.stringify({ workspaces: { foo: { kit: { name: "team" } } } }));
 			const logged: Array<{ workspaceIds: readonly (string | null)[]; action: string; kind: string }> = [];
 			const api = createKitSettingsApi({
 				log: async (workspaceIds, record) => {
@@ -71,16 +68,13 @@ describe("kit settings caller rules", () => {
 			]);
 			expect(JSON.parse(readFileSync(globalConfigPath, "utf8")).workspaces.foo.kit).toEqual({ name: "team" });
 
-			// The orchestrator picks within the vetted model registry: an unknown model is refused with the vet command.
-			const unvetted = await api.set({
+			// Any model may be on any role: Kanban keeps no list of allowed models.
+			const anyModel = await api.set({
 				caller: OWN_ORCHESTRATOR,
 				workspaceId: "foo",
 				request: { key: "roles.fallback.model", value: "m1" },
 			});
-			expect(unvetted).toMatchObject({ ok: false, changes: [] });
-			expect(unvetted.error).toContain("cline + m1 is not vetted for dev work");
-			expect(unvetted.error).toContain("kanban models vet --agent cline --model m1 --role dev");
-			expect(JSON.parse(readFileSync(globalConfigPath, "utf8")).workspaces.foo.kit).toEqual({ name: "team" });
+			expect(anyModel).toMatchObject({ ok: true, changes: [{ key: "roles.fallback.model", to: "m1" }] });
 
 			const response = await set(OWN_ORCHESTRATOR);
 			expect(response).toMatchObject({
@@ -104,6 +98,7 @@ describe("kit settings caller rules", () => {
 			});
 			expect(unset.ok).toBe(true);
 			expect((await readKitSettingsHistory(getKitSettingsHistoryPath("foo"))).map((entry) => entry.by)).toEqual([
+				{ kind: "orchestrator", taskId: "__home_agent__:foo:claude" },
 				{ kind: "orchestrator", taskId: "__home_agent__:foo:claude" },
 				{ kind: "user" },
 			]);

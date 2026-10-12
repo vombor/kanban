@@ -89,7 +89,6 @@ describe("Cline Lemonade context sync", () => {
 		return syncClineLemonadeContextWindows({
 			modelsPath,
 			mode: options.mode ?? "on",
-			requireLabels: ["tool-calling"],
 			backupDir,
 			fetch: options.fetch ?? createFakeLemonadeFetch(),
 			now: NOW,
@@ -119,8 +118,8 @@ describe("Cline Lemonade context sync", () => {
 				reason: "its window would come from the model's max_context_window, not its recipe_options.ctx_size",
 			},
 		]);
-		// Models to add (Devstral, Qwen, Mystery), Old to remove and Gemma's vision flag are the user's.
-		expect(result.userDifferences).toBeGreaterThanOrEqual(5);
+		// Gemma's vision flag and the other non-window keys are setup-provider's.
+		expect(result.userDifferences).toBeGreaterThanOrEqual(1);
 
 		const models = readModels();
 		expect(models["GLM-4.7-Flash-GGUF"]).toEqual(
@@ -185,16 +184,17 @@ describe("Cline Lemonade context sync", () => {
 			}),
 		);
 		const result = await sync();
+		// In the record's order: its models are the orchestrator's.
 		expect(result.changes).toEqual([
-			expect.objectContaining({
-				id: "Devstral-Small-2507-GGUF",
-				contextWindow: { from: 131072, to: 131072 },
-				maxTokens: { from: 999, to: 32768 },
-			}),
 			expect.objectContaining({
 				id: "GLM-4.7-Flash-GGUF",
 				contextWindow: { from: undefined, to: 202752 },
 				maxTokens: { from: undefined, to: 32768 },
+			}),
+			expect.objectContaining({
+				id: "Devstral-Small-2507-GGUF",
+				contextWindow: { from: 131072, to: 131072 },
+				maxTokens: { from: 999, to: 32768 },
 			}),
 		]);
 	});

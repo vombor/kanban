@@ -7,7 +7,6 @@ import { decidePlanAssignment } from "../../../src/kits/plan-assignment";
 import { answerPlanAssignment, createRoutingPolicy } from "../../../src/kits/policy";
 import { getBuiltInKits, getDefaultKit, resolveKitLayers } from "../../../src/kits/resolve-kit";
 import { createCardHistory, createEffectiveCard } from "../../utilities/effective-card";
-import { PROVISIONAL_ALLOWED } from "../../utilities/routing-vetting";
 
 function resolveBuiltIn(name: string, overrides: Record<string, unknown> = {}) {
 	const kit = getBuiltInKits().get(name);
@@ -26,7 +25,7 @@ const config = parsePipelineConfig({}).config;
 describe("plan routing (the kit's plan section)", () => {
 	it("team: plan cards run on Claude with its own default model, starting in plan mode", () => {
 		const { kit } = resolveBuiltIn("team");
-		expect(answerPlanAssignment(kit, PROVISIONAL_ALLOWED)).toEqual({
+		expect(answerPlanAssignment(kit)).toEqual({
 			kind: "plan",
 			agentId: "claude",
 			startInPlanMode: true,
@@ -38,7 +37,7 @@ describe("plan routing (the kit's plan section)", () => {
 	});
 
 	it("default: plan is disabled, so the one agent keeps planning its own work", () => {
-		expect(answerPlanAssignment(resolveBuiltIn("default").kit, PROVISIONAL_ALLOWED)).toMatchObject({
+		expect(answerPlanAssignment(resolveBuiltIn("default").kit)).toMatchObject({
 			kind: "disabled",
 		});
 		const decision = decidePlanAssignment({
@@ -54,7 +53,7 @@ describe("plan routing (the kit's plan section)", () => {
 		for (const name of ["default", "team", "team-local"]) {
 			const { kit } = resolveBuiltIn(name);
 			expect(kit.qa?.skip?.roles).toContain("plan");
-			const answer = createRoutingPolicy(kit, PROVISIONAL_ALLOWED).qaPolicy({
+			const answer = createRoutingPolicy(kit).qaPolicy({
 				dev: createEffectiveCard({ agentId: "claude", role: "plan" }),
 				round: 1,
 				history: createCardHistory(),
@@ -73,16 +72,15 @@ describe("plan routing (the kit's plan section)", () => {
 			kitName: "team",
 			issues: [],
 		};
-		// Claude on Opus has no plan vetting in the registry: the kit's planner is refused.
-		const unvetted = {
+		// Any model may plan: Claude on Opus is applied as the kit says.
+		const claudeOpus = {
 			...resolved,
 			...resolveBuiltIn("team", { "plan.model": { model: "us.anthropic.claude-opus-5-5" } }),
 		};
-		expect(decidePlanAssignment({ request: { workspaceId: "ws" }, config, resolved: unvetted })).toMatchObject({
-			ok: false,
-			error: expect.stringMatching(
-				/plan role is refused: claude \+ us\.anthropic\.claude-opus-5-5 is not vetted for plan work/u,
-			),
+		expect(decidePlanAssignment({ request: { workspaceId: "ws" }, config, resolved: claudeOpus })).toMatchObject({
+			ok: true,
+			outcome: "applied",
+			agentSettings: { modelId: "us.anthropic.claude-opus-5-5" },
 		});
 		expect(decidePlanAssignment({ request: { workspaceId: "ws" }, config, resolved })).toMatchObject({
 			ok: true,

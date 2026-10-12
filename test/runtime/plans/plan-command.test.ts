@@ -57,10 +57,7 @@ const TEAM_TIER3 = { providerId: "bedrock", modelId: "us.openai.gpt-6.1-sol" };
 function writeConfig(kit: string): void {
 	const path = getKanbanGlobalConfigPath();
 	mkdirSync(dirname(path), { recursive: true });
-	writeFileSync(
-		path,
-		JSON.stringify({ workspaces: { [WORKSPACE_ID]: { kit: { name: kit }, models: { allowProvisional: true } } } }),
-	);
+	writeFileSync(path, JSON.stringify({ workspaces: { [WORKSPACE_ID]: { kit: { name: kit } } } }));
 }
 
 function orchestrator(via: "credential" | "process" = "credential"): RuntimeCaller {

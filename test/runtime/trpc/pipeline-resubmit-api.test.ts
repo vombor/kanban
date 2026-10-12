@@ -29,7 +29,7 @@ const OTHER_ORCHESTRATOR = session("bar", "orchestrator", "__home_agent__:bar:cl
 const OWN_CARD = session("foo", "card", "d1111");
 const UNKNOWN: RuntimeCaller = { kind: "unknown", reason: "a credential outside its session's process tree" };
 const NOW = Date.parse("2026-10-09T09:00:00.000Z");
-const QA_WORKSPACE = { landing: { mode: "qa" }, kit: { name: "team" }, models: { allowProvisional: true } };
+const QA_WORKSPACE = { landing: { mode: "qa" }, kit: { name: "team" } };
 
 describe("resubmit caller rules", () => {
 	it("allows the user and the project's own orchestrator, refuses everyone else", () => {

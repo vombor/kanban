@@ -21,7 +21,7 @@ import { createPipelineWorkerHarness, createSnapshot } from "../../utilities/pip
 import { createBoard, createCard } from "../../utilities/workspace-state-store";
 
 const T0 = Date.parse("2026-10-09T06:04:52.000Z");
-const QA_WORKSPACE = { landing: { mode: "qa" }, kit: { name: "team" }, models: { allowProvisional: true } };
+const QA_WORKSPACE = { landing: { mode: "qa" }, kit: { name: "team" } };
 const DEV = createCard({ id: "f0ba7", updatedAt: T0 - 120_000 });
 
 describe("a turn that ends while the card is already in Review (issue #20)", () => {

@@ -82,8 +82,6 @@ export const USER_ONLY_COMMANDS = [
 	// Write user kit files: the team definition of every project on that kit (src/kits/user-kit-edit.ts).
 	"kit create",
 	"kit edit",
-	// Lets a project route to combinations the vetted model registry hasn't vetted yet.
-	"models allow-provisional",
 	// Creates the machine's Kanban GitHub App, whose key the server keeps (src/github-app/).
 	"github bot create",
 ] as const;

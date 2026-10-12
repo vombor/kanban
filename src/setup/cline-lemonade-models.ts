@@ -12,29 +12,24 @@
 //   - The output budget is min(maxTokens, window - input - 1024), so maxTokens can't push a request past the window.
 //   - `modelsSourceUrl` only ever yields ids (`extractModelIdsFromPayload`), so the metadata can't ride on the
 //     model-lists route; it has to be in models.json.
-// The wanted record has every model Lemonade lists (downloaded, with the route's required labels, and in
-// `models.lists.lemonade.include` when the user set one, 2026-10-12) with its
-// contextWindow (see src/models/lemonade-models.ts for where the size comes from), maxTokens, supportsVision and
-// supportsReasoning, and zero prices when none are set; other keys of a model are kept, and models Lemonade no longer
-// lists (or the include leaves out) are dropped. A `provider.defaultModelId` that is no longer in the record becomes
-// its first model (the include's order when set). With Lemonade down no value changes (only a list is still
-// rewritten as a record).
+// The record is the allow list (docs/team/MODELS.md): Cline offers only the models in it, and the Kanban orchestrator
+// curates it by hand with models that passed `kanban models vet`. So the wanted record has exactly the models the
+// file has, never one more or one less; of those Lemonade lists, the metadata is refreshed: contextWindow (see
+// src/models/lemonade-models.ts for where the size comes from), maxTokens, supportsVision and supportsReasoning, and
+// zero prices when none are set; other keys of a model are kept. A model Lemonade doesn't list is kept as it is and
+// reported. A `provider.defaultModelId` that isn't in the record becomes the record's first model (the record is what
+// Cline offers). With Lemonade down no value changes (only a list is still rewritten as a record). Another provider type
+// in the setup-provider registry follows the same rule: keep the records it finds, only fill in their metadata.
 // Read-only: `kanban setup` and doctor print the differences, and `kanban setup-provider lemonade` (run by the user
 // or the Kanban orchestrator, cline-lemonade-apply.ts) writes them. The one exception is the server's context sync
 // (cline-lemonade-context-sync.ts, issue #31): from this same plan it writes only contextWindow and maxTokens of
 // models already in the file.
-import {
-	DEFAULT_LEMONADE_MODEL_LIST_SETTINGS,
-	isIncludedModelId,
-	LEMONADE_MODEL_LIST_INCLUDE_KEY,
-} from "../config/model-lists-config";
+import { DEFAULT_LEMONADE_MODEL_LIST_SETTINGS } from "../config/model-lists-config";
 import {
 	fetchLemonadeCatalog,
-	isListedLemonadeModel,
 	type LemonadeCatalog,
 	type LemonadeContextSource,
 	type LemonadeContextWindow,
-	type LemonadeModel,
 	lemonadeApiBaseUrl,
 	resolveLemonadeContextWindow,
 } from "../models/lemonade-models";
@@ -107,34 +102,31 @@ export interface LemonadeModelUpdate {
 }
 
 /**
- * The wanted record: `current` with Lemonade's metadata for every listed model (in `include` when set); with no
- * catalog, `current`. `excluded`: models Lemonade lists that the include leaves out.
+ * The wanted record: the models of `current`, each one Lemonade lists with Lemonade's metadata; with no catalog,
+ * `current`. `unlisted` are the record's models Lemonade doesn't list (kept unchanged).
  */
 export function buildDesiredLemonadeModels(
 	current: StoredModels,
 	catalog: LemonadeCatalog | null,
-	requireLabels: readonly string[],
-	include: readonly string[] | null = null,
-): { models: StoredModels; updates: LemonadeModelUpdate[]; excluded: string[] } {
+): { models: StoredModels; updates: LemonadeModelUpdate[]; unlisted: string[] } {
 	if (!catalog) {
-		return { models: { ...current }, updates: [], excluded: [] };
+		return { models: { ...current }, updates: [], unlisted: [] };
 	}
+	const byId = new Map(catalog.models.map((model) => [model.id, model]));
 	const models: StoredModels = {};
 	const updates: LemonadeModelUpdate[] = [];
-	const excluded: string[] = [];
-	for (const model of catalog.models) {
-		if (!isListedLemonadeModel(model, requireLabels)) {
+	const unlisted: string[] = [];
+	for (const [id, existing] of Object.entries(current)) {
+		const model = byId.get(id);
+		if (!model) {
+			models[id] = { ...existing };
+			unlisted.push(id);
 			continue;
 		}
-		if (!isIncludedModelId(model.id, include)) {
-			excluded.push(model.id);
-			continue;
-		}
-		const existing = current[model.id];
 		const next: StoredModelEntry = {
 			...existing,
 			id: model.id,
-			name: typeof existing?.name === "string" ? existing.name : model.id,
+			name: typeof existing.name === "string" ? existing.name : model.id,
 		};
 		const contextWindow = resolveLemonadeContextWindow(model, catalog);
 		if (contextWindow) {
@@ -150,60 +142,7 @@ export function buildDesiredLemonadeModels(
 		models[model.id] = next;
 		updates.push({ id: model.id, contextWindow, vision, reasoning });
 	}
-	return { models, updates, excluded };
-}
-
-/** Why each `include` id is not offered: Lemonade doesn't list it, hasn't downloaded it, or it lacks a label. */
-export function describeUnlistedIncludedModels(
-	catalogModels: readonly LemonadeModel[],
-	requireLabels: readonly string[],
-	include: readonly string[] | null,
-): string[] {
-	const byId = new Map(catalogModels.map((model) => [model.id, model]));
-	return (include ?? []).flatMap((id) => {
-		const model = byId.get(id);
-		if (!model) {
-			return [`${id} is not on Lemonade`];
-		}
-		if (!model.downloaded) {
-			return [`${id} is not downloaded`];
-		}
-		const missing = requireLabels.filter((label) => !model.labels.includes(label));
-		return missing.length > 0 ? [`${id} lacks label ${missing.join(", ")}`] : [];
-	});
-}
-
-export interface LemonadeDefaultModelChange {
-	from: string;
-	to: string;
-	/** Why `from` goes: the include leaves it out, or Lemonade no longer lists it. */
-	reason: string;
-}
-
-/**
- * A `provider.defaultModelId` that isn't in the wanted record becomes its first model (the include's order when
- * set). Null when it is in the record, unset, or there is nothing to compare (no catalog, an empty record).
- */
-export function planLemonadeDefaultModel(input: {
-	current: unknown;
-	models: StoredModels;
-	include: readonly string[] | null;
-	excluded: readonly string[];
-	catalogKnown: boolean;
-}): LemonadeDefaultModelChange | null {
-	const current = typeof input.current === "string" ? input.current : null;
-	const ids = Object.keys(input.models);
-	if (!input.catalogKnown || current === null || ids.length === 0 || current in input.models) {
-		return null;
-	}
-	const to = (input.include ?? []).find((id) => id in input.models) ?? ids[0];
-	if (!to) {
-		return null;
-	}
-	const reason = input.excluded.includes(current)
-		? `not in ${LEMONADE_MODEL_LIST_INCLUDE_KEY}`
-		: "Lemonade no longer lists it";
-	return { from: current, to, reason };
+	return { models, updates, unlisted };
 }
 
 export interface LemonadeFieldChange {
@@ -212,11 +151,10 @@ export interface LemonadeFieldChange {
 	to: unknown;
 }
 
+/** Only metadata changes: the record's models are the orchestrator's, never added or removed here. */
 export interface LemonadeModelsDiff {
 	/** The file has the list form cline 3.x rejects. */
 	listForm: boolean;
-	added: string[];
-	removed: string[];
 	changed: Array<{ id: string; fields: LemonadeFieldChange[] }>;
 }
 
@@ -225,8 +163,6 @@ function sameJson(left: unknown, right: unknown): boolean {
 }
 
 export function diffLemonadeModels(stored: StoredModelsRead, desired: StoredModels): LemonadeModelsDiff {
-	const added = Object.keys(desired).filter((id) => !(id in stored.models));
-	const removed = Object.keys(stored.models).filter((id) => !(id in desired));
 	const changed: LemonadeModelsDiff["changed"] = [];
 	for (const [id, next] of Object.entries(desired)) {
 		const current = stored.models[id];
@@ -241,27 +177,15 @@ export function diffLemonadeModels(stored: StoredModelsRead, desired: StoredMode
 			changed.push({ id, fields });
 		}
 	}
-	return { listForm: stored.form === "list", added, removed, changed };
+	return { listForm: stored.form === "list", changed };
 }
 
 export function isLemonadeModelsDiffEmpty(diff: LemonadeModelsDiff): boolean {
-	return !diff.listForm && diff.added.length === 0 && diff.removed.length === 0 && diff.changed.length === 0;
+	return !diff.listForm && diff.changed.length === 0;
 }
 
 function formatValue(value: unknown): string {
 	return value === undefined ? "(unset)" : JSON.stringify(value);
-}
-
-function describeAdded(
-	update: LemonadeModelUpdate | undefined,
-	id: string,
-	entry: StoredModelEntry | undefined,
-): string {
-	const features = [update?.vision ? "vision" : null, update?.reasoning ? "reasoning" : null].filter(Boolean);
-	const context = update?.contextWindow
-		? `context ${update.contextWindow.tokens} (${CONTEXT_SOURCE_LABELS[update.contextWindow.source]}), maxTokens ${entry?.maxTokens}`
-		: `no context info from Lemonade; Cline's ${CLINE_DEFAULT_CONTEXT_WINDOW} default`;
-	return `${id}: add, ${context}${features.length > 0 ? `, ${features.join(", ")}` : ""}`;
 }
 
 function describeChange(id: string, fields: LemonadeFieldChange[], update: LemonadeModelUpdate | undefined): string {
@@ -275,25 +199,25 @@ function describeChange(id: string, fields: LemonadeFieldChange[], update: Lemon
 	return `${id}: ${parts.join(", ")}`;
 }
 
-/** One line per difference, in the order added, changed, removed. */
+/** One line per difference. */
 export function describeLemonadeModelsDiff(
 	diff: LemonadeModelsDiff,
-	desired: StoredModels,
 	updates: readonly LemonadeModelUpdate[],
-	excluded: ReadonlySet<string> = new Set(),
 ): string[] {
 	const updateById = new Map(updates.map((update) => [update.id, update]));
 	return [
 		...(diff.listForm
 			? ["models is a list, which cline 3.x rejects (it drops the provider): rewrite as a record by id"]
 			: []),
-		...diff.added.map((id) => describeAdded(updateById.get(id), id, desired[id])),
 		...diff.changed.map(({ id, fields }) => describeChange(id, fields, updateById.get(id))),
-		...diff.removed.map(
-			(id) =>
-				`${id}: remove (${excluded.has(id) ? `not in ${LEMONADE_MODEL_LIST_INCLUDE_KEY}` : "Lemonade no longer lists it"})`,
-		),
 	];
+}
+
+/** The line about the record's models Lemonade doesn't list, or null. */
+export function describeUnlistedLemonadeModels(unlisted: readonly string[]): string | null {
+	return unlisted.length > 0
+		? `${unlisted.join(", ")}: in the models record but Lemonade doesn't list it (kept; a card on it fails until Lemonade has it or the orchestrator takes it out of models.json)`
+		: null;
 }
 
 function describeInSync(models: StoredModels): string {
@@ -306,20 +230,35 @@ function describeInSync(models: StoredModels): string {
 		.join(", ")}`;
 }
 
+export interface LemonadeDefaultModelChange {
+	from: string;
+	to: string;
+}
+
+/**
+ * A `provider.defaultModelId` that isn't in the record becomes the record's first model. Null when it is in the
+ * record, unset, or the record is empty.
+ */
+export function planLemonadeDefaultModel(current: unknown, models: StoredModels): LemonadeDefaultModelChange | null {
+	const from = typeof current === "string" ? current : null;
+	const to = Object.keys(models)[0];
+	return from === null || !to || from in models ? null : { from, to };
+}
+
 export interface LemonadeModelsPlan {
 	/** Lemonade answered and its models are already in the file. */
 	inSync: boolean;
 	/** Lemonade didn't answer (the wanted record is then the file's own, as a record). */
 	unreachable: string | null;
 	diff: LemonadeModelsDiff;
-	/** `provider.defaultModelId` to change, when it isn't in the wanted record. */
+	/** `provider.defaultModelId` to change, when it isn't in the record. */
 	defaultModel: LemonadeDefaultModelChange | null;
-	/** `include` ids Lemonade can't offer, one reason each (empty without an include or a catalog). */
-	unlistedIncluded: string[];
 	/** The wanted `providers.lemonade.models`. */
 	models: StoredModels;
-	/** What Lemonade said about each listed model (empty when it didn't answer). */
+	/** What Lemonade said about each of the record's models it lists (empty when it didn't answer). */
 	updates: LemonadeModelUpdate[];
+	/** The record's models Lemonade doesn't list (empty when it didn't answer). */
+	unlisted: string[];
 	/** The Lemonade API root the values come from. */
 	apiBaseUrl: string;
 	/** What is in sync, what would change, or why nothing can be compared. */
@@ -327,10 +266,6 @@ export interface LemonadeModelsPlan {
 }
 
 export interface LemonadeModelsOptions {
-	/** The model-lists route's labels (`models.lists.lemonade.requireLabels`), so both offer the same models. */
-	requireLabels: readonly string[];
-	/** `models.lists.lemonade.include`: only these ids (null or absent = every listed model). */
-	include?: readonly string[] | null;
 	/** Lemonade's base URL when the provider entry has no baseUrl (`models.lists.lemonade.url`). */
 	lemonadeUrl?: string;
 	fetch?: typeof fetch;
@@ -359,41 +294,22 @@ export async function planLemonadeModelsForEntry(
 		const message = error instanceof Error ? error.message : String(error);
 		unreachable = `Lemonade at ${apiBaseUrl} did not answer (${message}); model values can't be compared`;
 	}
-	const include = options.include ?? null;
 	const stored = readStoredModels(entry.models);
-	const { models, updates, excluded } = buildDesiredLemonadeModels(
-		stored.models,
-		catalog,
-		options.requireLabels,
-		include,
-	);
+	const { models, updates, unlisted } = buildDesiredLemonadeModels(stored.models, catalog);
 	const diff = diffLemonadeModels(stored, models);
 	const provider = isObject(entry.provider) ? entry.provider : {};
-	const defaultModel = planLemonadeDefaultModel({
-		current: provider.defaultModelId,
-		models,
-		include,
-		excluded,
-		catalogKnown: catalog !== null,
-	});
-	const unlistedIncluded = catalog
-		? describeUnlistedIncludedModels(catalog.models, options.requireLabels, include)
-		: [];
+	const defaultModel = planLemonadeDefaultModel(provider.defaultModelId, models);
 	const empty = isLemonadeModelsDiffEmpty(diff) && defaultModel === null;
+	const unlistedLine = describeUnlistedLemonadeModels(unlisted);
 	const details = [
 		...(unreachable ? [unreachable] : []),
-		...describeLemonadeModelsDiff(diff, models, updates, new Set(excluded)),
+		...describeLemonadeModelsDiff(diff, updates),
 		...(defaultModel
-			? [`defaultModelId: ${defaultModel.from} -> ${defaultModel.to} (${defaultModel.from}: ${defaultModel.reason})`]
-			: []),
-		...(unlistedIncluded.length > 0
-			? [`${LEMONADE_MODEL_LIST_INCLUDE_KEY} names models Lemonade can't offer: ${unlistedIncluded.join("; ")}`]
-			: []),
-		...(catalog && updates.length === 0
 			? [
-					`Lemonade lists no downloaded model with labels ${options.requireLabels.join(", ") || "(none)"}${include ? ` in ${LEMONADE_MODEL_LIST_INCLUDE_KEY}` : ""}`,
+					`defaultModelId: ${defaultModel.from} -> ${defaultModel.to} (${defaultModel.from} is not in the models record)`,
 				]
 			: []),
+		...(unlistedLine ? [unlistedLine] : []),
 		...(catalog && empty ? [describeInSync(models)] : []),
 	];
 	return {
@@ -401,9 +317,9 @@ export async function planLemonadeModelsForEntry(
 		unreachable,
 		diff,
 		defaultModel,
-		unlistedIncluded,
 		models,
 		updates,
+		unlisted,
 		apiBaseUrl,
 		details,
 	};

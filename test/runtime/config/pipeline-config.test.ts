@@ -214,6 +214,32 @@ describe("pipeline config", () => {
 		expect(migrateLegacyConfigKeys({ models: { lists: { lemonade: {} } } }).migrated).toEqual([]);
 	});
 
+	it("still parses the removed workspaces.<id>.models (allowProvisional), ignores it, and migration deletes it", () => {
+		const raw = {
+			workspaces: {
+				foo: { kit: { name: "team" }, models: { allowProvisional: true } },
+				bar: { models: { anything: "else" } },
+				plain: { landing: { mode: "qa" } },
+			},
+		};
+		const { config, issues } = parsePipelineConfig(raw);
+		expect(issues).toEqual([]);
+		expect(config.workspaces.foo).not.toHaveProperty("models");
+		expect(config.workspaces.foo?.kit).toEqual({ name: "team", overrides: {} });
+		expect(config.workspaces.bar).not.toHaveProperty("models");
+		expect(migrateLegacyConfigKeys(raw)).toEqual({
+			config: {
+				workspaces: {
+					foo: { kit: { name: "team" } },
+					bar: {},
+					plain: { landing: { mode: "qa" } },
+				},
+			},
+			migrated: ["workspaces.foo.models", "workspaces.bar.models"],
+		});
+		expect(migrateLegacyConfigKeys({ workspaces: { plain: {} } }).migrated).toEqual([]);
+	});
+
 	it("resolves each workspace's own wake settings: its overrides over the machine-wide ones", () => {
 		const { config, issues } = parsePipelineConfig({
 			orchestrator: { wake: { mode: "sidebar", cooldownMin: 5 } },

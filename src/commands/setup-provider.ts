@@ -6,7 +6,6 @@ import type { Command } from "commander";
 
 import { readPipelineConfig } from "../config/pipeline-config";
 import {
-	CLINE_PROVIDER_SETUPS,
 	describeProviderSyncStatuses,
 	findClineProviderSetup,
 	type ProviderSetupContext,
@@ -15,13 +14,9 @@ import {
 } from "../setup/cline-provider-setup";
 import { SETUP_PROVIDER_IDS } from "../setup/setup-provider-command";
 import { getKanbanHomePath } from "../state/kanban-home";
-import { resolveSetupOrigin } from "./setup";
-
-type RootPortOption = { mode: "fixed"; value: number } | { mode: "auto" };
 
 export interface SetupProviderOptions {
 	dryRun?: boolean;
-	origin?: string;
 	json?: boolean;
 }
 
@@ -98,15 +93,9 @@ export async function runSetupProviderCommand(input: SetupProviderCommandInput):
 	if (!setup) {
 		throw new Error(`unknown provider "${provider}"; one of ${SETUP_PROVIDER_IDS.join(", ")}`);
 	}
-	if (options.origin !== undefined && !setup.options.includes("--origin")) {
-		const takers = CLINE_PROVIDER_SETUPS.filter((entry) => entry.options.includes("--origin"));
-		throw new Error(`--origin is only for ${takers.map((entry) => entry.id).join(", ")}`);
-	}
 	const result = await setup.apply(context, { dryRun: options.dryRun === true });
 	return {
-		stdout: options.json
-			? `${JSON.stringify({ origin: context.origin, ...result }, null, 2)}\n`
-			: `${formatResult(result)}\n`,
+		stdout: options.json ? `${JSON.stringify(result, null, 2)}\n` : `${formatResult(result)}\n`,
 		exitCode: result.status === "error" || result.status === "refused" ? 1 : 0,
 	};
 }
@@ -119,21 +108,15 @@ export function registerSetupProviderCommand(program: Command): void {
 			"Write a model provider's settings into Cline's files (models.json, providers.json) as Kanban needs them for Cline cards, or with no provider list the providers and whether each is in sync. Each provider changes only its own entry, backs the file up into the Kanban home (backups/cline/) first, writes atomically and never prints a key; keys come from Kanban's environment, never the command line. Only the user and the Kanban project's orchestrator may run it; `kanban setup` and `kanban doctor` just print it. The server's Lemonade context sync (agents.cline.lemonadeContextSync) is separate.",
 		)
 		.option("--dry-run", "Print what would change; write nothing.")
-		.option(
-			"--origin <url>",
-			"lemonade: Kanban server origin for the model-lists route (default: the running server).",
-		)
 		.option("--json", "Print the result as JSON.")
-		.action(async (provider: string | undefined, options: SetupProviderOptions, command: Command) => {
+		.action(async (provider: string | undefined, options: SetupProviderOptions) => {
 			try {
-				const { port } = command.optsWithGlobals<{ port?: RootPortOption }>();
 				const homePath = getKanbanHomePath();
-				const { origin } = resolveSetupOrigin({ originFlag: options.origin, portFlag: port, homePath });
 				const { config } = await readPipelineConfig();
 				const output = await runSetupProviderCommand({
 					provider,
 					options,
-					context: { config, homePath, origin, env: process.env },
+					context: { config, homePath, env: process.env },
 				});
 				process.stdout.write(output.stdout);
 				if (output.exitCode !== 0) {

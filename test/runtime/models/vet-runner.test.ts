@@ -4,8 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import type { RuntimeTaskSessionSummary } from "../../../src/core/api-contract";
-import { getVettedRegistry } from "../../../src/models/vetted-registry";
-import { buildVetProposal, formatVetReport } from "../../../src/models/vetting/vet-report";
+import { describeVetSummary, formatVetReport } from "../../../src/models/vetting/vet-report";
 import {
 	DEFAULT_VET_LIMITS,
 	PROVIDER_TIMEOUT_RETRIES,
@@ -163,21 +162,15 @@ describe("kanban models vet: the runner", () => {
 			"start",
 			"discard v0001",
 		]);
-		const proposal = buildVetProposal(getVettedRegistry(), result, "3.0.69");
-		expect(proposal.replaces?.model).toBe("Gemma-4-12B-it-GGUF");
-		expect(proposal.entry.roles.dev).toMatchObject({
-			status: "vetted",
-			cliVersion: "3.0.69",
-			evidence: { run: "r1" },
-		});
-		// Other roles' vettings and the capabilities already recorded stay.
-		expect(proposal.entry.roles.plan?.status).toBe("vetted");
-		expect(proposal.entry.roles.qa?.status).toBe("vetted");
-		expect(proposal.entry.capabilities).toMatchObject({ toolUse: true, turnEnd: true, contextWindow: 131072 });
-		expect(formatVetReport(result, proposal, { repoPath: REPO })).toContain("Outcome: **PASSED**");
+		expect(describeVetSummary(result)).toMatch(/^kanban models vet dev smoke test passed \(.*\) in \d+ min/u);
+		const report = formatVetReport(result, { repoPath: REPO }, "3.0.69");
+		expect(report).toContain("Outcome: **PASSED**");
+		expect(report).toContain("- agent CLI: 3.0.69");
+		// It proposes nothing: Kanban keeps no registry, the orchestrator curates Cline's models.json.
+		expect(report).not.toMatch(/registry|proposed/iu);
 	});
 
-	it("fails a turn that ends without doing the task, and proposes a rejection with the reason", async () => {
+	it("fails a turn that ends without doing the task, with the reason in the summary", async () => {
 		const { deps, input } = createHarness((fake, at) => {
 			if (at === 10_000) {
 				fake.column = "review";
@@ -190,8 +183,7 @@ describe("kanban models vet: the runner", () => {
 			kind: "task",
 			detail: expect.stringContaining("file read: no RESULT.md"),
 		});
-		const proposal = buildVetProposal(getVettedRegistry(), result, null);
-		expect(proposal.entry.roles.dev).toMatchObject({ status: "rejected", reason: expect.stringContaining("task:") });
+		expect(describeVetSummary(result)).toMatch(/smoke test failed after \d+ min .*: task: /u);
 	});
 
 	it("stops at the first failure detector, and always discards the card", async () => {
@@ -285,7 +277,7 @@ describe("kanban models vet: harness failures (the first runs, 2026-10-09)", () 
 			kind: "tool_loop",
 			detail: "one tool call filled 3 of the last 4: read_files {}",
 		});
-		expect(buildVetProposal(getVettedRegistry(), result, null).entry.roles.dev?.status).toBe("rejected");
+		expect(result.outcome).toBe("failed");
 	});
 
 	it("leaves the silence to the probe where it reads the agent (a model still loading)", async () => {
@@ -302,7 +294,7 @@ describe("kanban models vet: harness failures (the first runs, 2026-10-09)", () 
 		]);
 	});
 
-	it("retries a local provider's timeout, then reports it as a harness failure and proposes provisional", async () => {
+	it("retries a local provider's timeout, then reports it as a harness failure (inconclusive)", async () => {
 		const { deps, calls, input } = createHarness(() => {});
 		let occurrence = 0;
 		deps.board.deliverInput = async (taskId, text) => {
@@ -328,21 +320,12 @@ describe("kanban models vet: harness failures (the first runs, 2026-10-09)", () 
 			harness: true,
 			detail: expect.stringMatching(/^provider timeout while lemonade loads .*\(still after 2 retries\)$/u),
 		});
-		// A registry without the combination's entry, so no recorded capability carries over.
-		const registry = getVettedRegistry();
-		const proposal = buildVetProposal(
-			{ ...registry, entries: registry.entries.filter((entry) => entry.model !== "Gemma-4-12B-it-GGUF") },
-			{ ...result, toolUse: { native: 0, textual: 0, turns: 1 } },
-			null,
-		);
-		expect(proposal.entry.roles.dev).toMatchObject({
-			status: "provisional",
-			reason: expect.stringContaining("provider_timeout: provider timeout while lemonade loads"),
-			evidence: { summary: expect.stringContaining("for a harness or environment reason") },
-		});
-		// No capability is read off a run the environment cut short.
-		expect(proposal.entry.capabilities?.toolUse).toBeUndefined();
-		expect(formatVetReport(result, proposal, { repoPath: REPO })).toContain("not the model");
+		const summary = describeVetSummary({ ...result, toolUse: { native: 0, textual: 0, turns: 1 } });
+		expect(summary).toContain("inconclusive");
+		expect(summary).toContain("0 native tool call(s), 0 as text");
+		expect(summary).toContain("for a harness or environment reason");
+		expect(summary).toContain("provider_timeout: provider timeout while lemonade loads");
+		expect(formatVetReport(result, { repoPath: REPO })).toContain("not the model");
 	});
 
 	it("waits for a retry to show up instead of retrying the same error twice", async () => {
@@ -432,17 +415,12 @@ describe("kanban models vet: provider capacity and provider errors (issue #25)",
 			},
 		});
 		expect(calls).toEqual([]);
-		// Gemma-4-12B's dev role is vetted: an inconclusive run leaves it as it is.
-		const proposal = buildVetProposal(getVettedRegistry(), result, null);
-		expect(proposal.unchanged).toBe(true);
-		expect(proposal.entry).toBe(proposal.replaces);
-		expect(proposal.entry.roles.dev?.status).toBe("vetted");
-		const report = formatVetReport(result, proposal, { repoPath: REPO });
+		const report = formatVetReport(result, { repoPath: REPO });
 		expect(report).toContain("Outcome: **INCONCLUSIVE**");
-		expect(report).toContain("Nothing to commit");
+		expect(report).toContain("Run it again once the cause is gone.");
 	});
 
-	it("never proposes a rejection for a run whose turn ended on a provider error", async () => {
+	it("never calls a run whose turn ended on a provider error failed", async () => {
 		const { deps, input } = createHarness((fake, at) => {
 			if (at === 10_000) {
 				fake.column = "review";
@@ -460,14 +438,9 @@ describe("kanban models vet: provider capacity and provider errors (issue #25)",
 		const deepseek = { ...COMBINATION, model: "DeepSeek-V4-Flash-0731-GGUF-BF16" };
 		const result = await runVet({ ...input, combination: deepseek, role: "plan" }, deps);
 		expect(result).toMatchObject({ outcome: "inconclusive", failure: { kind: "provider_error" }, checks: [] });
-		// No recorded plan vetting for DeepSeek: provisional with the reason, never rejected.
-		const proposal = buildVetProposal(getVettedRegistry(), result, null);
-		expect(proposal.unchanged).toBe(false);
-		expect(proposal.entry.roles.plan).toMatchObject({
-			status: "provisional",
-			reason: "provider_error: No model loaded: DeepSeek-V4-Flash-0731-GGUF-BF16",
-			evidence: { summary: expect.stringContaining("inconclusive") },
-		});
+		expect(describeVetSummary(result)).toMatch(
+			/inconclusive .*: provider_error: No model loaded: DeepSeek-V4-Flash-0731-GGUF-BF16$/u,
+		);
 	});
 });
 

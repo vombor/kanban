@@ -173,7 +173,7 @@ describe("effective-agent incident (2026-10-06)", () => {
 	it("(c) a second workspace on kit team in the same config does not change the first one", async () => {
 		const harness = createPipelineWorkerHarness({
 			config: {
-				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" }, models: { allowProvisional: true } } },
+				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" } } },
 			},
 		});
 		harnesses.push(harness);

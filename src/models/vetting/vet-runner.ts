@@ -16,14 +16,14 @@
 // #25: five of 17 runs got only "No model loaded"). A run that ends on a harness or environment failure, the
 // capacity wait included, is `inconclusive`: it says nothing about the model.
 //
-// The result is a report and a proposed registry entry (vet-report.ts). It never edits the registry: the Kanban
-// orchestrator commits the proposal to models/vetted.json.
+// The result is a report with a passed/failed/inconclusive summary (vet-report.ts). It changes nothing else: the
+// Kanban orchestrator decides whether the model goes into Cline's models.json.
 import type { RuntimeAgentId, RuntimeTaskAgentSettings, RuntimeTaskSessionSummary } from "../../core/api-contract";
 import type { ProviderCapacityHold } from "../../pipeline/provider-capacity";
 import { buildProviderRetryPrompt } from "../../pipeline/recovery-prompts";
 import { formatSetupProviderCommand, isSetupProviderId } from "../../setup/setup-provider-command";
 import { isReviewSettled } from "../../terminal/review-settle";
-import type { ModelCombination, VettingRole } from "../vetted-registry";
+import type { ModelCombination, VettingRole } from "../model-combination";
 import type { VetFailure, VetProbeInput, VetProbeVerdict } from "./vet-probe";
 import { checkVetTask, type VetCheck, type VetCheckDeps, type VetTask } from "./vet-tasks";
 

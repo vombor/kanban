@@ -4,7 +4,7 @@
 //   "models": { "lists": { "lemonade": { "url": "http://localhost:13305", "requireLabels": ["tool-calling"],
 //     "include": ["<model id>", ...] } } }
 //
-// `include` is the user's choice of models Cline's lemonade provider offers (2026-10-12; the models stay installed on
+// `include` is the user's choice of models the model-lists route lists (2026-10-12; the models stay installed on
 // Lemonade): absent (or null) means every model that passes the other rules, a list means only those ids, and only
 // while they still pass them. The user sets it with `kanban config set models.lists.lemonade.include <ids...>`
 // (src/config/model-list-include-setting.ts).

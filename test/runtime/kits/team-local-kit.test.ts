@@ -3,17 +3,11 @@ import { describe, expect, it } from "vitest";
 import { parsePipelineConfig } from "../../../src/config/pipeline-config";
 import { evaluateKitRecommendedSettings } from "../../../src/kits/kit-recommendations";
 import { buildKitReport, formatKitReport } from "../../../src/kits/kit-report";
+import { listKitRoutes } from "../../../src/kits/kit-routes";
 import { answerPlanAssignment, createRoutingPolicy } from "../../../src/kits/policy";
 import { getBuiltInKits, getDefaultKit, resolveKitLayers } from "../../../src/kits/resolve-kit";
-import {
-	checkKitRoutes,
-	checkRouting,
-	describeRefusedKitRoutes,
-	getStrictRoutingVetting,
-} from "../../../src/kits/routing-vetting";
 import { listKitModels } from "../../../src/kits/team/bench/price-sync-job";
 import { createCardHistory, createEffectiveCard } from "../../utilities/effective-card";
-import { PROVISIONAL_ALLOWED } from "../../utilities/routing-vetting";
 
 const QWEN = { provider: "lemonade", model: "Qwen3.8-27B-GGUF-UD-Q4_K_XL" };
 const DEVSTRAL = { provider: "lemonade", model: "Devstral-Small-2-24B-Instruct-2512-GGUF-Q4_K_M" };
@@ -71,7 +65,7 @@ describe("team-local kit", () => {
 	it("assigns new dev and plan cards to Cline on the dev tier's local model", () => {
 		const { kit } = resolveTeamLocal();
 		expect(
-			createRoutingPolicy(kit, PROVISIONAL_ALLOWED).devAssignment({
+			createRoutingPolicy(kit).devAssignment({
 				workspaceId: "ws",
 				title: "",
 				prompt: "",
@@ -82,7 +76,7 @@ describe("team-local kit", () => {
 			model: QWEN,
 			tier: "dev",
 		});
-		expect(answerPlanAssignment(kit, PROVISIONAL_ALLOWED)).toEqual({
+		expect(answerPlanAssignment(kit)).toEqual({
 			kind: "plan",
 			agentId: "cline",
 			model: QWEN,
@@ -93,7 +87,7 @@ describe("team-local kit", () => {
 	});
 
 	it("gives every candidate dev model QA from another family", () => {
-		const policy = createRoutingPolicy(resolveTeamLocal().kit, PROVISIONAL_ALLOWED);
+		const policy = createRoutingPolicy(resolveTeamLocal().kit);
 		const qaFor = (model: { provider: string; model: string }) =>
 			policy.qaPolicy({
 				dev: createEffectiveCard({ agentId: "cline", model }),
@@ -113,7 +107,7 @@ describe("team-local kit", () => {
 	});
 
 	it("refuses QA by the dev model's own family", () => {
-		const policy = createRoutingPolicy(resolveTeamLocal().kit, PROVISIONAL_ALLOWED);
+		const policy = createRoutingPolicy(resolveTeamLocal().kit);
 		expect(
 			policy.qaPolicy({
 				dev: createEffectiveCard({
@@ -127,7 +121,7 @@ describe("team-local kit", () => {
 	});
 
 	it("reworks on the same model, then hands the task to the fallback local model at once, and waits out Lemonade outages", () => {
-		const policy = createRoutingPolicy(resolveTeamLocal().kit, PROVISIONAL_ALLOWED);
+		const policy = createRoutingPolicy(resolveTeamLocal().kit);
 		const dev = createEffectiveCard({ agentId: "cline", model: QWEN });
 		const limits = { maxFailRounds: 3 };
 		expect(policy.onFail({ dev, cause: "fail", verdict: null, history: createCardHistory([1]), limits })).toEqual({
@@ -140,19 +134,15 @@ describe("team-local kit", () => {
 		expect(policy.onOutage({ dev, heldMin: 400, maxMin: 360 })).toMatchObject({ action: "hold" });
 	});
 
-	it("passes the strict routing check with no overrides, as a fresh kit apply team-local does", () => {
+	it("routes its roles to its local models with no overrides, as a fresh kit apply team-local does", () => {
 		const { kit } = resolveTeamLocal();
-		const routes = checkKitRoutes(kit, getStrictRoutingVetting());
-		expect(routes.map(({ label, combination, check }) => [label, combination.model, check.ok])).toEqual([
-			["roles.dev", QWEN.model, true],
-			["roles.qa", GEMMA.model, true],
-			["roles.plan", QWEN.model, true],
-			["roles.fallback", DEVSTRAL.model, true],
+		expect(listKitRoutes(kit).map(({ label, combination }) => [label, combination.model])).toEqual([
+			["roles.dev", QWEN.model],
+			["roles.qa", GEMMA.model],
+			["roles.plan", QWEN.model],
+			["roles.fallback", DEVSTRAL.model],
 		]);
-		expect(describeRefusedKitRoutes(kit, getStrictRoutingVetting())).toEqual([]);
-		const glm = { agentId: "cline" as const, provider: "lemonade", model: "GLM-4.7-Flash-GGUF" };
-		expect(checkRouting(getStrictRoutingVetting(), "dev", glm).ok).toBe(false);
-		expect(collectModelProviders(kit).map(({ model }) => model)).not.toContain(glm.model);
+		expect(collectModelProviders(kit).map(({ model }) => model)).not.toContain("GLM-4.7-Flash-GGUF");
 	});
 
 	it("leaves its local models out of the AWS price check", () => {
@@ -186,7 +176,7 @@ describe("team-local kit", () => {
 		});
 	});
 
-	it("shows in kanban kit show with every route vetted, with the settings it needs", () => {
+	it("shows in kanban kit show, with the settings it needs", () => {
 		const resolved = resolveTeamLocal();
 		const report = buildKitReport({
 			kitName: "team-local",
@@ -197,8 +187,8 @@ describe("team-local kit", () => {
 			outageMaxMin: 360,
 			config: parsePipelineConfig({}).config,
 		});
-		// Every route is vetted (strict config). The one refusal is a sample card built on the QA model itself:
-		// no QA model of another family is vetted, so a card someone builds on Gemma waits in Review.
+		// The one refusal is a sample card built on the QA model itself: the kit requires a QA model of another
+		// vendor and has none for Gemma, so a card someone builds on Gemma waits in Review.
 		expect(report.warnings).toEqual([
 			expect.stringContaining("gemma-4-31B-it-qat-q4_0-gguf-Q4_0 is from the dev card's vendor (google)"),
 		]);

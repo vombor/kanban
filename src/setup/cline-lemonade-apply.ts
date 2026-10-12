@@ -4,8 +4,10 @@
 // and doctor only print the differences and this command line. The one exception is the server's context sync
 // (cline-lemonade-context-sync.ts, issue #31): contextWindow and maxTokens of models already in the entry.
 //
-// It changes the Lemonade provider entry and nothing else: `provider.modelsSourceUrl` (cline-models-source.ts) and
-// `models` with `provider.defaultModelId` when that model is no longer offered (cline-lemonade-models.ts). Before writing it copies the file as read into the Kanban home's backups
+// It changes the Lemonade provider entry and nothing else: it drops `provider.modelsSourceUrl` (cline-models-source.ts:
+// Cline would offer every model a dynamic list returns) and fills in the metadata of the models already in `models`
+// (cline-lemonade-models.ts). Which models are in the record is the Kanban orchestrator's: it never adds or removes
+// one (docs/team/MODELS.md). Before writing it copies the file as read into the Kanban home's backups
 // (`<home>/backups/cline/`, never next to Cline's files; the file can hold API keys, so the copy is 0600), then
 // replaces models.json atomically with its own mode (cline-file-write.ts). A file that changes while Lemonade is asked
 // is left alone.
@@ -17,22 +19,17 @@ import {
 	type LemonadeModelsOptions,
 	planLemonadeModelsForEntry,
 } from "./cline-lemonade-models";
-import {
-	buildLemonadeModelListUrl,
-	CLINE_LEMONADE_PROVIDER_ID,
-	planModelsSourceUrl,
-	readClineLemonadeEntry,
-} from "./cline-models-source";
+import { CLINE_LEMONADE_PROVIDER_ID, planModelsSourceUrl, readClineLemonadeEntry } from "./cline-models-source";
 import { formatSetupProviderCommand } from "./setup-provider-command";
 
 /** The exact command line setup and doctor print: the user's (or the Kanban orchestrator's) to run. */
-export function formatApplyLemonadeModelsCommand(origin: string): string {
-	return formatSetupProviderCommand("lemonade", `--origin ${new URL(origin).origin}`);
+export function formatApplyLemonadeModelsCommand(): string {
+	return formatSetupProviderCommand("lemonade");
 }
 
 /** Setup's and doctor's line telling the user what to run. */
-export function formatApplyLemonadeModelsHint(origin: string): string {
-	return `to apply, run \`${formatApplyLemonadeModelsCommand(origin)}\` (Kanban itself only syncs the context windows of models already listed)`;
+export function formatApplyLemonadeModelsHint(): string {
+	return `to apply, run \`${formatApplyLemonadeModelsCommand()}\` (Kanban itself only syncs the context windows of models already listed)`;
 }
 
 /** Where the command keeps its copies of models.json: `<home>/backups/cline`. */
@@ -42,8 +39,6 @@ export function getClineModelsBackupDir(homePath?: string): string {
 
 export interface ApplyClineLemonadeOptions extends LemonadeModelsOptions {
 	modelsPath: string;
-	/** Kanban server origin the model-lists route is on. */
-	origin: string;
 	/** Default: `<home>/backups/cline`. */
 	backupDir?: string;
 	dryRun: boolean;
@@ -63,16 +58,13 @@ export async function applyClineLemonadeEntry(options: ApplyClineLemonadeOptions
 	if (read.kind !== "found") {
 		return { status: read.kind === "absent" ? "absent" : "error", lines: [read.detail], backupPath: null };
 	}
-	const targetUrl = buildLemonadeModelListUrl(options.origin);
-	const source = planModelsSourceUrl(read.modelsSourceUrl, targetUrl);
+	const source = planModelsSourceUrl(read.modelsSourceUrl);
 	const models = await planLemonadeModelsForEntry(read.entry, options);
-	const urlChanges = source.action === "update";
+	const urlChanges = source.action === "remove";
 	// With Lemonade down the wanted record is the file's own, so only a list form can differ.
 	const modelChanges = hasLemonadeModelsChanges(models);
 	const lines = [
-		urlChanges
-			? `modelsSourceUrl: ${read.modelsSourceUrl ?? "(none)"} -> ${targetUrl}`
-			: `modelsSourceUrl: ${read.modelsSourceUrl ?? "(none)"}${source.action === "custom" ? ` (${source.detail})` : ""}`,
+		urlChanges ? `modelsSourceUrl: ${read.modelsSourceUrl} -> (none): ${source.detail}` : "modelsSourceUrl: (none)",
 		...models.details,
 	];
 	if (!urlChanges && !modelChanges) {
@@ -93,8 +85,9 @@ export async function applyClineLemonadeEntry(options: ApplyClineLemonadeOptions
 	const providers = read.document.providers as Record<string, Record<string, unknown>>;
 	const lemonade = providers[CLINE_LEMONADE_PROVIDER_ID] as Record<string, unknown>;
 	if (urlChanges) {
-		const provider = (lemonade.provider as Record<string, unknown> | undefined) ?? {};
-		lemonade.provider = { ...provider, modelsSourceUrl: targetUrl };
+		const { modelsSourceUrl: _dropped, ...provider } =
+			(lemonade.provider as Record<string, unknown> | undefined) ?? {};
+		lemonade.provider = provider;
 	}
 	if (models.defaultModel) {
 		const provider = (lemonade.provider as Record<string, unknown> | undefined) ?? {};

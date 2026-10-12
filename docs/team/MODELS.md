@@ -1,118 +1,42 @@
-# The vetted model registry
+# Models: Cline's models.json is the allow list
 
-Kanban keeps the list of **agent CLI + provider + model combinations that are known to work** for each kind of work:
-they make tool calls, end their turns so Kanban sees it, and don't fail on images or context. Projects route work
-only to combinations on that list. A combination that would only waste a project's time erroring out is caught
-before a card runs on it.
+Kanban keeps **no list of allowed models** (the vetted model registry, `models/vetted.json`, was removed on
+2026-10-12, user decision). Any project may put any model on any role: the kit gives defaults, the project overrides
+them (`kanban kit set roles.<role>.agent|provider|model|tier ...`), a card may name its own (`kanban task create
+--agent-id/--model`, the create dialog), and Kanban neither refuses nor warns about the choice. Vendors are still
+read from whatever model is chosen (`getModelVendor()`), so a kit's `qa.requireDifferentVendor` still holds.
 
-- The registry: `models/vetted.json` in the Kanban repo, bundled into `dist/cli.js` like the built-in kits, with its
-  JSON Schema in `models/vetted.schema.json` (code: `src/models/vetted-registry.ts`).
-- The one rule that uses it: `src/kits/routing-vetting.ts`.
-- Vetting a combination: `kanban models vet` (`src/models/vetting/`).
-- Showing it: `kanban models list`.
-
-The registry changes only through the Kanban repo, never per project: `kanban models vet` writes a proposal, and the
-Kanban orchestrator commits it on fork/stack. A new Kanban build then carries it to every project.
-
-## Format
-
-```json
-{
-	"agent": "cline",
-	"provider": "bedrock",
-	"model": "us.anthropic.claude-opus-5-5",
-	"roles": {
-		"plan": { "status": "vetted", "at": "2026-10-09", "cliVersion": "3.0.69",
-		          "evidence": { "run": null, "summary": "foo's planner (plan cards ca9f3, 090cd, ...)" } },
-		"dev":  { "status": "provisional", "at": "2026-10-06", "cliVersion": null,
-		          "evidence": { "run": "runoff tier2-coupons-2026-10-06", "summary": "tier-2 runoff candidate (c9e97)" } }
-	},
-	"capabilities": { "toolUse": true, "images": true, "contextWindow": null, "turnEnd": true },
-	"note": "optional"
-}
-```
-
-| Key | Meaning |
-| --- | --- |
-| `agent` | the agent CLI (`cline`, `codex`, `claude`, ...) |
-| `provider` | the provider the card names; `null` = none (the agent's own config, e.g. Codex's `config.toml`; for Cline, `models.providers`) |
-| `model` | the model id; `null` = the agent's own default model |
-| `roles.<role>` | one vetting per role: `dev`, `qa`, `plan` (a kit's `fallback` role builds, so it is vetted as `dev`). `status` `vetted`, `provisional` or `rejected` (with a `reason`), `at`, `cliVersion`, `evidence.run` (the vet run id, a runoff or calibration) and `evidence.summary` |
-| `capabilities` | what runs found: native tool calls, images, context window, a turn end Kanban sees (null/missing = not checked) |
-| `rejected` | `{ at, reason, scope? }`: the whole combination is refused; `scope: "model"` refuses the model on every agent and provider |
-
-A combination can be fine for QA and not for dev: each role has its own status. The CLI version is a record, not a
-gate: agent CLIs update themselves, and a newer version keeps the vetting.
-
-Lookup (`lookupVetting`): a model rejected with `scope: "model"` is rejected everywhere; otherwise the entry with the
-same agent and model counts, providers only where both sides name one (a Codex card names no provider and matches
-the `codex + bedrock + sol` entry). When several entries fit, the least permissive one answers. No entry = `unknown`.
-
-### Seeded entries (2026-10-09)
-
-| Combination | dev | qa | plan |
-| --- | --- | --- | --- |
-| codex + bedrock + us.openai.gpt-6.1-sol | vetted (foo's one coder) | | |
-| codex + bedrock + us.moonshotai.kimi-k3 | vetted (foo's fallback) | | |
-| cline + bedrock + us.anthropic.claude-haiku-5-5 | | vetted (foo's QA) | |
-| cline + bedrock + us.anthropic.claude-opus-5-5 | provisional | | vetted (foo's planner) |
-| cline + bedrock + us.anthropic.claude-haiku-4-5-20251001-v1:0 | | vetted (team kit's QA route) | |
-| cline + bedrock + us.openai.gpt-6.1-sol | provisional (team kit's tier-3 default) | | |
-| cline + bedrock + us.moonshotai.kimi-k3 | provisional (team kit's tier-2) | | |
-| cline + bedrock + us.amazon.nova-2-lite-v1:0 | provisional | provisional | |
-| codex + its own default model | | provisional (team kit's `roles.qa`) | |
-| claude + its own default model | | | provisional (team kit's `roles.plan`) |
-| cline + lemonade + Gemma-4-12B-it-GGUF | | vetted (team-local's QA) | |
-| cline + lemonade + Qwen3.6-35B-A3B-MTP-GGUF | vetted (team-local's fallback) | provisional | provisional |
-| cline + lemonade + Devstral-Small-2507-GGUF | provisional | provisional (stalled twice as notes' QA, not re-vetted) | |
-| cline + lemonade + DeepSeek-V4-Flash-0731-GGUF-BF16 | provisional | | |
-
-The team-local entries were vetted by `kanban models vet` on cline 3.0.70 (2026-10-09; run ids in each entry). The
-first runs that morning failed for harness reasons (fixed in 3eef296b) and are not recorded as rejections.
-
-Rejected on every agent and provider (the kits' old `dropped` lists): `qwen.qwen3-next-80b-a3b`,
-`openai.gpt-oss-120b-1:0`, `nvidia.nemotron-super-3-120b`, `us.openai.gpt-6-luna`, `us.anthropic.claude-sonnet-5-5`,
-`LMX-Omni-52B-Halo`, `GLM-4.7-Flash-GGUF` (team-local's dev and planner until the user removed it, 2026-10-11), each with its reason. A tier lookup never picks them (`getUsableTierEntries`); a user kit's own
-`dropped` list still counts on top.
-
-## Enforcement
-
-A role may be routed only to a combination that is **vetted** for that role, or **provisional** where the user
-allowed provisional combinations for the project (`workspaces.<id>.models.allowProvisional`). Rejected and unknown
-combinations are refused with the reason and the `kanban models vet` command to run. One rule
-(`checkRouting`), asked by every routing path:
-
-| Path | What a refusal does |
-| --- | --- |
-| `kanban kit apply` (and `project add --kit`) | refused before anything is written; `--allow-provisional` sets the project's switch with it |
-| `kanban kit set roles.<role>.*` (orchestrator or user) | refused when the change routes a role to a refused combination |
-| devAssignment (new dev cards, CLI and create dialog; `kanban task reassign`) | the kit's proposal is `refused`: the CLI refuses the card, the dialog warns, the issue import creates it without an agent, `task reassign` leaves the card as it is (status `refused`) |
-| plan cards (`answerPlanAssignment`) | the plan card is refused |
-| the QA gate (`qaPolicy`) | no QA card: the dev card waits in Review with `refused: ...` in the decision log (it never lands unreviewed) |
-| escalation and outage takeover | to the orchestrator (an outage keeps holding) |
-| runoffs (`onFail.runoff`, `kanban bench runoff create`) | the runoff answer goes to the orchestrator; `bench runoff create` from an agent session is refused |
-| `kanban bench calibrate` | refused; only the user's `--force` runs it, with a warning |
-| a card's explicit agent/model (`task create`, `task update`) | from an agent session (it has a session credential): refused. From the user's shell or the browser's create dialog: allowed with a clear warning; it's the user's call |
-
-Projects on the `default` kit route nothing (every card runs on the agent selected in Kanban settings), so nothing
-is checked there. Calibration cards (Kanban's own runners: `bench calibrate`, `models vet`) are not checked by the card
-rule; their runners check what they need.
-
-`kanban doctor` lists every project's routing against the registry: a pass row per project whose routes are all
-allowed, a warning per refused route with the command to run, an info row for `default`-kit projects. `kanban kit
-show` prints the same per route.
+- **Cline cards**: Cline's own `models.json` (`<cline data>/settings/models.json`) is the allow list. A provider
+  with an entry there offers only the models in its `models` record, and the provider must have **no**
+  `modelsSourceUrl` (Cline offers every id that URL returns, so a dynamic list would offer unvetted models). The
+  Kanban orchestrator curates the record by hand, with models that passed `kanban models vet`.
+- **Other agents** (Claude Code, Codex, Copilot, ...): no model check at all.
 
 ## Who does what
 
-- **The user**: allows or refuses provisional combinations for a project (`kanban models allow-provisional on|off
-  --project <p>`, or `kanban kit apply ... --allow-provisional`), may pick any combination for a card in the create
-  dialog or with `kanban task create --agent-id/--model` (with a warning), and decides what goes into the registry.
-- **A project's orchestrator**: picks its project's role models within the registry (`kanban kit set
-  roles.<role>.model ...`; `kanban models list --project <p>` shows what it may use), and runs `kanban models vet` for
-  a combination it wants. It can't route outside the registry, and its explicit per-card choices must be vetted.
-- **The Kanban orchestrator**: commits vet proposals to `models/vetted.json` (with `npx tsx
-  scripts/write-vetted-schema.ts` after a schema change).
-- **Cards**: nothing here (`models vet` is refused from a card; `models allow-provisional` from every agent session).
+- **The Kanban orchestrator** vets a model with `kanban models vet` (below) and, once it passed, adds it to the
+  provider's `models` record in Cline's models.json by hand (a dry `kanban setup-provider <provider> --dry-run`
+  then shows the metadata it fills in). It takes a model out the same way.
+- **`kanban setup-provider <provider>`** (the user or the Kanban orchestrator, [setup-provider.md](../fork/setup-provider.md))
+  never adds or removes a model: it keeps the records it finds, only fills in or refreshes their metadata (context
+  window, maxTokens, vision, reasoning) and drops a `modelsSourceUrl`. Every provider type in its registry follows
+  that rule. The server's Lemonade context sync writes only the context windows of models already in the record.
+- **A project's orchestrator** picks its project's role models (`kanban kit set roles.<role>.model ...`). For a Cline
+  role, `kanban doctor` warns when the provider's record doesn't list the model (Cline couldn't select it).
+- **Cards**: nothing here (`models vet` is refused from a card).
+
+## Doctor
+
+- `cline-models-source` (setup step) and doctor: a Lemonade `modelsSourceUrl` is reported, with
+  `kanban setup-provider lemonade` to drop it.
+- The Lemonade models row: metadata that differs from what Lemonade reports (with the command), and record models
+  Lemonade doesn't list (kept; pull the model or take it out of the record).
+- The allow-list row (`src/doctor/cline-models-allow-list-checks.ts`): a kit role (roles, QA routes, the fallback,
+  runoff models) or an open card that puts a Cline card on a model its provider's models.json record doesn't list is
+  a warning, nothing more. A provider without an entry in models.json (Cline's built-in ones, e.g. `bedrock`,
+  `cline-pass`) has no record to check.
+- An old `workspaces.<id>.models.allowProvisional` in config.json still parses and is ignored; doctor warns and
+  `--fix` deletes it (`migrateLegacyConfigKeys()`).
 
 ## Vetting
 
@@ -151,14 +75,13 @@ the model's: a context overflow (llama.cpp's "Context size has been exceeded." i
 writes in place of a reply (its session message has `metadata.displayRole: "error"`: "No model loaded: <model>",
 "Response stream ended without a finish reason."); a rejected request over a malformed tool call stays the model's.
 
-It writes `<home>/data/models/vetting/<run>/report.md`, `result.json` (the run and the proposal) and `run.log`, and
-prints the proposed entry: the combination's entry with this role's vetting set to `vetted` (passed) or `rejected`
-with the failure as the reason (failed), and the capabilities seen. A run the harness or the environment cut short
-is **inconclusive** (sign-in, `no_session`, no capacity, a provider or transport error or timeout, a context
-overflow, a hung request, a failed session): it never proposes a rejection. A role that already has a vetting keeps
-it (nothing to commit), a role without one gets `provisional` with the reason, and no `toolUse` is recorded from a
-run with no tool calls. It exits 0 when the run passed, 1 when it failed and 2 when it was inconclusive. It never edits the
-registry. One failed run may be bad luck: the orchestrator decides what to commit. The run lasts minutes, so an
+It writes `<home>/data/models/vetting/<run>/report.md`, `result.json` (the run, the agent CLI's version and the
+summary) and `run.log`, and prints the outcome and its summary: **passed**, **failed** (with the failure) or
+**inconclusive**, with the time, the cost and the tool-call counts (native and written as text). A run the harness
+or the environment cut short is inconclusive (sign-in, `no_session`, no capacity, a provider or transport error or
+timeout, a context overflow, a hung request, a failed session): it says nothing about the model. It exits 0 when the
+run passed, 1 when it failed and 2 when it was inconclusive. It changes nothing else: no registry, no models.json.
+One failed run may be bad luck: the orchestrator decides what goes into models.json. The run lasts minutes, so an
 orchestrator starts it in the background of its own session (it must stay in the session's process tree).
 
 ## ClinePass (`cline-pass`)
@@ -172,24 +95,24 @@ For Kanban it is a cloud provider: a QA card on it takes a cloud QA slot. Its tu
 `cline-pass/` prefix, and its account answers ("No access to ClinePass subscription models yet", "Organization
 accounts cannot use ClinePass subscriptions") escalate to the orchestrator at once as provider errors, while its usage
 limit gets the provider retries first. It has no outage probe.
-`kanban models vet --agent cline --provider cline-pass --model cline-pass/<model> --role <role>` proposes a
-combination, and ends inconclusive (`sign_in`) at once while no key is stored.
+`kanban models vet --agent cline --provider cline-pass --model cline-pass/<model> --role <role>` vets a model, and
+ends inconclusive (`sign_in`) at once while no key is stored.
 
-Vetted by `kanban models vet` on cline 3.0.70 (2026-10-12, run ids in each entry; $0 per run on the subscription), all
-`cline + cline-pass` for dev and qa, none for plan:
+Passed `kanban models vet` on cline 3.0.70 (2026-10-12; $0 per run on the subscription), all `cline + cline-pass`,
+for dev and qa (none was run for plan):
 
 | Model | dev | qa | plan |
 | --- | --- | --- | --- |
-| cline-pass/mimo-v2.6-flash | vetted | vetted | |
-| cline-pass/mimo-v2.6-pro | vetted | vetted | |
-| cline-pass/deepseek-v4.1-flash | vetted | vetted | |
-| cline-pass/glm-5.3 | vetted | vetted | |
-| cline-pass/qwen3.8-max | vetted | vetted | |
-| cline-pass/muse-spark-1.3-contributor | vetted | vetted | |
-| cline-pass/kimi-k3 | vetted (ClinePass: "will consume usage faster than others") | vetted | |
-| cline-pass/minimax-m3 | vetted | vetted | |
+| cline-pass/mimo-v2.6-flash | passed | passed | |
+| cline-pass/mimo-v2.6-pro | passed | passed | |
+| cline-pass/deepseek-v4.1-flash | passed | passed | |
+| cline-pass/glm-5.3 | passed | passed | |
+| cline-pass/qwen3.8-max | passed | passed | |
+| cline-pass/muse-spark-1.3-contributor | passed | passed | |
+| cline-pass/kimi-k3 | passed (ClinePass: "will consume usage faster than others") | passed | |
+| cline-pass/minimax-m3 | passed | passed | |
 
-The same day `cline + lemonade + Laguna-XS-2.1-GGUF-Q4_K_M` was vetted for dev and qa (not plan).
+The same day `cline + lemonade + Laguna-XS-2.1-GGUF-Q4_K_M` passed for dev and qa (not plan).
 
 ## Local provider: Lemonade
 
@@ -199,12 +122,12 @@ on this machine, `http://localhost:13305/api/v1`): its turns are priced at 0, a 
 (`pipeline.qa.slots`) and waits only for `models.providerCapacity.lemonade`, a vet run gives the first reply the local
 load allowance, and an unreachable server is a provider outage (backoff retries, then the outage hold).
 
-- Cline's model list (`modelsSourceUrl`): `/api/model-lists/lemonade`, downloaded models with `requireLabels`, from
-  `models.lists.lemonade.url`. Cline's entry is written by `kanban setup-provider lemonade` (models.json;
-  the user or the Kanban orchestrator runs it).
-- Leaving out a model Lemonade still has (it stays installed): `kanban config set models.lists.lemonade.include <ids...>`
-  (the user's command), then `kanban setup-provider lemonade`; `kanban config unset models.lists.lemonade.include` offers
-  every model again.
+- Cline's model list: the lemonade entry's `models` record in models.json, curated by the Kanban orchestrator; no
+  `modelsSourceUrl`. `kanban setup-provider lemonade` (the user or the Kanban orchestrator) fills in the record's
+  metadata from Lemonade and drops a `modelsSourceUrl`. Kanban's `/api/model-lists/lemonade` route still answers
+  (downloaded models with `models.lists.lemonade.requireLabels`, limited to `models.lists.lemonade.include` when
+  the user set one), but Cline is no longer pointed at it. A `provider.defaultModelId` the record doesn't list is
+  moved to the record's first model by `kanban setup-provider lemonade`.
 - Models loaded at once: `/api/v1/health` `max_models.llm` (doctor and `kit show` compare it with Kanban's capacity).
 - Outage probe and "is the model loaded?" (vet): `/api/v1/health`.
 - Context windows: `recipe_options.ctx_size`, kept in sync by the server.

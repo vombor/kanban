@@ -37,7 +37,7 @@ describe("kanban config set|unset models.lists.lemonade.include", () => {
 		expect(set).toMatchObject({
 			from: undefined,
 			to: ["Muse-Glimmer-30B-GGUF-Q4_K_M", "gemma-4-31B-it-qat-q4_0-gguf-Q4_0"],
-			next: expect.stringContaining("kanban setup-provider lemonade"),
+			next: expect.stringContaining("models record in Cline's models.json"),
 		});
 		const written = read();
 		expect(written.other).toEqual({ keep: true });

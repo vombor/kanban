@@ -63,8 +63,8 @@ export interface VetFailure {
 	kind: VetFailureKind;
 	detail: string;
 	/**
-	 * Caused by the harness or the environment (sign-in, provider, Kanban), not by the model: the proposal is then
-	 * `provisional` with the reason, never `rejected` (vet-report.ts).
+	 * Caused by the harness or the environment (sign-in, provider, Kanban), not by the model: the run is then
+	 * `inconclusive`, never `failed` (vet-report.ts).
 	 */
 	harness?: boolean;
 	/** `provider_timeout` only: which error this is (session + message count), so one error is retried once. */

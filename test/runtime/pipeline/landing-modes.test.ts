@@ -18,7 +18,6 @@ import { createTaskLandingGate } from "../../../src/server/task-landing-gate";
 import { createTaskTrashWorkflow, type TaskTrashTrigger } from "../../../src/server/task-trash-workflow";
 import type { TerminalSessionManager } from "../../../src/terminal/session-manager";
 import { createLandRepo } from "../../utilities/land-repo";
-import { PROVISIONAL_ALLOWED } from "../../utilities/routing-vetting";
 import {
 	createBoard,
 	createCard,
@@ -319,7 +318,7 @@ describe("landing modes", () => {
 				},
 				settings: getWorkspacePipelineSettings(parsePipelineConfig(landingConfig("qa")).config, WORKSPACE_ID),
 				kitName: "default",
-				policy: createRoutingPolicy(getDefaultKit(), PROVISIONAL_ALLOWED),
+				policy: createRoutingPolicy(getDefaultKit()),
 				state: { version: 1, since: "2026-10-07T00:00:00.000Z", importedFrom: null, cards: {} },
 				limits: { maxFailRounds: 3 },
 				recoveryNudgeCheckMs: 120_000,
@@ -660,7 +659,7 @@ describe("landing modes", () => {
 			return { repo: created, harness };
 		}
 
-		const teamQa = landingConfig("qa", { kit: { name: "team" }, models: { allowProvisional: true } });
+		const teamQa = landingConfig("qa", { kit: { name: "team" } });
 
 		it.each(["approve", "browser", "cli", "pipeline"] as const)(
 			"refuses a decided runoff's loser a land (trigger %s) and lands nothing",
@@ -712,7 +711,6 @@ describe("landing modes", () => {
 			const { repo: created, harness } = createRunoffHarness(
 				landingConfig("qa", {
 					kit: { name: "team" },
-					models: { allowProvisional: true },
 					pipeline: { shadow: true },
 				}),
 			);

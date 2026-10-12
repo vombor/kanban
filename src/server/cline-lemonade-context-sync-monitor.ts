@@ -162,8 +162,6 @@ export function createClineLemonadeContextSyncMonitor(
 		const result = await syncClineLemonadeContextWindows({
 			modelsPath: getClineModelsSettingsPath(settings.dataDir),
 			mode: settings.mode,
-			requireLabels: lemonade.requireLabels,
-			include: lemonade.include,
 			lemonadeUrl: lemonade.url,
 			fetch: deps.fetch,
 			timeoutMs: LEMONADE_TIMEOUT_MS,

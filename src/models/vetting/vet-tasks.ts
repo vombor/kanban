@@ -11,7 +11,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { readQaVerdictFile } from "../../pipeline/qa-verdict";
-import type { VettingRole } from "../vetted-registry";
+import type { VettingRole } from "../model-combination";
 
 export interface ScratchFile {
 	path: string;

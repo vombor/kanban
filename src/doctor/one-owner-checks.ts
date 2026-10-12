@@ -372,14 +372,14 @@ async function checkLegacyKitOwners(
 				level: "fail",
 				area: "owner",
 				message: `Cline's Lemonade model list points at the legacy model-lists service (${url}), which is not running`,
-				hint: "kanban setup (points it at Kanban's model-lists route)",
+				hint: "kanban setup-provider lemonade (drops it: the models record is Cline's allow list)",
 			});
 		} else {
 			findings.push({
 				level: "info",
 				area: "owner",
 				message: `Cline's Lemonade model list comes from the legacy model-lists service (${url})`,
-				hint: "kanban setup (moves it to Kanban's route), then retire the service",
+				hint: "kanban setup-provider lemonade (drops it: the models record is Cline's allow list), then retire the service",
 			});
 		}
 	} else if (url && isManagedModelsSourceUrl(url) && modelListsOwns) {

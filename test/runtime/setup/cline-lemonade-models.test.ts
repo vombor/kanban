@@ -14,7 +14,6 @@ import { createFakeLemonadeFetch, LEMONADE_HEALTH_QWEN_LOADED_PAYLOAD } from "..
 import { createTempDir } from "../../utilities/temp-dir";
 
 const LABELS = ["tool-calling"];
-const ORIGIN = "http://127.0.0.1:3485";
 
 // The pod's ~/.cline/data/settings/models.json on 2026-10-07 (models as a list), with Lemonade at a test origin.
 function clineModelsFile(models: unknown): Record<string, unknown> {
@@ -62,7 +61,7 @@ describe("Cline models.json Lemonade metadata plan", () => {
 	}
 
 	function plan(fetchImpl: typeof fetch = createFakeLemonadeFetch()) {
-		return planClineLemonadeModels({ modelsPath, requireLabels: LABELS, fetch: fetchImpl });
+		return planClineLemonadeModels({ modelsPath, fetch: fetchImpl });
 	}
 
 	it("sizes maxTokens at a quarter of the window, at most 32K", () => {
@@ -71,25 +70,15 @@ describe("Cline models.json Lemonade metadata plan", () => {
 		expect(maxTokensForContextWindow(4096)).toBe(1024);
 	});
 
-	it("lists what to add, change and remove for a list, with each listed model's real window, and writes nothing", async () => {
+	it("fills in the record's own models from Lemonade, never adds or removes one, and writes nothing", async () => {
 		write(clineModelsFile(["Qwen3-Coder-Next-GGUF", "GLM-4.7-Flash-GGUF", "Gemma-4-12B-it-GGUF"]));
 		const before = readFileSync(modelsPath, "utf8");
 		const fetchImpl = createFakeLemonadeFetch();
 
 		const result = found(await plan(fetchImpl));
 		expect(result.inSync).toBe(false);
-		expect(result.diff).toEqual({
-			listForm: true,
-			added: expect.arrayContaining([
-				"Devstral-Small-2507-GGUF",
-				"Qwen3.6-35B-A3B-MTP-GGUF",
-				"gpt-oss-20b-mxfp4-GGUF",
-				"Mystery-Coder-GGUF",
-			]),
-			removed: ["Qwen3-Coder-Next-GGUF"],
-			changed: expect.any(Array),
-		});
-		expect(result.diff.added).toHaveLength(4);
+		expect(result.diff).toEqual({ listForm: true, changed: expect.any(Array) });
+		expect(result.unlisted).toEqual(["Qwen3-Coder-Next-GGUF"]);
 		expect(result.details).toContain(
 			"models is a list, which cline 3.x rejects (it drops the provider): rewrite as a record by id",
 		);
@@ -97,18 +86,16 @@ describe("Cline models.json Lemonade metadata plan", () => {
 			"GLM-4.7-Flash-GGUF: contextWindow (unset) -> 202752 (recipe ctx_size), maxTokens (unset) -> 32768, supportsVision (unset) -> false, supportsReasoning (unset) -> false, inputPrice (unset) -> 0, outputPrice (unset) -> 0",
 		);
 		expect(result.details).toContain(
-			"Qwen3.6-35B-A3B-MTP-GGUF: add, context 262144 (model max; Lemonade auto-tunes up to it), maxTokens 32768, vision",
+			"Qwen3-Coder-Next-GGUF: in the models record but Lemonade doesn't list it (kept; a card on it fails until Lemonade has it or the orchestrator takes it out of models.json)",
 		);
-		expect(result.details).toContain(
-			"Mystery-Coder-GGUF: add, no context info from Lemonade; Cline's 128000 default",
-		);
-		expect(result.details).toContain("Qwen3-Coder-Next-GGUF: remove (Lemonade no longer lists it)");
 		// Metadata comes from the server Cline talks to (the provider's baseUrl).
 		expect(fetchImpl.urls).toContain("http://lemonade.test:13305/api/v1/models");
 		expect(readFileSync(modelsPath, "utf8")).toBe(before);
 		expect(readdirSync(dir.path)).toEqual(["models.json"]);
 
+		// Exactly the record's models: the orchestrator's allow list, not every model Lemonade has.
 		expect(result.models).toEqual({
+			"Qwen3-Coder-Next-GGUF": { id: "Qwen3-Coder-Next-GGUF", name: "Qwen3-Coder-Next-GGUF" },
 			"GLM-4.7-Flash-GGUF": {
 				id: "GLM-4.7-Flash-GGUF",
 				name: "GLM-4.7-Flash-GGUF",
@@ -129,31 +116,32 @@ describe("Cline models.json Lemonade metadata plan", () => {
 				inputPrice: 0,
 				outputPrice: 0,
 			},
-			"Devstral-Small-2507-GGUF": expect.objectContaining({ contextWindow: 131072, maxTokens: 32768 }),
-			"Qwen3.6-35B-A3B-MTP-GGUF": expect.objectContaining({ contextWindow: 262144, supportsVision: true }),
-			"gpt-oss-20b-mxfp4-GGUF": expect.objectContaining({ contextWindow: 131072, supportsReasoning: true }),
-			"Mystery-Coder-GGUF": {
-				id: "Mystery-Coder-GGUF",
-				name: "Mystery-Coder-GGUF",
-				supportsVision: false,
-				supportsReasoning: false,
-				inputPrice: 0,
-				outputPrice: 0,
-			},
 		});
-		// Image and speech models, and models not downloaded, never reach Cline.
-		expect(Object.keys(result.models)).not.toContain("Flux-2-Klein-9B-GGUF");
-		expect(Object.keys(result.models)).not.toContain("Not-Downloaded-GGUF");
+	});
+
+	it("fills in a model Lemonade has no context info for with Cline's default, and one not downloaded too", async () => {
+		write(clineModelsFile({ "Mystery-Coder-GGUF": {}, "Not-Downloaded-GGUF": {} }));
+		const result = found(await plan());
+		expect(result.unlisted).toEqual([]);
+		expect(result.models["Mystery-Coder-GGUF"]).toEqual({
+			id: "Mystery-Coder-GGUF",
+			name: "Mystery-Coder-GGUF",
+			supportsVision: false,
+			supportsReasoning: false,
+			inputPrice: 0,
+			outputPrice: 0,
+		});
+		expect(Object.keys(result.models)).toEqual(["Mystery-Coder-GGUF", "Not-Downloaded-GGUF"]);
 	});
 
 	it("is in sync once the file has the wanted record", async () => {
-		write(clineModelsFile(["GLM-4.7-Flash-GGUF"]));
+		write(clineModelsFile(["GLM-4.7-Flash-GGUF", "Mystery-Coder-GGUF"]));
 		write(clineModelsFile(found(await plan()).models));
 
 		const again = found(await plan());
 		expect(again.inSync).toBe(true);
 		expect(again.details).toEqual([
-			"6 model(s) in sync: Devstral-Small-2507-GGUF 131072, GLM-4.7-Flash-GGUF 202752, Gemma-4-12B-it-GGUF 65536, Qwen3.6-35B-A3B-MTP-GGUF 262144, gpt-oss-20b-mxfp4-GGUF 131072, Mystery-Coder-GGUF 128000 (Cline default)",
+			"2 model(s) in sync: GLM-4.7-Flash-GGUF 202752, Mystery-Coder-GGUF 128000 (Cline default)",
 		]);
 	});
 
@@ -184,12 +172,16 @@ describe("Cline models.json Lemonade metadata plan", () => {
 		expect(result.details).toContain(
 			"GLM-4.7-Flash-GGUF: contextWindow 128000 -> 202752 (recipe ctx_size), maxTokens (unset) -> 32768, supportsVision (unset) -> false, supportsReasoning (unset) -> false, outputPrice (unset) -> 0",
 		);
-		// Loaded below its max: the loaded size is what llama-server runs with.
+	});
+
+	it("takes a loaded model's ctx_size: what llama-server runs it with", async () => {
+		write(clineModelsFile({ "Qwen3.6-35B-A3B-MTP-GGUF": {} }));
+		const result = found(await plan(createFakeLemonadeFetch({ health: LEMONADE_HEALTH_QWEN_LOADED_PAYLOAD })));
 		expect(result.models["Qwen3.6-35B-A3B-MTP-GGUF"]?.contextWindow).toBe(98304);
 	});
 
 	it("never claims more than a positive global ctx_size for a model without its own", async () => {
-		write(clineModelsFile({}));
+		write(clineModelsFile({ "Qwen3.6-35B-A3B-MTP-GGUF": {}, "Mystery-Coder-GGUF": {}, "GLM-4.7-Flash-GGUF": {} }));
 		const { models } = found(await plan(createFakeLemonadeFetch({ params: { ctx_size: 32768 } })));
 		expect(models["Qwen3.6-35B-A3B-MTP-GGUF"]?.contextWindow).toBe(32768);
 		expect(models["Mystery-Coder-GGUF"]?.contextWindow).toBe(32768);
@@ -231,7 +223,6 @@ describe("Cline models.json Lemonade metadata plan", () => {
 		function check(fetchImpl: typeof fetch = createFakeLemonadeFetch()) {
 			return checkClineLemonadeModels({
 				modelsPath,
-				origin: ORIGIN,
 				lemonadeModelList: { url: "http://lemonade.test:13305", requireLabels: LABELS, include: null },
 				fetch: fetchImpl,
 			});
@@ -245,21 +236,26 @@ describe("Cline models.json Lemonade metadata plan", () => {
 			const [warn] = await check();
 			expect(warn?.level).toBe("warn");
 			expect(warn?.message).toContain("GLM-4.7-Flash-GGUF: contextWindow 128000 -> 202752 (recipe ctx_size)");
-			expect(warn?.message).toContain(
-				"Gemma-4-12B-it-GGUF: add, context 65536 (recipe ctx_size), maxTokens 16384, vision",
-			);
-			expect(warn?.message).toContain("Old-GGUF: remove (Lemonade no longer lists it)");
-			expect(warn?.hint).toBe("kanban setup-provider lemonade --origin http://127.0.0.1:3485");
+			expect(warn?.message).not.toContain("Gemma-4-12B-it-GGUF");
+			expect(warn?.message).toContain("Old-GGUF: in the models record but Lemonade doesn't list it");
+			expect(warn?.hint).toBe("kanban setup-provider lemonade");
 			expect(readFileSync(modelsPath, "utf8")).toBe(before);
 
 			const [down] = await check(createFakeLemonadeFetch({ down: true }));
 			expect(down?.level).toBe("info");
 			expect(down?.message).toContain("did not answer");
 
+			// In sync but a model Lemonade doesn't list: a warning the command can't fix.
+			write(clineModelsFile(found(await plan()).models));
+			const [unlisted] = await check();
+			expect(unlisted?.level).toBe("warn");
+			expect(unlisted?.hint).toBe("pull the model in Lemonade, or take it out of models.json's lemonade record");
+
+			write(clineModelsFile({ "GLM-4.7-Flash-GGUF": {} }));
 			write(clineModelsFile(found(await plan()).models));
 			const [pass] = await check();
 			expect(pass?.level).toBe("pass");
-			expect(pass?.message).toContain("6 model(s) in sync");
+			expect(pass?.message).toContain("1 model(s) in sync");
 		});
 
 		it("says what the Lemonade context sync will write, or that it is off", async () => {
@@ -267,7 +263,6 @@ describe("Cline models.json Lemonade metadata plan", () => {
 			const run = (mode: "on" | "report" | "off") =>
 				checkClineLemonadeModels({
 					modelsPath,
-					origin: ORIGIN,
 					lemonadeModelList: { url: "http://lemonade.test:13305", requireLabels: LABELS, include: null },
 					contextSync: { mode, intervalSec: 30 },
 					historyPath: "/home/k/data/models/cline-lemonade-sync.jsonl",

@@ -4,6 +4,11 @@
 // through cline-file-write.ts, only that provider's keys, and never a printed secret. Kanban writes these only when
 // the user or the Kanban project's orchestrator runs the command (KANBAN_ORCHESTRATOR_OR_USER_COMMANDS in
 // src/isolation/cli-scope.ts); the server's Lemonade context sync stays its own (cline-lemonade-context-sync.ts).
+//
+// Which models a provider's `models` record in models.json lists is the Kanban orchestrator's (the record is Cline's
+// allow list, docs/team/MODELS.md): a provider's write keeps the records it finds and only fills in or refreshes their
+// metadata (context window, maxTokens, vision, reasoning), never adds or removes a model, and drops a
+// `modelsSourceUrl` (Cline offers every id it returns). A new provider type here follows the same rule.
 import { readLemonadeModelListSettings } from "../config/model-lists-config";
 import type { PipelineConfig } from "../config/pipeline-config";
 import { checkClineBedrockKey } from "../doctor/cline-bedrock-key-checks";
@@ -25,8 +30,6 @@ import type { SetupProviderId } from "./setup-provider-command";
 export interface ProviderSetupContext {
 	config: PipelineConfig;
 	homePath: string;
-	/** The Kanban server origin (Lemonade's modelsSourceUrl is its model-lists route). */
-	origin: string;
 	/** Where the keys come from (AWS_BEARER_TOKEN_BEDROCK, CLINE_API_KEY); never printed. */
 	env: NodeJS.ProcessEnv;
 	fetch?: typeof fetch;
@@ -59,8 +62,6 @@ export interface ClineProviderSetup {
 	label: string;
 	/** What the write changes, for the provider list. */
 	writes: string;
-	/** Options only this provider takes (besides --dry-run and --json). */
-	options: readonly "--origin"[];
 	check: (context: ProviderSetupContext) => Promise<DoctorFinding[]>;
 	apply: (context: ProviderSetupContext, options: { dryRun: boolean }) => Promise<ProviderSetupResult>;
 }
@@ -84,12 +85,10 @@ const lemonade: ClineProviderSetup = {
 	id: "lemonade",
 	label: "Lemonade (local models)",
 	writes:
-		"models.json: the lemonade entry's modelsSourceUrl (Kanban's model-lists route) and each model's context window, maxTokens, vision and reasoning as Lemonade reports them",
-	options: ["--origin"],
+		"models.json: drops the lemonade entry's modelsSourceUrl, and fills in the context window, maxTokens, vision and reasoning of the models already in its record as Lemonade reports them (never adds or removes a model)",
 	check: async (context) =>
 		await checkClineLemonadeModels({
 			modelsPath: getClineModelsSettingsPath(context.config.agents.cline.dataDir),
-			origin: context.origin,
 			lemonadeModelList: (await readLemonadeModelListSettings()).settings,
 			contextSync: context.config.agents.cline.lemonadeContextSync,
 			historyPath: getClineLemonadeSyncHistoryPath(context.homePath),
@@ -100,9 +99,6 @@ const lemonade: ClineProviderSetup = {
 		const { settings } = await readLemonadeModelListSettings();
 		const result = await applyClineLemonadeEntry({
 			modelsPath,
-			origin: context.origin,
-			requireLabels: settings.requireLabels,
-			include: settings.include,
 			lemonadeUrl: settings.url,
 			fetch: context.fetch,
 			backupDir: getClineBackupDir(context.homePath),
@@ -125,7 +121,6 @@ const bedrock: ClineProviderSetup = {
 	label: "Amazon Bedrock",
 	writes:
 		"providers.json: the bedrock entry's apiKey from AWS_BEARER_TOKEN_BEDROCK, and a region (AWS_REGION, else models.bedrockRegion) when none is stored",
-	options: [],
 	check: async (context) =>
 		await checkClineBedrockKey({
 			providersPath: getClineProvidersSettingsPath(context.config.agents.cline.dataDir),
@@ -150,7 +145,6 @@ const clinePass: ClineProviderSetup = {
 	id: CLINE_PASS_PROVIDER_ID,
 	label: "ClinePass (Cline's subscription)",
 	writes: "providers.json: the cline-pass entry's apiKey from CLINE_API_KEY",
-	options: [],
 	check: async (context) =>
 		await checkClinePassKey({
 			providersPath: getClineProvidersSettingsPath(context.config.agents.cline.dataDir),

@@ -18,7 +18,7 @@ import { type ModelProbeOutcome, probeModel } from "../models/model-probe";
 import { getBedrockProfilesCachePath, loadModelProbeDependencies } from "../models/model-probe-setup";
 import { listWorkspaceIndexEntries, loadWorkspaceBoardById, mutateWorkspaceState } from "../state/workspace-state";
 import { registerModelPricesCommand } from "./model-prices";
-import { registerModelsRegistryCommands } from "./models-registry";
+import { registerModelsVetCommand } from "./models-vet";
 import { createRuntimeTrpcClient, notifyRuntimeWorkspaceStateUpdated } from "./runtime-trpc-client";
 import { resolveWorkspaceTarget } from "./workspace-target";
 
@@ -271,7 +271,7 @@ async function runProviders(options: ProvidersCommandOptions): Promise<number> {
 export function registerModelsCommand(program: Command): void {
 	const models = program
 		.command("models")
-		.description("The vetted model registry (list, vet), model probes and the Cline provider policy.");
+		.description("The vet smoke test, model probes and the Cline provider policy.");
 	models
 		.command("probe")
 		.description(
@@ -321,5 +321,5 @@ export function registerModelsCommand(program: Command): void {
 			}
 		});
 	registerModelPricesCommand(models);
-	registerModelsRegistryCommands(models);
+	registerModelsVetCommand(models);
 }

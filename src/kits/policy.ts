@@ -8,7 +8,6 @@ import type { RuntimeAgentId, RuntimeBoardCard } from "../core/api-contract";
 import type { EffectiveModel } from "../core/effective-agent";
 import { getKitFallbackFlow, resolveKitRole } from "./kit-roles";
 import type { CardRole, KitDocument, KitFallbackTrigger } from "./kit-schema";
-import { checkRouting, getStrictRoutingVetting, type RoutingVetting } from "./routing-vetting";
 
 export interface EffectiveCard {
 	card: RuntimeBoardCard;
@@ -52,15 +51,10 @@ export interface QaPromptParts {
 	serversScript: string | null;
 }
 
-/**
- * `refused`: the kit's dev role names a combination the vetted model registry doesn't allow for dev work
- * (src/kits/routing-vetting.ts); the proposal must not be applied.
- */
 export type DevAssignmentAnswer = {
 	agentId: RuntimeAgentId;
 	model?: EffectiveModel;
 	tier?: string;
-	refused?: string;
 } | null;
 
 /**
@@ -77,8 +71,6 @@ export type PlanAssignmentAnswer =
 			startInPlanMode: boolean;
 			/** `plan.rules` texts, in key order, added to the plan prompt. */
 			rules: string[];
-			/** The vetted model registry doesn't allow the plan role's combination (src/kits/routing-vetting.ts). */
-			refused?: string;
 	  };
 
 export type QaPolicyAnswer =
@@ -233,10 +225,7 @@ export function getPromptParts(kit: KitDocument, ruleNames: string[]): QaPromptP
  * The plan question, asked only at plan card creation (`kanban task create --role plan`, src/kits/plan-assignment.ts),
  * never by the pipeline: plan cards are never QA'd, reworked or landed on a PASS.
  */
-export function answerPlanAssignment(
-	kit: KitDocument,
-	vetting: RoutingVetting = getStrictRoutingVetting(),
-): PlanAssignmentAnswer {
+export function answerPlanAssignment(kit: KitDocument): PlanAssignmentAnswer {
 	const plan = kit.plan;
 	if (plan?.enabled !== true) {
 		return { kind: "disabled", reason: `kit "${kit.name}" has plan.enabled off` };
@@ -248,40 +237,19 @@ export function answerPlanAssignment(
 		startInPlanMode: plan.startInPlanMode ?? false,
 		rules: Object.values(plan.rules ?? {}),
 	};
-	const refused = role?.agentId ? refusalOf(vetting, "plan", role.agentId, role.model) : null;
-	const vettingNote = refused ? { refused } : {};
 	// No model, or (only a guard: the resolver refuses it) a tier without a usable model.
 	if (!role?.model) {
-		return { ...base, ...vettingNote };
+		return base;
 	}
-	return { ...base, model: role.model, ...(role.tier ? { tier: role.tier } : {}), ...vettingNote };
-}
-
-/** The vetted model registry's refusal of a routing answer, or null when it is allowed. */
-function refusalOf(
-	vetting: RoutingVetting,
-	role: "dev" | "qa" | "plan",
-	agentId: RuntimeAgentId,
-	model: EffectiveModel | null | undefined,
-): string | null {
-	const check = checkRouting(vetting, role, {
-		agentId,
-		provider: model?.provider ?? null,
-		model: model?.model ?? null,
-	});
-	return check.ok ? null : check.message;
+	return { ...base, model: role.model, ...(role.tier ? { tier: role.tier } : {}) };
 }
 
 /**
  * The evaluator for one resolved kit. `kit` must already be resolved (override > kit > default) and validated.
- * Every answer that names an agent and model is checked against the vetted model registry (`vetting`, the
- * workspace's: getWorkspaceRoutingVetting): a refused one becomes "no QA", "to the orchestrator" or a refused dev
- * assignment, with the reason.
+ * Any model may be on any role (docs/team/MODELS.md): the answers name what the kit and the project's overrides
+ * say and never refuse a model.
  */
-export function createRoutingPolicy(
-	kit: KitDocument,
-	vetting: RoutingVetting = getStrictRoutingVetting(),
-): RoutingPolicy {
+export function createRoutingPolicy(kit: KitDocument): RoutingPolicy {
 	const fallbackFlow = getKitFallbackFlow(kit);
 
 	/**
@@ -316,10 +284,6 @@ export function createRoutingPolicy(
 		}
 		// A fallback without its own agent runs on the dev role's agent, else on the agent the card ran on.
 		const agentId = role.agentId ?? resolveKitRole(kit, "dev")?.agentId ?? dev.agentId;
-		const refused = refusalOf(vetting, "dev", agentId, role.model);
-		if (refused) {
-			return toOrchestrator(`the fallback is refused: ${refused}`);
-		}
 		return {
 			action: "escalate",
 			to: { agentId, model: role.model },
@@ -338,17 +302,10 @@ export function createRoutingPolicy(
 				return null;
 			}
 			// No model, or (only a guard: the resolver refuses it) a tier without a usable model.
-			const refused = refusalOf(vetting, "dev", role.agentId, role.model);
-			const vettingNote = refused ? { refused } : {};
 			if (!role.model) {
-				return { agentId: role.agentId, ...vettingNote };
+				return { agentId: role.agentId };
 			}
-			return {
-				agentId: role.agentId,
-				model: role.model,
-				...(role.tier ? { tier: role.tier } : {}),
-				...vettingNote,
-			};
+			return { agentId: role.agentId, model: role.model, ...(role.tier ? { tier: role.tier } : {}) };
 		},
 
 		qaPolicy({ dev }) {
@@ -397,11 +354,6 @@ export function createRoutingPolicy(
 					};
 				}
 			}
-			// Not landed either: the card waits in Review with the reason, as for a same-vendor refusal.
-			const refused = refusalOf(vetting, "qa", target.agent, qaModel);
-			if (refused) {
-				return { kind: "none", reason: `refused: ${routeName ?? "roles.qa"}: ${refused}` };
-			}
 			return {
 				kind: "qa",
 				agentId: target.agent,
@@ -433,21 +385,6 @@ export function createRoutingPolicy(
 			}
 			const runoff = cause === "fail" ? kit.onFail?.runoff : null;
 			if (runoff) {
-				const refused = runoff.models.flatMap((model) => {
-					const why = refusalOf(vetting, "dev", model.agent, {
-						provider: model.provider ?? null,
-						model: model.model,
-					});
-					return why ? [why] : [];
-				});
-				if (refused.length > 0) {
-					return {
-						action: "escalate",
-						to: "orchestrator",
-						requireApproval: false,
-						reason: `${fails} failed QA round(s); the kit's runoff is refused: ${refused.join("; ")}`,
-					};
-				}
 				return {
 					action: "runoff",
 					models: runoff.models.map((model) => ({

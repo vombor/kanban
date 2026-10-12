@@ -238,7 +238,7 @@ describe("kanban bench calibrate", () => {
 				getKanbanGlobalConfigPath(),
 				JSON.stringify({
 					workspaces: {
-						[workspaceId]: { kit: { name: "team" }, models: { allowProvisional: true }, isolation: { mode } },
+						[workspaceId]: { kit: { name: "team" }, isolation: { mode } },
 					},
 				}),
 			);

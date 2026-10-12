@@ -10,7 +10,7 @@ import { createBoard, createCard } from "../../utilities/workspace-state-store";
 // queued, none starts, no QA card is nudged, no PASS lands and no rework is sent; the resume lets all of it act.
 const T0 = Date.parse("2026-10-07T10:00:00.000Z");
 const PAUSED_AT = "2026-10-07T09:30:00.000Z";
-const QA_WORKSPACE = { landing: { mode: "qa" }, kit: { name: "team" }, models: { allowProvisional: true } };
+const QA_WORKSPACE = { landing: { mode: "qa" }, kit: { name: "team" } };
 const PAUSED_WORKSPACE = { ...QA_WORKSPACE, pipeline: { paused: true, pausedAt: PAUSED_AT } };
 const OPENAI_DEV = {
 	agentId: "cline" as const,

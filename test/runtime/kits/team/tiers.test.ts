@@ -4,7 +4,6 @@ import { createRoutingPolicy } from "../../../../src/kits/policy";
 import { getBuiltInKits, getDefaultKit, resolveKitLayers } from "../../../../src/kits/resolve-kit";
 import { buildTiersReport, formatTiersReport } from "../../../../src/kits/team/tiers/tiers-report";
 import { createCardHistory, createEffectiveCard } from "../../../utilities/effective-card";
-import { PROVISIONAL_ALLOWED } from "../../../utilities/routing-vetting";
 
 function team(overrides: Record<string, unknown> = {}) {
 	const kit = getBuiltInKits().get("team");
@@ -19,7 +18,7 @@ function team(overrides: Record<string, unknown> = {}) {
 }
 
 const escalateAfterStall = (kit: ReturnType<typeof team>) =>
-	createRoutingPolicy(kit, PROVISIONAL_ALLOWED).onFail({
+	createRoutingPolicy(kit).onFail({
 		dev: createEffectiveCard({ agentId: "cline", model: "us.openai.gpt-6.1-sol" }),
 		cause: "stalled",
 		verdict: null,
@@ -84,7 +83,9 @@ describe("tiers feature", () => {
 		expect(text).toContain("tier3: picks bedrock/us.openai.gpt-6.1-sol");
 		expect(text).toContain("  - bedrock/us.amazon.nova-2-lite-v1:0: candidate; dropped 2026-10-05");
 		expect(text).not.toContain("[DROPPED]");
-		expect(text).toContain("Dropped (skipped on every provider):");
+		// The team kit drops nothing itself, and Kanban keeps no list of rejected models.
+		expect(report.dropped).toEqual([]);
+		expect(text).not.toContain("Dropped (skipped on every provider):");
 		expect(text).toContain("roles.dev: tier tier3; roles.fallback: tier tier2");
 
 		const off = formatTiersReport(buildTiersReport(team({ features: [] }))).join("\n");

@@ -103,18 +103,6 @@ describe("CLI program option parsing", () => {
 		);
 	});
 
-	it("passes the options of models list and models allow-provisional", async () => {
-		expect(
-			await parse(["models", "list"], ["models", "list", "--project", "kanban-2uge", "--role", "qa", "--json"]),
-		).toEqual([{ project: "kanban-2uge", role: "qa", json: true }]);
-		expect(
-			await parse(
-				["models", "allow-provisional"],
-				["models", "allow-provisional", "on", "--project", "kanban-2uge"],
-			),
-		).toEqual(["on", { project: "kanban-2uge" }]);
-	});
-
 	it("passes --agent to the other subcommands that have one", async () => {
 		const [run] = await parse(
 			["orchestrator", "run"],
@@ -146,9 +134,9 @@ describe("CLI program option parsing", () => {
 
 	it("still takes root options after the subcommand", async () => {
 		const program = createCliProgram();
-		const target = findCommand(program, ["models", "list"]);
+		const target = findCommand(program, ["models", "probe"]);
 		target.action(() => {});
-		await program.parseAsync(["models", "list", "--home", "/tmp/kanban-home-test"], { from: "user" });
+		await program.parseAsync(["models", "probe", "--home", "/tmp/kanban-home-test"], { from: "user" });
 		expect(program.opts()).toMatchObject({ home: "/tmp/kanban-home-test" });
 	});
 });

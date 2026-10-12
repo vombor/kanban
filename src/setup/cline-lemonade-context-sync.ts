@@ -10,8 +10,8 @@
 //   - of models already in the Lemonade entry's `models` record,
 //   - when the window comes from Lemonade's `recipe_options.ctx_size`: the loaded model's (/health) or the recipe's
 //     (/models). A global ctx_size or `max_context_window` (the model's maximum, not what it loads with) is skipped.
-// Adding, removing or renaming models, the list form, `modelsSourceUrl`, vision, reasoning, prices and every other
-// key stay setup-provider lemonade. The write is apply's: models.json as read is backed up into
+// The list form, dropping `modelsSourceUrl`, vision, reasoning, prices and every other key stay setup-provider
+// lemonade; which models are in the record is the Kanban orchestrator's (never added or removed by either). The write is apply's: models.json as read is backed up into
 // `<home>/backups/cline`, the file is left alone when it changed while Lemonade was asked, and it is replaced
 // atomically with its own mode (cline-file-write.ts). A running Cline session keeps the window it started with.
 import { readFile } from "node:fs/promises";
@@ -48,7 +48,7 @@ export interface LemonadeContextSkip {
 export interface LemonadeContextSyncPlan {
 	changes: LemonadeContextChange[];
 	skipped: LemonadeContextSkip[];
-	/** Differences left to setup-provider lemonade (models to add or remove, other keys, the list form). */
+	/** Differences left to setup-provider lemonade (other keys, the list form). */
 	userDifferences: number;
 }
 
@@ -63,8 +63,7 @@ export function planLemonadeContextSync(plan: LemonadeModelsPlan): LemonadeConte
 		(count, change) => count + change.fields.filter((field) => !isSyncKey(field.key)).length,
 		0,
 	);
-	const userDifferences =
-		(diff.listForm ? 1 : 0) + diff.added.length + diff.removed.length + otherFields + (plan.defaultModel ? 1 : 0);
+	const userDifferences = (diff.listForm ? 1 : 0) + otherFields + (plan.defaultModel ? 1 : 0);
 	const contextChanges = diff.changed.filter((change) => change.fields.some((field) => isSyncKey(field.key)));
 	if (diff.listForm) {
 		return {

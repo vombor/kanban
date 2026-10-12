@@ -74,18 +74,19 @@ Fix it before anything else.
   `kanban models providers --cleanup` lists the edits for Cline's files; you make them. `kanban doctor` reports
   Kanban's rules left in `~/.cline/rules` and `*.bak-before-kanban-setup-*` backups with the `rm` command; it never
   deletes them.
-- **Cline's Lemonade models (`models.json`):** `kanban setup` and `kanban doctor` compare the `lemonade` provider entry
-  (its `modelsSourceUrl` and each model's context window, maxTokens, vision, reasoning) with Kanban's model-lists route
-  and what Lemonade reports now, and list every difference (doctor: WARN, INFO when Lemonade is down). To apply them,
-  run the printed `kanban setup-provider lemonade --origin <origin>` yourself (`--dry-run` first to see the
-  changes). It changes only the Lemonade entry and backs up the old file to `~/.kanban/backups/cline/`. To roll back,
+- **Cline's Lemonade models (`models.json`):** the `lemonade` entry's `models` record is Cline's allow list
+  ([MODELS.md](MODELS.md)): the Kanban orchestrator adds a model there by hand once it passed `kanban models vet`, and
+  the entry has no `modelsSourceUrl`. `kanban setup` and `kanban doctor` compare the record's models (context window,
+  maxTokens, vision, reasoning) with what Lemonade reports now, report a `modelsSourceUrl` and the record's models
+  Lemonade doesn't list (doctor: WARN, INFO when Lemonade is down). To apply them, run the printed
+  `kanban setup-provider lemonade` yourself (`--dry-run` first to see the changes); it never adds or removes a model. It changes only the Lemonade entry and backs up the old file to `~/.kanban/backups/cline/`. To roll back,
   copy the backup over `~/.cline/data/settings/models.json`.
 - **Lemonade context windows follow a reload by themselves** (issue #31): the server's Lemonade context sync
   (`agents.cline.lemonadeContextSync`, `mode` `on` by default, `report` only logs, `off`; `intervalSec` 30) compares
   the same way every 30 s and right before each Cline launch, and writes only `contextWindow` and `maxTokens` of
   models already in the entry, from Lemonade's `recipe_options.ctx_size` (never `max_context_window`), with the same
-  backup and atomic write. It is the one write Kanban makes in Cline's files on its own; adding or removing models,
-  `modelsSourceUrl` and every other key stay the command's. Each change (old -> new per model, with the Lemonade value)
+  backup and atomic write. It is the one write Kanban makes in Cline's files on its own; dropping `modelsSourceUrl`
+  and every other key stay the command's, and which models are in the record is the Kanban orchestrator's. Each change (old -> new per model, with the Lemonade value)
   is in the server log and `~/.kanban/data/models/cline-lemonade-sync.jsonl`, as are report-mode, skipped and failed
   writes. A running Cline session keeps its window; the next one gets the new one.
 

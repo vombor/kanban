@@ -15,7 +15,6 @@ import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
 import { createFakeLemonadeFetch } from "../../utilities/lemonade-fixtures";
 import { createTempDir } from "../../utilities/temp-dir";
 
-const ORIGIN = "http://127.0.0.1:3485";
 const NOW = new Date("2026-10-12T12:00:00.000Z");
 const BEDROCK_KEY = "bedrock-key-from-the-env";
 const CLINE_PASS_KEY = "cline-pass-key-from-the-env";
@@ -59,7 +58,7 @@ describe("kanban setup-provider", () => {
 				await runSetupProviderCommand({
 					provider,
 					options,
-					context: { config, homePath, origin: ORIGIN, env, fetch: createFakeLemonadeFetch(), now: NOW },
+					context: { config, homePath, env, fetch: createFakeLemonadeFetch(), now: NOW },
 				}),
 		);
 	}
@@ -116,12 +115,16 @@ describe("kanban setup-provider", () => {
 		expect(document.providers.bedrock.settings.apiKey).toBe("other");
 	});
 
-	it("lemonade: writes the entry's modelsSourceUrl and models from Lemonade, only that entry", async () => {
+	it("lemonade: drops the entry's modelsSourceUrl and fills in its own models' metadata, only that entry", async () => {
 		writeJson(modelsPath(), {
 			version: 1,
 			providers: {
 				lemonade: {
-					provider: { name: "Lemonade", baseUrl: "http://lemonade.test:13305/api/v1" },
+					provider: {
+						name: "Lemonade",
+						baseUrl: "http://lemonade.test:13305/api/v1",
+						modelsSourceUrl: "http://127.0.0.1:3485/api/model-lists/lemonade",
+					},
 					models: ["GLM-4.7-Flash-GGUF"],
 				},
 				other: { provider: { name: "Other" }, models: ["x"] },
@@ -129,15 +132,20 @@ describe("kanban setup-provider", () => {
 		});
 		const dry = await run("lemonade", { dryRun: true });
 		expect(dry.stdout).toContain("dry run: not written");
-		expect(dry.stdout).toContain(`-> ${ORIGIN}/api/model-lists/lemonade`);
+		expect(dry.stdout).toContain("modelsSourceUrl: http://127.0.0.1:3485/api/model-lists/lemonade -> (none)");
 
 		const written = await run("lemonade", {});
 		expect(written.exitCode).toBe(0);
 		expect(written.stdout).toContain(`lemonade (${modelsPath()}): written`);
 		expect(written.stdout).toContain("backup: ");
 		const document = JSON.parse(readFileSync(modelsPath(), "utf8"));
-		expect(document.providers.lemonade.provider.modelsSourceUrl).toBe(`${ORIGIN}/api/model-lists/lemonade`);
-		expect(Object.keys(document.providers.lemonade.models)).toContain("GLM-4.7-Flash-GGUF");
+		expect(document.providers.lemonade.provider).toEqual({
+			name: "Lemonade",
+			baseUrl: "http://lemonade.test:13305/api/v1",
+		});
+		// The record is the orchestrator's allow list: Lemonade's other models are not added.
+		expect(Object.keys(document.providers.lemonade.models)).toEqual(["GLM-4.7-Flash-GGUF"]);
+		expect(document.providers.lemonade.models["GLM-4.7-Flash-GGUF"]).toMatchObject({ contextWindow: 202752 });
 		expect(document.providers.other).toEqual({ provider: { name: "Other" }, models: ["x"] });
 		expect((await run("lemonade", {})).stdout).toContain("in sync, nothing written");
 	});
@@ -177,10 +185,9 @@ describe("kanban setup-provider", () => {
 		]);
 	});
 
-	it("refuses an unknown provider (localai included) and an option another provider doesn't take", async () => {
+	it("refuses an unknown provider (localai included)", async () => {
 		await expect(run("localai", {})).rejects.toThrow(
 			'unknown provider "localai"; one of lemonade, bedrock, cline-pass',
 		);
-		await expect(run("bedrock", { origin: ORIGIN })).rejects.toThrow("--origin is only for lemonade");
 	});
 });

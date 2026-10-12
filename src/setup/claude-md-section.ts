@@ -44,10 +44,10 @@ export function renderClaudeMdSection(): string {
   \`{port}\` in a command is a free port per run, \`{url}\` the browser's way to it (docs/fork/shortcuts.md).
 - Agents never approve a plan; the user approves it on the board (Approve plan). Don't run \`kanban plan approve\`
   or \`kanban plan expand --approved-by-user\`: tell the user the plan is ready, and expand it once they approved it.
-- Models come from Kanban's vetted model registry: a role, and a card's own \`--agent-id\`/\`--model\`, can only use
-  a combination vetted for that role (\`kanban models list --project <path>\`). For another one, run
-  \`kanban models vet --agent <a> [--provider <p>] [--model <m>] --role dev|qa|plan\` and give the Kanban project its
-  proposal; provisional combinations are the user's to allow.
+- Any model may be on any role: the kit gives defaults, \`kanban kit set roles.<role>.*\` and a card's own
+  \`--agent-id\`/\`--model\` override them, and Kanban doesn't refuse the choice. For Cline cards, Cline's models.json
+  is the allow list (Cline offers only the models in a provider's record); the Kanban project's orchestrator curates
+  it with models that passed \`kanban models vet --agent <a> [--provider <p>] [--model <m>] --role dev|qa|plan\`.
 - GitHub issues and comments go out as Kanban's GitHub App, signed with your project: \`kanban github issue create
   --repo <owner/name> --title <title> --body-file <file>\`, \`kanban github issue comment --repo <owner/name> --number <n>
   --body-file <file>\`, \`edit\`, \`close\`. Never \`gh issue create|comment|edit|close\` or \`gh api\` writes; reading with gh

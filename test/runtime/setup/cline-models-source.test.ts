@@ -3,14 +3,10 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import {
-	buildLemonadeModelListUrl,
-	isManagedModelsSourceUrl,
-	planClineModelsSource,
-} from "../../../src/setup/cline-models-source";
+import { isManagedModelsSourceUrl, planClineModelsSource } from "../../../src/setup/cline-models-source";
 import { createTempDir } from "../../utilities/temp-dir";
 
-const TARGET = "http://127.0.0.1:3485/api/model-lists/lemonade";
+const ROUTE = "http://127.0.0.1:3485/api/model-lists/lemonade";
 
 // The shape of the pod's ~/.cline/data/settings/models.json on 2026-10-07, pointing at the legacy kit service.
 function clineModelsFile(modelsSourceUrl?: string): Record<string, unknown> {
@@ -54,10 +50,6 @@ describe("Cline models.json modelsSourceUrl step", () => {
 		return readdirSync(dir.path).filter((name) => name.includes(".bak"));
 	}
 
-	it("builds the route URL from a server URL", () => {
-		expect(buildLemonadeModelListUrl("http://127.0.0.1:3485/my-workspace")).toBe(TARGET);
-	});
-
 	it("recognizes the legacy kit service and the route on any origin", () => {
 		expect(isManagedModelsSourceUrl("http://127.0.0.1:13306/lemonade/models")).toBe(true);
 		expect(isManagedModelsSourceUrl("http://localhost:13306/lemonade/v1/models/")).toBe(true);
@@ -66,47 +58,42 @@ describe("Cline models.json modelsSourceUrl step", () => {
 		expect(isManagedModelsSourceUrl("https://models.example.com/list")).toBe(false);
 	});
 
-	it("wants the legacy service URL repointed, and writes nothing", async () => {
+	it("wants the legacy service URL dropped, and writes nothing", async () => {
 		write(clineModelsFile("http://127.0.0.1:13306/lemonade/models"));
 		const before = readFileSync(modelsPath, "utf8");
 
-		expect(await planClineModelsSource(modelsPath, TARGET)).toMatchObject({
-			action: "update",
+		expect(await planClineModelsSource(modelsPath)).toMatchObject({
+			action: "remove",
 			currentUrl: "http://127.0.0.1:13306/lemonade/models",
-			targetUrl: TARGET,
 		});
 		// Planning never writes: only the user's apply command does (cline-lemonade-apply.test.ts).
 		expect(readFileSync(modelsPath, "utf8")).toBe(before);
 		expect(backups()).toEqual([]);
 	});
 
-	it("wants a missing URL set, a route on another Kanban origin moved, and the route kept", async () => {
+	it("wants every modelsSourceUrl dropped (Kanban's route and any other URL), and none is up to date", async () => {
 		write(clineModelsFile());
-		expect((await planClineModelsSource(modelsPath, TARGET)).action).toBe("update");
-		write(clineModelsFile("http://127.0.0.1:3484/api/model-lists/lemonade"));
-		expect((await planClineModelsSource(modelsPath, TARGET)).action).toBe("update");
-		write(clineModelsFile(TARGET));
-		expect((await planClineModelsSource(modelsPath, TARGET)).action).toBe("up-to-date");
-	});
-
-	it("leaves a URL the user chose alone", async () => {
+		expect((await planClineModelsSource(modelsPath)).action).toBe("up-to-date");
+		write(clineModelsFile(ROUTE));
+		expect((await planClineModelsSource(modelsPath)).action).toBe("remove");
+		// A dynamic list offers every model it returns, not only the curated record.
 		write(clineModelsFile("https://models.example.com/lemonade"));
-		expect(await planClineModelsSource(modelsPath, TARGET)).toMatchObject({
-			action: "custom",
+		expect(await planClineModelsSource(modelsPath)).toMatchObject({
+			action: "remove",
 			currentUrl: "https://models.example.com/lemonade",
 		});
 	});
 
 	it("skips a missing file or a file without a Lemonade provider", async () => {
-		expect((await planClineModelsSource(modelsPath, TARGET)).action).toBe("skip");
+		expect((await planClineModelsSource(modelsPath)).action).toBe("skip");
 		write({ version: 1, providers: { other: { provider: { name: "Other" } } } });
-		expect((await planClineModelsSource(modelsPath, TARGET)).action).toBe("skip");
+		expect((await planClineModelsSource(modelsPath)).action).toBe("skip");
 	});
 
 	it("reports a broken file as an error", async () => {
 		writeFileSync(modelsPath, "{ broken");
-		expect((await planClineModelsSource(modelsPath, TARGET)).action).toBe("error");
+		expect((await planClineModelsSource(modelsPath)).action).toBe("error");
 		write({ version: 1 });
-		expect((await planClineModelsSource(modelsPath, TARGET)).action).toBe("error");
+		expect((await planClineModelsSource(modelsPath)).action).toBe("error");
 	});
 });
