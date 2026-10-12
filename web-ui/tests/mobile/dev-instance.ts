@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -19,7 +19,20 @@ export interface DevInstance {
 	baseUrl: string;
 	rootDir: string;
 	projectDir: string;
+	// Stops the runtime as a restart does (SIGTERM, so its shutdown runs) and
+	// starts it again on the same port and Kanban home. Vite keeps running.
+	restartRuntime: () => Promise<void>;
 	stop: () => Promise<void>;
+}
+
+export interface DevInstanceOptions {
+	// Executables put first on the runtime's PATH (name -> script), e.g. a fake
+	// agent CLI under a name Kanban detects.
+	fakeCommands?: Record<string, string>;
+	// The Kanban home's config.json, written before the first start.
+	globalConfig?: Record<string, unknown>;
+	// Extra runtime flags, e.g. the pod's --skip-shutdown-cleanup.
+	runtimeArgs?: string[];
 }
 
 async function findFreePort(): Promise<number> {
@@ -94,8 +107,19 @@ function stopProcess(child: ChildProcess): Promise<void> {
 	});
 }
 
-export async function startDevInstance(): Promise<DevInstance> {
+export async function startDevInstance(options: DevInstanceOptions = {}): Promise<DevInstance> {
 	const rootDir = mkdtempSync(join(tmpdir(), "kanban-mobile-e2e-"));
+	const kanbanHome = join(rootDir, "kanban-home");
+	const binDir = join(rootDir, "bin");
+	mkdirSync(binDir, { recursive: true });
+	for (const [name, script] of Object.entries(options.fakeCommands ?? {})) {
+		writeFileSync(join(binDir, name), script);
+		chmodSync(join(binDir, name), 0o755);
+	}
+	if (options.globalConfig) {
+		mkdirSync(kanbanHome, { recursive: true });
+		writeFileSync(join(kanbanHome, "config.json"), `${JSON.stringify(options.globalConfig, null, 2)}\n`);
+	}
 	const projectDir = join(rootDir, "projects", "demo");
 	mkdirSync(projectDir, { recursive: true });
 	mkdirSync(join(rootDir, "user-home"), { recursive: true });
@@ -115,17 +139,31 @@ export async function startDevInstance(): Promise<DevInstance> {
 		throw new Error("Refusing to use the live Kanban port.");
 	}
 
-	const runtime = spawn(
-		join(repoDir, "node_modules/.bin/tsx"),
-		[join(repoDir, "src/cli.ts"), "--home", join(rootDir, "kanban-home"), "--port", String(runtimePort), "--no-open"],
-		{
-			cwd: projectDir,
-			// Development mode accepts the Vite dev server's origin (KANBAN_WEB_UI_PORT).
-			env: createIsolatedEnv(rootDir, { NODE_ENV: "development", KANBAN_WEB_UI_PORT: String(webPort) }),
-			detached: true,
-			stdio: ["ignore", "pipe", "pipe"],
-		},
-	);
+	const startRuntime = () =>
+		spawn(
+			join(repoDir, "node_modules/.bin/tsx"),
+			[
+				join(repoDir, "src/cli.ts"),
+				"--home",
+				kanbanHome,
+				"--port",
+				String(runtimePort),
+				"--no-open",
+				...(options.runtimeArgs ?? []),
+			],
+			{
+				cwd: projectDir,
+				// Development mode accepts the Vite dev server's origin (KANBAN_WEB_UI_PORT).
+				env: createIsolatedEnv(rootDir, {
+					NODE_ENV: "development",
+					KANBAN_WEB_UI_PORT: String(webPort),
+					PATH: `${binDir}:${process.env.PATH ?? ""}`,
+				}),
+				detached: true,
+				stdio: ["ignore", "pipe", "pipe"],
+			},
+		);
+	let runtime = startRuntime();
 	const vite = spawn(
 		join(webUiDir, "node_modules/.bin/vite"),
 		["--host", "127.0.0.1", "--port", String(webPort), "--strictPort"],
@@ -152,5 +190,10 @@ export async function startDevInstance(): Promise<DevInstance> {
 		await stop();
 		throw error;
 	}
-	return { baseUrl: `http://127.0.0.1:${webPort}`, rootDir, projectDir, stop };
+	const restartRuntime = async () => {
+		await stopProcess(runtime);
+		runtime = startRuntime();
+		await waitForOutput(runtime, /Kanban running at/, "Kanban runtime");
+	};
+	return { baseUrl: `http://127.0.0.1:${webPort}`, rootDir, projectDir, restartRuntime, stop };
 }

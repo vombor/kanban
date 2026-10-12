@@ -398,14 +398,12 @@ async function startServer(serverOptions: {
 	});
 	// A "running" summary loaded at startup has no process in this server (its PTY died with the old one): it is marked
 	// interrupted and persisted at once. Only once this process has bound the server: one that loses the port to a
-	// running server must not mark that server's live sessions. Not with session sync off: the browser then makes the
-	// moves, and it trashes a card whose session turns interrupted (use-board-interactions.ts), every orphan included.
+	// running server must not mark that server's live sessions. With session sync off only the sidebar (home-agent)
+	// sessions: the browser then makes the moves, and it trashes a card whose session turns interrupted
+	// (use-board-interactions.ts), every orphan included; a sidebar is no card, and its browser restarts it on the mark.
 	let serverBound = false;
 	const markOrphanedSessions = (workspaceId: string, manager: TerminalSessionManager): void => {
-		if (!sessionSyncSetting.enabled) {
-			return;
-		}
-		const summaries = manager.markOrphanedSessionsInterrupted();
+		const summaries = manager.markOrphanedSessionsInterrupted({ cardSessions: sessionSyncSetting.enabled });
 		if (summaries.length === 0) {
 			return;
 		}

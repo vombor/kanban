@@ -131,6 +131,44 @@ describe("TerminalSessionManager", () => {
 		}
 	});
 
+	it("marks a hydrated sidebar session interrupted in Review too, with or without the card sessions", () => {
+		// The pod runs with --skip-shutdown-cleanup: the orchestrator waiting for the user is stored in Review with
+		// its dead pid, and the open tab restarts its sidebar only on "interrupted" (2026-10-12 09:24:50Z restart).
+		const sidebar = "__home_agent__:demo:claude";
+		const hydrate = () => {
+			const manager = new TerminalSessionManager();
+			manager.hydrateFromRecord({
+				[sidebar]: createSummary({ taskId: sidebar, state: "awaiting_review", pid: 1383, reviewReason: "hook" }),
+				"__home_agent__:demo:codex": createSummary({
+					taskId: "__home_agent__:demo:codex",
+					state: "idle",
+					pid: null,
+				}),
+				card: createSummary({ taskId: "card", state: "running", pid: 4242 }),
+				review: createSummary({ taskId: "review", state: "awaiting_review", pid: 4343 }),
+			});
+			return manager;
+		};
+
+		const withCards = hydrate();
+		expect(
+			withCards
+				.markOrphanedSessionsInterrupted()
+				.map((summary) => `${summary.taskId}:${summary.state}:${summary.pid}`)
+				.sort(),
+		).toEqual([`${sidebar}:interrupted:null`, "card:interrupted:null"]);
+		expect(withCards.getSummary("review")?.state).toBe("awaiting_review");
+		expect(withCards.getSummary("__home_agent__:demo:codex")?.state).toBe("idle");
+		// An interrupted summary is no stale live one: attaching a terminal leaves the mark for the browser.
+		expect(withCards.recoverStaleSession(sidebar)?.state).toBe("interrupted");
+
+		const sidebarOnly = hydrate();
+		expect(
+			sidebarOnly.markOrphanedSessionsInterrupted({ cardSessions: false }).map((summary) => summary.taskId),
+		).toEqual([sidebar]);
+		expect(sidebarOnly.getSummary("card")?.state).toBe("running");
+	});
+
 	it("resets stale running sessions without active processes", () => {
 		const manager = new TerminalSessionManager();
 		manager.hydrateFromRecord({

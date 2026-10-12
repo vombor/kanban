@@ -11,6 +11,7 @@ import type {
 	RuntimeTaskTurnCheckpoint,
 	RuntimeTaskTypedInput,
 } from "../core/api-contract";
+import { isHomeAgentSessionId } from "../core/home-agent-session";
 import {
 	type AgentAdapterLaunchInput,
 	type AgentOutputTransitionDetector,
@@ -356,11 +357,22 @@ export class TerminalSessionManager implements TerminalSessionService {
 	 * the previous server, and a dead "running" summary misled the QA gate, the watchdog, session sync and the
 	 * browser after the 2026-10-07 23:02:56Z restart. Restart recovery counts "interrupted" as an orphan state like
 	 * "running" (restart-recovery.ts), so marking before or after it plans changes nothing there.
+	 *
+	 * A home-agent (sidebar orchestrator) session is marked in Review too: it waits for the user between turns, so a
+	 * stop that skipped the shutdown cleanup (the pod's `--skip-shutdown-cleanup`, a crash) leaves it "awaiting_review"
+	 * with the dead pid, and the browser restarts its sidebar only on "interrupted" (use-home-agent-session.ts): the
+	 * open tab's sidebar stayed blank after the 2026-10-12 09:24:50Z restart. Card sessions in Review keep their state
+	 * (restart recovery would resume them as orphans). `cardSessions: false` (session sync off, where the browser
+	 * trashes a card whose session turns interrupted) marks only the home-agent sessions, which are no cards.
 	 */
-	markOrphanedSessionsInterrupted(): RuntimeTaskSessionSummary[] {
+	markOrphanedSessionsInterrupted(options: { cardSessions?: boolean } = {}): RuntimeTaskSessionSummary[] {
+		const cardSessions = options.cardSessions ?? true;
 		const marked: RuntimeTaskSessionSummary[] = [];
-		for (const entry of this.entries.values()) {
-			if (entry.active || entry.summary.state !== "running") {
+		for (const [taskId, entry] of this.entries) {
+			const isOrphan = isHomeAgentSessionId(taskId)
+				? isActiveState(entry.summary.state)
+				: cardSessions && entry.summary.state === "running";
+			if (entry.active || !isOrphan) {
 				continue;
 			}
 			marked.push(
