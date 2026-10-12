@@ -82,32 +82,21 @@ describe("local residency", () => {
 		).toEqual([]);
 	});
 
-	it("speaks LocalAI's terms for a kit on LocalAI (max_active_backends, its own env var)", () => {
-		const set = ["qwen3-coder-next-q8-0-qwen", "gemma-4-26b-a4b-it"];
+	it("names another provider's own capacity key and a generic hint", () => {
 		const findings = assessLocalResidency({
 			kitName: "k",
-			provider: "localai",
-			workingSet: set,
+			provider: "ollama",
+			workingSet: ["qwen3-coder", "gemma-4"],
 			providerMaxLoaded: 1,
 			kanbanCapacity: 1,
 		});
 		expect(findings).toMatchObject([
 			{
 				level: "warn",
-				message: expect.stringContaining("LocalAI keeps 1 model(s) loaded (max_active_backends)"),
-				hint: expect.stringContaining("LOCALAI_MAX_ACTIVE_BACKENDS=2"),
+				message: expect.stringContaining("ollama keeps 1 model(s) loaded"),
+				hint: "let ollama keep 2 models loaded",
 			},
 		]);
-		expect(findings[0]?.message).toContain("models.providerCapacity.localai.maxLoadedModels");
-		// The host's four GPUs, once LocalAI keeps four: both models stay resident.
-		expect(
-			assessLocalResidency({
-				kitName: "k",
-				provider: "localai",
-				workingSet: set,
-				providerMaxLoaded: 4,
-				kanbanCapacity: 4,
-			}),
-		).toMatchObject([{ level: "pass" }]);
+		expect(findings[0]?.message).toContain("models.providerCapacity.ollama.maxLoadedModels");
 	});
 });

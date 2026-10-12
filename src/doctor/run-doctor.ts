@@ -25,7 +25,6 @@ import { readLiveKanbanServerLock } from "../state/kanban-server-lock";
 import { listWorkspaceIndexEntries, loadWorkspaceBoardById } from "../state/workspace-state";
 import { checkClineBedrockKey } from "./cline-bedrock-key-checks";
 import { checkKanbanFilesUnderClineDir } from "./cline-dir-checks";
-import { checkClineLocalAiProvider } from "./cline-localai-checks";
 import { checkClineLemonadeModels } from "./cline-models-checks";
 import { checkClinePassKey } from "./cline-pass-key-checks";
 import { createDeepCheckDeps, type DeepCheckDeps, runDeepChecks } from "./deep-checks";
@@ -47,12 +46,7 @@ import { checkGuardrails, type GuardrailCheckDeps } from "./guardrail-checks";
 import { checkHomeLocation } from "./home-location-checks";
 import { checkIsolation } from "./isolation-checks";
 import { checkIssueImport, createIssueCheckDeps, type IssueCheckDeps } from "./issue-checks";
-import {
-	checkKitLemonadeModels,
-	checkKitLocalAiModels,
-	checkKitProjectSettings,
-	checkKitRecommendedSettings,
-} from "./kit-settings-checks";
+import { checkKitLemonadeModels, checkKitProjectSettings, checkKitRecommendedSettings } from "./kit-settings-checks";
 import { checkOneOwner } from "./one-owner-checks";
 import { checkProjectShortcuts, type ProjectShortcutCheckDeps } from "./project-shortcut-checks";
 import { checkRoutingVetting } from "./routing-vetting-checks";
@@ -174,7 +168,6 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
 			fetch: options.fetch,
 		})),
 	);
-	findings.push(...(await checkClineLocalAiProvider({ config, origin: options.origin, fetch: options.fetch })));
 	findings.push(...checkKitProjectSettings(projectContext));
 	findings.push(...checkKitRecommendedSettings(projectContext));
 	findings.push(...checkRoutingVetting(projectContext));
@@ -185,7 +178,6 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
 			fetch: options.fetch,
 		})),
 	);
-	findings.push(...(await checkKitLocalAiModels({ ...projectContext, fetch: options.fetch })));
 	findings.push(
 		...(await checkKanbanFilesUnderClineDir({
 			rulesDir: getClineGlobalRulesPath(),

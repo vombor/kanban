@@ -7,7 +7,7 @@
 // Where the probe answers, it owns the run's silence: the runner's generic "no progress" check doesn't apply. The first
 // runs (2026-10-09, three Lemonade models loading at once) failed for harness reasons, so the probe never counts
 // what the environment does as the model's silence: a model a local provider is still loading (Lemonade's
-// /api/v1/health, LocalAI's /system), the first
+// /api/v1/health), the first
 // reply of a slow-first-call provider (CLINE_FIRST_REPLY_LOAD_ALLOWANCE_MS), a model request in flight before the
 // hung check's limit, and a shell tool whose command still runs (findAgentToolProcess). A provider timeout on a local
 // provider is `provider_timeout`, which the runner retries; it and the other environment failures are `harness`.
@@ -96,7 +96,7 @@ export interface VetProbeOptions {
 	hungMin?: number;
 	reader?: ClineSessionDetailReader;
 	/**
-	 * Whether a local provider has the model loaded (Lemonade's /api/v1/health, LocalAI's /system), null when it
+	 * Whether a local provider has the model loaded (Lemonade's /api/v1/health), null when it
 	 * can't be told or the provider has no such answer.
 	 */
 	isModelLoaded?: (provider: string, model: string) => Promise<boolean | null>;

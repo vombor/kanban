@@ -1,8 +1,7 @@
 // Does a local model server keep a kit's models loaded side by side? A kit like team-local runs its dev, QA and
 // fallback models at the same time; each local provider keeps only so many resident and evicts the least recently
-// used one for the next request, so with fewer slots than models every dev ↔ QA switch reloads a model:
-//   - Lemonade: `max_models.llm` of /api/v1/health (its `max_loaded_models` setting, default 1);
-//   - LocalAI: `max_active_backends` of /api/settings (0 = unlimited, its default; `single_backend` = 1).
+// used one for the next request, so with fewer slots than models every dev ↔ QA switch reloads a model (Lemonade:
+// `max_models.llm` of /api/v1/health, its `max_loaded_models` setting, default 1).
 // Kanban's own limit, `models.providerCapacity.<provider>.maxLoadedModels`, serializes work by model and must not be
 // above what the server holds, or cards thrash; below it, QA cards wait for nothing. Pure: `kanban doctor` and
 // `kanban kit show` ask the server (src/models/local-provider-limits.ts) and print these.
@@ -12,7 +11,6 @@ import type { KitDocument } from "./kit-schema";
 import { answerPlanAssignment, createRoutingPolicy, type EffectiveCard } from "./policy";
 
 export const LEMONADE_PROVIDER = "lemonade";
-export const LOCALAI_PROVIDER = "localai";
 
 /** What each local provider calls its limit, and how the user raises it. */
 const PROVIDER_FACTS: Record<string, { name: string; field: string; hint: (count: number) => string }> = {
@@ -20,12 +18,6 @@ const PROVIDER_FACTS: Record<string, { name: string; field: string; hint: (count
 		name: "Lemonade",
 		field: "max_models.llm",
 		hint: (count) => formatLemonadeMaxLoadedModelsHint(count),
-	},
-	[LOCALAI_PROVIDER]: {
-		name: "LocalAI",
-		field: "max_active_backends",
-		hint: (count) =>
-			`run LocalAI with LOCALAI_MAX_ACTIVE_BACKENDS=${count} (or --max-active-backends ${count}; and without LOCALAI_SINGLE_ACTIVE_BACKEND), then restart it`,
 	},
 };
 
@@ -93,8 +85,7 @@ export function formatLemonadeMaxLoadedModelsHint(count: number): string {
 }
 
 /**
- * `providerMaxLoaded`: what the server keeps loaded (Lemonade's `max_models.llm`, LocalAI's `max_active_backends`;
- * -1 = unlimited). `kanbanCapacity`: Kanban's `models.providerCapacity.<provider>.maxLoadedModels` (undefined = no
+ * `providerMaxLoaded`: what the server keeps loaded (Lemonade's `max_models.llm`; -1 = unlimited). `kanbanCapacity`: Kanban's `models.providerCapacity.<provider>.maxLoadedModels` (undefined = no
  * limit). `provider` defaults to Lemonade.
  */
 export function assessLocalResidency(input: {

@@ -8,10 +8,10 @@
 // and, for bedrock, hold a key (`apiKey`, `auth.apiKey` or `auth.accessToken`) or AWS credentials (`aws.authentication`
 // iam/profile, `aws.profile`, or `aws.accessKey` + `aws.secretKey`), plus a region (`aws.region` or `region`). The
 // environment never counts there: with only AWS_BEARER_TOKEN_BEDROCK and AWS_REGION set, the TUI opens the sign-in
-// screen, although Cline's Bedrock client (headless runs) would use them. A custom provider from models.json (Lemonade,
-// LocalAI) needs no key, but without one its stored settings must hold both `baseUrl` and `model` (cline 3.0.70, `jp`
-// in the bundle, real TUI runs against LocalAI 2026-10-11: `{provider, model}` alone opened the sign-in screen, and
-// models.json's baseUrl doesn't count). ClinePass (`cline-pass`; cline 3.0.70, real TUI runs against a fake
+// screen, although Cline's Bedrock client (headless runs) would use them. A custom provider from models.json (Lemonade)
+// needs no key, but without one its stored settings must hold both `baseUrl` and `model` (cline 3.0.70, `jp` in the
+// bundle, real TUI runs against a keyless custom provider 2026-10-11: `{provider, model}` alone opened the sign-in
+// screen, and models.json's baseUrl doesn't count). ClinePass (`cline-pass`; cline 3.0.70, real TUI runs against a fake
 // OpenAI-compatible server, 2026-10-12) is an OAuth provider whose credentials Cline stores under `cline`
 // (`storageProviderId`): its settings are `providers.cline.settings`' `auth`, `apiKey` and `baseUrl` under
 // `providers["cline-pass"].settings`, and they must hold a key (a Cline account sign-in's `auth.accessToken` first,
@@ -24,8 +24,8 @@ import { getClineProvidersSettingsPath } from "../state/kanban-home";
 
 type JsonObject = Record<string, unknown>;
 
-/** The custom (models.json) providers Kanban sets up for Cline cards: Lemonade and LocalAI. */
-const CLINE_CUSTOM_PROVIDER_IDS: readonly string[] = ["lemonade", "localai"];
+/** The custom (models.json) providers Kanban sets up for Cline cards: Lemonade. */
+const CLINE_CUSTOM_PROVIDER_IDS: readonly string[] = ["lemonade"];
 
 export const CLINE_PASS_PROVIDER_ID = "cline-pass";
 /** Providers whose credentials Cline keeps under another provider's entry (`storageProviderId` in the bundle). */

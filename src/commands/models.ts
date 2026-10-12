@@ -282,7 +282,7 @@ export function registerModelsCommand(program: Command): void {
 		.option("--refresh", "Re-fetch the inference-profile list (cached in the Kanban home's data/models).")
 		.option(
 			"--provider <id>",
-			"Probe as a card on this provider: bedrock (tool call), lemonade (/api/v1/health) or localai (/readyz).",
+			"Probe as a card on this provider: bedrock (tool call) or lemonade (/api/v1/health).",
 			"bedrock",
 		)
 		.option("--region <region>", "Bedrock region (default: models.bedrockRegion).")

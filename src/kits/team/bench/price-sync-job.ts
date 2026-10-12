@@ -39,7 +39,7 @@ export interface BenchPriceContext {
 
 /**
  * The kit models the AWS price check proposes entries for: models on a local or subscription provider (Lemonade,
- * LocalAI, ClinePass) cost nothing per token, skipped.
+ * ClinePass) cost nothing per token, skipped.
  */
 export function listKitModels(kit: KitDocument): string[] {
 	const models = [...Object.values(kit.tiers ?? {}).flat(), ...(kit.dropped ?? [])]

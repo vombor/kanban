@@ -66,7 +66,6 @@ export const USER_ONLY_COMMANDS = [
 	"isolation revoke",
 	"isolation approve",
 	"cline apply-lemonade-models",
-	"cline apply-localai-provider",
 	"cline store-bedrock-key",
 	"cline store-cline-pass-key",
 	"cline remove-bedrock-key",

@@ -18,7 +18,7 @@ import {
 	DEFAULT_CLINE_LEMONADE_CONTEXT_SYNC,
 } from "./cline-lemonade-context-sync-config";
 import { clineTurnDetectorModeSchema, getDefaultClineTurnDetectorSettings } from "./cline-turn-detector-config";
-import { DEFAULT_LEMONADE_MODEL_LIST_SETTINGS, DEFAULT_LOCALAI_MODEL_LIST_SETTINGS } from "./model-lists-config";
+import { DEFAULT_LEMONADE_MODEL_LIST_SETTINGS } from "./model-lists-config";
 
 export const landingModeSchema = runtimeLandingModeSchema;
 
@@ -373,14 +373,12 @@ const orchestratorSectionSchema = z
 	})
 	.strict();
 
+/** The model provider whose support was removed (LocalAI, 2026-10-12): its old config keys are parsed and ignored. */
+export const REMOVED_MODEL_PROVIDER_ID = "localai";
+
 const providerCapacitySchema = z.object({ maxLoadedModels: z.number().int().positive() }).strict();
 const DEFAULT_PROVIDER_CAPACITY: Record<string, z.infer<typeof providerCapacitySchema>> = {
 	lemonade: { maxLoadedModels: 1 },
-	// What the user's LocalAI says it keeps loaded (/api/settings `max_active_backends` 1, `single_backend` true on
-	// 2026-10-11), though its host has four GPUs and could hold four models: a limit above what LocalAI holds makes
-	// cards on different models reload on every request, so Kanban follows LocalAI's API. Raising both to 4
-	// (LOCALAI_MAX_ACTIVE_BACKENDS=4, then this limit) is the user's; doctor compares the two.
-	localai: { maxLoadedModels: 1 },
 };
 
 const modelsSectionSchema = z
@@ -398,7 +396,7 @@ const modelsSectionSchema = z
 		// `kanban bench calibrate`'s waves wait (or are refused) while other cards hold a different model on a
 		// provider at its limit (Lemonade loads one model at a time). The rework stage's sibling and resume starts
 		// don't check it yet.
-		// Merged over the defaults: setting one provider keeps the other's limit.
+		// Merged over the defaults: setting another provider keeps Lemonade's limit.
 		providerCapacity: z
 			.record(z.string(), providerCapacitySchema)
 			.default({})
@@ -415,22 +413,14 @@ const modelsSectionSchema = z
 					})
 					.strict()
 					.default(() => structuredClone(DEFAULT_LEMONADE_MODEL_LIST_SETTINGS)),
-				// No default URL: null = the baseUrl of Cline's localai provider (src/setup/cline-localai-provider.ts).
-				localai: z
-					.object({
-						url: z.string().nullable().default(DEFAULT_LOCALAI_MODEL_LIST_SETTINGS.url),
-						requireCapabilities: z
-							.array(z.string())
-							.default(() => [...DEFAULT_LOCALAI_MODEL_LIST_SETTINGS.requireCapabilities]),
-					})
-					.strict()
-					.default(() => structuredClone(DEFAULT_LOCALAI_MODEL_LIST_SETTINGS)),
+				// Removed with LocalAI support (2026-10-12). Still parsed, so an old config.json keeps its other model
+				// settings, but dropped here: nothing reads it, migrateLegacyConfigKeys() removes it from the file and
+				// doctor warns until then.
+				[REMOVED_MODEL_PROVIDER_ID]: z.unknown().optional(),
 			})
 			.strict()
-			.default(() => ({
-				lemonade: structuredClone(DEFAULT_LEMONADE_MODEL_LIST_SETTINGS),
-				localai: structuredClone(DEFAULT_LOCALAI_MODEL_LIST_SETTINGS),
-			})),
+			.transform(({ [REMOVED_MODEL_PROVIDER_ID]: _removed, ...lists }) => lists)
+			.default(() => ({ lemonade: structuredClone(DEFAULT_LEMONADE_MODEL_LIST_SETTINGS) })),
 	})
 	.strict();
 
@@ -533,9 +523,22 @@ export function readLegacyWakeTarget(config: Record<string, unknown>): unknown {
 }
 
 /**
- * config.json with the keys an older build wrote in an older form rewritten: P2-1's boolean `sessionSync`, and the
+ * The removed provider's keys (`models.lists.localai`, `models.providerCapacity.localai`) in a raw config.json, as
+ * dotted keys (empty when absent).
+ */
+export function readRemovedModelProviderKeys(config: Record<string, unknown>): string[] {
+	const models = asRecord(config.models);
+	return (["lists", "providerCapacity"] as const).flatMap((section) => {
+		const entries = asRecord(models?.[section]);
+		return entries && REMOVED_MODEL_PROVIDER_ID in entries ? [`models.${section}.${REMOVED_MODEL_PROVIDER_ID}`] : [];
+	});
+}
+
+/**
+ * config.json with the keys an older build wrote in an older form rewritten: P2-1's boolean `sessionSync`, the
  * removed `orchestrator.wake.target` (deleted: every workspace now wakes its own orchestrator, so there is nothing to
- * carry it into). Returns the dotted keys it changed; an absent key stays absent (its default applies).
+ * carry it into) and the removed LocalAI provider's keys (deleted, nothing reads them). Returns the dotted keys it
+ * changed; an absent key stays absent (its default applies).
  * A build from before the move (P2-1 up to P3-2) reads the new `sessionSync` object as invalid and uses the
  * default (on), so after a rollback to one, `"sessionSync": { "enabled": false }` must be written back as `false`.
  */
@@ -554,6 +557,20 @@ export function migrateLegacyConfigKeys(config: Record<string, unknown>): {
 		const { target: _removed, ...wake } = asRecord(orchestrator.wake) ?? {};
 		next = { ...next, orchestrator: { ...orchestrator, wake } };
 		migrated.push("orchestrator.wake.target");
+	}
+	const removedProviderKeys = readRemovedModelProviderKeys(config);
+	if (removedProviderKeys.length > 0) {
+		const models = asRecord(config.models) ?? {};
+		const without = (section: "lists" | "providerCapacity") => {
+			const entries = asRecord(models[section]);
+			if (!entries) {
+				return {};
+			}
+			const { [REMOVED_MODEL_PROVIDER_ID]: _removed, ...rest } = entries;
+			return { [section]: rest };
+		};
+		next = { ...next, models: { ...models, ...without("lists"), ...without("providerCapacity") } };
+		migrated.push(...removedProviderKeys);
 	}
 	return { config: next, migrated };
 }

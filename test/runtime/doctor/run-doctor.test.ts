@@ -199,6 +199,28 @@ describe("kanban doctor", () => {
 		});
 	});
 
+	it("warns about the removed LocalAI provider's keys; --fix removes them", async () => {
+		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
+			writeJson(globalConfigPath, {
+				selectedAgentId: "claude",
+				models: { lists: { localai: { url: null } }, providerCapacity: { localai: { maxLoadedModels: 1 } } },
+			});
+			const report = await runDoctor(DOCTOR);
+			const warning = find(report.findings, "home", "LocalAI support was removed");
+			expect(warning?.level).toBe("warn");
+			expect(warning?.message).toContain('"models.lists.localai" and "models.providerCapacity.localai"');
+			await runDoctor({ ...DOCTOR, fix: true });
+			expect(JSON.parse(readFileSync(globalConfigPath, "utf8"))).toMatchObject({
+				selectedAgentId: "claude",
+				models: { lists: {}, providerCapacity: {} },
+			});
+			const { models } = JSON.parse(readFileSync(globalConfigPath, "utf8"));
+			expect(models.lists).not.toHaveProperty("localai");
+			expect(models.providerCapacity).not.toHaveProperty("localai");
+			expect(find((await runDoctor(DOCTOR)).findings, "home", "LocalAI")).toBeUndefined();
+		});
+	});
+
 	it("reports worktrees missing the main checkout's pre-push hook, and --fix copies it", async () => {
 		await withTemporaryKanbanHome(async ({ userHomePath }) => {
 			const repo = createRepo(join(userHomePath, "app"));

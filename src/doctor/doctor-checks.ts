@@ -10,6 +10,7 @@ import {
 	migrateLegacyConfigKeys,
 	type PipelineConfig,
 	readLegacyWakeTarget,
+	readRemovedModelProviderKeys,
 	updatePipelineConfigFile,
 } from "../config/pipeline-config";
 import { DEFAULT_KIT_NAME, type KitCatalog, resolveWorkspaceKit } from "../kits/resolve-kit";
@@ -407,6 +408,19 @@ export function checkLegacyConfigKeys(
 							`${workspaceId}: dropped ${dropped} line(s) of other workspaces from its orchestrator queue`,
 					),
 				];
+			},
+		});
+	}
+	const removedProviderKeys = readRemovedModelProviderKeys(rawConfig);
+	if (removedProviderKeys.length > 0) {
+		findings.push({
+			level: "warn",
+			area: "home",
+			message: `${configPath} has ${removedProviderKeys.map((key) => `"${key}"`).join(" and ")}; LocalAI support was removed from Kanban (2026-10-12), so it is ignored`,
+			hint: "kanban doctor --fix removes it",
+			fix: async () => {
+				await updatePipelineConfigFile((config) => migrateLegacyConfigKeys(config).config, configPath);
+				return removedProviderKeys.map((key) => `removed ${key}`);
 			},
 		});
 	}

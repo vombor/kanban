@@ -1,5 +1,5 @@
 // What a model probe needs from this machine: the Bedrock API key and region with its inference-profile list (cached
-// in the Kanban home), Lemonade's base URL and LocalAI's URL. Shared by `kanban models probe` and the outage hold of recovery
+// in the Kanban home), and Lemonade's base URL. Shared by `kanban models probe` and the outage hold of recovery
 // (src/pipeline/recovery-stage.ts), so both probe the same endpoint with the same key.
 import { join } from "node:path";
 
@@ -7,7 +7,6 @@ import type { PipelineConfig } from "../config/pipeline-config";
 import { getKanbanModelsDataPath } from "../state/kanban-home";
 import { loadBedrockInferenceProfiles, resolveBedrockApiKey } from "./bedrock-probe";
 import { getProviderSettingsPaths, readClineProvidersFile } from "./cline-providers";
-import { resolveConfiguredLocalAiUrl } from "./localai-endpoint";
 import { LEMONADE_PROVIDER_ID, type ModelProbeDependencies } from "./model-probe";
 
 const BEDROCK_PROFILES_CACHE_FILE = "bedrock-profiles.json";
@@ -52,7 +51,6 @@ export async function loadModelProbeDependencies(
 		deps: {
 			bedrock: apiKey ? { region, apiKey, profiles: profiles.profiles } : null,
 			lemonadeBaseUrl,
-			localAiUrl: await resolveConfiguredLocalAiUrl(config),
 		},
 		region,
 		hasBedrockKey: apiKey !== null,

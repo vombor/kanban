@@ -3,23 +3,13 @@ import type { AddressInfo } from "node:net";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import {
-	DEFAULT_LEMONADE_MODEL_LIST_SETTINGS,
-	DEFAULT_LOCALAI_MODEL_LIST_SETTINGS,
-} from "../../../src/config/model-lists-config";
+import { DEFAULT_LEMONADE_MODEL_LIST_SETTINGS } from "../../../src/config/model-lists-config";
 import {
 	createModelListsRequestHandler,
 	filterLemonadeModels,
 	LEMONADE_MODEL_LIST_PATH,
-	LOCALAI_MODEL_LIST_PATH,
 	type ModelListsRouteDependencies,
 } from "../../../src/server/model-lists-route";
-import {
-	type FakeLocalAi,
-	getRefusingLocalAiUrl,
-	LOCALAI_CHAT_MODEL_IDS,
-	startFakeLocalAi,
-} from "../../utilities/localai-fixtures";
 
 // A trimmed copy of Lemonade's /api/v1/models: coding models next to image, speech and TTS ones.
 const LEMONADE_MODELS = {
@@ -95,7 +85,6 @@ describe("model-lists route", () => {
 		const origin = await serve({
 			loadLemonadeSettings: async () => ({ url: "http://lemonade.test:13305/", requireLabels: ["tool-calling"] }),
 			fetch: fetchImpl,
-			loadLocalAiSettings: async () => DEFAULT_LOCALAI_MODEL_LIST_SETTINGS,
 			warn: vi.fn(),
 		});
 
@@ -116,7 +105,6 @@ describe("model-lists route", () => {
 		const origin = await serve({
 			loadLemonadeSettings: async () => DEFAULT_LEMONADE_MODEL_LIST_SETTINGS,
 			fetch: lemonadeFetch(() => new Response("down", { status: 503 })),
-			loadLocalAiSettings: async () => DEFAULT_LOCALAI_MODEL_LIST_SETTINGS,
 			warn,
 		});
 
@@ -134,7 +122,6 @@ describe("model-lists route", () => {
 		const origin = await serve({
 			loadLemonadeSettings: async () => DEFAULT_LEMONADE_MODEL_LIST_SETTINGS,
 			fetch: fetchImpl,
-			loadLocalAiSettings: async () => DEFAULT_LOCALAI_MODEL_LIST_SETTINGS,
 			warn: vi.fn(),
 		});
 
@@ -144,52 +131,5 @@ describe("model-lists route", () => {
 		expect((await fetch(`${origin}/api/model-lists/openai`)).status).toBe(418);
 		expect((await fetch(`${origin}${LEMONADE_MODEL_LIST_PATH}/models`)).status).toBe(418);
 		expect(fetchImpl).not.toHaveBeenCalled();
-	});
-
-	describe("localai", () => {
-		let localai: FakeLocalAi | null = null;
-
-		afterEach(async () => {
-			await localai?.close();
-			localai = null;
-		});
-
-		it("serves LocalAI's chat models, leaving out the others", async () => {
-			localai = await startFakeLocalAi();
-			const url = localai.url;
-			const origin = await serve({
-				loadLemonadeSettings: async () => DEFAULT_LEMONADE_MODEL_LIST_SETTINGS,
-				loadLocalAiSettings: async () => ({ url, requireCapabilities: ["chat"] }),
-				warn: vi.fn(),
-			});
-			const response = await fetch(`${origin}${LOCALAI_MODEL_LIST_PATH}`);
-			expect(response.status).toBe(200);
-			const body = (await response.json()) as { object: string; data: Array<{ id: string; labels: string[] }> };
-			expect(body.object).toBe("list");
-			expect(body.data.map((model) => model.id)).toEqual(LOCALAI_CHAT_MODEL_IDS);
-			expect(body.data.find((model) => model.id === "gemma-4-26b-a4b-it")?.labels).toEqual(["chat", "vision"]);
-			expect(localai.requests).toEqual(["/v1/models/capabilities"]);
-		});
-
-		it("answers 502 when LocalAI's URL is unknown or its host refuses connections, logging once", async () => {
-			const warn = vi.fn();
-			const refusing = await getRefusingLocalAiUrl();
-			let url: string | null = null;
-			const origin = await serve({
-				loadLemonadeSettings: async () => DEFAULT_LEMONADE_MODEL_LIST_SETTINGS,
-				loadLocalAiSettings: async () => ({ url, requireCapabilities: ["chat"] }),
-				warn,
-			});
-			const unknown = await fetch(`${origin}${LOCALAI_MODEL_LIST_PATH}`);
-			expect(unknown.status).toBe(502);
-			expect(((await unknown.json()) as { error: string }).error).toContain("models.lists.localai.url");
-			url = refusing;
-			expect((await fetch(`${origin}${LOCALAI_MODEL_LIST_PATH}`)).status).toBe(502);
-			expect((await fetch(`${origin}${LOCALAI_MODEL_LIST_PATH}`)).status).toBe(502);
-			expect(warn).toHaveBeenCalledTimes(2);
-			expect(
-				warn.mock.calls.every(([message]) => String(message).startsWith("[model-lists] localai list failed")),
-			).toBe(true);
-		});
 	});
 });

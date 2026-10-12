@@ -25,11 +25,7 @@ describe("pipeline config", () => {
 		expect(config.watchdog.stall.reviewMin).toBe(10);
 		expect(config.orchestrator.wake.mode).toBe("headless");
 		expect(config.models.providers.default).toBe("bedrock");
-		expect(config.models.providerCapacity).toEqual({
-			lemonade: { maxLoadedModels: 1 },
-			localai: { maxLoadedModels: 1 },
-		});
-		expect(config.models.lists.localai).toEqual({ url: null, requireCapabilities: ["chat"] });
+		expect(config.models.providerCapacity).toEqual({ lemonade: { maxLoadedModels: 1 } });
 		expect(config.workspaces).toEqual({});
 	});
 
@@ -136,14 +132,10 @@ describe("pipeline config", () => {
 		const { config } = parsePipelineConfig({ models: { providerCapacity: { ollama: { maxLoadedModels: 2 } } } });
 		expect(config.models.providerCapacity).toEqual({
 			lemonade: { maxLoadedModels: 1 },
-			localai: { maxLoadedModels: 1 },
 			ollama: { maxLoadedModels: 2 },
 		});
 		const raised = parsePipelineConfig({ models: { providerCapacity: { lemonade: { maxLoadedModels: 3 } } } });
-		expect(raised.config.models.providerCapacity).toEqual({
-			lemonade: { maxLoadedModels: 3 },
-			localai: { maxLoadedModels: 1 },
-		});
+		expect(raised.config.models.providerCapacity).toEqual({ lemonade: { maxLoadedModels: 3 } });
 	});
 
 	it("rejects unknown keys inside a section", () => {
@@ -193,6 +185,33 @@ describe("pipeline config", () => {
 			migrated: ["orchestrator.wake.target"],
 		});
 		expect(migrateLegacyConfigKeys({ orchestrator: { wake: { mode: "sidebar" } } }).migrated).toEqual([]);
+	});
+
+	it("still parses the removed LocalAI provider's keys, ignores them, and migration deletes them", () => {
+		const raw = {
+			models: {
+				providerCapacity: { lemonade: { maxLoadedModels: 2 }, localai: { maxLoadedModels: 1 } },
+				lists: {
+					lemonade: { url: "http://localhost:13305" },
+					localai: { url: "http://localai.example.ts.net", requireCapabilities: ["chat"] },
+				},
+			},
+		};
+		const { config, issues } = parsePipelineConfig(raw);
+		expect(issues).toEqual([]);
+		expect(config.models.lists).toEqual({
+			lemonade: { url: "http://localhost:13305", requireLabels: ["tool-calling"] },
+		});
+		expect(migrateLegacyConfigKeys(raw)).toEqual({
+			config: {
+				models: {
+					providerCapacity: { lemonade: { maxLoadedModels: 2 } },
+					lists: { lemonade: { url: "http://localhost:13305" } },
+				},
+			},
+			migrated: ["models.lists.localai", "models.providerCapacity.localai"],
+		});
+		expect(migrateLegacyConfigKeys({ models: { lists: { lemonade: {} } } }).migrated).toEqual([]);
 	});
 
 	it("resolves each workspace's own wake settings: its overrides over the machine-wide ones", () => {

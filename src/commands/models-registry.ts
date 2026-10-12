@@ -25,8 +25,6 @@ import { listAllowedCombinations } from "../kits/card-routing-check";
 import { loadKitCatalog, resolveWorkspaceKit } from "../kits/resolve-kit";
 import { measureCard } from "../kits/team/scoreboard/scoreboard-store";
 import { fetchLemonadeModelLoaded, lemonadeApiBaseUrl } from "../models/lemonade-models";
-import { resolveConfiguredLocalAiUrl } from "../models/localai-endpoint";
-import { fetchLocalAiModelLoaded, LOCALAI_PROVIDER_ID } from "../models/localai-models";
 import { LEMONADE_PROVIDER_ID } from "../models/model-probe";
 import {
 	describeCombination,
@@ -321,7 +319,6 @@ async function runVetCommand(options: VetOptions): Promise<number> {
 		loadGlobalRuntimeConfig(),
 		readLemonadeModelListSettings(),
 	]);
-	const localAiUrl = await resolveConfiguredLocalAiUrl(config);
 	const runtimeClient = createRuntimeTrpcClient(target.workspaceId);
 	const signals = createAgentRunSignals();
 	const projectArgs = { cwd: repoPathOfProject, projectPath: repoPathOfProject };
@@ -400,9 +397,6 @@ async function runVetCommand(options: VetOptions): Promise<number> {
 				isModelLoaded: async (provider, model) => {
 					if (provider === LEMONADE_PROVIDER_ID) {
 						return await fetchLemonadeModelLoaded(lemonadeApiBaseUrl(lemonade.settings.url), model);
-					}
-					if (provider === LOCALAI_PROVIDER_ID && localAiUrl) {
-						return await fetchLocalAiModelLoaded(localAiUrl, model);
 					}
 					return null;
 				},
