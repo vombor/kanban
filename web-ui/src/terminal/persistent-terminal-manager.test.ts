@@ -24,7 +24,7 @@ const fakeTerminals = vi.hoisted(() => {
 		// When set, write callbacks wait for releaseWrites(), like a busy renderer.
 		deferWrites = false;
 		unicode = { activeVersion: "" };
-		modes = { mouseTrackingMode: "none" };
+		modes = { mouseTrackingMode: "none", applicationCursorKeysMode: false };
 		element: HTMLElement | undefined = undefined;
 		// The active buffer's scroll position: scrolled up while viewportY < baseY.
 		activeBuffer = { type: "normal" as "normal" | "alternate", viewportY: 0, baseY: 0 };
@@ -477,6 +477,25 @@ describe("persistent terminal reconnect", () => {
 		// "b" was never sent anywhere, not even after the reconnect.
 		expect(latestSocket("stream").sent).toEqual(["c"]);
 		expect(firstStream.sent).toEqual(["a"]);
+	});
+
+	it("sends a key bar key in the terminal's cursor-key mode", async () => {
+		const persistentTerminal = createTerminal();
+		await completeConnection({ snapshot: "" });
+		const terminal = latestTerminal();
+		const stream = latestSocket("stream");
+
+		expect(persistentTerminal.sendKey("down")).toBe(true);
+		// The TUI switched to application cursor keys (DECCKM, CSI ? 1 h).
+		terminal.modes.applicationCursorKeysMode = true;
+		persistentTerminal.sendKey("down");
+		persistentTerminal.sendKey("shiftTab");
+		persistentTerminal.sendKey("enter");
+		expect(stream.sent).toEqual(["\x1b[B", "\x1bOB", "\x1b[Z", "\r"]);
+
+		stream.serverClose(1006);
+		expect(persistentTerminal.sendKey("up")).toBe(false);
+		expect(stream.sent).toHaveLength(4);
 	});
 
 	it("gives up after the attempt limit and reconnects from the retry button", async () => {

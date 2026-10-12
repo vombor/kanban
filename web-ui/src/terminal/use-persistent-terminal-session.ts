@@ -7,6 +7,7 @@ import { disposePersistentTerminal, ensurePersistentTerminal } from "@/terminal/
 import { registerTerminalController } from "@/terminal/terminal-controller-registry";
 import type { TerminalReadiness } from "@/terminal/terminal-readiness";
 import type { TerminalConnectionStatus } from "@/terminal/terminal-reconnect-controller";
+import type { TerminalTouchKey } from "@/terminal/terminal-touch-keys";
 
 interface UsePersistentTerminalSessionInput {
 	taskId: string;
@@ -34,8 +35,9 @@ export interface UsePersistentTerminalSessionResult {
 	isScrolledUp: boolean;
 	clearTerminal: () => void;
 	scrollToBottom: () => void;
-	// Enter that keeps a phone keyboard and its dictation going (terminal-ime-input.ts).
-	submitInput: () => void;
+	// A touch key bar key (Enter, arrows, Tab, Esc, Space) that keeps a phone
+	// keyboard and its dictation going (terminal-ime-input.ts).
+	sendKey: (key: TerminalTouchKey) => void;
 	stopTerminal: () => Promise<void>;
 	retryConnection: () => void;
 }
@@ -215,8 +217,8 @@ export function usePersistentTerminalSession({
 		terminalRef.current?.scrollToBottom();
 	}, []);
 
-	const submitInput = useCallback(() => {
-		terminalRef.current?.submitInput();
+	const sendKey = useCallback((key: TerminalTouchKey) => {
+		terminalRef.current?.sendKey(key);
 	}, []);
 
 	const retryConnection = useCallback(() => {
@@ -232,7 +234,7 @@ export function usePersistentTerminalSession({
 		isScrolledUp,
 		clearTerminal,
 		scrollToBottom,
-		submitInput,
+		sendKey,
 		stopTerminal,
 		retryConnection,
 	};

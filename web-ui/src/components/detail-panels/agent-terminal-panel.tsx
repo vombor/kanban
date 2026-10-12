@@ -1,11 +1,12 @@
 import "@xterm/xterm/css/xterm.css";
 
-import { ArrowDown, Command, CornerDownLeft, Maximize2, MessageSquare, Minimize2, X } from "lucide-react";
+import { Command, Maximize2, MessageSquare, Minimize2, X } from "lucide-react";
 import type { MutableRefObject, ReactElement } from "react";
 import { useMemo } from "react";
 
 import { TerminalConnectionStatusIndicator } from "@/components/detail-panels/terminal-connection-status";
 import { TerminalLoadingOverlay } from "@/components/detail-panels/terminal-loading-overlay";
+import { TerminalTouchControls } from "@/components/detail-panels/terminal-touch-controls";
 import { VoiceChatBar } from "@/components/detail-panels/voice-chat-bar";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
@@ -15,6 +16,7 @@ import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import { useTaskWorkspaceSnapshotValue } from "@/stores/workspace-metadata-store";
 import type { TerminalReadiness } from "@/terminal/terminal-readiness";
 import type { TerminalConnectionStatus } from "@/terminal/terminal-reconnect-controller";
+import type { TerminalTouchKey } from "@/terminal/terminal-touch-keys";
 import { usePersistentTerminalSession } from "@/terminal/use-persistent-terminal-session";
 import { isMacPlatform } from "@/utils/platform";
 
@@ -28,7 +30,7 @@ interface AgentTerminalSessionControls {
 	readiness: TerminalReadiness | null;
 	retryConnection: () => void;
 	scrollToBottom: () => void;
-	submitInput: () => void;
+	sendKey: (key: TerminalTouchKey) => void;
 	stopTerminal: () => Promise<void>;
 }
 
@@ -204,14 +206,15 @@ function AgentTerminalPanelLayout({
 		clearTerminal,
 		retryConnection,
 		scrollToBottom,
-		submitInput,
+		sendKey,
 		stopTerminal,
 	} = sessionControls;
 	// Phones only: desktop has the scrollbar and the wheel, and stays unchanged.
 	const isTouchDevice = useIsTouchDevice();
 	const showJumpToBottom = isTouchDevice && isScrolledUp && readiness?.state !== "loading";
-	// Enter while the keyboard dictates: a key on the keyboard would end its voice input.
-	const showEnter = isTouchDevice && readiness?.state === "ready";
+	// Enter and the keys a phone keyboard lacks (arrows, Tab, Esc) for a TUI's pickers;
+	// a key on the keyboard would end its voice input.
+	const showKeys = isTouchDevice && readiness?.state === "ready";
 	const hasHeader = showSessionToolbar || Boolean(onClose);
 	const canStop = summary?.state === "running" || summary?.state === "awaiting_review";
 	const statusLabel = useMemo(() => describeState(summary), [summary]);
@@ -363,34 +366,12 @@ function AgentTerminalPanelLayout({
 					className="kb-terminal-container touch-pan-x touch-pinch-zoom"
 					style={{ height: "100%", width: "100%", background: terminalBackgroundColor }}
 				/>
-				{showJumpToBottom || showEnter ? (
-					<div className="absolute right-4 bottom-4 z-20 flex flex-col gap-2">
-						{showJumpToBottom ? (
-							<button
-								type="button"
-								onClick={scrollToBottom}
-								// Keeps the terminal focused, so an open on-screen keyboard stays open.
-								onMouseDown={(event) => event.preventDefault()}
-								aria-label="Jump to bottom"
-								className="inline-flex size-11 cursor-pointer items-center justify-center rounded-full border border-border-bright bg-surface-2 text-text-primary shadow-lg active:bg-surface-4"
-							>
-								<ArrowDown size={20} />
-							</button>
-						) : null}
-						{showEnter ? (
-							<button
-								type="button"
-								onClick={submitInput}
-								// Keeps the terminal focused, so the keyboard and its dictation keep going.
-								onMouseDown={(event) => event.preventDefault()}
-								aria-label="Send Enter"
-								className="inline-flex size-11 cursor-pointer items-center justify-center rounded-full border border-border-bright bg-surface-2 text-text-primary shadow-lg active:bg-surface-4"
-							>
-								<CornerDownLeft size={20} />
-							</button>
-						) : null}
-					</div>
-				) : null}
+				<TerminalTouchControls
+					showJumpToBottom={showJumpToBottom}
+					showKeys={showKeys}
+					onJumpToBottom={scrollToBottom}
+					onKey={sendKey}
+				/>
 				<TerminalLoadingOverlay readiness={readiness} />
 			</div>
 			{voiceChat ? <VoiceChatBar taskId={taskId} workspaceId={workspaceId} summary={summary} /> : null}

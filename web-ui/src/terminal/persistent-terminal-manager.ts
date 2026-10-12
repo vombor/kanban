@@ -37,6 +37,7 @@ import {
 	TerminalReconnectController,
 	type TerminalSocketKind,
 } from "@/terminal/terminal-reconnect-controller";
+import { encodeTerminalTouchKey, type TerminalTouchKey } from "@/terminal/terminal-touch-keys";
 import {
 	attachTerminalTouchScroll,
 	isTerminalScrolledUp,
@@ -891,20 +892,21 @@ class PersistentTerminal {
 		return true;
 	}
 
-	// Enter for the panel's Enter button. On a phone it sends what has been
-	// dictated so far first and leaves the textarea alone, so the keyboard keeps
-	// listening (terminal-ime-input.ts).
-	submitInput(): boolean {
+	// A key of the panel's touch key bar (Enter, arrows, Tab, Esc, Space). On a
+	// phone it sends what has been dictated so far first and leaves the textarea
+	// alone, so the keyboard keeps listening (terminal-ime-input.ts).
+	sendKey(key: TerminalTouchKey): boolean {
 		if (!this.isIoOpen()) {
 			return false;
 		}
+		const data = encodeTerminalTouchKey(key, this.terminal.modes.applicationCursorKeysMode);
 		if (this.imeInput && isTouchInput()) {
-			return this.imeInput.submit();
+			return this.imeInput.sendKey(data);
 		}
 		if (!this.isAcceptingUserInput()) {
 			return false;
 		}
-		this.terminal.input("\r");
+		this.terminal.input(data);
 		return true;
 	}
 

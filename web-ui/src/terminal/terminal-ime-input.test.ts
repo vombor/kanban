@@ -219,6 +219,36 @@ describe("attachTerminalImeInput", () => {
 		expect(sent).toEqual(["\r", " there"]);
 	});
 
+	it("sends pending dictation before a key bar key, and that text is final", () => {
+		imeEdit("2", "insertText");
+		expect(ime.sendKey("\x1b[B")).toBe(true);
+		expect(sent).toEqual(["2", "\x1b[B"]);
+		// The keyboard rewrites its hypothesis after the key: the TUI already acted on "2".
+		imeEdit("", "deleteContentBackward");
+		imeEdit("two", "insertText");
+		vi.runAllTimers();
+		expect(sent).toEqual(["2", "\x1b[B", "two"]);
+		expect(textarea.value).toBe("two");
+		expect(xtermSaw).toEqual([]);
+	});
+
+	it("sends key bar keys after xterm has sent a composition that was still open, in order", () => {
+		textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+		imeEdit("hi", "insertCompositionText", true);
+		ime.sendKey(" ");
+		ime.sendKey("\t");
+		expect(sent).toEqual([]);
+		textarea.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "hi" }));
+		vi.runAllTimers();
+		expect(sent).toEqual([" \t"]);
+	});
+
+	it("refuses a key bar key while the terminal blocks input", () => {
+		accepting = false;
+		expect(ime.sendKey("\x1b")).toBe(false);
+		expect(sent).toEqual([]);
+	});
+
 	it("leaves Enter to xterm inside a composition and Shift+Enter always", () => {
 		key("keydown", "Enter", 13, { shiftKey: true });
 		textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));

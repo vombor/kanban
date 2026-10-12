@@ -25,6 +25,10 @@
 // PTY's current line (the text after the submitted part), so Backspaces never
 // reach a prompt that has already been sent, and a later rewrite of a submitted
 // hypothesis sends only what follows it.
+//
+// The panel's key bar (arrows, Tab, Esc, Space) goes through sendKey() the same
+// way: the TUI acts on the key (moves its cursor, picks an option), so what has
+// been dictated goes out first, the key after it, and that text is final too.
 
 const DEL = "\x7f";
 const ENTER = "\r";
@@ -78,6 +82,8 @@ export interface TerminalImeInput {
 	// and its focus as they are, so the keyboard keeps listening. False when the
 	// terminal blocks input.
 	submit: () => boolean;
+	// The same for any key's sequence (the key bar's arrows, Tab, Esc, Space).
+	sendKey: (data: string) => boolean;
 	dispose: () => void;
 }
 
@@ -101,8 +107,8 @@ export function attachTerminalImeInput(
 	// The textarea text that was submitted with Enter, always a prefix of `synced`.
 	// The PTY's current line is what follows it, and only that line is diffed.
 	let submitted = "";
-	// Enter asked for while xterm still owes the PTY a composition's text.
-	let isSubmitPending = false;
+	// Keys asked for while xterm still owes the PTY a composition's text, in order.
+	let pendingKeys: string[] = [];
 	let hasPendingEdit = false;
 	let flushTimer: ReturnType<typeof setTimeout> | null = null;
 	let isComposing = false;
@@ -141,24 +147,26 @@ export function attachTerminalImeInput(
 	};
 
 	// Everything the textarea holds is on the PTY now (or was dropped while input was blocked).
-	const sendEnter = () => {
+	const sendFinal = (data: string) => {
 		submitted = synced;
-		send(ENTER);
+		send(data);
 	};
 
-	const submit = (): boolean => {
+	const sendKey = (data: string): boolean => {
 		if (!canSend()) {
 			return false;
 		}
 		if (isComposing || isXtermCompositionSendPending) {
-			// Enter goes out right after xterm has sent the composition's text.
-			isSubmitPending = true;
+			// The key goes out right after xterm has sent the composition's text.
+			pendingKeys.push(data);
 			return true;
 		}
 		flush();
-		sendEnter();
+		sendFinal(data);
 		return true;
 	};
+
+	const submit = (): boolean => sendKey(ENTER);
 
 	// xterm emptied or changed the textarea itself (Enter in a composition, blur,
 	// Ctrl+C): what it holds now is the baseline, and only what is left of the
@@ -220,10 +228,11 @@ export function attachTerminalImeInput(
 				isXtermCompositionSendPending = false;
 				// xterm sent everything from the composition's start to the end of the textarea.
 				synced = textarea.value;
-				if (isSubmitPending && !isComposing) {
-					isSubmitPending = false;
+				if (pendingKeys.length > 0 && !isComposing) {
+					const keys = pendingKeys.join("");
+					pendingKeys = [];
 					if (canSend()) {
-						sendEnter();
+						sendFinal(keys);
 					}
 				}
 			}, 0);
@@ -274,5 +283,5 @@ export function attachTerminalImeInput(
 		host.removeEventListener("input", onInput, true);
 		host.removeEventListener("blur", onBlur, true);
 	};
-	return { submit, dispose };
+	return { submit, sendKey, dispose };
 }
