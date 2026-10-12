@@ -61,7 +61,7 @@ describe("resolveKitLayers", () => {
 	it("refuses unknown override keys and keys that identify the kit", () => {
 		const unknown = resolveKitLayers(getDefaultKit(), named, { "qa.blurbs": "x" });
 		expect(unknown.ok).toBe(false);
-		expect(resolveKitLayers(getDefaultKit(), named, { name: "team" }).ok).toBe(false);
+		expect(resolveKitLayers(getDefaultKit(), named, { name: "team-cloud" }).ok).toBe(false);
 		expect(resolveKitLayers(getDefaultKit(), named, { "qa.enabled.x": true }).ok).toBe(false);
 		expect(resolveKitLayers(getDefaultKit(), named, { "qa..blurb": "x" }).ok).toBe(false);
 	});
@@ -69,7 +69,7 @@ describe("resolveKitLayers", () => {
 
 describe("roles: model and tier exclude each other across layers", () => {
 	const team = async (overrides: Record<string, unknown>) => {
-		const resolved = resolveKitByName(await builtInCatalog(), "team", overrides);
+		const resolved = resolveKitByName(await builtInCatalog(), "team-cloud", overrides);
 		if (!resolved.ok) {
 			throw new Error(resolved.error);
 		}
@@ -84,7 +84,7 @@ describe("roles: model and tier exclude each other across layers", () => {
 		expect(resolved.kit.roles?.dev).toMatchObject({ agent: "cline", model: "us.anthropic.claude-opus-5-5" });
 		expect(resolved.kit.roles?.dev?.tier).toBeUndefined();
 		expect(resolved.sources["roles.dev.model"]).toBe("project");
-		expect(resolved.sources["roles.dev.agent"]).toBe("team");
+		expect(resolved.sources["roles.dev.agent"]).toBe("team-cloud");
 	});
 
 	it("a project's roles.fallback.tier replaces an explicit model", async () => {
@@ -119,7 +119,7 @@ describe("roles: model and tier exclude each other across layers", () => {
 			outage: true,
 		});
 		expect(resolved.sources["roles.dev.agent"]).toBe("project");
-		expect(resolved.sources["roles.dev.tier"]).toBe("team");
+		expect(resolved.sources["roles.dev.tier"]).toBe("team-cloud");
 		for (const key of ["dev", "escalate", "onOutage"]) {
 			expect(key in resolved.kit).toBe(false);
 		}
@@ -146,15 +146,18 @@ describe("resolveWorkspaceKit", () => {
 		const catalog = await builtInCatalog();
 		const { config } = parsePipelineConfig({
 			workspaces: {
-				foo: { landing: { mode: "qa" }, kit: { name: "team", overrides: { "qa.blurb": "Project: Pawsome" } } },
+				foo: {
+					landing: { mode: "qa" },
+					kit: { name: "team-cloud", overrides: { "qa.blurb": "Project: Pawsome" } },
+				},
 				"kanban-2uge": { landing: { mode: "off" } },
 			},
 		});
 		const foo = resolveWorkspaceKit(config, "foo", catalog);
-		expect(foo.kitName).toBe("team");
+		expect(foo.kitName).toBe("team-cloud");
 		expect(foo.kit.qa?.blurb).toBe("Project: Pawsome");
 		expect(foo.sources["qa.blurb"]).toBe("project");
-		expect(foo.sources["qa.enabled"]).toBe("team");
+		expect(foo.sources["qa.enabled"]).toBe("team-cloud");
 		for (const workspaceId of ["kanban-2uge", "brand-new"]) {
 			const other = resolveWorkspaceKit(config, workspaceId, catalog);
 			expect(other.kitName).toBe("default");
@@ -163,12 +166,41 @@ describe("resolveWorkspaceKit", () => {
 		}
 	});
 
+	it("runs a workspace whose config still names the renamed kit team on team-cloud", async () => {
+		const catalog = await builtInCatalog();
+		const { config } = parsePipelineConfig({
+			workspaces: {
+				old: { landing: { mode: "qa" }, kit: { name: "team", overrides: { "qa.blurb": "Project: Pawsome" } } },
+				new: {
+					landing: { mode: "qa" },
+					kit: { name: "team-cloud", overrides: { "qa.blurb": "Project: Pawsome" } },
+				},
+			},
+		});
+		const old = resolveWorkspaceKit(config, "old", catalog);
+		const current = resolveWorkspaceKit(config, "new", catalog);
+		expect(old.kitName).toBe("team-cloud");
+		expect(old.issues).toEqual([]);
+		expect(old.kit).toEqual(current.kit);
+		expect(old.sources).toEqual(current.sources);
+	});
+
+	it("answers a command naming the renamed kit team with its new name", async () => {
+		const catalog = await builtInCatalog();
+		const resolved = resolveKitByName(catalog, "team");
+		expect(resolved.ok).toBe(false);
+		expect(resolved.ok ? "" : resolved.error).toBe(
+			'kit "team" was renamed to team-cloud (2026-10-12); use team-cloud',
+		);
+		expect(resolveKitByName(catalog, "team-cloud").ok).toBe(true);
+	});
+
 	it("falls back to default with an issue when the kit is unknown or its overrides are invalid", async () => {
 		const catalog = await builtInCatalog();
 		const { config } = parsePipelineConfig({
 			workspaces: {
 				a: { kit: { name: "gone" } },
-				b: { kit: { name: "team", overrides: { "qa.nope": 1 } } },
+				b: { kit: { name: "team-cloud", overrides: { "qa.nope": 1 } } },
 			},
 		});
 		for (const workspaceId of ["a", "b"]) {
@@ -189,16 +221,18 @@ describe("loadKitCatalog", () => {
 				join(path, "solo.json"),
 				JSON.stringify({ kit: 1, name: "solo", dev: { agent: "codex" }, qa: { enabled: false } }),
 			);
+			writeFileSync(join(path, "team-cloud.json"), JSON.stringify({ kit: 1, name: "team-cloud" }));
+			// The old name of a renamed built-in kit stays reserved.
 			writeFileSync(join(path, "team.json"), JSON.stringify({ kit: 1, name: "team" }));
 			writeFileSync(join(path, "other.json"), JSON.stringify({ kit: 1, name: "renamed" }));
 			writeFileSync(join(path, "broken.json"), "{");
 			writeFileSync(join(path, "typo.json"), JSON.stringify({ kit: 1, name: "typo", qa: { enable: true } }));
 			const catalog = await loadKitCatalog(path);
-			expect([...catalog.kits.keys()].sort()).toEqual(["default", "solo", "team", "team-cline", "team-local"]);
-			expect(catalog.kits.get("team")?.origin).toEqual({ kind: "built-in" });
+			expect([...catalog.kits.keys()].sort()).toEqual(["default", "solo", "team-cline", "team-cloud", "team-local"]);
+			expect(catalog.kits.get("team-cloud")?.origin).toEqual({ kind: "built-in" });
 			expect(catalog.kits.get("solo")?.origin).toEqual({ kind: "user", path: join(path, "solo.json") });
 			expect(catalog.errors.map((error) => error.path).sort()).toEqual(
-				["broken.json", "other.json", "team.json", "typo.json"].map((file) => join(path, file)),
+				["broken.json", "other.json", "team-cloud.json", "team.json", "typo.json"].map((file) => join(path, file)),
 			);
 			const solo = resolveKitByName(catalog, "solo");
 			// A user kit's legacy dev.agent is its roles.dev.agent.
@@ -216,7 +250,7 @@ describe("loadKitCatalog", () => {
 			const notADir = join(path, "kits");
 			writeFileSync(notADir, "");
 			const catalog = await loadKitCatalog(notADir);
-			expect([...catalog.kits.keys()]).toEqual(["default", "team", "team-local", "team-cline"]);
+			expect([...catalog.kits.keys()]).toEqual(["default", "team-cloud", "team-local", "team-cline"]);
 			expect(catalog.errors).toEqual([{ path: notADir, error: expect.stringContaining("ENOTDIR") }]);
 		} finally {
 			cleanup();
@@ -227,7 +261,7 @@ describe("loadKitCatalog", () => {
 		const { path, cleanup } = createTempDir("kanban-kits-");
 		try {
 			const catalog = await loadKitCatalog(join(path, "missing"));
-			expect([...catalog.kits.keys()]).toEqual(["default", "team", "team-local", "team-cline"]);
+			expect([...catalog.kits.keys()]).toEqual(["default", "team-cloud", "team-local", "team-cline"]);
 			expect(catalog.errors).toEqual([]);
 		} finally {
 			cleanup();
@@ -238,12 +272,12 @@ describe("loadKitCatalog", () => {
 describe("kanban kit show report", () => {
 	it("lists each resolved value with its source and the evaluator's answers", async () => {
 		const catalog = await builtInCatalog();
-		const resolved = resolveKitByName(catalog, "team", { "qa.blurb": "Project: Pawsome" });
+		const resolved = resolveKitByName(catalog, "team-cloud", { "qa.blurb": "Project: Pawsome" });
 		if (!resolved.ok) {
 			throw new Error(resolved.error);
 		}
 		const report = buildKitReport({
-			kitName: "team",
+			kitName: "team-cloud",
 			resolved,
 			workspaceId: "foo",
 			selectedAgentId: "claude",
@@ -255,7 +289,7 @@ describe("kanban kit show report", () => {
 		expect(formatKitReport(report).join("\n")).not.toMatch(/REFUSED|vetted model registry/u);
 		const sourceOf = (key: string) => report.values.find((row) => row.key === key)?.source;
 		expect(sourceOf("qa.blurb")).toBe("project");
-		expect(sourceOf("qa.enabled")).toBe("team");
+		expect(sourceOf("qa.enabled")).toBe("team-cloud");
 		expect(sourceOf("land.postLand")).toBe("default");
 		expect(report.devAssignment).toMatchObject({ agentId: "cline", tier: "tier3" });
 		expect(report.qa[0]).toMatchObject({ devModel: { model: "us.openai.gpt-6.1-sol" }, answer: { kind: "qa" } });
@@ -269,9 +303,9 @@ describe("kanban kit show report", () => {
 		const text = formatKitReport(report).join("\n");
 		// The team's fallback (roles.fallback = tier2) takes an outage-held card over once recovery would give up.
 		expect(text).toContain("After 360 min of provider outage: take over on cline bedrock/us.moonshotai.kimi-k3");
-		expect(text).toContain("Team definition (kit team;");
+		expect(text).toContain("Team definition (kit team-cloud;");
 		expect(text).toMatch(
-			/ {2}dev {7}cline on bedrock\/us\.openai\.gpt-6\.1-sol \(tier tier3\) {2}\[agent: team, model: team\]/u,
+			/ {2}dev {7}cline on bedrock\/us\.openai\.gpt-6\.1-sol \(tier tier3\) {2}\[agent: team-cloud, model: team-cloud\]/u,
 		);
 		expect(text).toMatch(/fallback {2}the dev role's agent on bedrock\/us\.moonshotai\.kimi-k3 \(tier tier2\)/u);
 		expect(text).toContain(
@@ -285,7 +319,7 @@ describe("kanban kit show report", () => {
 	});
 
 	it("shows the outage takeover the legacy onOutage/escalate keys ask for", async () => {
-		const resolved = resolveKitByName(await builtInCatalog(), "team", {
+		const resolved = resolveKitByName(await builtInCatalog(), "team-cloud", {
 			"onOutage.then": "escalate",
 			"onOutage.afterMin": 45,
 			"escalate.to": { agent: "codex", provider: "bedrock", model: "us.moonshotai.kimi-k3" },
@@ -296,7 +330,7 @@ describe("kanban kit show report", () => {
 		}
 		const lines = formatKitReport(
 			buildKitReport({
-				kitName: "team",
+				kitName: "team-cloud",
 				resolved,
 				workspaceId: "foo",
 				selectedAgentId: "claude",

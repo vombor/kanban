@@ -3,7 +3,7 @@
 // Prices are machine-wide (one `data/prices/`), but which models matter and where a change is reported are per
 // workspace: every workspace whose resolved kit lists `bench` contributes its kit's tier and dropped models and its
 // ATTENTION.md. With no such workspace (the pod today: every project is on `default`), `kanban models prices sync`
-// falls back to the built-in `team` kit's models and reports to no ATTENTION.md.
+// falls back to the built-in `team-cloud` kit's models and reports to no ATTENTION.md.
 //
 // The daily check (was review-watch's PRICE_SYNC toggle, archive/devteam-kit:services/review-watch.mjs@6da71597)
 // is a job the `bench` feature registers for each of its workspaces (bench-feature.ts); the watchdog runs it only in
@@ -20,7 +20,7 @@ import { type PriceSyncResult, runPriceSync } from "./price-sync";
 import { isUnmeteredProvider, loadPriceTable } from "./prices";
 
 const DEFAULT_PRICES_REGION = "us-west-2";
-const TEAM_KIT_NAME = "team";
+const TEAM_KIT_NAME = "team-cloud";
 export const PRICE_CHECK_JOB_NAME = "prices-check";
 export const PRICE_CHECK_EVERY_MIN = 24 * 60;
 // A job that comes due a little early (worker restarts, clock drift) doesn't fetch twice in one day.

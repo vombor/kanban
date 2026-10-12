@@ -98,14 +98,14 @@ describe("mapLegacyKitConfig", () => {
 		const mapping = mapLegacyKitConfig(liveLikeKitConfig(), "kit.config.json");
 		const foo = mapping.workspaces.find((workspace) => workspace.workspaceId === "foo");
 		expect(foo).toMatchObject({
-			kit: "team",
+			kit: "team-cloud",
 			landing: "qa",
 			shadow: true,
 			defaultBaseRef: "master",
 			name: "Pawsome",
 		});
 		// devAgent, qaAgent, the default qaRoutes, QAFLOW_MAX_FAILS and tier3 (deprecated provider → bedrock) all match
-		// kits/team.json, so they are not overrides.
+		// kits/team-cloud.json, so they are not overrides.
 		expect(foo?.overrides).toEqual({
 			"qa.blurb": "Project: Pawsome, a pet shop.",
 			"qa.promptNotes.dbSetup": "npx prisma migrate deploy",
@@ -129,7 +129,7 @@ describe("mapLegacyKitConfig", () => {
 		expect(fresh).toMatchObject({ kit: null, overrides: {}, landing: "off", shadow: false });
 	});
 
-	it("turns differences from kits/team.json into overrides", () => {
+	it("turns differences from kits/team-cloud.json into overrides", () => {
 		const raw = liveLikeKitConfig();
 		raw.qaAgent = "claude";
 		(raw.thresholds as Record<string, unknown>).QAFLOW_MAX_FAILS = 5;
@@ -217,7 +217,7 @@ describe("importLegacyKitConfig", () => {
 			expect(config.workspaces["kanban-2uge"]?.kit).toBeNull();
 			const catalog = await loadKitCatalog(join(userHomePath, "no-user-kits"));
 			const foo = resolveWorkspaceKit(config, "foo", catalog);
-			expect(foo.kitName).toBe("team");
+			expect(foo.kitName).toBe("team-cloud");
 			expect(foo.issues).toEqual([]);
 			expect(foo.kit.qa?.blurb).toBe("Project: Pawsome, a pet shop.");
 			expect(resolveWorkspaceKit(config, "newproj", catalog).kitName).toBe("default");

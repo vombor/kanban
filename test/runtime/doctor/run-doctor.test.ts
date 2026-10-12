@@ -239,6 +239,25 @@ describe("kanban doctor", () => {
 		});
 	});
 
+	it("warns about a workspace still on the renamed kit team; it runs on team-cloud, --fix rewrites it", async () => {
+		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
+			writeJson(globalConfigPath, {
+				selectedAgentId: "claude",
+				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team", overrides: { "qa.blurb": "x" } } } },
+			});
+			const report = await runDoctor(DOCTOR);
+			const warning = find(report.findings, "home", 'has "workspaces.foo.kit.name": "team"');
+			expect(warning?.level).toBe("warn");
+			expect(warning?.message).toContain("renamed to team-cloud");
+			expect(warning?.hint).toBe("kanban doctor --fix rewrites it");
+			await runDoctor({ ...DOCTOR, fix: true });
+			expect(JSON.parse(readFileSync(globalConfigPath, "utf8")).workspaces).toEqual({
+				foo: { landing: { mode: "qa" }, kit: { name: "team-cloud", overrides: { "qa.blurb": "x" } } },
+			});
+			expect(find((await runDoctor(DOCTOR)).findings, "home", "kit.name")).toBeUndefined();
+		});
+	});
+
 	it("reports worktrees missing the main checkout's pre-push hook, and --fix copies it", async () => {
 		await withTemporaryKanbanHome(async ({ userHomePath }) => {
 			const repo = createRepo(join(userHomePath, "app"));

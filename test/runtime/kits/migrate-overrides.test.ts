@@ -23,7 +23,9 @@ function writeConfig(path: string, config: unknown): void {
 }
 
 const fooConfig = () => ({
-	workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team", overrides: structuredClone(FOO_OVERRIDES) } } },
+	workspaces: {
+		foo: { landing: { mode: "qa" }, kit: { name: "team-cloud", overrides: structuredClone(FOO_OVERRIDES) } },
+	},
 });
 
 describe("kanban kit migrate-overrides (foo-like fixture)", () => {
@@ -110,7 +112,12 @@ describe("kanban kit migrate-overrides (foo-like fixture)", () => {
 			const userKit = JSON.parse(readFileSync(join(getKanbanKitsPath(), "foo-team.json"), "utf8"));
 			expect(userKit).toMatchObject({ kit: 1, name: "foo-team", description: FOO_OVERRIDES.description });
 			const history = await readKitSettingsHistory(getKitSettingsHistoryPath("foo"));
-			expect(history[0]).toMatchObject({ key: "(kit)", from: "team", to: "foo-team", via: "kit migrate-overrides" });
+			expect(history[0]).toMatchObject({
+				key: "(kit)",
+				from: "team-cloud",
+				to: "foo-team",
+				via: "kit migrate-overrides",
+			});
 			expect(history.find((entry) => entry.key === "escalate.to")).toMatchObject({
 				from: FOO_OVERRIDES["escalate.to"],
 			});
@@ -133,7 +140,9 @@ describe("kanban kit migrate-overrides (foo-like fixture)", () => {
 			entries: [{ workspaceId: "foo" }],
 		});
 		expect(findings.map((finding) => finding.level)).toEqual(["warn", "warn"]);
-		expect(findings[0]?.message).toContain("change kit team's team definition (description, fallback.on.conflict");
+		expect(findings[0]?.message).toContain(
+			"change kit team-cloud's team definition (description, fallback.on.conflict",
+		);
 		expect(findings[0]?.message).toContain("they still apply");
 		expect(findings[1]?.message).toContain("legacy override key(s) dev.agent (= roles.dev.agent)");
 		expect(findings.every((finding) => finding.hint?.includes("kanban kit migrate-overrides --project foo"))).toBe(
@@ -147,20 +156,20 @@ describe("kanban kit migrate-overrides (foo-like fixture)", () => {
 				workspaces: {
 					bar: {
 						kit: {
-							name: "team",
+							name: "team-cloud",
 							overrides: { "escalate.to": { agent: "codex", model: "m1" }, "escalate.requireApproval": false },
 						},
 					},
 				},
 			});
 			const result = await migrateWorkspaceOverrides({ workspaceId: "bar" });
-			expect(result.toKit).toBe("team");
+			expect(result.toKit).toBe("team-cloud");
 			expect(result.userKit).toBeNull();
 			expect(
 				(JSON.parse(readFileSync(globalConfigPath, "utf8")) as { workspaces: { bar: { kit: unknown } } }).workspaces
 					.bar.kit,
 			).toEqual({
-				name: "team",
+				name: "team-cloud",
 				overrides: {
 					"roles.fallback.agent": "codex",
 					"roles.fallback.model": "m1",
@@ -169,7 +178,7 @@ describe("kanban kit migrate-overrides (foo-like fixture)", () => {
 			});
 
 			writeConfig(globalConfigPath, {
-				workspaces: { bar: { kit: { name: "team", overrides: { "onFail.reworkRounds": 1 } } } },
+				workspaces: { bar: { kit: { name: "team-cloud", overrides: { "onFail.reworkRounds": 1 } } } },
 			});
 			await expect(migrateWorkspaceOverrides({ workspaceId: "bar", into: "team-local" })).rejects.toThrow(
 				/not a user kit name/u,

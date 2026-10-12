@@ -8,7 +8,7 @@ something is done, and the core never decides who does it.
 
 - Every project is on the built-in **`default`** kit unless its config entry names another one. `default` answers
   "no" to every question, so a project on it behaves like upstream Kanban.
-- **`team`** is the built-in preset for the dev-team workflow (Cline juniors on tier-3 models, cross-vendor QA,
+- **`team-cloud`** is the built-in preset for the dev-team workflow (Cline juniors on tier-3 models, cross-vendor QA,
   same-model rework, then a fallback model, then the orchestrator).
 - **`team-local`** is the same workflow on local Lemonade models only (Cline + provider `lemonade`, nothing paid
   or in the cloud), with a fallback local model before the orchestrator. See [The `team-local` kit](#the-team-local-kit).
@@ -28,7 +28,7 @@ doesn't list (Cline couldn't select it).
 
 Code: `src/kits/kit-schema.ts` (schema), `src/kits/kit-roles.ts` (roles and the fallback flow),
 `src/kits/project-settings.ts` (what a project may set), `src/kits/kit-legacy-keys.ts` (keys from before the split), `src/kits/resolve-kit.ts` (resolver), `src/kits/policy.ts` (the one
-evaluator), `kits/default.json`, `kits/team.json`, `kits/team-local.json`, `kits/team-cline.json`. Plan: `docs/fork/kit-merge-plan.md` §3.2-§3.4, §4.0.
+evaluator), `kits/default.json`, `kits/team-cloud.json`, `kits/team-local.json`, `kits/team-cline.json`. Plan: `docs/fork/kit-merge-plan.md` §3.2-§3.4, §4.0.
 
 ## The questions
 
@@ -50,7 +50,7 @@ by hand.
 The core keeps these guarantees whatever the kit says:
 
 - **An explicit choice wins.** An agent or model set by the card's creator is never replaced by `devAssignment`.
-  The create dialog only preselects the kit's proposal and shows "from kit `team`".
+  The create dialog only preselects the kit's proposal and shows "from kit `team-cloud`".
 - **A card keeps what it was created with.** Applying or changing a kit doesn't touch existing cards, and clearing
   a card's agent (`kanban task update --agent-id default --provider default --model default`, or the editor's
   first agent option, the selected one) makes it run on the agent selected in Kanban settings, not on the kit's
@@ -94,7 +94,7 @@ entry gets `default`. If the named kit is missing, or its overrides don't valida
 ```jsonc
 // <home>/config.json
 "workspaces": {
-  "foo":         { "landing": { "mode": "qa" }, "kit": { "name": "team", "overrides": { "qa.blurb": "Project: Pawsome…" } } },
+  "foo":         { "landing": { "mode": "qa" }, "kit": { "name": "team-cloud", "overrides": { "qa.blurb": "Project: Pawsome…" } } },
   "kanban-2uge": { "landing": { "mode": "off" } }   // no kit: default
 }
 ```
@@ -105,7 +105,7 @@ source (`project`, the kit's name, or `default`). The pipeline worker reads the 
 restart.
 
 The landing mode is a core setting ([CONFIG.md](CONFIG.md)), not a kit key. Applying a kit never changes it.
-`kanban kit apply team --project foo --landing qa` sets both in one step on purpose.
+`kanban kit apply team-cloud --project foo --landing qa` sets both in one step on purpose.
 
 ### Existing cards after a kit change
 
@@ -140,10 +140,10 @@ agent on a kit with a dev assignment, the CLI prints the `reassign` command for 
 `"kit": 1` is the schema version. The schema is strict: an unknown key is an error at `kanban kit apply` (and in a
 user kit file), never a silent no-op. A missing key means "no answer", so the `default` kit's value applies.
 
-| Key | Type | Used for | `default` | `team` |
+| Key | Type | Used for | `default` | `team-cloud` |
 |---|---|---|---|---|
 | `kit` | `1` | schema version | `1` | `1` |
-| `name` | lowercase `[a-z0-9_-]`, the file name | | `default` | `team` |
+| `name` | lowercase `[a-z0-9_-]`, the file name | | `default` | `team-cloud` |
 | `description` | text | `kanban kit list` | | |
 | `roles.dev` | `{ agent?, provider?, model? \| tier?, note? }` | `devAssignment`: the agent and model of new dev cards (model needs agent) | none (→ `null`) | `cline`, tier `tier3` |
 | `roles.qa` | same | `qaPolicy`: the QA agent and model when no route matches. No model = the agent's own default (Codex: `~/.codex/config.toml`) | none | `codex` |
@@ -237,7 +237,7 @@ kanban kit set qa.promptNotes.dbSetup "npx prisma migrate deploy" --project /pro
 kanban kit set land.postLand '[{"paths":"^prisma/","run":"npx prisma generate"}]' --project /projects/foo
 kanban kit unset roles.dev.model --project /projects/foo       # the kit's dev model again
 kanban kit unset roles.fallback --project /projects/foo        # every field of the role
-kanban kit set onFail.reworkRounds 5 --project /projects/foo   # refused: part of the team definition (kit team)
+kanban kit set onFail.reworkRounds 5 --project /projects/foo   # refused: part of the team definition (kit team-cloud)
 kanban kit set roles.dev.model gpt-9 --project /projects/foo          # any model; for Cline, doctor warns if models.json doesn't list it
 ```
 
@@ -449,11 +449,18 @@ open runoff (`hold`). A feature that fails to answer leaves the PASS for the nex
 With landing `off` (the default), the orchestrator or the user lands. With landing `qa` on `default`, every
 submitted card waits for Approve & land.
 
-## The `team` kit
+## The `team-cloud` kit
 
-`kits/team.json`: the dev-team routing that ran the `foo` project under the legacy kit, as data. P4-T1 checked
+`kits/team-cloud.json`: the dev-team routing that ran the `foo` project under the legacy kit, as data. P4-T1 checked
 parity against the legacy kit's live config (`test/runtime/kits/team-parity.test.ts`,
 `team-qa-routing.test.ts`, `team-qa-prompt.test.ts`).
+
+It was named `team` until 2026-10-12 (user request: `team-cloud` next to `team-local` and `team-cline`). The old
+name keeps working where it is stored and nowhere else (`src/kits/renamed-kits.ts`): a `workspaces.<id>.kit` that
+names `team` runs on `team-cloud`, `kanban doctor` warns and `--fix` (and `kanban config import-kit`) rewrites it;
+`kanban kit apply team`, `kit create --from team`, `kit show team` and the other commands that take a kit name answer
+"renamed to team-cloud"; `kit list` lists `team-cloud` only, and no user kit may be named `team`. A user kit made
+`--from team` earlier is a full copy, so it needs nothing.
 
 - **Dev:** Cline on the `tier3` default (`us.openai.gpt-6.1-sol` on bedrock).
 - **Plan:** plan cards on Claude with the Claude CLI's default model (no pin), starting in plan mode (user
@@ -499,7 +506,7 @@ model that the pod's Lemonade doesn't have.
   onto the model the card runs on, and a fallback sibling that fails in turn goes to the orchestrator, never to
   another sibling (`refuseTakeover()` in `src/pipeline/rework.ts`). So the orchestrator is the last resort, after
   the fallback has failed too.
-- **Outage:** `fallback.on.outage: false` (the same fallback structure as `team`, with this trigger off). Lemonade down (connection refused, `/health` not `ok`) is a provider
+- **Outage:** `fallback.on.outage: false` (the same fallback structure as `team-cloud`, with this trigger off). Lemonade down (connection refused, `/health` not `ok`) is a provider
   outage: recovery holds the card and probes `/health` every `pipeline.recovery.outage.probeEveryMin`, resumes it
   when Lemonade is back, and gives it to the orchestrator at `maxMin`. A takeover would not help: every model in the
   kit runs on the same server.
@@ -708,7 +715,7 @@ User kits are made and changed only by the user, with two commands (an agent ses
   `<home>/kits/<name>.json`: the `--from` kit as it resolves over `default`, so the file is a complete copy (kits
   don't inherit, see below), with the `--set` keys applied the way the resolver applies them (a role's `model`
   replaces its `tier` and back). It prints every key that differs from `--from`. Refused: a taken name (`default`,
-  `team`, `team-local`, an existing user kit, a refused kit file of that name), a name that isn't a file name, and
+  `team-cloud`, `team-local`, an existing user kit, a refused kit file of that name), a name that isn't a file name, and
   a key or value the full kit schema refuses.
 - `kanban kit edit <name> --set <key>=<value> ... [--unset <key> ...] [--dry-run]` changes keys of an existing
   **user** kit (a built-in kit changes only with a Kanban release: copy it with `kit create`). `--unset` removes a
@@ -725,14 +732,14 @@ edit is logged to `<home>/data/kit-history.jsonl` (`at`, `kitName`, `key`, `from
 (`via: "kit edit"`), so `kanban kit show --project` shows it.
 
 ```sh
-kanban kit create claude-qa --from team --set roles.dev.agent=claude --set onFail.reworkRounds=1 --dry-run
+kanban kit create claude-qa --from team-cloud --set roles.dev.agent=claude --set onFail.reworkRounds=1 --dry-run
 kanban kit apply claude-qa --project <ws> --dry-run   # then without --dry-run; --landing qa to switch landing too
 kanban kit show --project <ws>                          # every value and its source; then kanban doctor <path>
 ```
 
-**foo: team with three fallback triggers off.** foo runs on `team` with overrides from before the team/project
+**foo: team-cloud with three fallback triggers off.** foo ran on `team-cloud` (then named `team`) with overrides from before the team/project
 split. `migrate-overrides` turns them into project settings plus a user kit named by `--into` (its legacy
-`escalate.*` / `onOutage.then` keys are dropped as redundant, since `team` already has every trigger on and no
+`escalate.*` / `onOutage.then` keys are dropped as redundant, since `team-cloud` already has every trigger on and no
 approval, so no stored trigger override is left to shadow the kit), then the edit turns the three triggers off. The
 `qaFails` and `outage` triggers and everything else stay as foo has them:
 
@@ -769,7 +776,7 @@ write complete copies:
 
 Per-project models and facts belong in project settings, not in a copy of the kit: `kanban kit set` (the user or
 the project's orchestrator, [Project settings](#project-settings)), or at apply time
-`kanban kit apply team --project foo --set qa.blurb="Project: Pawsome…" --set 'land.postLand=[…]'` (`--set` takes
+`kanban kit apply team-cloud --project foo --set qa.blurb="Project: Pawsome…" --set 'land.postLand=[…]'` (`--set` takes
 only project settings; `--unset <key>` removes any stored key).
 
 What a kit can't do, on purpose:

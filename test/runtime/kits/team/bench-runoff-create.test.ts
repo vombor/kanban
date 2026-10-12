@@ -114,7 +114,7 @@ describe("kanban bench runoff create", () => {
 		await withTemporaryKanbanHome(async () => {
 			writeConfig({
 				workspaces: {
-					"ws-1": { kit: { name: "team" }, landing: { mode: "qa" } },
+					"ws-1": { kit: { name: "team-cloud" }, landing: { mode: "qa" } },
 				},
 			});
 			harness.store = createWorkspaceStateStore({ board: createBoard({}), sessions: {}, revision: 1 });

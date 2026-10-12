@@ -42,7 +42,7 @@ describe("kit settings caller rules", () => {
 	it("applies an allowed change at once and logs a refused one, writing nothing for it", async () => {
 		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
 			mkdirSync(dirname(globalConfigPath), { recursive: true });
-			writeFileSync(globalConfigPath, JSON.stringify({ workspaces: { foo: { kit: { name: "team" } } } }));
+			writeFileSync(globalConfigPath, JSON.stringify({ workspaces: { foo: { kit: { name: "team-cloud" } } } }));
 			const logged: Array<{ workspaceIds: readonly (string | null)[]; action: string; kind: string }> = [];
 			const api = createKitSettingsApi({
 				log: async (workspaceIds, record) => {
@@ -66,7 +66,7 @@ describe("kit settings caller rules", () => {
 				{ workspaceIds: ["foo", "foo"], action: "kit.set", kind: "refused" },
 				{ workspaceIds: ["foo", null], action: "kit.set", kind: "refused" },
 			]);
-			expect(JSON.parse(readFileSync(globalConfigPath, "utf8")).workspaces.foo.kit).toEqual({ name: "team" });
+			expect(JSON.parse(readFileSync(globalConfigPath, "utf8")).workspaces.foo.kit).toEqual({ name: "team-cloud" });
 
 			// Any model may be on any role: Kanban keeps no list of allowed models.
 			const anyModel = await api.set({
@@ -79,7 +79,7 @@ describe("kit settings caller rules", () => {
 			const response = await set(OWN_ORCHESTRATOR);
 			expect(response).toMatchObject({
 				ok: true,
-				kitName: "team",
+				kitName: "team-cloud",
 				changes: [{ key: "roles.fallback.model", to: "us.moonshotai.kimi-k3" }],
 			});
 			expect(
@@ -108,7 +108,7 @@ describe("kit settings caller rules", () => {
 
 describe("kit.set / kit.unset routes", () => {
 	it("decide on the strict caller (the process-tree lookup), not the lazy one", async () => {
-		const set = vi.fn(async () => ({ ok: true, kitName: "team", changes: [], historyPath: null }));
+		const set = vi.fn(async () => ({ ok: true, kitName: "team-cloud", changes: [], historyPath: null }));
 		const getCaller = vi.fn(async (): Promise<RuntimeCaller> => ({ kind: "user" }));
 		const caller = runtimeAppRouter.createCaller({
 			requestedWorkspaceId: "foo",

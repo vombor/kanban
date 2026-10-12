@@ -659,7 +659,7 @@ describe("landing modes", () => {
 			return { repo: created, harness };
 		}
 
-		const teamQa = landingConfig("qa", { kit: { name: "team" } });
+		const teamQa = landingConfig("qa", { kit: { name: "team-cloud" } });
 
 		it.each(["approve", "browser", "cli", "pipeline"] as const)(
 			"refuses a decided runoff's loser a land (trigger %s) and lands nothing",
@@ -710,7 +710,7 @@ describe("landing modes", () => {
 		it("shadow only logs the refusal", async () => {
 			const { repo: created, harness } = createRunoffHarness(
 				landingConfig("qa", {
-					kit: { name: "team" },
+					kit: { name: "team-cloud" },
 					pipeline: { shadow: true },
 				}),
 			);

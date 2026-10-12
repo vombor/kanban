@@ -9,7 +9,7 @@ import { createPipelineWorkerHarness, createSnapshot } from "../../utilities/pip
 import { createBoard, createCard } from "../../utilities/workspace-state-store";
 
 const T0 = Date.parse("2026-10-11T06:43:23.000Z");
-const QA_WORKSPACE = { landing: { mode: "qa" }, kit: { name: "team" } };
+const QA_WORKSPACE = { landing: { mode: "qa" }, kit: { name: "team-cloud" } };
 const DEV = createCard({ id: "8c28e" });
 
 describe("pipeline worker: card stages for the board", () => {

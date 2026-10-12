@@ -187,7 +187,7 @@ describe("kanban task done", () => {
 			mkdirSync(dirname(configPath), { recursive: true });
 			writeFileSync(
 				configPath,
-				JSON.stringify({ workspaces: { "ws-1": { landing: { mode: "qa" }, kit: { name: "team" } } } }),
+				JSON.stringify({ workspaces: { "ws-1": { landing: { mode: "qa" }, kit: { name: "team-cloud" } } } }),
 			);
 			const doneGate = createTaskLandingGate({ findWorktree: async () => null });
 			const { trashTaskSpy, caller } = installRuntime(store, doneGate);

@@ -42,7 +42,7 @@ function kinds(actions: ReturnType<typeof createReworkHarness>["actions"]) {
 }
 
 function teamPolicy(overrides: Record<string, unknown>) {
-	const team = getBuiltInKits().get("team");
+	const team = getBuiltInKits().get("team-cloud");
 	if (!team) {
 		throw new Error("team kit missing");
 	}

@@ -185,7 +185,7 @@ describe("expansion", () => {
 			slug: "coupons",
 			title: "Plan",
 			createdAt: "2026-10-07T00:00:00.000Z",
-			kit: "team",
+			kit: "team-cloud",
 			agentId: "claude",
 			providerId: null,
 			modelId: null,

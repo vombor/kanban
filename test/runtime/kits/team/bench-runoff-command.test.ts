@@ -39,12 +39,12 @@ describe("kanban bench runoff status / tiers", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("tiers --kit team prints the tier picks", async () => {
+	it("tiers --kit team-cloud prints the tier picks", async () => {
 		await withTemporaryKanbanHome(async () => {
-			const result = await run(["tiers", "--kit", "team", "--json"]);
+			const result = await run(["tiers", "--kit", "team-cloud", "--json"]);
 			expect(result.exitCode).toBe(0);
 			const report = JSON.parse(result.stdout) as { kitName: string; tiers: Array<{ name: string; pick: unknown }> };
-			expect(report.kitName).toBe("team");
+			expect(report.kitName).toBe("team-cloud");
 			expect(report.tiers.find((tier) => tier.name === "tier3")?.pick).toEqual({
 				provider: "bedrock",
 				model: "us.openai.gpt-6.1-sol",

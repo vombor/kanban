@@ -18,7 +18,7 @@ import { createCardHistory, createEffectiveCard } from "../../utilities/effectiv
 import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
 
 const team = () => {
-	const kit = getBuiltInKits().get("team");
+	const kit = getBuiltInKits().get("team-cloud");
 	if (!kit) {
 		throw new Error("team kit missing");
 	}
@@ -82,7 +82,9 @@ describe("project settings: which keys a project may set", () => {
 		]) {
 			const classified = classifyKitSettingKey(key, team());
 			expect(classified.kind, key).toBe("team");
-			expect(classified.kind === "team" && classified.message).toContain("part of the team definition (kit team)");
+			expect(classified.kind === "team" && classified.message).toContain(
+				"part of the team definition (kit team-cloud)",
+			);
 		}
 	});
 
@@ -155,7 +157,7 @@ describe("project settings: set and unset", () => {
 	it("sets the scripted checks' environment and refuses an env file outside the project", async () => {
 		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
 			writeConfig(globalConfigPath, {
-				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" } } },
+				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team-cloud" } } },
 			});
 			const set = async (key: string, value: unknown) =>
 				await setProjectKitSetting({ workspaceId: "foo", key, value, by: { kind: "user" } });
@@ -183,7 +185,7 @@ describe("project settings: set and unset", () => {
 	it("sets a role's model at once (kit < project), logs who changed it, and unset brings the kit's value back", async () => {
 		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
 			writeConfig(globalConfigPath, {
-				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" } } },
+				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team-cloud" } } },
 			});
 			const result = await setProjectKitSetting({
 				workspaceId: "foo",
@@ -196,7 +198,7 @@ describe("project settings: set and unset", () => {
 				expect.objectContaining({ key: "roles.fallback.model", to: "us.anthropic.claude-opus-5-5" }),
 			]);
 			expect(readWorkspace(globalConfigPath, "foo").kit).toEqual({
-				name: "team",
+				name: "team-cloud",
 				overrides: { "roles.fallback.model": "us.anthropic.claude-opus-5-5" },
 			});
 
@@ -221,7 +223,7 @@ describe("project settings: set and unset", () => {
 			).toMatchObject({ action: "escalate", to: { model: { model: "us.anthropic.claude-opus-5-5" } } });
 
 			await unsetProjectKitSetting({ workspaceId: "foo", key: "roles.fallback", by: { kind: "user" } });
-			expect(readWorkspace(globalConfigPath, "foo").kit).toEqual({ name: "team", overrides: {} });
+			expect(readWorkspace(globalConfigPath, "foo").kit).toEqual({ name: "team-cloud", overrides: {} });
 			expect((await resolve()).kit.roles?.fallback?.tier).toBe("tier2");
 
 			const history = await readKitSettingsHistory(getKitSettingsHistoryPath("foo"));
@@ -229,7 +231,7 @@ describe("project settings: set and unset", () => {
 				{
 					at: "2026-10-09T10:00:00.000Z",
 					workspaceId: "foo",
-					kitName: "team",
+					kitName: "team-cloud",
 					key: "roles.fallback.model",
 					to: "us.anthropic.claude-opus-5-5",
 					by: { kind: "orchestrator", taskId: "__home_agent__:foo:claude" },
@@ -248,7 +250,9 @@ describe("project settings: set and unset", () => {
 
 	it("refuses team keys and invalid values without writing anything", async () => {
 		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
-			const original = { workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team", overrides: {} } } } };
+			const original = {
+				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team-cloud", overrides: {} } } },
+			};
 			writeConfig(globalConfigPath, original);
 			const by = { kind: "user" } as const;
 			await expect(
@@ -276,7 +280,7 @@ describe("project settings: set and unset", () => {
 			writeConfig(globalConfigPath, {
 				workspaces: {
 					foo: {
-						kit: { name: "team", overrides: { "dev.agent": "codex", "onOutage.then": "orchestrator" } },
+						kit: { name: "team-cloud", overrides: { "dev.agent": "codex", "onOutage.then": "orchestrator" } },
 					},
 				},
 			});
@@ -287,7 +291,7 @@ describe("project settings: set and unset", () => {
 				by: { kind: "user" },
 			});
 			expect(readWorkspace(globalConfigPath, "foo").kit).toEqual({
-				name: "team",
+				name: "team-cloud",
 				overrides: { "onOutage.then": "orchestrator", "roles.dev.agent": "cline" },
 			});
 			expect(result.changes.map(({ key, from, to }) => ({ key, from, to }))).toEqual([

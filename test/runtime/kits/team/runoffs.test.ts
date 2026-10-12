@@ -211,7 +211,7 @@ describe("runoffs.json", () => {
 
 describe("runoff create", () => {
 	const team = (() => {
-		const kit = getBuiltInKits().get("team");
+		const kit = getBuiltInKits().get("team-cloud");
 		if (!kit) {
 			throw new Error("team kit missing");
 		}
@@ -253,7 +253,7 @@ describe("runoff create", () => {
 		expect(getTierContenders(novaDropped, "qa", "cline").map((contender) => contender.model)).toEqual([
 			"us.anthropic.claude-haiku-4-5-20251001-v1:0",
 		]);
-		expect(() => getTierContenders(team, "tier9", "cline")).toThrow('tier "tier9" is not in kit "team"');
+		expect(() => getTierContenders(team, "tier9", "cline")).toThrow('tier "tier9" is not in kit "team-cloud"');
 	});
 
 	it("plans one card per model on the same prompt and base, and refuses a bad runoff", () => {

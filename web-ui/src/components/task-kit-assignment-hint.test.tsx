@@ -41,8 +41,8 @@ describe("TaskKitAssignmentHint", () => {
 		return container.textContent ?? "";
 	}
 
-	it('says "from kit team" while the proposal is selected', () => {
-		const devAssignment = { kitName: "team", outcome: "applied", proposal: PROPOSAL } as const;
+	it('says "from kit team-cloud" while the proposal is selected', () => {
+		const devAssignment = { kitName: "team-cloud", outcome: "applied", proposal: PROPOSAL } as const;
 		expect(
 			render(
 				<TaskKitAssignmentHint
@@ -51,7 +51,7 @@ describe("TaskKitAssignmentHint", () => {
 					agentSettings={{ ...PROPOSAL.agentSettings }}
 				/>,
 			),
-		).toBe("from kit team");
+		).toBe("from kit team-cloud");
 		expect(
 			render(<TaskKitAssignmentHint devAssignment={devAssignment} agentId="claude" agentSettings={undefined} />),
 		).toBe("");
@@ -61,12 +61,12 @@ describe("TaskKitAssignmentHint", () => {
 		expect(
 			render(
 				<TaskKitAssignmentHint
-					devAssignment={{ kitName: "team", outcome: "shadow", proposal: PROPOSAL }}
+					devAssignment={{ kitName: "team-cloud", outcome: "shadow", proposal: PROPOSAL }}
 					agentId={undefined}
 					agentSettings={undefined}
 				/>,
 			),
-		).toBe("Kit team would pick cline on us.openai.gpt-6.1-sol (shadow mode: not applied)");
+		).toBe("Kit team-cloud would pick cline on us.openai.gpt-6.1-sol (shadow mode: not applied)");
 	});
 
 	it("shows nothing on the default kit", () => {

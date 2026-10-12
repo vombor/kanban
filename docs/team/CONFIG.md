@@ -202,6 +202,7 @@ session `__home_agent__:<ws>:<selected agent>` of the workspace the items are ab
 | `models.lists.lemonade.url`, `.requireLabels` | `http://localhost:13305`, `["tool-calling"]` | the model-lists route `GET /api/model-lists/lemonade` (read on every request). Cline is not pointed at it: its Lemonade `models` record in models.json is the allow list ([MODELS.md](MODELS.md)) |
 | `models.lists.lemonade.include` | null | the models the model-lists route lists, a non-empty list of model ids (the models stay installed on Lemonade). null = every model that passes `requireLabels`; a list = only those ids, and only while they still pass it. It no longer reaches Cline: Cline offers its models.json `models` record, which the Kanban orchestrator curates and `kanban setup-provider lemonade` never adds to or removes from. Set it with `kanban config set models.lists.lemonade.include <ids...>`, remove it with `kanban config unset models.lists.lemonade.include` (the user's commands; `config set` takes only this key) |
 | `workspaces.<id>.models.allowProvisional` | removed | the vetted model registry's provisional switch (removed 2026-10-12): still parsed and ignored; `kanban doctor` warns and `--fix` deletes it. Any model may be on any role ([MODELS.md](MODELS.md)) |
+| `workspaces.<id>.kit.name` `"team"` | renamed | the built-in kit `team` is `team-cloud` since 2026-10-12: an old entry naming `team` runs on `team-cloud`; `kanban doctor` warns and `--fix` (and `kanban config import-kit`) rewrites the name ([KITS.md](KITS.md#the-team-cloud-kit)) |
 | `agents.pretrust` | `true` | pre-trust every workspace's main repo root for Claude Code and Codex |
 | `agents.cline.dataDir` | null (`~/.cline/data`) | Cline's sessions and providers |
 | `agents.cline.turnDetector.mode` | `report` | Cline CLI turn-end detector and session sync's idle-TUI check: `off` / `report` / `on`. `report` while the legacy column-sync logic is still the reference |
@@ -285,7 +286,7 @@ Model providers' Cline settings, written by `kanban setup-provider <provider>`
 ## From kit.config.json
 
 `kanban config import-kit [--dry-run]` maps the legacy kit's config (plan §3.5). Each project with QA on gets kit
-`team` (values that differ become overrides), landing `qa` and shadow. Every other project gets `default` with
+`team-cloud` (values that differ become overrides), landing `qa` and shadow. Every other project gets `default` with
 landing `off`. Top-level routing is never copied onto a project. The main renames:
 
 | kit.config.json | config.json |

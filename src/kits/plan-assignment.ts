@@ -51,7 +51,7 @@ export function decidePlanAssignment(input: {
 		return {
 			ok: false,
 			kitName: resolved.kitName,
-			error: `${answer.reason}, so this project makes no plan cards: its agent plans its own work. To use a planner, set the kit override plan.enabled (kanban kit apply ... --set plan.enabled=true) or use a kit with a plan section (team).`,
+			error: `${answer.reason}, so this project makes no plan cards: its agent plans its own work. To use a planner, set the kit override plan.enabled (kanban kit apply ... --set plan.enabled=true) or use a kit with a plan section (team-cloud).`,
 			issues: resolved.issues,
 		};
 	}

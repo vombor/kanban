@@ -120,7 +120,7 @@ describe("kit settings doctor rows", () => {
 	it("checks nothing when no project routes to Lemonade", async () => {
 		const fake = createFakeLemonadeFetch();
 		const findings = await checkKitLemonadeModels({
-			config: parsePipelineConfig({ workspaces: { foo: { kit: { name: "team", overrides: {} } } } }).config,
+			config: parsePipelineConfig({ workspaces: { foo: { kit: { name: "team-cloud", overrides: {} } } } }).config,
 			catalog: await builtInCatalog(),
 			entries: [{ workspaceId: "foo" }],
 			lemonadeModelList: LEMONADE,

@@ -86,7 +86,7 @@ function writeConfig(config: Record<string, unknown>): void {
 }
 
 function teamWorkspace(extra: Record<string, unknown> = {}): Record<string, unknown> {
-	return { workspaces: { [WORKSPACE_ID]: { kit: { name: "team" }, ...extra } } };
+	return { workspaces: { [WORKSPACE_ID]: { kit: { name: "team-cloud" }, ...extra } } };
 }
 
 function request(overrides: Partial<DevAssignmentRequest> = {}): DevAssignmentRequest {
@@ -120,7 +120,7 @@ describe("resolveDevAssignment", () => {
 
 	it("never inherits another workspace's kit", async () => {
 		await withTemporaryKanbanHome(async () => {
-			writeConfig({ workspaces: { other: { kit: { name: "team" } } } });
+			writeConfig({ workspaces: { other: { kit: { name: "team-cloud" } } } });
 			expect((await resolveDevAssignment(request())).outcome).toBe("none");
 		});
 	});
@@ -130,7 +130,7 @@ describe("resolveDevAssignment", () => {
 			writeConfig(teamWorkspace());
 			const decision = await resolveDevAssignment(request());
 			expect(decision).toMatchObject({
-				kitName: "team",
+				kitName: "team-cloud",
 				outcome: "applied",
 				proposal: { agentId: "cline", agentSettings: TEAM_TIER3, tier: "tier3" },
 				agentId: "cline",
@@ -189,14 +189,14 @@ describe("resolveDevAssignment", () => {
 				},
 				workspaces: {
 					[WORKSPACE_ID]: {
-						kit: { name: "team", overrides: { "dev.model": { model: "us.anthropic.claude-opus-5-5" } } },
+						kit: { name: "team-cloud", overrides: { "dev.model": { model: "us.anthropic.claude-opus-5-5" } } },
 					},
 					plain: {
-						kit: { name: "team", overrides: { "dev.model": { model: "us.amazon.nova-2-lite-v1:0" } } },
+						kit: { name: "team-cloud", overrides: { "dev.model": { model: "us.amazon.nova-2-lite-v1:0" } } },
 					},
 					codex: {
 						kit: {
-							name: "team",
+							name: "team-cloud",
 							overrides: { "dev.agent": "codex", "dev.model": { model: "us.moonshotai.kimi-k3" } },
 						},
 					},
@@ -274,13 +274,13 @@ describe("kanban task create", () => {
 			const [card] = backlogCards();
 			expect(card).toMatchObject({ agentId: "cline", agentSettings: TEAM_TIER3 });
 			expect(result).toMatchObject({
-				devAssignment: { kit: "team", outcome: "applied" },
+				devAssignment: { kit: "team-cloud", outcome: "applied" },
 				task: { agentId: "cline", agentSettings: TEAM_TIER3 },
 			});
 			expect(readLog()).toEqual([
 				expect.objectContaining({
 					taskId: card?.id,
-					kit: "team",
+					kit: "team-cloud",
 					outcome: "applied",
 					created: { agentId: "cline", agentSettings: TEAM_TIER3 },
 				}),
@@ -338,7 +338,7 @@ describe("kanban task create", () => {
 					created: { agentId: null, agentSettings: null },
 				}),
 			]);
-			expect(stderr).toHaveBeenCalledWith(expect.stringContaining("Kit team (shadow) would assign cline"));
+			expect(stderr).toHaveBeenCalledWith(expect.stringContaining("Kit team-cloud (shadow) would assign cline"));
 		});
 	});
 
@@ -368,7 +368,7 @@ describe("kanban task create", () => {
 				["same", "created on cline with us.openai.gpt-6.1-sol (set by its creator)"],
 				["different", "created on claude with its default model (set by its creator)"],
 			]);
-			expect(items[0]?.pipeline).toBe('kit "team" proposes cline with us.openai.gpt-6.1-sol (tier3)');
+			expect(items[0]?.pipeline).toBe('kit "team-cloud" proposes cline with us.openai.gpt-6.1-sol (tier3)');
 		});
 	});
 });
@@ -399,7 +399,7 @@ describe("workspace.getDevAssignment (the create dialog's preselection)", () => 
 			writeConfig(teamWorkspace());
 			const answer = await createCaller().workspace.getDevAssignment({ prompt: "x" });
 			expect(answer).toMatchObject({
-				kitName: "team",
+				kitName: "team-cloud",
 				outcome: "applied",
 				proposal: { agentId: "cline", agentSettings: TEAM_TIER3, tier: "tier3" },
 			});
@@ -469,7 +469,7 @@ describe("browser-created cards (workspace.saveState)", () => {
 				workspaceId: WORKSPACE_ID,
 				taskId: "b1",
 				title: "Card b1",
-				kit: "team",
+				kit: "team-cloud",
 				outcome: "applied",
 				proposal: { agentId: "cline", agentSettings: TEAM_TIER3, tier: "tier3" },
 				created: { agentId: "cline", agentSettings: TEAM_TIER3 },

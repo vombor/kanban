@@ -1,12 +1,12 @@
 // `kanban config import-kit [kit.config.json]` (plan §3.5, used at cutover): maps the legacy kit's config onto
 // Kanban's config.json.
 //
-//   - A project whose own entry turns QA on (toggles.QA_CREATE) gets kit `team`, with every value that differs
-//     from kits/team.json as an override (its blurb, QA prompt notes, postLand, …), landing `qa` when it also has
+//   - A project whose own entry turns QA on (toggles.QA_CREATE) gets kit `team-cloud`, with every value that differs
+//     from kits/team-cloud.json as an override (its blurb, QA prompt notes, postLand, …), landing `qa` when it also has
 //     AUTO_DONE, and `pipeline.shadow: true` (the pipeline decides and logs, acts on nothing, until P5-2).
 //   - Every other project gets no kit (`default`) and landing `off`.
 //   - Top-level routing (devAgent, qaAgent, qaRoutes, benchmark, the project toggles) is never copied onto a
-//     project: it is compared only for the projects that get `team`. That is the 2026-10-06 incident rule (§4.0).
+//     project: it is compared only for the projects that get `team-cloud`. That is the 2026-10-06 incident rule (§4.0).
 //   - Machine-wide keys (qaSlots, thresholds, watchdog/orchestrator/provider keys) become core settings (§3.1).
 //
 // Only keys present in the file are mapped (the kit's built-in defaults are not imported), and the import changes
@@ -54,7 +54,7 @@ export interface ImportKitMapping {
 	warnings: string[];
 }
 
-const TEAM_KIT_NAME = "team";
+const TEAM_KIT_NAME = "team-cloud";
 
 // The legacy kit's built-in qaRoutes, used when the file sets none (legacy kit lib/config.cjs DEFAULTS.qaRoutes).
 const LEGACY_DEFAULT_QA_ROUTES: unknown[] = [
@@ -129,7 +129,7 @@ const CORE_KEY_MAP: ReadonlyArray<readonly [string, string, Convert?]> = [
 	["modelLists.requireLabels", "models.lists.lemonade.requireLabels"],
 ];
 
-// Keys whose job is gone or moved somewhere fixed (§3.1 "D" rows), and the routing keys that only feed `team`.
+// Keys whose job is gone or moved somewhere fixed (§3.1 "D" rows), and the routing keys that only feed `team-cloud`.
 const NOT_IMPORTED: Readonly<Record<string, string>> = {
 	kanbanUrl: "in-process: no client URL",
 	runtimeUrl: "in-process: no client URL",
@@ -148,12 +148,12 @@ const NOT_IMPORTED: Readonly<Record<string, string>> = {
 	wakeTarget: "removed: each workspace wakes only its own orchestrator (project isolation)",
 	"modelLists.port": "the model-lists route is on the Kanban server",
 	"providers.legacyUpstream": "dropped (upstream Kanban's embedded Cline only)",
-	devAgent: "routing: only compared for projects that get kit team (roles.dev.agent)",
-	qaAgent: "routing: only compared for projects that get kit team (roles.qa.agent)",
-	qaRoutes: "routing: only compared for projects that get kit team (qa.routes)",
-	benchmark: "routing: only compared for projects that get kit team (tiers, dropped, tierRules, tierNotes)",
-	pricesRegion: "team kit data: only compared for projects that get kit team (prices.region)",
-	"toggles.PRICE_SYNC": "team kit data: only compared for projects that get kit team (prices.autoSync)",
+	devAgent: "routing: only compared for projects that get kit team-cloud (roles.dev.agent)",
+	qaAgent: "routing: only compared for projects that get kit team-cloud (roles.qa.agent)",
+	qaRoutes: "routing: only compared for projects that get kit team-cloud (qa.routes)",
+	benchmark: "routing: only compared for projects that get kit team-cloud (tiers, dropped, tierRules, tierNotes)",
+	pricesRegion: "team-cloud kit data: only compared for projects that get kit team-cloud (prices.region)",
+	"toggles.PRICE_SYNC": "team-cloud kit data: only compared for projects that get kit team-cloud (prices.autoSync)",
 	"toggles.QA_CREATE": "never copied onto a project (no inheritance since K-1)",
 	"toggles.AUTO_REWORK": "never copied onto a project (no inheritance since K-1)",
 	"toggles.AUTO_DONE": "never copied onto a project (no inheritance since K-1)",
@@ -246,7 +246,7 @@ function projectOrTop(project: Record<string, unknown>, raw: LegacyKitRaw, key: 
 
 /**
  * The kit-schema values a legacy QA project's routing amounts to (dotted kit key → value). Each is compared with
- * kits/team.json; only the differences become overrides.
+ * kits/team-cloud.json; only the differences become overrides.
  */
 function buildTeamEquivalent(
 	project: Record<string, unknown>,
@@ -384,18 +384,20 @@ function mapProject(raw: LegacyKitRaw, project: ReturnType<typeof listLegacyKitP
 			);
 		}
 		if (nonEmptyString(entry.projectBlurb)) {
-			notes.push("projectBlurb not imported: the default kit runs no QA (kanban kit apply team … --set qa.blurb=…)");
+			notes.push(
+				"projectBlurb not imported: the default kit runs no QA (kanban kit apply team-cloud … --set qa.blurb=…)",
+			);
 		}
 		return { ...base, kit: null, overrides: {}, landing: "off", shadow: false };
 	}
 	const team = getBuiltInKits().get(TEAM_KIT_NAME);
 	if (!team) {
-		throw new Error("The built-in team kit is missing.");
+		throw new Error("The built-in team-cloud kit is missing.");
 	}
 	const overrides = diffAgainstKit(team, buildTeamEquivalent(entry, raw, notes));
 	if (!AUTO_DONE) {
 		notes.push(
-			"AUTO_DONE is off (QA without auto-landing): landing qa would land after a PASS, so landing is off; the orchestrator lands (kanban kit apply team --landing qa to change)",
+			"AUTO_DONE is off (QA without auto-landing): landing qa would land after a PASS, so landing is off; the orchestrator lands (kanban kit apply team-cloud --landing qa to change)",
 		);
 	}
 	if (readDotted(entry, "scoreboard") !== undefined) {

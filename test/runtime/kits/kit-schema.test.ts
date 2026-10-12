@@ -20,10 +20,10 @@ function readKitFile(name: string): unknown {
 describe("kit schema", () => {
 	it("parses the built-in kits", () => {
 		expect(kitDocumentSchema.safeParse(readKitFile("default")).success).toBe(true);
-		expect(kitDocumentSchema.safeParse(readKitFile("team")).success).toBe(true);
+		expect(kitDocumentSchema.safeParse(readKitFile("team-cloud")).success).toBe(true);
 		expect(kitDocumentSchema.safeParse(readKitFile("team-local")).success).toBe(true);
 		expect(kitDocumentSchema.safeParse(readKitFile("team-cline")).success).toBe(true);
-		expect([...getBuiltInKits().keys()]).toEqual(["default", "team", "team-local", "team-cline"]);
+		expect([...getBuiltInKits().keys()]).toEqual(["default", "team-cloud", "team-local", "team-cline"]);
 	});
 
 	it("rejects unknown keys at every level", () => {
@@ -100,10 +100,12 @@ describe("kit schema", () => {
 	});
 
 	it("refuses a user kit with a built-in name, or a name that isn't its file name", () => {
-		const team = parseUserKit({ kit: 1, name: "team" }, "team");
+		const team = parseUserKit({ kit: 1, name: "team-cloud" }, "team-cloud");
 		expect(team.ok).toBe(false);
 		expect(team.ok ? "" : team.error).toContain("built-in");
 		expect(parseUserKit({ kit: 1, name: "default" }, "default").ok).toBe(false);
+		const oldName = parseUserKit({ kit: 1, name: "team" }, "team");
+		expect(oldName.ok ? "" : oldName.error).toContain("old name of the built-in kit team-cloud");
 		expect(parseUserKit({ kit: 1, name: "mine" }, "other").ok).toBe(false);
 		expect(
 			parseUserKit({ kit: 1, name: "mine", qa: { enabled: true, default: { agent: "codex" } } }, "mine").ok,
@@ -111,7 +113,7 @@ describe("kit schema", () => {
 	});
 
 	it("carries foo's live routing in the team kit", () => {
-		const team = getBuiltInKits().get("team");
+		const team = getBuiltInKits().get("team-cloud");
 		expect(team?.roles?.dev).toMatchObject({ agent: "cline", tier: "tier3" });
 		expect(team?.tiers?.tier3?.find((entry) => entry.default)?.model).toBe("us.openai.gpt-6.1-sol");
 		expect(team?.roles?.qa).toMatchObject({ agent: "codex" });
@@ -133,7 +135,7 @@ describe("kit schema", () => {
 			on: { qaFails: true, qaStalled: true, unchanged: true, conflict: true, outage: true },
 			requireApproval: false,
 		});
-		for (const name of ["default", "team", "team-local", "team-cline"]) {
+		for (const name of ["default", "team-cloud", "team-local", "team-cline"]) {
 			expect(listLegacyKitKeys(getBuiltInKits().get(name) as KitDocument)).toEqual([]);
 		}
 		expect(team?.recommends?.landingMode).toBe("qa");

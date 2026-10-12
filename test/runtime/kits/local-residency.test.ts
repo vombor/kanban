@@ -24,7 +24,7 @@ const TEAM_LOCAL_SET = [
 describe("local residency", () => {
 	it("counts the local models team-local runs at once: dev (= plan), QA and fallback", () => {
 		expect(listKitLocalWorkingSet(resolveBuiltIn("team-local"))).toEqual(TEAM_LOCAL_SET);
-		expect(listKitLocalWorkingSet(resolveBuiltIn("team"))).toEqual([]);
+		expect(listKitLocalWorkingSet(resolveBuiltIn("team-cloud"))).toEqual([]);
 		expect(listKitLocalWorkingSet(resolveBuiltIn("team-local", { "escalate.to": "orchestrator" }))).toEqual(
 			TEAM_LOCAL_SET.slice(0, 2),
 		);

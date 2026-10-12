@@ -105,13 +105,13 @@ describe("pipeline config", () => {
 
 	it("gives an unconfigured workspace landing off and no kit", () => {
 		const { config } = parsePipelineConfig({
-			workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" } } },
+			workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team-cloud" } } },
 		});
 		const other = getWorkspacePipelineSettings(config, "kanban-2uge");
 		expect(other.landing.mode).toBe("off");
 		expect(other.kit).toBeNull();
 		expect(other.pipeline.shadow).toBe(false);
-		expect(getWorkspacePipelineSettings(config, "foo").kit).toEqual({ name: "team", overrides: {} });
+		expect(getWorkspacePipelineSettings(config, "foo").kit).toEqual({ name: "team-cloud", overrides: {} });
 	});
 
 	it("keeps valid sections when another one is invalid", () => {
@@ -217,7 +217,7 @@ describe("pipeline config", () => {
 	it("still parses the removed workspaces.<id>.models (allowProvisional), ignores it, and migration deletes it", () => {
 		const raw = {
 			workspaces: {
-				foo: { kit: { name: "team" }, models: { allowProvisional: true } },
+				foo: { kit: { name: "team-cloud" }, models: { allowProvisional: true } },
 				bar: { models: { anything: "else" } },
 				plain: { landing: { mode: "qa" } },
 			},
@@ -225,12 +225,12 @@ describe("pipeline config", () => {
 		const { config, issues } = parsePipelineConfig(raw);
 		expect(issues).toEqual([]);
 		expect(config.workspaces.foo).not.toHaveProperty("models");
-		expect(config.workspaces.foo?.kit).toEqual({ name: "team", overrides: {} });
+		expect(config.workspaces.foo?.kit).toEqual({ name: "team-cloud", overrides: {} });
 		expect(config.workspaces.bar).not.toHaveProperty("models");
 		expect(migrateLegacyConfigKeys(raw)).toEqual({
 			config: {
 				workspaces: {
-					foo: { kit: { name: "team" } },
+					foo: { kit: { name: "team-cloud" } },
 					bar: {},
 					plain: { landing: { mode: "qa" } },
 				},
@@ -238,6 +238,31 @@ describe("pipeline config", () => {
 			migrated: ["workspaces.foo.models", "workspaces.bar.models"],
 		});
 		expect(migrateLegacyConfigKeys({ workspaces: { plain: {} } }).migrated).toEqual([]);
+	});
+
+	it("reads the renamed kit team as team-cloud, and migration rewrites the name", () => {
+		const raw = {
+			workspaces: {
+				foo: { landing: { mode: "qa" }, kit: { name: "team", overrides: { "qa.blurb": "x" } } },
+				bar: { kit: { name: "team-local" } },
+				plain: {},
+			},
+		};
+		const { config, issues } = parsePipelineConfig(raw);
+		expect(issues).toEqual([]);
+		expect(config.workspaces.foo?.kit).toEqual({ name: "team-cloud", overrides: { "qa.blurb": "x" } });
+		expect(config.workspaces.bar?.kit).toEqual({ name: "team-local", overrides: {} });
+		expect(migrateLegacyConfigKeys(raw)).toEqual({
+			config: {
+				workspaces: {
+					foo: { landing: { mode: "qa" }, kit: { name: "team-cloud", overrides: { "qa.blurb": "x" } } },
+					bar: { kit: { name: "team-local" } },
+					plain: {},
+				},
+			},
+			migrated: ["workspaces.foo.kit.name"],
+		});
+		expect(migrateLegacyConfigKeys({ workspaces: { foo: { kit: { name: "team-cloud" } } } }).migrated).toEqual([]);
 	});
 
 	it("resolves each workspace's own wake settings: its overrides over the machine-wide ones", () => {

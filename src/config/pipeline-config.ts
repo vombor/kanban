@@ -12,6 +12,7 @@ import { z } from "zod";
 
 import { type RuntimeLandingMode, runtimeLandingModeSchema } from "../core/api-contract";
 import { lockedFileSystem } from "../fs/locked-file-system";
+import { getRenamedKitName } from "../kits/renamed-kits";
 import { setConfiguredOpenAiCompatibleProviders } from "../models/openai-compatible-providers";
 import { getKanbanGlobalConfigPath, KANBAN_HOME_MARKER_VERSION } from "../state/kanban-home";
 import {
@@ -37,7 +38,12 @@ export type LandingMode = RuntimeLandingMode;
 /** The kit a workspace uses. Overrides are dotted kit keys (`"qa.blurb"`) → value (§3.4). */
 export const workspaceKitRefSchema = z
 	.object({
-		name: z.string().min(1),
+		// A renamed built-in kit's old name reads as its new one (src/kits/renamed-kits.ts); doctor warns and
+		// migrateLegacyConfigKeys() rewrites the file.
+		name: z
+			.string()
+			.min(1)
+			.transform((name) => getRenamedKitName(name) ?? name),
 		overrides: z.record(z.string(), z.unknown()).default({}),
 	})
 	.strict();
@@ -548,11 +554,27 @@ export function readRemovedWorkspaceModelsKeys(config: Record<string, unknown>):
 	});
 }
 
+/** A workspace whose `kit.name` still names a renamed built-in kit, with the old and the new name. */
+export interface RenamedWorkspaceKit {
+	key: string;
+	from: string;
+	to: string;
+}
+
+/** The workspaces whose raw config.json entry names a renamed built-in kit (`workspaces.<id>.kit.name`). */
+export function readRenamedWorkspaceKits(config: Record<string, unknown>): RenamedWorkspaceKit[] {
+	return Object.entries(asRecord(config.workspaces) ?? {}).flatMap(([workspaceId, entry]) => {
+		const name = asRecord(asRecord(entry)?.kit)?.name;
+		const to = typeof name === "string" ? getRenamedKitName(name) : null;
+		return typeof name === "string" && to ? [{ key: `workspaces.${workspaceId}.kit.name`, from: name, to }] : [];
+	});
+}
+
 /**
  * config.json with the keys an older build wrote in an older form rewritten: P2-1's boolean `sessionSync`, the
  * removed `orchestrator.wake.target` (deleted: every workspace now wakes its own orchestrator, so there is nothing to
  * carry it into), the removed LocalAI provider's keys and the removed `workspaces.<id>.models` section (deleted,
- * nothing reads them). Returns the dotted keys it changed; an absent key stays absent (its default applies).
+ * nothing reads them) and a renamed built-in kit's old name in `workspaces.<id>.kit.name` (src/kits/renamed-kits.ts). Returns the dotted keys it changed; an absent key stays absent (its default applies).
  * A build from before the move (P2-1 up to P3-2) reads the new `sessionSync` object as invalid and uses the
  * default (on), so after a rollback to one, `"sessionSync": { "enabled": false }` must be written back as `false`.
  */
@@ -600,6 +622,19 @@ export function migrateLegacyConfigKeys(config: Record<string, unknown>): {
 		);
 		next = { ...next, workspaces };
 		migrated.push(...removedWorkspaceModelsKeys);
+	}
+	const renamedKits = readRenamedWorkspaceKits(next);
+	if (renamedKits.length > 0) {
+		const workspaces = Object.fromEntries(
+			Object.entries(asRecord(next.workspaces) ?? {}).map(([workspaceId, entry]) => {
+				const record = asRecord(entry);
+				const kit = asRecord(record?.kit);
+				const to = typeof kit?.name === "string" ? getRenamedKitName(kit.name) : null;
+				return [workspaceId, record && kit && to ? { ...record, kit: { ...kit, name: to } } : entry];
+			}),
+		);
+		next = { ...next, workspaces };
+		migrated.push(...renamedKits.map(({ key }) => key));
 	}
 	return { config: next, migrated };
 }

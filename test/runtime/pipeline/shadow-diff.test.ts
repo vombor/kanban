@@ -1,6 +1,6 @@
 // The cutover's shadow diff (plan §8.4 step 1, §9: "shadow mode + scripts/pipeline-shadow-diff.ts during cutover"):
 // the legacy autoland log parser on lines in the exact shapes autoland writes, and the comparison against a stub
-// routing policy (no test here reads kits/team.json).
+// routing policy (no test here reads kits/team-cloud.json).
 import { describe, expect, it } from "vitest";
 
 import type { OnFailAnswer, QaPolicyAnswer, RoutingPolicy } from "../../../src/kits/policy";
@@ -446,10 +446,10 @@ describe("computeShadowDiff", () => {
 				"restart",
 			).map((item) => item.status);
 		const worker = (note: string) => decision(0.2, { stage: "worker", taskId: null, note });
-		expect(clean([worker("watching: landing qa, kit team, shadow, recovery report (report only)")])).toEqual([
+		expect(clean([worker("watching: landing qa, kit team-cloud, shadow, recovery report (report only)")])).toEqual([
 			"same",
 		]);
-		expect(clean([worker("watching: landing qa, kit team, shadow, recovery off")])).toEqual(["legacy_only"]);
+		expect(clean([worker("watching: landing qa, kit team-cloud, shadow, recovery off")])).toEqual(["legacy_only"]);
 		expect(clean([])).toEqual(["legacy_only"]);
 	});
 
@@ -459,7 +459,7 @@ describe("computeShadowDiff", () => {
 			workspaceId: WS,
 			taskId,
 			title: taskId,
-			kit: "team",
+			kit: "team-cloud",
 			outcome: "shadow" as const,
 			proposal: {
 				agentId: "cline" as const,

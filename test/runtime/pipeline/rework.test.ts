@@ -263,7 +263,10 @@ describe("rework loop in the pipeline worker (team kit)", () => {
 		const harness = createPipelineWorkerHarness({
 			config: {
 				workspaces: {
-					foo: { landing: { mode: "qa" }, kit: { name: "team", overrides: { "fallback.on.qaFails": false } } },
+					foo: {
+						landing: { mode: "qa" },
+						kit: { name: "team-cloud", overrides: { "fallback.on.qaFails": false } },
+					},
 				},
 			},
 			worktree: () => "/worktrees/d1111",
@@ -319,7 +322,7 @@ describe("rework loop in the pipeline worker (team kit)", () => {
 				workspaces: {
 					foo: {
 						landing: { mode: "qa" },
-						kit: { name: "team" },
+						kit: { name: "team-cloud" },
 						pipeline: { shadow: true },
 					},
 				},

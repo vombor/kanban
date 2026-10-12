@@ -4,7 +4,7 @@
 //   - legacy model keys become their `roles.*` keys (`dev.agent` → `roles.dev.agent`);
 //   - role models and facts stay project settings;
 //   - team keys the kit already has with the same value are dropped (foo's `escalate.requireApproval: false` once
-//     team.json's fallback needs no approval);
+//     team-cloud.json's fallback needs no approval);
 //   - the other team keys go into a new user kit (`$KANBAN_HOME/kits/<into>.json`: the project's kit with them
 //     applied), and the workspace is switched to it.
 // The plan is refused unless the new kit + project settings resolve to exactly the kit the workspace resolves to now
@@ -22,8 +22,8 @@ import { translateLegacyOverrides } from "./kit-legacy-keys";
 import { type KitDocument, kitNameSchema } from "./kit-schema";
 import { appendKitSettingsHistory, classifyStoredOverrides, diffOverridesForHistory } from "./project-settings";
 import {
-	BUILT_IN_KIT_NAMES,
 	DEFAULT_KIT_NAME,
+	isReservedKitName,
 	type KitCatalog,
 	loadKitCatalog,
 	parseUserKit,
@@ -110,7 +110,7 @@ export function planOverrideMigration(input: {
 	let toKit = kitName;
 	if (needsKit) {
 		const nameCheck = kitNameSchema.safeParse(intoName);
-		if (!nameCheck.success || BUILT_IN_KIT_NAMES.includes(intoName)) {
+		if (!nameCheck.success || isReservedKitName(intoName)) {
 			throw new Error(`--into ${intoName}: not a user kit name (lowercase letters, digits, '-', '_'; not built-in)`);
 		}
 		if (catalog.kits.has(intoName)) {

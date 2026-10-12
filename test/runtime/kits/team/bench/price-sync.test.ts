@@ -262,7 +262,7 @@ describe("daily price check job", () => {
 			autoSync: false,
 		}));
 		registry.register(createBenchFeature({ readContext, paths }));
-		const team = getBuiltInKits().get("team");
+		const team = getBuiltInKits().get("team-cloud");
 		if (!team) {
 			throw new Error("team kit missing");
 		}
@@ -275,7 +275,7 @@ describe("daily price check job", () => {
 	});
 
 	it("takes its models from the kit's tiers and dropped list", () => {
-		const team = getBuiltInKits().get("team");
+		const team = getBuiltInKits().get("team-cloud");
 		if (!team) {
 			throw new Error("team kit missing");
 		}

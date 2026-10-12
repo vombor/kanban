@@ -18,7 +18,7 @@ import { createTempDir } from "../../../utilities/temp-dir";
 import { createBoard, createCard } from "../../../utilities/workspace-state-store";
 
 function teamKit() {
-	const kit = getBuiltInKits().get("team");
+	const kit = getBuiltInKits().get("team-cloud");
 	if (!kit) {
 		throw new Error("team kit missing");
 	}
@@ -412,7 +412,7 @@ describe("runoffs feature in the pipeline worker", () => {
 		const releaseHold = vi.fn();
 		const harness = createPipelineWorkerHarness({
 			config: {
-				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" } } },
+				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team-cloud" } } },
 			},
 			snapshot: (taskId) => (taskId === "d1111" ? snapshot : `snap-${taskId}`),
 			createFeatures: ({ bus, appendQaLog, root }) => {
@@ -481,7 +481,7 @@ describe("runoffs feature in the pipeline worker", () => {
 		const releaseHold = vi.fn();
 		const harness = createPipelineWorkerHarness({
 			config: {
-				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" } } },
+				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team-cloud" } } },
 			},
 			snapshot: (taskId) => `snap-${taskId}-rebased`,
 			createFeatures: ({ bus, appendQaLog, root }) => {
@@ -563,7 +563,7 @@ describe("runoffs feature in the pipeline worker", () => {
 				workspaces: {
 					foo: {
 						landing: { mode: "qa" },
-						kit: { name: "team" },
+						kit: { name: "team-cloud" },
 						pipeline: { shadow: true },
 					},
 				},

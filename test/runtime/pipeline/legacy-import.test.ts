@@ -79,7 +79,9 @@ describe("kanban pipeline import-legacy", () => {
 			scoreboardMd: bench.scoreboardMd,
 			qaLog: getPipelineQaLogPath("foo", home),
 		};
-		config = { workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" }, pipeline: { shadow: true } } } };
+		config = {
+			workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team-cloud" }, pipeline: { shadow: true } } },
+		};
 		autoland = {};
 	});
 	afterEach(() => {
@@ -268,7 +270,9 @@ describe("kanban pipeline import-legacy", () => {
 	});
 
 	it("refuses while the workspace is not on landing qa in shadow", async () => {
-		config = { workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" }, pipeline: { shadow: false } } } };
+		config = {
+			workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team-cloud" }, pipeline: { shadow: false } } },
+		};
 		const report = await run();
 		expect(report.refusals).toEqual([expect.stringContaining("not landing qa in shadow")]);
 		expect(report.pipelineState).toBeNull();

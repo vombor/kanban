@@ -14,7 +14,7 @@ import {
 	toFooEffectiveCard,
 } from "../../utilities/legacy-team-fixtures";
 
-// foo's QA prompt parts from the `team` kit + foo's imported overrides, checked against the legacy kit's own prompts
+// foo's QA prompt parts from the `team-cloud` kit + foo's imported overrides, checked against the legacy kit's own prompts
 // (archive/devteam-kit:qa/qa-card.cjs@9828540 buildPrompt, fixtures in fixtures/legacy-team/qa-prompts.json). The kit
 // owns the parts (rule texts, blurb, notes); the skeleton around them is the core's QA prompt builder.
 

@@ -198,14 +198,16 @@ describe("one-owner check", () => {
 		const shadow = await checkOneOwner(
 			context({
 				kanbanConfig: {
-					workspaces: { foo: { landing: { mode: "qa" }, pipeline: { shadow: true }, kit: { name: "team" } } },
+					workspaces: {
+						foo: { landing: { mode: "qa" }, pipeline: { shadow: true }, kit: { name: "team-cloud" } },
+					},
 				},
 			}),
 		);
 		expect(shadow.some((finding) => finding.level === "fail")).toBe(false);
 		expect(levels(shadow)).toContainEqual([
 			"info",
-			"foo: the legacy kit lands; Kanban shadows it (landing qa, kit team, pipeline.shadow)",
+			"foo: the legacy kit lands; Kanban shadows it (landing qa, kit team-cloud, pipeline.shadow)",
 		]);
 		const disabled = await checkOneOwner(
 			context({

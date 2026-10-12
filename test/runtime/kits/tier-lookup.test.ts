@@ -34,7 +34,7 @@ describe("tier lookup", () => {
 	});
 
 	it("resolves the team kit's tier3 to gpt-6.1-sol", () => {
-		const team = getBuiltInKits().get("team");
+		const team = getBuiltInKits().get("team-cloud");
 		if (!team) {
 			throw new Error("team kit missing");
 		}
@@ -42,7 +42,7 @@ describe("tier lookup", () => {
 	});
 
 	it("makes a dev.model tier without a usable model a schema error", () => {
-		const team = getBuiltInKits().get("team");
+		const team = getBuiltInKits().get("team-cloud");
 		if (!team) {
 			throw new Error("team kit missing");
 		}

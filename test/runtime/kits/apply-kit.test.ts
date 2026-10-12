@@ -30,15 +30,15 @@ describe("applyWorkspaceKit", () => {
 				},
 			});
 			// Any model may be on any role: the team kit's defaults apply without a vetting check.
-			const result = await applyWorkspaceKit({ workspaceId: "foo", kitName: "team" });
+			const result = await applyWorkspaceKit({ workspaceId: "foo", kitName: "team-cloud" });
 			expect(result.written).toBe(true);
-			expect(result.kitName).toEqual({ from: "default", to: "team" });
+			expect(result.kitName).toEqual({ from: "default", to: "team-cloud" });
 			expect(result.landing).toEqual({ from: "off", to: "off" });
 			expect(result.recommendedLandingMode).toBe("qa");
 			expect(result.changes.find((change) => change.key === "qa.enabled")).toMatchObject({
 				from: false,
 				to: true,
-				toSource: "team",
+				toSource: "team-cloud",
 			});
 			const config = readConfig(globalConfigPath);
 			expect(config.selectedAgentId).toBe("claude");
@@ -46,7 +46,7 @@ describe("applyWorkspaceKit", () => {
 			expect(config.workspaces).toEqual({
 				foo: {
 					landing: { mode: "off" },
-					kit: { name: "team", overrides: { "qa.blurb": "Project: Pawsome" } },
+					kit: { name: "team-cloud", overrides: { "qa.blurb": "Project: Pawsome" } },
 				},
 				other: { landing: { mode: "commit" } },
 			});
@@ -57,12 +57,12 @@ describe("applyWorkspaceKit", () => {
 		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
 			writeConfig(globalConfigPath, {
 				workspaces: {
-					foo: { kit: { name: "team", overrides: { "qa.blurb": "x" } } },
+					foo: { kit: { name: "team-cloud", overrides: { "qa.blurb": "x" } } },
 				},
 			});
 			await applyWorkspaceKit({
 				workspaceId: "foo",
-				kitName: "team",
+				kitName: "team-cloud",
 				landing: "qa",
 				set: { "qa.promptNotes.dbSetup": "npx prisma migrate deploy" },
 				unset: ["qa.blurb"],
@@ -70,7 +70,7 @@ describe("applyWorkspaceKit", () => {
 			expect(readConfig(globalConfigPath).workspaces).toEqual({
 				foo: {
 					landing: { mode: "qa" },
-					kit: { name: "team", overrides: { "qa.promptNotes.dbSetup": "npx prisma migrate deploy" } },
+					kit: { name: "team-cloud", overrides: { "qa.promptNotes.dbSetup": "npx prisma migrate deploy" } },
 				},
 			});
 		});
@@ -81,21 +81,32 @@ describe("applyWorkspaceKit", () => {
 			const original = { workspaces: { foo: { landing: { mode: "off" } } } };
 			writeConfig(globalConfigPath, original);
 			await expect(
-				applyWorkspaceKit({ workspaceId: "foo", kitName: "team", set: { "qa.blurbz": "x" } }),
+				applyWorkspaceKit({ workspaceId: "foo", kitName: "team-cloud", set: { "qa.blurbz": "x" } }),
 			).rejects.toThrow(/blurbz/u);
 			await expect(applyWorkspaceKit({ workspaceId: "foo", kitName: "nope" })).rejects.toThrow(/unknown kit/u);
 			await expect(
-				applyWorkspaceKit({ workspaceId: "foo", kitName: "team", set: { "roles.dev.tier": "tier1" } }),
+				applyWorkspaceKit({ workspaceId: "foo", kitName: "team-cloud", set: { "roles.dev.tier": "tier1" } }),
 			).rejects.toThrow(/tier1/u);
 			// --set takes only project settings: legacy keys and the team definition are refused.
 			await expect(
-				applyWorkspaceKit({ workspaceId: "foo", kitName: "team", set: { "dev.agent": "codex" } }),
+				applyWorkspaceKit({ workspaceId: "foo", kitName: "team-cloud", set: { "dev.agent": "codex" } }),
 			).rejects.toThrow(/legacy key; use roles\.dev\.agent/u);
 			await expect(
-				applyWorkspaceKit({ workspaceId: "foo", kitName: "team", set: { "onFail.reworkRounds": 5 } }),
+				applyWorkspaceKit({ workspaceId: "foo", kitName: "team-cloud", set: { "onFail.reworkRounds": 5 } }),
 			).rejects.toThrow(/part of the team definition/u);
-			await expect(applyWorkspaceKit({ workspaceId: "foo", kitName: "team", unset: ["qa.blurb"] })).rejects.toThrow(
-				/no override/u,
+			await expect(
+				applyWorkspaceKit({ workspaceId: "foo", kitName: "team-cloud", unset: ["qa.blurb"] }),
+			).rejects.toThrow(/no override/u);
+			expect(readConfig(globalConfigPath)).toEqual(original);
+		});
+	});
+
+	it("answers kit apply team with the new name and writes nothing", async () => {
+		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
+			const original = { workspaces: { foo: { landing: { mode: "qa" } } } };
+			writeConfig(globalConfigPath, original);
+			await expect(applyWorkspaceKit({ workspaceId: "foo", kitName: "team" })).rejects.toThrow(
+				'kit "team" was renamed to team-cloud (2026-10-12); use team-cloud',
 			);
 			expect(readConfig(globalConfigPath)).toEqual(original);
 		});
@@ -104,12 +115,12 @@ describe("applyWorkspaceKit", () => {
 	it("writes nothing on a dry run, and drops the kit entry for default without overrides", async () => {
 		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
 			writeConfig(globalConfigPath, {
-				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" } } },
+				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team-cloud" } } },
 			});
 			const dryRun = await applyWorkspaceKit({ workspaceId: "foo", kitName: "default", dryRun: true });
 			expect(dryRun.written).toBe(false);
 			expect(readConfig(globalConfigPath).workspaces).toEqual({
-				foo: { landing: { mode: "qa" }, kit: { name: "team" } },
+				foo: { landing: { mode: "qa" }, kit: { name: "team-cloud" } },
 			});
 			await applyWorkspaceKit({ workspaceId: "foo", kitName: "default" });
 			expect(readConfig(globalConfigPath).workspaces).toEqual({

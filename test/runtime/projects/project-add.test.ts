@@ -49,23 +49,23 @@ describe("kanban project add", () => {
 		await withTemporaryKanbanHome(async ({ userHomePath, globalConfigPath }) => {
 			writeConfig(globalConfigPath, {
 				workspaces: {
-					other: { landing: { mode: "qa" }, kit: { name: "team", overrides: { "qa.blurb": "Other" } } },
+					other: { landing: { mode: "qa" }, kit: { name: "team-cloud", overrides: { "qa.blurb": "Other" } } },
 				},
 			});
 			const repo = createRepo(join(userHomePath, "shop"));
 			const result = await addProject({
 				repoPath: repo,
-				kit: "team",
+				kit: "team-cloud",
 				landing: "qa",
 				blurb: "Project: shop",
 				base: "main",
 			});
-			expect(result).toMatchObject({ kitName: "team", landingMode: "qa" });
+			expect(result).toMatchObject({ kitName: "team-cloud", landingMode: "qa" });
 			const { config } = await readPipelineConfig(globalConfigPath);
 			expect(config.workspaces[result.workspaceId]).toMatchObject({
 				landing: { mode: "qa" },
 				defaultBaseRef: "main",
-				kit: { name: "team", overrides: { "qa.blurb": "Project: shop" } },
+				kit: { name: "team-cloud", overrides: { "qa.blurb": "Project: shop" } },
 			});
 
 			const plain = createRepo(join(userHomePath, "plain"));
@@ -78,9 +78,9 @@ describe("kanban project add", () => {
 	it("keeps an existing project's kit and landing mode, and says how to change them", async () => {
 		await withTemporaryKanbanHome(async ({ userHomePath, globalConfigPath }) => {
 			const repo = createRepo(join(userHomePath, "app"));
-			const first = await addProject({ repoPath: repo, kit: "team", landing: "off" });
+			const first = await addProject({ repoPath: repo, kit: "team-cloud", landing: "off" });
 			const second = await addProject({ repoPath: repo, kit: "default", landing: "qa", name: "App" });
-			expect(second).toMatchObject({ kitName: "team", landingMode: "off" });
+			expect(second).toMatchObject({ kitName: "team-cloud", landingMode: "off" });
 			expect(second.warnings.join("\n")).toContain(`kanban kit apply default --project ${first.workspaceId}`);
 			expect(second.warnings.join("\n")).toContain("landing qa not applied");
 			const { config } = await readPipelineConfig(globalConfigPath);

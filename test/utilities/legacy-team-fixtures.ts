@@ -65,15 +65,15 @@ export function getFooImportedOverrides(): Record<string, unknown> {
 	const foo = mapLegacyKitConfig(readLegacyKitConfig(), "kit.config.json").workspaces.find(
 		(workspace) => workspace.workspaceId === "foo",
 	);
-	if (!foo || foo.kit !== "team") {
+	if (!foo || foo.kit !== "team-cloud") {
 		throw new Error("the live kit.config.json no longer maps foo to the team kit");
 	}
 	return foo.overrides;
 }
 
-/** The `team` kit with `overrides`, resolved over `default` (as resolveWorkspaceKit does). */
+/** The `team-cloud` kit with `overrides`, resolved over `default` (as resolveWorkspaceKit does). */
 export function createTeamPolicy(overrides: Record<string, unknown> = {}): RoutingPolicy {
-	const team = getBuiltInKits().get("team");
+	const team = getBuiltInKits().get("team-cloud");
 	if (!team) {
 		throw new Error("team kit missing");
 	}

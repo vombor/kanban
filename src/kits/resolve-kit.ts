@@ -10,22 +10,29 @@
 // is merged (kit-legacy-keys.ts). A role names a `model` or a `tier`: a layer that sets one drops the other's value from
 // the layers below, so a project's `roles.dev.model` replaces the kit's `roles.dev.tier`.
 //
-// Built-in kits (`default`, `team`, `team-local`, `team-cline`) ship in the package (`kits/*.json`). User kits are data files in
-// `$KANBAN_HOME/kits/<name>.json`; a user kit with a built-in name is refused.
+// Built-in kits (`default`, `team-cloud`, `team-local`, `team-cline`) ship in the package (`kits/*.json`). User kits are data
+// files in `$KANBAN_HOME/kits/<name>.json`; a user kit with a built-in name, or the old name of a renamed one
+// (renamed-kits.ts), is refused.
 import { readdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
 import defaultKitJson from "../../kits/default.json" with { type: "json" };
-import teamKitJson from "../../kits/team.json" with { type: "json" };
 import teamClineKitJson from "../../kits/team-cline.json" with { type: "json" };
+import teamCloudKitJson from "../../kits/team-cloud.json" with { type: "json" };
 import teamLocalKitJson from "../../kits/team-local.json" with { type: "json" };
 import { getWorkspacePipelineSettings, type PipelineConfig } from "../config/pipeline-config";
 import { getKanbanKitsPath } from "../state/kanban-home";
 import { translateLegacyKitLayer, translateLegacyOverrides } from "./kit-legacy-keys";
 import { formatKitIssues, type KitDocument, kitDocumentObjectSchema, kitDocumentSchema } from "./kit-schema";
+import { describeRenamedKit, getRenamedKitName, RENAMED_BUILT_IN_KITS } from "./renamed-kits";
 
 export const DEFAULT_KIT_NAME = "default";
-export const BUILT_IN_KIT_NAMES: readonly string[] = ["default", "team", "team-local", "team-cline"];
+export const BUILT_IN_KIT_NAMES: readonly string[] = ["default", "team-cloud", "team-local", "team-cline"];
+
+/** True for a built-in kit's name or a renamed one's old name: no user kit may have it. */
+export function isReservedKitName(name: string): boolean {
+	return BUILT_IN_KIT_NAMES.includes(name) || RENAMED_BUILT_IN_KITS.has(name);
+}
 
 /** Keys a workspace override may not set: they identify the kit. */
 const NON_OVERRIDABLE_KEYS: ReadonlySet<string> = new Set(["kit", "name"]);
@@ -87,7 +94,7 @@ let builtInKits: Map<string, KitDocument> | null = null;
 export function getBuiltInKits(): Map<string, KitDocument> {
 	builtInKits ??= new Map([
 		["default", parseBuiltInKit(defaultKitJson, "default")],
-		["team", parseBuiltInKit(teamKitJson, "team")],
+		["team-cloud", parseBuiltInKit(teamCloudKitJson, "team-cloud")],
 		["team-local", parseBuiltInKit(teamLocalKitJson, "team-local")],
 		["team-cline", parseBuiltInKit(teamClineKitJson, "team-cline")],
 	]);
@@ -111,8 +118,14 @@ export function parseUserKit(
 	if (!parsed.success) {
 		return { ok: false, error: formatKitIssues(parsed.error) };
 	}
-	if (BUILT_IN_KIT_NAMES.includes(parsed.data.name)) {
-		return { ok: false, error: `"${parsed.data.name}" is a built-in kit name; a user kit can't replace it` };
+	if (isReservedKitName(parsed.data.name)) {
+		const renamed = getRenamedKitName(parsed.data.name);
+		return {
+			ok: false,
+			error: renamed
+				? `"${parsed.data.name}" is the old name of the built-in kit ${renamed}; a user kit can't take it`
+				: `"${parsed.data.name}" is a built-in kit name; a user kit can't replace it`,
+		};
 	}
 	if (parsed.data.name !== fileName) {
 		return { ok: false, error: `the kit is named "${parsed.data.name}" but the file is ${fileName}.json` };
@@ -316,6 +329,10 @@ export function resolveKitByName(
 	overrides: Record<string, unknown> = {},
 ): KitResolution {
 	const entry = catalog.kits.get(name);
+	const renamed = getRenamedKitName(name);
+	if (!entry && renamed) {
+		return { ok: false, error: describeRenamedKit(name, renamed) };
+	}
 	if (!entry) {
 		return { ok: false, error: `unknown kit "${name}" (known: ${[...catalog.kits.keys()].join(", ")})` };
 	}
@@ -324,7 +341,8 @@ export function resolveKitByName(
 
 /**
  * The kit a workspace runs on. Falls back to `default` (with an issue) when the configured kit is missing or its
- * overrides don't validate: `default` answers "no" to everything, which is the safe direction.
+ * overrides don't validate: `default` answers "no" to everything, which is the safe direction. A config that still
+ * names a renamed built-in kit already reads as its new name (workspaceKitRefSchema).
  */
 export function resolveWorkspaceKit(
 	config: PipelineConfig,

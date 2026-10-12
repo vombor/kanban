@@ -66,7 +66,7 @@ function line(devId: string, round: number, verdict: ScoreboardLine["verdict"], 
 }
 
 function teamKit() {
-	const kit = getBuiltInKits().get("team");
+	const kit = getBuiltInKits().get("team-cloud");
 	if (!kit) {
 		throw new Error("team kit missing");
 	}

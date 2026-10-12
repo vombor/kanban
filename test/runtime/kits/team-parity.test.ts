@@ -11,7 +11,7 @@ import {
 	toFooEffectiveCard,
 } from "../../utilities/legacy-team-fixtures";
 
-// The `team` kit plus foo's overrides from `kanban config import-kit` must answer like the legacy kit did for foo with
+// The `team-cloud` kit plus foo's overrides from `kanban config import-kit` must answer like the legacy kit did for foo with
 // the live kit.config.json (fixtures in fixtures/legacy-team, taken 2026-10-07 from legacy kit 9828540).
 const fooPolicy = () => createTeamPolicy(getFooImportedOverrides());
 const MAX_FAIL_ROUNDS = 3; // the live thresholds.QAFLOW_MAX_FAILS, imported as pipeline.rework.maxFailRounds
@@ -23,8 +23,8 @@ describe("team kit parity with foo's legacy kit.config.json", () => {
 			(entry) => entry.workspaceId === "foo",
 		) as Record<string, unknown>;
 		// Everything foo inherits from the top level (devAgent, qaAgent, the built-in qaRoutes, benchmark tiers and
-		// dropped models with the deprecated openai-native provider mapped to bedrock) is what kits/team.json says,
-		// except Nova 2 Lite: kits/team.json brought it back on 2026-10-07 (tier3 candidate, qa), the legacy kit still
+		// dropped models with the deprecated openai-native provider mapped to bedrock) is what kits/team-cloud.json says,
+		// except Nova 2 Lite: kits/team-cloud.json brought it back on 2026-10-07 (tier3 candidate, qa), the legacy kit still
 		// drops it. So an import pins foo's legacy lists as overrides and foo keeps Nova dropped until the user says.
 		const overrides = getFooImportedOverrides();
 		expect(Object.keys(overrides).sort()).toEqual(

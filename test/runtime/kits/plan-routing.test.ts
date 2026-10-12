@@ -24,7 +24,7 @@ const config = parsePipelineConfig({}).config;
 
 describe("plan routing (the kit's plan section)", () => {
 	it("team: plan cards run on Claude with its own default model, starting in plan mode", () => {
-		const { kit } = resolveBuiltIn("team");
+		const { kit } = resolveBuiltIn("team-cloud");
 		expect(answerPlanAssignment(kit)).toEqual({
 			kind: "plan",
 			agentId: "claude",
@@ -50,7 +50,7 @@ describe("plan routing (the kit's plan section)", () => {
 	});
 
 	it("every built-in kit skip QA for plan cards, and the evaluator never QAs one", () => {
-		for (const name of ["default", "team", "team-local", "team-cline"]) {
+		for (const name of ["default", "team-cloud", "team-local", "team-cline"]) {
 			const { kit } = resolveBuiltIn(name);
 			expect(kit.qa?.skip?.roles).toContain("plan");
 			const answer = createRoutingPolicy(kit).qaPolicy({
@@ -64,18 +64,18 @@ describe("plan routing (the kit's plan section)", () => {
 
 	it("applies the kit's agent, a pinned model and its provider, and lets the creator's choices win", () => {
 		const resolved = {
-			...resolveBuiltIn("team", {
+			...resolveBuiltIn("team-cloud", {
 				"plan.agent": "cline",
 				"plan.model": { provider: "bedrock", model: "us.anthropic.claude-opus-5-5" },
 				"plan.rules": { specs: "Specs follow docs/specs/TEMPLATE.md." },
 			}),
-			kitName: "team",
+			kitName: "team-cloud",
 			issues: [],
 		};
 		// Any model may plan: Claude on Opus is applied as the kit says.
 		const claudeOpus = {
 			...resolved,
-			...resolveBuiltIn("team", { "plan.model": { model: "us.anthropic.claude-opus-5-5" } }),
+			...resolveBuiltIn("team-cloud", { "plan.model": { model: "us.anthropic.claude-opus-5-5" } }),
 		};
 		expect(decidePlanAssignment({ request: { workspaceId: "ws" }, config, resolved: claudeOpus })).toMatchObject({
 			ok: true,
@@ -137,7 +137,7 @@ describe("plan routing (the kit's plan section)", () => {
 					config: parsePipelineConfig({}).config,
 				}),
 			).join("\n");
-		expect(report("team")).toContain(
+		expect(report("team-cloud")).toContain(
 			"Plan cards (kanban task create --role plan):\n  claude on its own default model, starting in plan mode",
 		);
 		expect(report("default")).toMatch(/Plan cards[^\n]*\n {2}none \(kit "default" has plan.enabled off\)/u);

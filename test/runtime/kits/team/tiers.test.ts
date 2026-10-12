@@ -6,7 +6,7 @@ import { buildTiersReport, formatTiersReport } from "../../../../src/kits/team/t
 import { createCardHistory, createEffectiveCard } from "../../../utilities/effective-card";
 
 function team(overrides: Record<string, unknown> = {}) {
-	const kit = getBuiltInKits().get("team");
+	const kit = getBuiltInKits().get("team-cloud");
 	if (!kit) {
 		throw new Error("team kit missing");
 	}
@@ -79,7 +79,7 @@ describe("tiers feature", () => {
 		});
 
 		const text = formatTiersReport(report).join("\n");
-		expect(text).toContain("Kit team: tiers feature on");
+		expect(text).toContain("Kit team-cloud: tiers feature on");
 		expect(text).toContain("tier3: picks bedrock/us.openai.gpt-6.1-sol");
 		expect(text).toContain("  - bedrock/us.amazon.nova-2-lite-v1:0: candidate; dropped 2026-10-05");
 		expect(text).not.toContain("[DROPPED]");

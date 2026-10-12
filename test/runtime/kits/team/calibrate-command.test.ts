@@ -89,7 +89,7 @@ describe("kanban bench calibrate", () => {
 
 	it("refuses rule names the kit doesn't have", async () => {
 		await withTemporaryKanbanHome(async ({ userHomePath }) => {
-			const { writeSpec } = await createWorkspace(userHomePath, "team");
+			const { writeSpec } = await createWorkspace(userHomePath, "team-cloud");
 			const spec = writeSpec([
 				{
 					key: "haiku",
@@ -100,14 +100,14 @@ describe("kanban bench calibrate", () => {
 				},
 			]);
 			await expect(runCalibrateCommand(spec, { print: true })).rejects.toThrow(
-				/model haiku: rule nope is not in kit team's qa\.rules \(drive\)/u,
+				/model haiku: rule nope is not in kit team-cloud's qa\.rules \(drive\)/u,
 			);
 		});
 	});
 
 	it("--print checks the dev prompts and refs without creating cards", async () => {
 		await withTemporaryKanbanHome(async ({ userHomePath }) => {
-			const { writeSpec, head } = await createWorkspace(userHomePath, "team");
+			const { writeSpec, head } = await createWorkspace(userHomePath, "team-cloud");
 			const spec = writeSpec([
 				{
 					key: "haiku",
@@ -132,7 +132,7 @@ describe("kanban bench calibrate", () => {
 
 	it("starts a detached --worker for the calibration and hands it the runner lock", async () => {
 		await withTemporaryKanbanHome(async ({ userHomePath }) => {
-			const { writeSpec, workspaceId, repoPath } = await createWorkspace(userHomePath, "team");
+			const { writeSpec, workspaceId, repoPath } = await createWorkspace(userHomePath, "team-cloud");
 			const spec = writeSpec([
 				{
 					key: "haiku",
@@ -193,7 +193,7 @@ describe("kanban bench calibrate", () => {
 
 		it("gives the detached worker a child credential bound to its pid, then lets it start", async () => {
 			await withTemporaryKanbanHome(async ({ userHomePath }) => {
-				const { writeSpec, workspaceId } = await createWorkspace(userHomePath, "team");
+				const { writeSpec, workspaceId } = await createWorkspace(userHomePath, "team-cloud");
 				const spec = writeSpec([
 					{
 						key: "haiku",
@@ -238,7 +238,7 @@ describe("kanban bench calibrate", () => {
 				getKanbanGlobalConfigPath(),
 				JSON.stringify({
 					workspaces: {
-						[workspaceId]: { kit: { name: "team" }, isolation: { mode } },
+						[workspaceId]: { kit: { name: "team-cloud" }, isolation: { mode } },
 					},
 				}),
 			);
@@ -247,7 +247,7 @@ describe("kanban bench calibrate", () => {
 		for (const mode of ["report", "enforce"] as const) {
 			it(`with isolation ${mode}, refuses detached mode up front, pointing to --foreground, when the server won't bind one`, async () => {
 				await withTemporaryKanbanHome(async ({ userHomePath }) => {
-					const { writeSpec, workspaceId } = await createWorkspace(userHomePath, "team");
+					const { writeSpec, workspaceId } = await createWorkspace(userHomePath, "team-cloud");
 					setIsolationMode(workspaceId, mode);
 					const spec = writeSpec([
 						{
@@ -296,7 +296,7 @@ describe("kanban bench calibrate", () => {
 		it("with isolation off, a failed bind or issue falls back to the plain detach", async () => {
 			for (const failure of ["bind", "issue"] as const) {
 				await withTemporaryKanbanHome(async ({ userHomePath }) => {
-					const { writeSpec, workspaceId } = await createWorkspace(userHomePath, "team");
+					const { writeSpec, workspaceId } = await createWorkspace(userHomePath, "team-cloud");
 					setIsolationMode(workspaceId, "off");
 					const spec = writeSpec([
 						{
@@ -354,7 +354,7 @@ describe("kanban bench calibrate", () => {
 
 	it("releases the runner lock when the worker could not be spawned", async () => {
 		await withTemporaryKanbanHome(async ({ userHomePath }) => {
-			const { writeSpec, workspaceId } = await createWorkspace(userHomePath, "team");
+			const { writeSpec, workspaceId } = await createWorkspace(userHomePath, "team-cloud");
 			const spec = writeSpec([
 				{
 					key: "haiku",

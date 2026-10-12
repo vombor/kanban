@@ -33,7 +33,7 @@ function qaConfig(wake: Record<string, unknown> = {}, extra: Record<string, unkn
 	return {
 		watchdog: { mode: "on" },
 		orchestrator: { wake },
-		workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" } } },
+		workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team-cloud" } } },
 		...extra,
 	};
 }
@@ -239,8 +239,8 @@ describe("wakeOrchestrator", () => {
 // Project isolation: a workspace's items wake only its own orchestrator; there is no cross-workspace wake target.
 describe("watchdog wake isolated by project", () => {
 	const TWO_QA = {
-		foo: { landing: { mode: "qa" }, kit: { name: "team" } },
-		bar: { landing: { mode: "qa" }, kit: { name: "team" } },
+		foo: { landing: { mode: "qa" }, kit: { name: "team-cloud" } },
+		bar: { landing: { mode: "qa" }, kit: { name: "team-cloud" } },
 	};
 
 	function barBoard() {

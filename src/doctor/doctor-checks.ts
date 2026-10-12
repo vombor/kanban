@@ -12,6 +12,7 @@ import {
 	readLegacyWakeTarget,
 	readRemovedModelProviderKeys,
 	readRemovedWorkspaceModelsKeys,
+	readRenamedWorkspaceKits,
 	updatePipelineConfigFile,
 } from "../config/pipeline-config";
 import { DEFAULT_KIT_NAME, type KitCatalog, resolveWorkspaceKit } from "../kits/resolve-kit";
@@ -435,6 +436,18 @@ export function checkLegacyConfigKeys(
 			fix: async () => {
 				await updatePipelineConfigFile((config) => migrateLegacyConfigKeys(config).config, configPath);
 				return removedWorkspaceModelsKeys.map((key) => `removed ${key}`);
+			},
+		});
+	}
+	for (const { key, from, to } of readRenamedWorkspaceKits(rawConfig)) {
+		findings.push({
+			level: "warn",
+			area: "home",
+			message: `${configPath} has "${key}": "${from}"; the built-in kit ${from} was renamed to ${to} (2026-10-12), so the project runs on ${to}`,
+			hint: "kanban doctor --fix rewrites it",
+			fix: async () => {
+				await updatePipelineConfigFile((config) => migrateLegacyConfigKeys(config).config, configPath);
+				return [`${key}: ${from} -> ${to}`];
 			},
 		});
 	}

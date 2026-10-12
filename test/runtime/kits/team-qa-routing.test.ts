@@ -6,7 +6,7 @@ import { createTeamPolicy, toFooEffectiveCard } from "../../utilities/legacy-tea
 
 // Ported from archive/devteam-kit:test/qa-route.test.cjs@9828540 (user rule 10/06: the QA vendor differs from the dev
 // vendor). OpenAI-built cards get Haiku 4.5 on Cline plus the "drive" rule; every other card gets the default QA
-// agent (Codex, with its own model config). Here the answers come from the built-in `team` kit alone.
+// agent (Codex, with its own model config). Here the answers come from the built-in `team-cloud` kit alone.
 const HAIKU = "us.anthropic.claude-haiku-4-5-20251001-v1:0";
 const haiku = { kind: "qa", agentId: "cline", model: { provider: "bedrock", model: HAIKU }, route: "qa.routes[0]" };
 const codex = { kind: "qa", agentId: "codex", model: null, route: null };

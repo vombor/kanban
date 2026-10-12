@@ -54,16 +54,18 @@ describe("resolveChecksEnabled", () => {
 	});
 
 	it("is on by default only for landing qa on another kit", () => {
-		expect(resolveChecksEnabled(settingsFor({ landing: { mode: "qa" }, kit: { name: "team" } }), "team")).toBe(true);
-		expect(resolveChecksEnabled(settingsFor({ landing: { mode: "commit" }, kit: { name: "team" } }), "team")).toBe(
-			false,
-		);
+		expect(
+			resolveChecksEnabled(settingsFor({ landing: { mode: "qa" }, kit: { name: "team-cloud" } }), "team-cloud"),
+		).toBe(true);
+		expect(
+			resolveChecksEnabled(settingsFor({ landing: { mode: "commit" }, kit: { name: "team-cloud" } }), "team-cloud"),
+		).toBe(false);
 	});
 
 	it("an explicit setting wins both ways", () => {
-		expect(resolveChecksEnabled(settingsFor({ landing: { mode: "qa" }, checks: { enabled: false } }), "team")).toBe(
-			false,
-		);
+		expect(
+			resolveChecksEnabled(settingsFor({ landing: { mode: "qa" }, checks: { enabled: false } }), "team-cloud"),
+		).toBe(false);
 		expect(resolveChecksEnabled(settingsFor({ checks: { enabled: true } }), "default")).toBe(true);
 	});
 });

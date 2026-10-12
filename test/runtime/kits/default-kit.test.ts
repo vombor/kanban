@@ -50,7 +50,7 @@ describe("default kit", () => {
 	});
 
 	it("is what a workspace without a kit resolves to, even next to a team workspace", () => {
-		const { config } = parsePipelineConfig({ workspaces: { foo: { kit: { name: "team" } } } });
+		const { config } = parsePipelineConfig({ workspaces: { foo: { kit: { name: "team-cloud" } } } });
 		const catalog = {
 			kits: new Map(
 				[...getBuiltInKits()].map(([name, kit]) => [name, { kit, origin: { kind: "built-in" as const } }]),

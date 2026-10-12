@@ -6,7 +6,7 @@ import { getBuiltInKits, getDefaultKit, resolveKitLayers } from "../../../src/ki
 import { createCardHistory, createEffectiveCard } from "../../utilities/effective-card";
 
 function teamPolicy(overrides: Record<string, unknown> = {}) {
-	const team = getBuiltInKits().get("team");
+	const team = getBuiltInKits().get("team-cloud");
 	if (!team) {
 		throw new Error("team kit missing");
 	}

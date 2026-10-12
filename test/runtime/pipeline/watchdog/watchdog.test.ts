@@ -22,7 +22,7 @@ function harnessWith(config: unknown, options: Parameters<typeof createWatchdogH
 	return harness;
 }
 
-const QA_FOO = { foo: { landing: { mode: "qa" }, kit: { name: "team" } } };
+const QA_FOO = { foo: { landing: { mode: "qa" }, kit: { name: "team-cloud" } } };
 
 function readDecisions(path: string): Array<{ kind: string; outcome: string; note: string; taskId: string | null }> {
 	return existsSync(path)
@@ -207,7 +207,7 @@ describe("watchdog on", () => {
 			orchestrator: { wake: { mode: "sidebar" } },
 			workspaces: {
 				...QA_FOO,
-				bar: { landing: { mode: "qa" }, kit: { name: "team" } },
+				bar: { landing: { mode: "qa" }, kit: { name: "team-cloud" } },
 			},
 		});
 		const serverStartedAt = WATCHDOG_NOW - 70_000;

@@ -35,6 +35,7 @@ import {
 	type KitRoleName,
 	kitDocumentObjectSchema,
 } from "./kit-schema";
+import { getRenamedKitName } from "./renamed-kits";
 import { DEFAULT_KIT_NAME, type KitCatalog, loadKitCatalog, resolveKitByName } from "./resolve-kit";
 
 /** Project facts a project sets on its kit: a key here, or anything under it. */
@@ -263,7 +264,9 @@ async function changeProjectSettings(
 		input.workspaceId,
 		(entry) => {
 			const currentKit = entry.kit && typeof entry.kit === "object" ? (entry.kit as Record<string, unknown>) : {};
-			if ((typeof currentKit.name === "string" ? currentKit.name : DEFAULT_KIT_NAME) !== kitName) {
+			const storedName = typeof currentKit.name === "string" ? currentKit.name : DEFAULT_KIT_NAME;
+			// A renamed kit's old name is the same kit (the write below stores the new name).
+			if ((getRenamedKitName(storedName) ?? storedName) !== kitName) {
 				throw new KitSettingRefusedError(`workspaces.${input.workspaceId}.kit changed meanwhile; run it again.`);
 			}
 			const before =

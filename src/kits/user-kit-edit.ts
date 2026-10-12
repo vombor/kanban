@@ -32,9 +32,10 @@ import {
 	type KitSettingsHistoryEntry,
 	PROJECT_FACT_KEYS,
 } from "./project-settings";
+import { describeRenamedKit, getRenamedKitName } from "./renamed-kits";
 import {
-	BUILT_IN_KIT_NAMES,
 	getDefaultKit,
+	isReservedKitName,
 	type KitCatalog,
 	loadKitCatalog,
 	parseUserKit,
@@ -196,8 +197,13 @@ export function planUserKitCreate(input: {
 	if (!nameCheck.success) {
 		throw new UserKitRefusedError(`${name}: not a kit name (lowercase letters, digits, '-', '_')`);
 	}
-	if (BUILT_IN_KIT_NAMES.includes(name)) {
-		throw new UserKitRefusedError(`${name} is a built-in kit; pick another name`);
+	if (isReservedKitName(name)) {
+		const renamed = getRenamedKitName(name);
+		throw new UserKitRefusedError(
+			renamed
+				? `${name} is the old name of the built-in kit ${renamed}; pick another name`
+				: `${name} is a built-in kit; pick another name`,
+		);
 	}
 	const path = kitFilePath(name, input.kitsDir ?? getKanbanKitsPath());
 	if (catalog.kits.has(name) || catalog.errors.some((error) => error.path === path)) {
@@ -264,6 +270,10 @@ export function planUserKitEdit(input: {
 		throw new UserKitRefusedError("nothing to change: give --set <key>=<value> or --unset <key>");
 	}
 	const entry = catalog.kits.get(name);
+	const renamed = getRenamedKitName(name);
+	if (!entry && renamed) {
+		throw new UserKitRefusedError(describeRenamedKit(name, renamed));
+	}
 	if (!entry) {
 		const refused = catalog.errors.find((error) => error.path.endsWith(`/${name}.json`));
 		throw new UserKitRefusedError(

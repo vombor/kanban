@@ -208,7 +208,7 @@ describe("kanban plan", () => {
 
 	it("team kit: a plan card gets Claude in plan mode, the plan prompt and an index entry", async () => {
 		await withTemporaryKanbanHome(async () => {
-			writeConfig("team");
+			writeConfig("team-cloud");
 			const { result, id } = await createPlanCard();
 			const [entry] = allCards();
 			expect(entry?.column).toBe("backlog");
@@ -222,10 +222,10 @@ describe("kanban plan", () => {
 			expect(entry?.card.agentSettings).toBeUndefined();
 			expect(entry?.card.prompt).toContain("You are the planning agent");
 			expect(entry?.card.prompt).toContain("Customers can redeem coupons at checkout.");
-			expect(result).toMatchObject({ plan: { kit: "team", slug: "coupons", spec: "docs/specs/coupons.md" } });
+			expect(result).toMatchObject({ plan: { kit: "team-cloud", slug: "coupons", spec: "docs/specs/coupons.md" } });
 			expect((await createPlanIndexStore().read(WORKSPACE_ID)).plans[id]).toMatchObject({
 				slug: "coupons",
-				kit: "team",
+				kit: "team-cloud",
 				agentId: "claude",
 				modelId: null,
 				startInPlanMode: true,
@@ -247,7 +247,7 @@ describe("kanban plan", () => {
 
 	it("expand: refuses without approval, --dry-run writes nothing, then creates linked Backlog cards with devAssignment", async () => {
 		await withTemporaryKanbanHome(async () => {
-			writeConfig("team");
+			writeConfig("team-cloud");
 			const { id } = await createPlanCard();
 			writeBreakdown();
 
@@ -318,7 +318,7 @@ describe("kanban plan", () => {
 
 	it("refuses a bad breakdown, and a breakdown changed after the approval", async () => {
 		await withTemporaryKanbanHome(async () => {
-			writeConfig("team");
+			writeConfig("team-cloud");
 			const { id } = await createPlanCard();
 			moveToReview(id);
 			writeBreakdown({ ...BREAKDOWN, cards: [{ ...BREAKDOWN.cards[1], dependsOn: ["missing"] }] });
@@ -341,7 +341,7 @@ describe("kanban plan", () => {
 
 	it("--approved-by-user from the user's shell approves this breakdown and expands at once", async () => {
 		await withTemporaryKanbanHome(async () => {
-			writeConfig("team");
+			writeConfig("team-cloud");
 			const { id } = await createPlanCard();
 			moveToReview(id);
 			writeBreakdown();
@@ -354,7 +354,7 @@ describe("kanban plan", () => {
 
 	it("resumes a half-done expand with the same task ids", async () => {
 		await withTemporaryKanbanHome(async () => {
-			writeConfig("team");
+			writeConfig("team-cloud");
 			const { id } = await createPlanCard();
 			moveToReview(id);
 			writeBreakdown();
@@ -385,7 +385,7 @@ describe("kanban plan", () => {
 
 	describe("the user-only approval route", () => {
 		const setUpPlan = async () => {
-			writeConfig("team");
+			writeConfig("team-cloud");
 			const { id } = await createPlanCard();
 			moveToReview(id);
 			writeBreakdown();

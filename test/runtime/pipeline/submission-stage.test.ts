@@ -16,7 +16,7 @@ import { createEffectiveCard } from "../../utilities/effective-card";
 import { createRepoWithWorktree, git } from "../../utilities/git-repo";
 import { createCard } from "../../utilities/workspace-state-store";
 
-const TEAM_QA = { landing: { mode: "qa" }, kit: { name: "team" } };
+const TEAM_QA = { landing: { mode: "qa" }, kit: { name: "team-cloud" } };
 
 function settingsFor(entry: unknown) {
 	const settings = parsePipelineConfig({ workspaces: { foo: entry } }).config.workspaces.foo;
@@ -69,7 +69,7 @@ describe("submission stage", () => {
 			workspaceId: "foo",
 			workspacePath: repo.repoPath,
 			settings,
-			kitName: options.kitName ?? "team",
+			kitName: options.kitName ?? "team-cloud",
 			state: options.state ?? emptyState(),
 		};
 		const inspect = async (
@@ -284,7 +284,7 @@ describe("submission stage", () => {
 	it("the default kit (and checks.enabled false) snapshots but never runs checks", async () => {
 		for (const options of [
 			{ workspace: { landing: { mode: "qa" } }, kitName: "default" },
-			{ workspace: { ...TEAM_QA, checks: { enabled: false } }, kitName: "team" },
+			{ workspace: { ...TEAM_QA, checks: { enabled: false } }, kitName: "team-cloud" },
 		]) {
 			const { repo, enqueued, inspect } = setup(options);
 			writeFileSync(join(repo.worktreePath, "work.txt"), "work\n");
@@ -328,7 +328,7 @@ describe("submission stage", () => {
 				workspaceId: "foo",
 				workspacePath: "/nonexistent",
 				settings: settingsFor(TEAM_QA),
-				kitName: "team",
+				kitName: "team-cloud",
 				state: emptyState(),
 			},
 			{ card: createCard({ id: "dev-1" }), effective: createEffectiveCard({ agentId: "cline" }), session: null },

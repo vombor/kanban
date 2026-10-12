@@ -46,9 +46,9 @@ recovery stays `report`, the watchdog stays `off`, and foo is not on landing `qa
 
 | Role | Who | Why |
 |---|---|---|
-| Dev cards | whatever the project's kit assigns at creation (`team`: Cline on the tier-3 model), else the selected agent | cheap, and comparable across models when every round is scored |
-| QA cards | the kit's `qaPolicy`: `team` picks by the dev card's model vendor (OpenAI-built cards → Cline on Haiku 4.5 plus a "drive the changed path" step, everything else → Codex). The QA vendor must differ from the dev vendor (user rule 2026-10-06) | an independent reviewer from another vendor. Haiku won calibration for OpenAI-built cards but once missed a defect on a path it never exercised, hence the drive step |
-| Plan cards | the kit's `plan` section (`team`: Claude on its CLI's default model, starting in plan mode; `default`: none) | the architect: turns a requirement into a reviewed spec and a card breakdown (§13). Separate from the orchestrator (user 2026-10-07), so planners can be benchmarked later |
+| Dev cards | whatever the project's kit assigns at creation (`team-cloud`: Cline on the tier-3 model), else the selected agent | cheap, and comparable across models when every round is scored |
+| QA cards | the kit's `qaPolicy`: `team-cloud` picks by the dev card's model vendor (OpenAI-built cards → Cline on Haiku 4.5 plus a "drive the changed path" step, everything else → Codex). The QA vendor must differ from the dev vendor (user rule 2026-10-06) | an independent reviewer from another vendor. Haiku won calibration for OpenAI-built cards but once missed a defect on a path it never exercised, hence the drive step |
+| Plan cards | the kit's `plan` section (`team-cloud`: Claude on its CLI's default model, starting in plan mode; `default`: none) | the architect: turns a requirement into a reviewed spec and a card breakdown (§13). Separate from the orchestrator (user 2026-10-07), so planners can be benchmarked later |
 | Orchestrator | the agent selected in Kanban settings, in the sidebar (`__home_agent__:<ws>:<agent>`), never a hard-coded id | the scrum master: escalations, starting cards, expanding approved plans, tooling |
 | Moving cards, landing, rework, nudges | the server and the pipeline worker, no LLM | deterministic, free and always on |
 
@@ -334,7 +334,7 @@ Planning is the architect's job and orchestration the scrum master's (user decis
 the code and writes the plan, and the orchestrator turns the approved plan into cards and runs them.
 
 1. **Requirement → plan card.** `kanban task create --role plan --title "Coupons" --prompt "<the requirement>"`.
-   The kit's `plan` section picks the planner's agent, model and plan mode (`team`: Claude, no model pin, plan
+   The kit's `plan` section picks the planner's agent, model and plan mode (`team-cloud`: Claude, no model pin, plan
    mode on). The card's prompt is the plan template (`src/kits/plan-prompt.ts`) around the requirement. The plan is
    recorded in `data/<ws>/plans.json` with its slug. On a kit with `plan.enabled` off (`default`) this is
    refused: the one agent plans its own work, as before.

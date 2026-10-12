@@ -34,7 +34,7 @@ describe("kanban kit create", () => {
 		await withTemporaryKanbanHome(async () => {
 			const result = await createUserKit({
 				name: "team-quiet",
-				from: "team",
+				from: "team-cloud",
 				set: { "fallback.on.conflict": false, "onFail.reworkRounds": 2 },
 				description: "team without the conflict fallback",
 			});
@@ -46,7 +46,7 @@ describe("kanban kit create", () => {
 			]);
 			const catalog = await loadKitCatalog();
 			expect(catalog.errors).toEqual([]);
-			const team = resolveKitByName(catalog, "team");
+			const team = resolveKitByName(catalog, "team-cloud");
 			const copy = resolveKitByName(catalog, "team-quiet");
 			if (!team.ok || !copy.ok) {
 				throw new Error("does not resolve");
@@ -66,7 +66,7 @@ describe("kanban kit create", () => {
 			]);
 			expect(history[0]).toMatchObject({
 				kitName: "team-quiet",
-				to: "created from team",
+				to: "created from team-cloud",
 				by: { kind: "user-command" },
 			});
 		});
@@ -83,12 +83,18 @@ describe("kanban kit create", () => {
 
 	it("refuses taken names, bad keys and values that don't validate", async () => {
 		await withTemporaryKanbanHome(async () => {
-			await createUserKit({ name: "mine", from: "team" });
-			for (const name of ["default", "team", "team-local", "team-cline", "mine"]) {
-				await expect(createUserKit({ name, from: "team" })).rejects.toThrow(/built-in kit|already exists/);
+			await createUserKit({ name: "mine", from: "team-cloud" });
+			for (const name of ["default", "team-cloud", "team-local", "team-cline", "mine"]) {
+				await expect(createUserKit({ name, from: "team-cloud" })).rejects.toThrow(/built-in kit|already exists/);
 			}
-			await expect(createUserKit({ name: "Bad Name", from: "team" })).rejects.toThrow("not a kit name");
+			await expect(createUserKit({ name: "Bad Name", from: "team-cloud" })).rejects.toThrow("not a kit name");
 			await expect(createUserKit({ name: "x", from: "nope" })).rejects.toThrow('unknown kit "nope"');
+			await expect(createUserKit({ name: "x", from: "team" })).rejects.toThrow(
+				'--from team: kit "team" was renamed to team-cloud (2026-10-12); use team-cloud',
+			);
+			await expect(createUserKit({ name: "team", from: "team-cloud" })).rejects.toThrow(
+				"team is the old name of the built-in kit team-cloud",
+			);
 			const refusedSets: Array<[Record<string, unknown>, string]> = [
 				[{ "nope.x": 1 }, "is not a kit key"],
 				[{ name: "other" }, "identifies the kit"],
@@ -98,7 +104,7 @@ describe("kanban kit create", () => {
 				[{ "onFail.reworkRounds": -1 }, "does not resolve"],
 			];
 			for (const [set, message] of refusedSets) {
-				await expect(createUserKit({ name: "x", from: "team", set })).rejects.toThrow(message);
+				await expect(createUserKit({ name: "x", from: "team-cloud", set })).rejects.toThrow(message);
 			}
 			expect(existsSync(join(getKanbanKitsPath(), "x.json"))).toBe(false);
 		});
@@ -111,10 +117,10 @@ describe("kanban kit edit", () => {
 			writeConfig(globalConfigPath, {
 				workspaces: {
 					alpha: { kit: { name: "mine", overrides: { "fallback.on.unchanged": true } } },
-					beta: { kit: { name: "team", overrides: {} } },
+					beta: { kit: { name: "team-cloud", overrides: {} } },
 				},
 			});
-			await createUserKit({ name: "mine", from: "team" });
+			await createUserKit({ name: "mine", from: "team-cloud" });
 			const original = readFileSync(join(getKanbanKitsPath(), "mine.json"), "utf8");
 
 			const dry = await editUserKit({ name: "mine", set: { "fallback.on.unchanged": false }, dryRun: true });
@@ -158,9 +164,9 @@ describe("kanban kit edit", () => {
 
 	it("refuses built-in kits, unknown kits, bad keys and invalid results, and leaves the file alone", async () => {
 		await withTemporaryKanbanHome(async () => {
-			await createUserKit({ name: "mine", from: "team" });
+			await createUserKit({ name: "mine", from: "team-cloud" });
 			const original = readFileSync(join(getKanbanKitsPath(), "mine.json"), "utf8");
-			for (const name of ["default", "team", "team-local", "team-cline"]) {
+			for (const name of ["default", "team-cloud", "team-local", "team-cline"]) {
 				await expect(editUserKit({ name, set: { "qa.enabled": false } })).rejects.toThrow("built-in kit");
 			}
 			await expect(editUserKit({ name: "nope", set: { "qa.enabled": false } })).rejects.toThrow("unknown kit");
@@ -183,7 +189,7 @@ describe("kanban kit edit", () => {
 		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
 			writeConfig(globalConfigPath, {
 				workspaces: {
-					foo: { landing: { mode: "qa" }, kit: { name: "team", overrides: structuredClone(FOO_OVERRIDES) } },
+					foo: { landing: { mode: "qa" }, kit: { name: "team-cloud", overrides: structuredClone(FOO_OVERRIDES) } },
 				},
 			});
 			const migrated = await migrateWorkspaceOverrides({ workspaceId: "foo", into: "team-foo" });

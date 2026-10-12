@@ -170,10 +170,10 @@ describe("effective-agent incident (2026-10-06)", () => {
 		expect([...agents.values()]).not.toContain(undefined);
 	});
 
-	it("(c) a second workspace on kit team in the same config does not change the first one", async () => {
+	it("(c) a second workspace on kit team-cloud in the same config does not change the first one", async () => {
 		const harness = createPipelineWorkerHarness({
 			config: {
-				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team" } } },
+				workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team-cloud" } } },
 			},
 		});
 		harnesses.push(harness);

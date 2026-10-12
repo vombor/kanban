@@ -104,7 +104,7 @@ describe("kanban task reassign", () => {
 			expect(storedCard(taskId)?.agentId).toBeUndefined();
 			expect(readLog()).toEqual([]);
 
-			writeKit("team");
+			writeKit("team-cloud");
 			const revision = harness.store?.stored.revision;
 			const result = await reassign();
 			expect(statuses(result)).toEqual([[taskId, "reassigned"]]);
@@ -113,7 +113,7 @@ describe("kanban task reassign", () => {
 			expect(readLog()).toEqual([
 				expect.objectContaining({
 					taskId,
-					kit: "team",
+					kit: "team-cloud",
 					outcome: "applied",
 					source: "reassign",
 					created: { agentId: "cline", agentSettings: TEAM_TIER3 },
@@ -125,7 +125,7 @@ describe("kanban task reassign", () => {
 
 	it("keeps a card's own agent or model pick, and a reasoning effort alone is no pick", async () => {
 		await withTemporaryKanbanHome(async () => {
-			writeKit("team");
+			writeKit("team-cloud");
 			useStore({
 				backlog: [
 					createCard({ id: "claude", agentId: "claude" }),
@@ -151,7 +151,7 @@ describe("kanban task reassign", () => {
 
 	it("moves a card still on an older kit's assignment onto the current kit's, but not one the user changed", async () => {
 		await withTemporaryKanbanHome(async () => {
-			writeKit("team");
+			writeKit("team-cloud");
 			useStore({});
 			const first = (await createTask({ cwd: "/repo", title: "A", prompt: "A" })) as { task: { id: string } };
 			const second = (await createTask({ cwd: "/repo", title: "B", prompt: "B" })) as { task: { id: string } };
@@ -189,7 +189,7 @@ describe("kanban task reassign", () => {
 
 	it("never changes a started card or a non-dev card", async () => {
 		await withTemporaryKanbanHome(async () => {
-			writeKit("team");
+			writeKit("team-cloud");
 			useStore(
 				{
 					backlog: [createCard({ id: "ranbefore" }), createCard({ id: "qa", role: "qa" })],
@@ -214,12 +214,12 @@ describe("kanban task reassign", () => {
 
 	it("--dry-run reports what each card would get and changes and logs nothing", async () => {
 		await withTemporaryKanbanHome(async () => {
-			writeKit("team");
+			writeKit("team-cloud");
 			useStore({ backlog: [createCard({ id: "a" })] });
 			const result = await reassign({ dryRun: true });
 			expect(result).toMatchObject({
 				dryRun: true,
-				kit: "team",
+				kit: "team-cloud",
 				tasks: [
 					{
 						id: "a",
@@ -237,7 +237,7 @@ describe("kanban task reassign", () => {
 
 	it("shadow: logs the proposal and leaves the card; the default kit has nothing to give", async () => {
 		await withTemporaryKanbanHome(async () => {
-			writeKit("team", { pipeline: { shadow: true } });
+			writeKit("team-cloud", { pipeline: { shadow: true } });
 			useStore({ backlog: [createCard({ id: "a" })] });
 			expect(statuses(await reassign())).toEqual([["a", "shadow"]]);
 			expect(storedCard("a")?.agentId).toBeUndefined();
@@ -251,7 +251,7 @@ describe("kanban task reassign", () => {
 
 	it("refuses an unknown task id without changing any card", async () => {
 		await withTemporaryKanbanHome(async () => {
-			writeKit("team");
+			writeKit("team-cloud");
 			useStore({ backlog: [createCard({ id: "a" })] });
 			await expect(reassign({ target: { taskIds: ["a", "missing"] } })).rejects.toThrow(
 				'Task "missing" was not found',
@@ -289,13 +289,13 @@ describe("the task commands' reassign wiring", () => {
 
 	it("task update --agent-id default on a kit-routed Backlog card says how to get the kit's agent", async () => {
 		await withTemporaryKanbanHome(async () => {
-			writeKit("team");
+			writeKit("team-cloud");
 			useStore({ backlog: [createCard({ id: "a", agentId: "claude" })] });
 			await run("update", "--task-id", "a", "--agent-id", "default", "--provider", "default", "--model", "default");
 			expect(storedCard("a")?.agentId).toBeUndefined();
 			expect(stderr).toHaveBeenCalledWith(
 				expect.stringContaining(
-					"Card a now runs on the selected agent. Kit team assigns cline on us.openai.gpt-6.1-sol",
+					"Card a now runs on the selected agent. Kit team-cloud assigns cline on us.openai.gpt-6.1-sol",
 				),
 			);
 

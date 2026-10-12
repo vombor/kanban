@@ -10,7 +10,7 @@ import type { PipelineWorkerMessage } from "../../../src/pipeline/worker-protoco
 import { createPipelineWorkerHarness, createSnapshot } from "../../utilities/pipeline-worker";
 import { createBoard, createCard } from "../../utilities/workspace-state-store";
 
-const QA_WORKSPACE = { landing: { mode: "qa" }, kit: { name: "team" } };
+const QA_WORKSPACE = { landing: { mode: "qa" }, kit: { name: "team-cloud" } };
 
 describe("pipeline worker", () => {
 	const harnesses: Array<{ cleanup: () => void }> = [];
@@ -44,9 +44,9 @@ describe("pipeline worker", () => {
 			["qa_gate", "dev-1"],
 			["qa_gate", "dev-1"],
 		]);
-		expect(records[0]?.note).toContain("watching: landing qa, kit team");
+		expect(records[0]?.note).toContain("watching: landing qa, kit team-cloud");
 		expect(records[1]).toMatchObject({
-			kit: "team",
+			kit: "team-cloud",
 			landingMode: "qa",
 			shadow: false,
 			role: "dev",
@@ -150,7 +150,7 @@ describe("pipeline worker", () => {
 
 		harness.setConfig({ workspaces: { foo: QA_WORKSPACE } });
 		await harness.send(snapshot);
-		expect(harness.readCardDecisions("foo").at(-1)).toMatchObject({ kit: "team", answer: { kind: "qa" } });
+		expect(harness.readCardDecisions("foo").at(-1)).toMatchObject({ kit: "team-cloud", answer: { kind: "qa" } });
 
 		harness.setConfig({ workspaces: { foo: QA_WORKSPACE }, pipeline: { paused: true } });
 		const before = harness.readDecisions("foo").length;
@@ -358,7 +358,12 @@ describe("pipeline worker", () => {
 		expect(qaLog).toContain("## dev-1 Add a button — checks FAIL");
 		expect(qaLog).toContain("Error: expected 1 to be 2");
 		expect(harness.readCardDecisions("foo", "checks")).toMatchObject([
-			{ taskId: "dev-1", kit: "team", outcome: "acted", note: "checks FAIL on 01234567: install=ok test=fail" },
+			{
+				taskId: "dev-1",
+				kit: "team-cloud",
+				outcome: "acted",
+				note: "checks FAIL on 01234567: install=ok test=fail",
+			},
 		]);
 	});
 
