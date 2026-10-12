@@ -10,13 +10,14 @@
 // is merged (kit-legacy-keys.ts). A role names a `model` or a `tier`: a layer that sets one drops the other's value from
 // the layers below, so a project's `roles.dev.model` replaces the kit's `roles.dev.tier`.
 //
-// Built-in kits (`default`, `team`, `team-local`) ship in the package (`kits/*.json`). User kits are data files in
+// Built-in kits (`default`, `team`, `team-local`, `team-cline`) ship in the package (`kits/*.json`). User kits are data files in
 // `$KANBAN_HOME/kits/<name>.json`; a user kit with a built-in name is refused.
 import { readdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
 import defaultKitJson from "../../kits/default.json" with { type: "json" };
 import teamKitJson from "../../kits/team.json" with { type: "json" };
+import teamClineKitJson from "../../kits/team-cline.json" with { type: "json" };
 import teamLocalKitJson from "../../kits/team-local.json" with { type: "json" };
 import { getWorkspacePipelineSettings, type PipelineConfig } from "../config/pipeline-config";
 import { getKanbanKitsPath } from "../state/kanban-home";
@@ -24,7 +25,7 @@ import { translateLegacyKitLayer, translateLegacyOverrides } from "./kit-legacy-
 import { formatKitIssues, type KitDocument, kitDocumentObjectSchema, kitDocumentSchema } from "./kit-schema";
 
 export const DEFAULT_KIT_NAME = "default";
-export const BUILT_IN_KIT_NAMES: readonly string[] = ["default", "team", "team-local"];
+export const BUILT_IN_KIT_NAMES: readonly string[] = ["default", "team", "team-local", "team-cline"];
 
 /** Keys a workspace override may not set: they identify the kit. */
 const NON_OVERRIDABLE_KEYS: ReadonlySet<string> = new Set(["kit", "name"]);
@@ -88,6 +89,7 @@ export function getBuiltInKits(): Map<string, KitDocument> {
 		["default", parseBuiltInKit(defaultKitJson, "default")],
 		["team", parseBuiltInKit(teamKitJson, "team")],
 		["team-local", parseBuiltInKit(teamLocalKitJson, "team-local")],
+		["team-cline", parseBuiltInKit(teamClineKitJson, "team-cline")],
 	]);
 	return builtInKits;
 }

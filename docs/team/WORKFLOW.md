@@ -143,7 +143,7 @@ dev card stops ─▶ Review (settled) ─▶ snapshot refs/kanban/snapshots/<id
   would switch model is refused and escalated.
 - **Escalation to the orchestrator:** `qaflow.escalated`, `## ESCALATE` in the QA log, and the card to Backlog as
   `BLOCKED: …`. The watchdog writes ATTENTION.md and wakes the orchestrator. **The fallback** (the kit's
-  `roles.fallback` when the cause's `fallback.on` trigger is on; team and team-local by default): the work is
+  `roles.fallback` when the cause's `fallback.on` trigger is on; team, team-local and team-cline by default): the work is
   tagged `preserve/<id>-<model>`, and a sibling card takes the task over on that model (left in Backlog when
   `fallback.requireApproval`). A takeover onto the model the card already runs on, or by a card
   that took its task over itself, goes to the orchestrator instead, so a fallback never hands the task on and on.

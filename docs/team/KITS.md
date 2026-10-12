@@ -12,6 +12,9 @@ something is done, and the core never decides who does it.
   same-model rework, then a fallback model, then the orchestrator).
 - **`team-local`** is the same workflow on local Lemonade models only (Cline + provider `lemonade`, nothing paid
   or in the cloud), with a fallback local model before the orchestrator. See [The `team-local` kit](#the-team-local-kit).
+- **`team-cline`** is the same workflow on ClinePass, Cline's subscription provider (Cline + provider
+  `cline-pass`, $0 per run), with a fallback ClinePass model before the orchestrator. See
+  [The `team-cline` kit](#the-team-cline-kit).
 - **User kits** live in `<home>/kits/<name>.json`.
 
 A kit is the **team definition**: its roles with a default model each, and the flow. A project changes only its
@@ -25,7 +28,7 @@ doesn't list (Cline couldn't select it).
 
 Code: `src/kits/kit-schema.ts` (schema), `src/kits/kit-roles.ts` (roles and the fallback flow),
 `src/kits/project-settings.ts` (what a project may set), `src/kits/kit-legacy-keys.ts` (keys from before the split), `src/kits/resolve-kit.ts` (resolver), `src/kits/policy.ts` (the one
-evaluator), `kits/default.json`, `kits/team.json`, `kits/team-local.json`. Plan: `docs/fork/kit-merge-plan.md` §3.2-§3.4, §4.0.
+evaluator), `kits/default.json`, `kits/team.json`, `kits/team-local.json`, `kits/team-cline.json`. Plan: `docs/fork/kit-merge-plan.md` §3.2-§3.4, §4.0.
 
 ## The questions
 
@@ -645,6 +648,55 @@ They are built in (`src/kits/team/`) and run only for projects whose kit lists t
 
 The scoreboard is the team kit's score of its routing decisions. It is not the core's record of verdicts (that is
 `pipeline-state.json`), and no core decision reads it.
+
+## The `team-cline` kit
+
+`kits/team-cline.json`: the team workflow on ClinePass, Cline's subscription provider, through the Cline CLI with
+provider `cline-pass` (model ids `cline-pass/<model>`). Every role is `cline + cline-pass`
+(`test/runtime/kits/team-cline-kit.test.ts` checks every model and agent). All four models passed `kanban models vet`
+for dev and QA (2026-10-12, cline 3.0.70; none was vetted for plan, [MODELS.md](MODELS.md#clinepass-cline-pass)). Its
+models must be in Cline's models.json for Cline to select them, and the key must be stored with
+`kanban setup-provider cline-pass` ([cline-pass-auth.md](../fork/cline-pass-auth.md)).
+
+| Role | Model | Vendor (`getModelVendor()`) |
+|---|---|---|
+| Dev (`roles.dev`: tier `dev`) | `cline-pass/glm-5.3` | zai |
+| QA (`roles.qa`) | `cline-pass/qwen3.8-max` | qwen |
+| Plan cards (`roles.plan`, Cline `--plan`) | `cline-pass/minimax-m3` | minimax |
+| Fallback dev model (`roles.fallback`: tier `senior`) | `cline-pass/kimi-k3` (ClinePass: "will consume usage faster than others") | moonshotai |
+
+`qa.requireDifferentVendor` stays on: the vendor is read from the id after `cline-pass/`, so the dev and the
+fallback models are both reviewed by qwen3.8-max. No `qa.routes`, so a card someone builds on a qwen model gets no
+QA (`kit show` warns). The other ClinePass models that passed the vet are candidates in `tiers` (`mimo-v2.6-pro`,
+`mimo-v2.6-flash`, `deepseek-v4.1-flash`, `muse-spark-1.3-contributor` for dev; `minimax-m3`, `mimo-v2.6-pro`
+for QA).
+
+- **FAIL:** team-local's flow: same-model rework for 3 rounds (conflicts too), then a sibling card on kimi-k3 takes the
+  task over and starts at once (`requireApproval: false`: a ClinePass run costs $0). A fallback sibling that fails
+  in turn goes to the orchestrator.
+- **Outage:** `fallback.on.outage: false`. Recovery holds the card and gives it to the orchestrator at
+  `pipeline.recovery.outage.maxMin`; a takeover would not help, since every model is on the same subscription.
+  ClinePass's account answers (no subscription, an organization account) escalate at once, and its usage-limit
+  answer gets the provider retries and then escalates (provider errors, MODELS.md).
+- **QA slots:** ClinePass is a cloud provider, so its QA cards take a cloud QA slot (`pipeline.qa.slots`), unlike
+  Lemonade's.
+- **Features:** `scoreboard`, `bench`, `calibration` and `tiers` (the fallback is a tier), as team-local. Dropped:
+  - `runoffs` races sibling cards on several models at once for the same task, which multiplies the subscription's
+    usage for one card;
+  - the `bench` feature's daily AWS price check (`prices.autoSync: false`): ClinePass models have no AWS price, and
+    the check skips unmetered providers anyway.
+- **Costs:** a turn on provider `cline-pass` costs 0 whatever the model id (`SUBSCRIPTION_PROVIDER_IDS` in
+  `src/kits/team/bench/prices.ts`), so the scoreboard and `kanban bench metrics` show `$0.00`.
+- **Settings it needs** (`recommends.settings`, never applied): `pipeline.recovery.mode = on` and the project's
+  `recovery.enabled` (default `true`), so the ClinePass retries, escalations and outage holds above happen.
+- **Recommends** landing `qa`.
+
+```sh
+kanban kit apply team-cline --project /projects/<name> --landing qa --dry-run
+kanban kit apply team-cline --project /projects/<name> --landing qa
+kanban kit show --project /projects/<name>
+kanban doctor /projects/<name>     # warns about unmet settings and models Cline's models.json doesn't list
+```
 
 ## Writing a user kit
 

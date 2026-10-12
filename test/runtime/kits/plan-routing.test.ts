@@ -50,7 +50,7 @@ describe("plan routing (the kit's plan section)", () => {
 	});
 
 	it("every built-in kit skip QA for plan cards, and the evaluator never QAs one", () => {
-		for (const name of ["default", "team", "team-local"]) {
+		for (const name of ["default", "team", "team-local", "team-cline"]) {
 			const { kit } = resolveBuiltIn(name);
 			expect(kit.qa?.skip?.roles).toContain("plan");
 			const answer = createRoutingPolicy(kit).qaPolicy({

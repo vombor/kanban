@@ -112,6 +112,9 @@ for dev and qa (none was run for plan):
 | cline-pass/kimi-k3 | passed (ClinePass: "will consume usage faster than others") | passed | |
 | cline-pass/minimax-m3 | passed | passed | |
 
+The `team-cline` kit (KITS.md) routes dev to glm-5.3, QA to qwen3.8-max, plan cards to minimax-m3 and the fallback to
+kimi-k3.
+
 The same day `cline + lemonade + Laguna-XS-2.1-GGUF-Q4_K_M` passed for dev and qa (not plan).
 
 ## OpenAI-compatible servers (`providers.openaiCompatible`)

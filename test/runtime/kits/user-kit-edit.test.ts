@@ -84,7 +84,7 @@ describe("kanban kit create", () => {
 	it("refuses taken names, bad keys and values that don't validate", async () => {
 		await withTemporaryKanbanHome(async () => {
 			await createUserKit({ name: "mine", from: "team" });
-			for (const name of ["default", "team", "team-local", "mine"]) {
+			for (const name of ["default", "team", "team-local", "team-cline", "mine"]) {
 				await expect(createUserKit({ name, from: "team" })).rejects.toThrow(/built-in kit|already exists/);
 			}
 			await expect(createUserKit({ name: "Bad Name", from: "team" })).rejects.toThrow("not a kit name");
@@ -160,7 +160,7 @@ describe("kanban kit edit", () => {
 		await withTemporaryKanbanHome(async () => {
 			await createUserKit({ name: "mine", from: "team" });
 			const original = readFileSync(join(getKanbanKitsPath(), "mine.json"), "utf8");
-			for (const name of ["default", "team", "team-local"]) {
+			for (const name of ["default", "team", "team-local", "team-cline"]) {
 				await expect(editUserKit({ name, set: { "qa.enabled": false } })).rejects.toThrow("built-in kit");
 			}
 			await expect(editUserKit({ name: "nope", set: { "qa.enabled": false } })).rejects.toThrow("unknown kit");

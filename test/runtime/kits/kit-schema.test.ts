@@ -21,7 +21,9 @@ describe("kit schema", () => {
 	it("parses the built-in kits", () => {
 		expect(kitDocumentSchema.safeParse(readKitFile("default")).success).toBe(true);
 		expect(kitDocumentSchema.safeParse(readKitFile("team")).success).toBe(true);
-		expect([...getBuiltInKits().keys()]).toEqual(["default", "team", "team-local"]);
+		expect(kitDocumentSchema.safeParse(readKitFile("team-local")).success).toBe(true);
+		expect(kitDocumentSchema.safeParse(readKitFile("team-cline")).success).toBe(true);
+		expect([...getBuiltInKits().keys()]).toEqual(["default", "team", "team-local", "team-cline"]);
 	});
 
 	it("rejects unknown keys at every level", () => {
@@ -131,7 +133,7 @@ describe("kit schema", () => {
 			on: { qaFails: true, qaStalled: true, unchanged: true, conflict: true, outage: true },
 			requireApproval: false,
 		});
-		for (const name of ["default", "team", "team-local"]) {
+		for (const name of ["default", "team", "team-local", "team-cline"]) {
 			expect(listLegacyKitKeys(getBuiltInKits().get(name) as KitDocument)).toEqual([]);
 		}
 		expect(team?.recommends?.landingMode).toBe("qa");
