@@ -276,7 +276,7 @@ describe("pipeline worker: a rework recovery nudges", () => {
 		const LOCAL_DEV = createCard({
 			id: "d2222",
 			agentId: "cline",
-			agentSettings: { providerId: "lemonade", modelId: "GLM-4.7-Flash-GGUF" },
+			agentSettings: { providerId: "lemonade", modelId: "Qwen3.8-27B-GGUF-UD-Q4_K_XL" },
 		});
 		// Another In Progress card holds Lemonade's one loaded model (models.providerCapacity default: 1).
 		const HOLDER = createCard({

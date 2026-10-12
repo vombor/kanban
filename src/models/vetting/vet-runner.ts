@@ -160,7 +160,7 @@ function minutes(ms: number): number {
 	return Math.round(ms / 6_000) / 10;
 }
 
-/** "lemonade holds 2 of 2 model(s): d2222 (GLM-4.7-Flash-GGUF), 1 card(s) of other projects". */
+/** "lemonade holds 2 of 2 model(s): d2222 (Qwen3.8-27B-GGUF-UD-Q4_K_XL), 1 card(s) of other projects". */
 export function describeCapacityHold(hold: ProviderCapacityHold): string {
 	const others = hold.otherWorkspaceHolders > 0 ? [`${hold.otherWorkspaceHolders} card(s) of other projects`] : [];
 	return `${hold.provider} holds ${hold.loadedModels} of ${hold.maxLoadedModels} model(s): ${[...hold.holders, ...others].join(", ")}`;

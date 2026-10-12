@@ -192,37 +192,11 @@
 			"agent": "cline",
 			"provider": "lemonade",
 			"model": "GLM-4.7-Flash-GGUF",
-			"roles": {
-				"dev": {
-					"status": "vetted",
-					"at": "2026-10-09",
-					"cliVersion": "3.0.70",
-					"evidence": {
-						"run": "2026-10-09-dev-cline-0n3nm",
-						"summary": "kanban models vet dev smoke test passed (file read, edit, tests untouched, test suite, shell command, commit) in 19 min, $0.00, 10 native tool calls; team-local's dev model"
-					}
-				},
-				"plan": {
-					"status": "vetted",
-					"at": "2026-10-09",
-					"cliVersion": "3.0.70",
-					"evidence": {
-						"run": "2026-10-09-plan-cline-6w58b",
-						"summary": "kanban models vet plan smoke test passed (plan written, 3 numbered steps naming their files, file read, no code change) in 15 min, $0.00, 4 native tool calls; the run just before it (2026-10-09-plan-cline-zirxf) wrote no PLAN.md because its only model reply was \"Response stream ended without a finish reason\" (0 tool calls: a cut provider stream, not a planning failure)"
-					}
-				},
-				"qa": {
-					"status": "vetted",
-					"at": "2026-10-10",
-					"cliVersion": "3.0.70",
-					"evidence": {
-						"run": "2026-10-10-qa-cline-ru204",
-						"summary": "kanban models vet qa smoke test passed (verdict file, right verdict, file read, no code change) in 12 min, $0.00, 7 native tool call(s)"
-					}
-				}
-			},
-			"capabilities": { "toolUse": true, "images": false, "contextWindow": 131072, "turnEnd": true },
-			"note": "Lemonade/llama.cpp ends Cline turns without the TaskComplete hook: needs agents.cline.turnDetector.mode on (team-local recommends it)"
+			"rejected": {
+				"at": "2026-10-11",
+				"scope": "model",
+				"reason": "removed by the user 2026-10-11 (was vetted for dev, plan and QA on 2026-10-09/10, team-local's dev and planner until then); team-local now builds and plans on Qwen3.8-27B-GGUF-UD-Q4_K_XL"
+			}
 		},
 		{
 			"agent": "cline",

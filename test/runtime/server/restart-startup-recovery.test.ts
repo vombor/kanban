@@ -75,7 +75,7 @@ function runningSummary(taskId: string, workspacePath: string, startedAt: number
 		exitCode: null,
 		lastHookAt: null,
 		latestHookActivity: null,
-		modelId: "GLM-4.7-Flash-GGUF",
+		modelId: "Qwen3.8-27B-GGUF-UD-Q4_K_XL",
 		reasoningEffort: null,
 	};
 }
@@ -99,7 +99,9 @@ describe("restart recovery at server startup (issue #29)", () => {
 					at: new Date(serverStartedAt - 60_000).toISOString(),
 					kanbanStart: new Date(previousServerStartedAt).toISOString(),
 					source: "prepare",
-					cards: [{ id: "66ddd", column: "in_progress", model: "GLM-4.7-Flash-GGUF", wipTag, kind: "dev" }],
+					cards: [
+						{ id: "66ddd", column: "in_progress", model: "Qwen3.8-27B-GGUF-UD-Q4_K_XL", wipTag, kind: "dev" },
+					],
 				};
 				await writeRestartManifest(notesId, prepared);
 

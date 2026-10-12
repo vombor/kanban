@@ -62,7 +62,6 @@ the `codex + bedrock + sol` entry). When several entries fit, the least permissi
 | cline + bedrock + us.amazon.nova-2-lite-v1:0 | provisional | provisional | |
 | codex + its own default model | | provisional (team kit's `roles.qa`) | |
 | claude + its own default model | | | provisional (team kit's `roles.plan`) |
-| cline + lemonade + GLM-4.7-Flash-GGUF | vetted (team-local's dev) | provisional | vetted (team-local's planner) |
 | cline + lemonade + Gemma-4-12B-it-GGUF | | vetted (team-local's QA) | |
 | cline + lemonade + Qwen3.6-35B-A3B-MTP-GGUF | vetted (team-local's fallback) | provisional | provisional |
 | cline + lemonade + Devstral-Small-2507-GGUF | provisional | provisional (stalled twice as notes' QA, not re-vetted) | |
@@ -73,7 +72,7 @@ first runs that morning failed for harness reasons (fixed in 3eef296b) and are n
 
 Rejected on every agent and provider (the kits' old `dropped` lists): `qwen.qwen3-next-80b-a3b`,
 `openai.gpt-oss-120b-1:0`, `nvidia.nemotron-super-3-120b`, `us.openai.gpt-6-luna`, `us.anthropic.claude-sonnet-5-5`,
-`LMX-Omni-52B-Halo`, each with its reason. A tier lookup never picks them (`getUsableTierEntries`); a user kit's own
+`LMX-Omni-52B-Halo`, `GLM-4.7-Flash-GGUF` (team-local's dev and planner until the user removed it, 2026-10-11), each with its reason. A tier lookup never picks them (`getUsableTierEntries`); a user kit's own
 `dropped` list still counts on top.
 
 ## Enforcement
@@ -118,7 +117,7 @@ show` prints the same per route.
 ## Vetting
 
 ```sh
-kanban models vet --agent cline --provider lemonade --model GLM-4.7-Flash-GGUF --role dev [--project <p>] [--max-min 30] [--max-cost 2] [--capacity-wait-min 30]
+kanban models vet --agent cline --provider lemonade --model Qwen3.8-27B-GGUF-UD-Q4_K_XL --role dev [--project <p>] [--max-min 30] [--max-cost 2] [--capacity-wait-min 30]
 ```
 
 It runs one fixed, throwaway smoke test in a scratch git repo in a temp dir (never a project repo, never landed):

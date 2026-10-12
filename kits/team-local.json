@@ -1,18 +1,18 @@
 {
 	"kit": 1,
 	"name": "team-local",
-	"description": "The team workflow on local Lemonade models only (Cline + provider lemonade, no cloud anywhere): GLM-4.7-Flash builds and plans, Gemma-4-12B (another family, with vision) reviews, same-model rework for 3 rounds, then the fallback dev model Qwen3.6-35B-A3B-MTP takes the task over on a sibling card (started at once); only when the fallback fails too does the card go to the orchestrator. Every route (dev, plan, QA, fallback) is vetted (kanban models vet, 2026-10-09)",
+	"description": "The team workflow on local Lemonade models only (Cline + provider lemonade, no cloud anywhere): Qwen3.8-27B builds and plans, gemma-4-31B (another family, with vision) reviews, same-model rework for 3 rounds, then the fallback dev model Devstral-Small-2-24B takes the task over on a sibling card (started at once); only when the fallback fails too does the card go to the orchestrator. Every route (dev, plan, QA, fallback) is vetted (kanban models vet, 2026-10-10)",
 	"roles": {
 		"dev": {
 			"agent": "cline",
 			"tier": "dev",
-			"note": "Cline on the dev tier's pick (GLM-4.7-Flash, vetted for dev 2026-10-09)"
+			"note": "Cline on the dev tier's pick (Qwen3.8-27B, vetted for dev 2026-10-10)"
 		},
 		"qa": {
 			"agent": "cline",
 			"provider": "lemonade",
-			"model": "Gemma-4-12B-it-GGUF",
-			"note": "Gemma-4-12B (vetted for QA 2026-10-09): another family (google) than every dev model, with vision, so it reads screenshots; replaced Devstral, which stalled twice as notes' QA"
+			"model": "gemma-4-31B-it-qat-q4_0-gguf-Q4_0",
+			"note": "gemma-4-31B QAT (vetted for QA 2026-10-10): another family (google) than the Qwen dev and Devstral fallback models, with vision, so it reads screenshots; replaced Gemma-4-12B (2026-10-11)"
 		},
 		"plan": {
 			"agent": "cline",
@@ -21,7 +21,7 @@
 		},
 		"fallback": {
 			"tier": "senior",
-			"note": "fallback dev model (Qwen3.6-35B-A3B-MTP, a third family, vetted for dev 2026-10-09) on the dev role's agent"
+			"note": "fallback dev model (Devstral-Small-2-24B, a third family, vetted for dev 2026-10-10) on the dev role's agent"
 		}
 	},
 	"qa": {
@@ -47,17 +47,17 @@
 				"agent": "cline",
 				"model": {
 					"provider": "lemonade",
-					"model": "GLM-4.7-Flash-GGUF"
+					"model": "Qwen3.8-27B-GGUF-UD-Q4_K_XL"
 				},
-				"note": "in use (vetted for plan 2026-10-09): the dev model, so a plan card needs no model swap"
+				"note": "in use (vetted for plan 2026-10-10): the dev model, so a plan card needs no model swap"
 			},
 			{
 				"agent": "cline",
 				"model": {
 					"provider": "lemonade",
-					"model": "Qwen3.6-35B-A3B-MTP-GGUF"
+					"model": "Devstral-Small-2-24B-Instruct-2512-GGUF-Q4_K_M"
 				},
-				"note": "candidate; 128K context as Lemonade loads it"
+				"note": "candidate (vetted for plan 2026-10-10): the fallback dev model; 65536 context as Lemonade loads it"
 			}
 		],
 		"note": "Plans run on roles.plan (the dev tier's model) in Cline's plan mode (--plan)."
@@ -90,9 +90,14 @@
 		"dev": [
 			{
 				"provider": "lemonade",
-				"model": "GLM-4.7-Flash-GGUF",
+				"model": "Qwen3.8-27B-GGUF-UD-Q4_K_XL",
 				"default": true,
-				"note": "dev pick (vetted 2026-10-09): tool-calling, a 30B-A3B MoE so it is fast on the one GPU, MLA attention so its KV cache is small (131072 context ≈ 7 GB), and already Cline's Lemonade default. The memory budget assumes Lemonade loads it at 131072 (its max is 202752)"
+				"note": "dev pick (vetted 2026-10-10): tool-calling + vision, a dense 27B (17.2 GB at UD-Q4_K_XL); Lemonade loads it at 65536 (its max is 262144)"
+			},
+			{
+				"provider": "lemonade",
+				"model": "Devstral-Small-2-24B-Instruct-2512-GGUF-Q4_K_M",
+				"note": "the fallback dev model (tier senior), vetted for dev: tool-calling + vision, 65536 context as Lemonade loads it"
 			},
 			{
 				"provider": "lemonade",
@@ -102,7 +107,7 @@
 			{
 				"provider": "lemonade",
 				"model": "Qwen3.6-35B-A3B-MTP-GGUF",
-				"note": "the fallback dev model (tier senior), vetted for dev: tool-calling + vision, 131072 context as Lemonade loads it"
+				"note": "candidate, vetted for dev (2026-10-09): tool-calling + vision, 131072 context as Lemonade loads it"
 			},
 			{
 				"provider": "lemonade",
@@ -113,9 +118,9 @@
 		"qa": [
 			{
 				"provider": "lemonade",
-				"model": "Gemma-4-12B-it-GGUF",
+				"model": "gemma-4-31B-it-qat-q4_0-gguf-Q4_0",
 				"default": true,
-				"note": "QA pick (vetted 2026-10-09): another family (google) than the GLM dev and Qwen fallback models, vision + tool-calling, small (12B, 6.8 GB); 131072 context, and its KV cache is small (8 of 48 layers full attention)"
+				"note": "QA pick (vetted 2026-10-10): another family (google) than the Qwen dev and Devstral fallback models, vision + tool-calling, 17.6 GB at Q4_0 (QAT); Lemonade loads it at 98304"
 			},
 			{
 				"provider": "lemonade",
@@ -125,15 +130,15 @@
 			{
 				"provider": "lemonade",
 				"model": "Qwen3.6-35B-A3B-MTP-GGUF",
-				"note": "candidate (provisional for QA): the only vision model that is also strong at code; it is the fallback dev model, so it can't review a fallback sibling"
+				"note": "candidate (provisional for QA): a vision model that is also strong at code, but from the dev model's family (Qwen), so it can't review a dev card"
 			}
 		],
 		"senior": [
 			{
 				"provider": "lemonade",
-				"model": "Qwen3.6-35B-A3B-MTP-GGUF",
+				"model": "Devstral-Small-2-24B-Instruct-2512-GGUF-Q4_K_M",
 				"default": true,
-				"note": "fallback dev model (escalate.to, vetted for dev 2026-10-09): a third family (Qwen), neither the GLM dev model nor the Gemma QA model, so its sibling is still reviewed by Gemma. Started without approval (local runs cost 0); the core never hands a task onto the card's own model and sends a fallback sibling that fails to the orchestrator, so the takeover happens once"
+				"note": "fallback dev model (escalate.to, vetted for dev 2026-10-10): a third family (Mistral), neither the Qwen dev model nor the Gemma QA model, so its sibling is still reviewed by Gemma. Started without approval (local runs cost 0); the core never hands a task onto the card's own model and sends a fallback sibling that fails to the orchestrator, so the takeover happens once"
 			}
 		]
 	},
@@ -143,7 +148,7 @@
 		"senior": "the fallback dev model: a family other than dev and QA"
 	},
 	"tierNotes": {
-		"dev": "Memory budget (one GPU: Ryzen AI MAX+ 395, 96 GB GPU-addressable of 125 GB RAM): dev + QA + fallback must stay resident side by side within 80 GB, leaving 16 GB headroom. Estimate at the contexts Lemonade loads them with (weights = Lemonade's size; KV cache f16 from each model's config): GLM-4.7-Flash at 131072 = 16.3 + 7.1 (MLA, 54 KB/token) = 23.4 GB; Gemma-4-12B at 131072 = 6.8 + 2.1 (8 of 48 layers full attention with 1 KV head of 512, 16 KB/token) + 0.3 (40 sliding-window layers, 1024 tokens) = 9.2 GB; Qwen3.6-35B-A3B at 131072 = 22.1 + 2.6 (10 of 40 layers full attention, 20 KB/token) = 24.7 GB; plus ~1.5 GB compute buffers each: about 62 GB. GLM at Lemonade's max context (202752) adds about 4 GB: keep it at 131072 (lemonade load <model> --ctx-size <n> --llamacpp vulkan --save-options) and Lemonade's max_loaded_models at 3. kanban bench calibrate can still compare candidates",
+		"dev": "Memory budget (one GPU: Ryzen AI MAX+ 395, 96 GB GPU-addressable of 125 GB RAM): dev + QA + fallback must stay resident side by side within 80 GB, leaving 16 GB headroom. Weights (Lemonade's sizes) at the contexts Lemonade loads them with: Qwen3.8-27B 17.2 GB at 65536, gemma-4-31B QAT 17.6 GB at 98304, Devstral-Small-2-24B 14.2 GB at 65536: 49 GB of weights, plus each model's KV cache at that context and ~1.5 GB compute buffers each (all three are dense models, so their KV caches are larger than the MoE/MLA models' were: check the free memory with all three loaded before raising a context). Change a context with lemonade load <model> --ctx-size <n> --llamacpp vulkan --save-options, and keep Lemonade's max_loaded_models at 3. kanban bench calibrate can still compare candidates",
 		"qa": "requireDifferentVendor reads the family from the model id (GLM → zai, Devstral → mistral, Qwen → qwen, Gemma → google, DeepSeek → deepseek)"
 	},
 	"prices": {

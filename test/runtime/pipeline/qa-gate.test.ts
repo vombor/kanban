@@ -309,21 +309,24 @@ describe("QA gate", () => {
 				},
 			},
 		});
-		const onGlm = {
+		const onQwen = {
 			agentId: "cline" as const,
-			agentSettings: { providerId: "lemonade", modelId: "GLM-4.7-Flash-GGUF" },
+			agentSettings: { providerId: "lemonade", modelId: "Qwen3.8-27B-GGUF-UD-Q4_K_XL" },
 		};
-		const dev = createCard({ id: "d1111", ...onGlm });
-		const busy = createCard({ id: "d2222", ...onGlm });
+		const dev = createCard({ id: "d1111", ...onQwen });
+		const busy = createCard({ id: "d2222", ...onQwen });
 		await send(harness, { review: [dev], in_progress: [busy] });
 		expect(createdTasks(harness.actions)).toMatchObject([
-			{ taskId: "qa001", agentSettings: { providerId: "lemonade", modelId: "Gemma-4-12B-it-GGUF" } },
+			{ taskId: "qa001", agentSettings: { providerId: "lemonade", modelId: "gemma-4-31B-it-qat-q4_0-gguf-Q4_0" } },
 		]);
 
-		// Lemonade loads one model: Gemma would evict GLM while d2222 still runs on it. One record per hold.
+		// Lemonade loads one model: Gemma would evict Qwen while d2222 still runs on it. One record per hold.
 		harness.actions.length = 0;
-		const qa = createCard({ id: "qa001", role: "qa", reviewsTaskId: "d1111", ...onGlm });
-		const qaOnGemma = { ...qa, agentSettings: { providerId: "lemonade", modelId: "Gemma-4-12B-it-GGUF" } };
+		const qa = createCard({ id: "qa001", role: "qa", reviewsTaskId: "d1111", ...onQwen });
+		const qaOnGemma = {
+			...qa,
+			agentSettings: { providerId: "lemonade", modelId: "gemma-4-31B-it-qat-q4_0-gguf-Q4_0" },
+		};
 		await send(harness, { backlog: [qaOnGemma], in_progress: [busy], review: [dev] });
 		await send(harness, { backlog: [qaOnGemma], in_progress: [busy], review: [dev] });
 		expect(harness.actions).toEqual([]);
@@ -336,11 +339,11 @@ describe("QA gate", () => {
 			[
 				null,
 				"none",
-				"waiting for lemonade capacity: 1/1 model(s) loaded (held by d2222 (GLM-4.7-Flash-GGUF)); queued: qa001",
+				"waiting for lemonade capacity: 1/1 model(s) loaded (held by d2222 (Qwen3.8-27B-GGUF-UD-Q4_K_XL)); queued: qa001",
 			],
 		]);
 
-		// d2222 finished (it gets a QA card of its own): GLM is free, so Gemma may load.
+		// d2222 finished (it gets a QA card of its own): Qwen is free, so Gemma may load.
 		await send(harness, { backlog: [qaOnGemma], review: [dev, busy] });
 		expect(kinds(harness.actions)).toEqual(["createTask:qa002", "startTask:qa001"]);
 	});
@@ -574,13 +577,13 @@ describe("QA gate", () => {
 			kit: { name: "team-local" },
 			models: { allowProvisional: true },
 		};
-		const onGlm = {
+		const onQwen = {
 			agentId: "cline" as const,
-			agentSettings: { providerId: "lemonade", modelId: "GLM-4.7-Flash-GGUF" },
+			agentSettings: { providerId: "lemonade", modelId: "Qwen3.8-27B-GGUF-UD-Q4_K_XL" },
 		};
 		const onGemma = {
 			agentId: "cline" as const,
-			agentSettings: { providerId: "lemonade", modelId: "Gemma-4-12B-it-GGUF" },
+			agentSettings: { providerId: "lemonade", modelId: "gemma-4-31B-it-qat-q4_0-gguf-Q4_0" },
 		};
 		const localQa = (id: string, devId: string) => createCard({ id, role: "qa", reviewsTaskId: devId, ...onGemma });
 		const cloudQa = (id: string, devId: string) => createCard({ id, role: "qa", reviewsTaskId: devId });
@@ -596,8 +599,8 @@ describe("QA gate", () => {
 			const harness = createHarness({
 				config: { pipeline: { qa: { slots: 1 } }, workspaces: { foo: QA_WORKSPACE, notes: LOCAL_WORKSPACE } },
 			});
-			const n1 = createCard({ id: "n1111", ...onGlm });
-			const n2 = createCard({ id: "n2222", ...onGlm });
+			const n1 = createCard({ id: "n1111", ...onQwen });
+			const n2 = createCard({ id: "n2222", ...onQwen });
 			const d1 = createCard({ id: "d1111", ...OPENAI_DEV });
 
 			// notes' QA card starts on Gemma in Lemonade's capacity, not in a slot.
@@ -639,8 +642,8 @@ describe("QA gate", () => {
 					},
 				},
 			});
-			const n1 = createCard({ id: "n1111", ...onGlm });
-			const b1 = createCard({ id: "b1111", ...onGlm });
+			const n1 = createCard({ id: "n1111", ...onQwen });
+			const b1 = createCard({ id: "b1111", ...onQwen });
 			await send(harness, { in_progress: [b1] }, { workspaceId: "bar" });
 			await send(harness, { review: [n1] }, { workspaceId: "notes" });
 			const notesBoard = { backlog: [localQa("qa001", "n1111")], review: [n1] };
@@ -651,7 +654,7 @@ describe("QA gate", () => {
 				"waiting for lemonade capacity: 1/1 model(s) loaded (held by 1 card(s) of other projects); queued: qa001",
 			]);
 
-			// bar's card leaves In Progress: GLM is unloaded, so notes is evaluated again with no snapshot of its own.
+			// bar's card leaves In Progress: Qwen is unloaded, so notes is evaluated again with no snapshot of its own.
 			harness.actions.length = 0;
 			await send(harness, { review: [b1] }, { workspaceId: "bar" });
 			expect(kinds(harness.actions)).toEqual(["startTask:qa001"]);
@@ -662,7 +665,7 @@ describe("QA gate", () => {
 			const harness = createHarness({
 				config: { pipeline: { qa: { slots: 1 } }, workspaces: { foo: QA_WORKSPACE, notes: LOCAL_WORKSPACE } },
 			});
-			const n1 = createCard({ id: "n1111", ...onGlm });
+			const n1 = createCard({ id: "n1111", ...onQwen });
 			const d1 = createCard({ id: "d1111", ...OPENAI_DEV });
 			const d2 = createCard({ id: "d2222", ...OPENAI_DEV });
 			// A Lemonade dev card runs in notes: no cloud QA card waits for it.

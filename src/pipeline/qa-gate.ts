@@ -498,7 +498,7 @@ function listInProgressCapacityCards(context: Pick<QaGateContext, "snapshot" | "
 		}));
 }
 
-/** "d2222 (GLM-4.7-Flash-GGUF), 1 card(s) of other projects": other projects' cards are only counted. */
+/** "d2222 (Qwen3.8-27B-GGUF-UD-Q4_K_XL), 1 card(s) of other projects": other projects' cards are only counted. */
 function describeCapacityHolders(hold: ProviderCapacityHold): string {
 	const others = hold.otherWorkspaceHolders > 0 ? [`${hold.otherWorkspaceHolders} card(s) of other projects`] : [];
 	return [...hold.holders, ...others].join(", ");

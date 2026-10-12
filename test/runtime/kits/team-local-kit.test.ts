@@ -5,14 +5,19 @@ import { evaluateKitRecommendedSettings } from "../../../src/kits/kit-recommenda
 import { buildKitReport, formatKitReport } from "../../../src/kits/kit-report";
 import { answerPlanAssignment, createRoutingPolicy } from "../../../src/kits/policy";
 import { getBuiltInKits, getDefaultKit, resolveKitLayers } from "../../../src/kits/resolve-kit";
+import {
+	checkKitRoutes,
+	checkRouting,
+	describeRefusedKitRoutes,
+	getStrictRoutingVetting,
+} from "../../../src/kits/routing-vetting";
 import { listKitModels } from "../../../src/kits/team/bench/price-sync-job";
 import { createCardHistory, createEffectiveCard } from "../../utilities/effective-card";
 import { PROVISIONAL_ALLOWED } from "../../utilities/routing-vetting";
 
-const GLM = { provider: "lemonade", model: "GLM-4.7-Flash-GGUF" };
-const DEVSTRAL = { provider: "lemonade", model: "Devstral-Small-2507-GGUF" };
-const GEMMA = { provider: "lemonade", model: "Gemma-4-12B-it-GGUF" };
-const QWEN = { provider: "lemonade", model: "Qwen3.6-35B-A3B-MTP-GGUF" };
+const QWEN = { provider: "lemonade", model: "Qwen3.8-27B-GGUF-UD-Q4_K_XL" };
+const DEVSTRAL = { provider: "lemonade", model: "Devstral-Small-2-24B-Instruct-2512-GGUF-Q4_K_M" };
+const GEMMA = { provider: "lemonade", model: "gemma-4-31B-it-qat-q4_0-gguf-Q4_0" };
 
 function resolveTeamLocal(overrides: Record<string, unknown> = {}) {
 	const kit = getBuiltInKits().get("team-local");
@@ -74,13 +79,13 @@ describe("team-local kit", () => {
 			}),
 		).toEqual({
 			agentId: "cline",
-			model: GLM,
+			model: QWEN,
 			tier: "dev",
 		});
 		expect(answerPlanAssignment(kit, PROVISIONAL_ALLOWED)).toEqual({
 			kind: "plan",
 			agentId: "cline",
-			model: GLM,
+			model: QWEN,
 			tier: "dev",
 			startInPlanMode: true,
 			rules: [],
@@ -95,9 +100,12 @@ describe("team-local kit", () => {
 				round: 1,
 				history: createCardHistory(),
 			});
-		expect(qaFor(GLM)).toMatchObject({ kind: "qa", agentId: "cline", model: GEMMA, route: null });
-		expect(qaFor(QWEN)).toMatchObject({ kind: "qa", model: GEMMA });
+		expect(qaFor(QWEN)).toMatchObject({ kind: "qa", agentId: "cline", model: GEMMA, route: null });
 		expect(qaFor(DEVSTRAL)).toMatchObject({ kind: "qa", model: GEMMA, route: null });
+		expect(qaFor({ provider: "lemonade", model: "Qwen3.6-35B-A3B-MTP-GGUF" })).toMatchObject({
+			kind: "qa",
+			model: GEMMA,
+		});
 		expect(qaFor({ provider: "lemonade", model: "DeepSeek-V4-Flash-0731-GGUF-BF16" })).toMatchObject({
 			kind: "qa",
 			model: GEMMA,
@@ -120,7 +128,7 @@ describe("team-local kit", () => {
 
 	it("reworks on the same model, then hands the task to the fallback local model at once, and waits out Lemonade outages", () => {
 		const policy = createRoutingPolicy(resolveTeamLocal().kit, PROVISIONAL_ALLOWED);
-		const dev = createEffectiveCard({ agentId: "cline", model: GLM });
+		const dev = createEffectiveCard({ agentId: "cline", model: QWEN });
 		const limits = { maxFailRounds: 3 };
 		expect(policy.onFail({ dev, cause: "fail", verdict: null, history: createCardHistory([1]), limits })).toEqual({
 			action: "rework",
@@ -128,8 +136,23 @@ describe("team-local kit", () => {
 		});
 		expect(
 			policy.onFail({ dev, cause: "fail", verdict: null, history: createCardHistory([1, 2, 3]), limits }),
-		).toMatchObject({ action: "escalate", to: { agentId: "cline", model: QWEN }, requireApproval: false });
+		).toMatchObject({ action: "escalate", to: { agentId: "cline", model: DEVSTRAL }, requireApproval: false });
 		expect(policy.onOutage({ dev, heldMin: 400, maxMin: 360 })).toMatchObject({ action: "hold" });
+	});
+
+	it("passes the strict routing check with no overrides, as a fresh kit apply team-local does", () => {
+		const { kit } = resolveTeamLocal();
+		const routes = checkKitRoutes(kit, getStrictRoutingVetting());
+		expect(routes.map(({ label, combination, check }) => [label, combination.model, check.ok])).toEqual([
+			["roles.dev", QWEN.model, true],
+			["roles.qa", GEMMA.model, true],
+			["roles.plan", QWEN.model, true],
+			["roles.fallback", DEVSTRAL.model, true],
+		]);
+		expect(describeRefusedKitRoutes(kit, getStrictRoutingVetting())).toEqual([]);
+		const glm = { agentId: "cline" as const, provider: "lemonade", model: "GLM-4.7-Flash-GGUF" };
+		expect(checkRouting(getStrictRoutingVetting(), "dev", glm).ok).toBe(false);
+		expect(collectModelProviders(kit).map(({ model }) => model)).not.toContain(glm.model);
 	});
 
 	it("leaves its local models out of the AWS price check", () => {
@@ -177,12 +200,12 @@ describe("team-local kit", () => {
 		// Every route is vetted (strict config). The one refusal is a sample card built on the QA model itself:
 		// no QA model of another family is vetted, so a card someone builds on Gemma waits in Review.
 		expect(report.warnings).toEqual([
-			expect.stringContaining("Gemma-4-12B-it-GGUF is from the dev card's vendor (google)"),
+			expect.stringContaining("gemma-4-31B-it-qat-q4_0-gguf-Q4_0 is from the dev card's vendor (google)"),
 		]);
 		expect(report.recommendedLandingMode).toBe("qa");
 		const text = formatKitReport(report).join("\n");
 		expect(text).toContain(
-			"New dev cards (when the creator sets no agent):\n  cline on lemonade/GLM-4.7-Flash-GGUF (tier dev)",
+			"New dev cards (when the creator sets no agent):\n  cline on lemonade/Qwen3.8-27B-GGUF-UD-Q4_K_XL (tier dev)",
 		);
 		expect(text).not.toContain("[qa.routes[");
 		expect(text).toContain("Settings this kit needs (config.json; the kit never applies them):");

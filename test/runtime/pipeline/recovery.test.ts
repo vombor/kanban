@@ -395,7 +395,7 @@ describe("decideRecovery: Review cards", () => {
 			provider: "lemonade",
 			maxLoadedModels: 2,
 			loadedModels: 2,
-			holders: ["qa1 (gemma-4-31B-it-qat-q4_0-gguf-Q4_0)", "dev2 (GLM-4.7-Flash-GGUF)"],
+			holders: ["qa1 (gemma-4-31B-it-qat-q4_0-gguf-Q4_0)", "dev2 (Qwen3.8-27B-GGUF-UD-Q4_K_XL)"],
 			otherWorkspaceHolders: 0,
 		};
 		const reworkAt = new Date(NOW - 3 * MIN).toISOString();
@@ -492,7 +492,7 @@ describe("decideRecovery: Review cards", () => {
 	});
 
 	describe("a stop seen while the provider is at capacity (follow-up of issue #32)", () => {
-		const LEMONADE = { provider: "lemonade", model: "GLM-4.7-Flash-GGUF" };
+		const LEMONADE = { provider: "lemonade", model: "Qwen3.8-27B-GGUF-UD-Q4_K_XL" };
 		const OVERFLOW = "Context size has been exceeded.";
 		const capacityHold = {
 			provider: "lemonade",

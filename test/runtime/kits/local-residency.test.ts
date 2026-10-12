@@ -15,7 +15,11 @@ function resolveBuiltIn(name: string, overrides: Record<string, unknown> = {}) {
 	return resolved.kit;
 }
 
-const TEAM_LOCAL_SET = ["GLM-4.7-Flash-GGUF", "Gemma-4-12B-it-GGUF", "Qwen3.6-35B-A3B-MTP-GGUF"];
+const TEAM_LOCAL_SET = [
+	"Qwen3.8-27B-GGUF-UD-Q4_K_XL",
+	"gemma-4-31B-it-qat-q4_0-gguf-Q4_0",
+	"Devstral-Small-2-24B-Instruct-2512-GGUF-Q4_K_M",
+];
 
 describe("local residency", () => {
 	it("counts the local models team-local runs at once: dev (= plan), QA and fallback", () => {
@@ -71,7 +75,7 @@ describe("local residency", () => {
 		expect(
 			assessLocalResidency({
 				kitName: "k",
-				workingSet: ["GLM-4.7-Flash-GGUF"],
+				workingSet: ["Qwen3.8-27B-GGUF-UD-Q4_K_XL"],
 				lemonadeMaxLlm: 1,
 				kanbanCapacity: 1,
 			}),

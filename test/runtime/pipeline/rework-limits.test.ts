@@ -275,16 +275,21 @@ describe("rework limits", () => {
 			throw new Error(resolved.error);
 		}
 		const policy = createRoutingPolicy(resolved.kit, PROVISIONAL_ALLOWED);
-		const glm = { providerId: "lemonade", modelId: "GLM-4.7-Flash-GGUF" };
-		const dev = { ...DEV, agentSettings: glm };
+		const qwen = { providerId: "lemonade", modelId: "Qwen3.8-27B-GGUF-UD-Q4_K_XL" };
+		const dev = { ...DEV, agentSettings: qwen };
 		const fails = [failVerdict(1), failVerdict(2), failVerdict(3)];
 
 		const first = createHarness({ onFail: (input) => policy.onFail(input) });
 		await first.seed("d1111", { qaVerdicts: fails });
-		await first.tick({ review: [dev] }, [{ taskId: "d1111", agentId: "cline", modelId: "GLM-4.7-Flash-GGUF" }]);
+		await first.tick({ review: [dev] }, [
+			{ taskId: "d1111", agentId: "cline", modelId: "Qwen3.8-27B-GGUF-UD-Q4_K_XL" },
+		]);
 		expect(kinds(first.actions)).toEqual(["createTask:s0001", "startTask:s0001", "blockTask:d1111"]);
 		expect(first.actions[0]).toMatchObject({
-			task: { agentId: "cline", agentSettings: { providerId: "lemonade", modelId: "Qwen3.6-35B-A3B-MTP-GGUF" } },
+			task: {
+				agentId: "cline",
+				agentSettings: { providerId: "lemonade", modelId: "Devstral-Small-2-24B-Instruct-2512-GGUF-Q4_K_M" },
+			},
 		});
 
 		// The fallback sibling fails its rounds too: no second takeover, the orchestrator gets it.
@@ -292,14 +297,14 @@ describe("rework limits", () => {
 		const sibling = {
 			...DEV,
 			id: "s0001",
-			agentSettings: { providerId: "lemonade", modelId: "Qwen3.6-35B-A3B-MTP-GGUF" },
+			agentSettings: { providerId: "lemonade", modelId: "Devstral-Small-2-24B-Instruct-2512-GGUF-Q4_K_M" },
 		};
 		await fallback.seed("s0001", {
 			qaVerdicts: fails.map((verdict) => ({ ...verdict, snapshot: "snap-s0001" })),
 			sibling: { of: "d1111", kind: "escalation", at: new Date(REWORK_T0 - 60_000).toISOString() },
 		});
 		await fallback.tick({ review: [sibling] }, [
-			{ taskId: "s0001", agentId: "cline", modelId: "Qwen3.6-35B-A3B-MTP-GGUF" },
+			{ taskId: "s0001", agentId: "cline", modelId: "Devstral-Small-2-24B-Instruct-2512-GGUF-Q4_K_M" },
 		]);
 		expect(kinds(fallback.actions)).toEqual(["blockTask:s0001"]);
 		expect(readEscalationRecord(readQaflow(await fallback.entry("s0001")))).toMatchObject({ to: "orchestrator" });

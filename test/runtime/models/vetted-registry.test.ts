@@ -44,9 +44,14 @@ describe("the vetted model registry (models/vetted.json)", () => {
 		expect(status("cline", "bedrock", "us.anthropic.claude-haiku-5-5", "dev")).toBe("unknown");
 		expect(status("cline", "bedrock", "us.anthropic.claude-opus-5-5", "dev")).toBe("provisional");
 		// team-local's routes and the other Lemonade models, vetted by kanban models vet (2026-10-09/10).
-		expect(status("cline", "lemonade", "GLM-4.7-Flash-GGUF", "dev")).toBe("vetted");
-		expect(status("cline", "lemonade", "GLM-4.7-Flash-GGUF", "plan")).toBe("vetted");
-		expect(status("cline", "lemonade", "GLM-4.7-Flash-GGUF", "qa")).toBe("vetted");
+		expect(status("cline", "lemonade", "Qwen3.8-27B-GGUF-UD-Q4_K_XL", "dev")).toBe("vetted");
+		expect(status("cline", "lemonade", "Qwen3.8-27B-GGUF-UD-Q4_K_XL", "plan")).toBe("vetted");
+		expect(status("cline", "lemonade", "gemma-4-31B-it-qat-q4_0-gguf-Q4_0", "qa")).toBe("vetted");
+		expect(status("cline", "lemonade", "Devstral-Small-2-24B-Instruct-2512-GGUF-Q4_K_M", "dev")).toBe("vetted");
+		// Removed by the user (2026-10-11): rejected on every role, so kanban models vet never proposes it again.
+		expect(status("cline", "lemonade", "GLM-4.7-Flash-GGUF", "dev")).toBe("rejected");
+		expect(status("cline", "lemonade", "GLM-4.7-Flash-GGUF", "plan")).toBe("rejected");
+		expect(status("cline", "lemonade", "GLM-4.7-Flash-GGUF", "qa")).toBe("rejected");
 		expect(status("cline", "lemonade", "Gemma-4-12B-it-GGUF", "qa")).toBe("vetted");
 		expect(status("cline", "lemonade", "Gemma-4-12B-it-GGUF", "dev")).toBe("vetted");
 		expect(status("cline", "lemonade", "Gemma-4-12B-it-GGUF", "plan")).toBe("vetted");
@@ -73,6 +78,7 @@ describe("the vetted model registry (models/vetted.json)", () => {
 				"us.openai.gpt-6-luna",
 				"us.anthropic.claude-sonnet-5-5",
 				"LMX-Omni-52B-Halo",
+				"GLM-4.7-Flash-GGUF",
 			]),
 		);
 		const verdict = lookupVetting(

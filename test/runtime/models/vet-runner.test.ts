@@ -22,7 +22,7 @@ import {
 import { createTempDir } from "../../utilities/temp-dir";
 
 const REPO = "/tmp/kanban-vet-test/repo";
-const COMBINATION = { agentId: "cline" as const, provider: "lemonade", model: "GLM-4.7-Flash-GGUF" };
+const COMBINATION = { agentId: "cline" as const, provider: "lemonade", model: "Gemma-4-12B-it-GGUF" };
 
 type FakeAgent = (fake: FakeRun, at: number) => void;
 
@@ -159,12 +159,12 @@ describe("kanban models vet: the runner", () => {
 		expect(result).toMatchObject({ outcome: "passed", failure: null, turnEnded: true, taskId: "v0001" });
 		expect(result.checks.every((check) => check.ok)).toBe(true);
 		expect(calls).toEqual([
-			'create cline {"providerId":"lemonade","modelId":"GLM-4.7-Flash-GGUF"}',
+			'create cline {"providerId":"lemonade","modelId":"Gemma-4-12B-it-GGUF"}',
 			"start",
 			"discard v0001",
 		]);
 		const proposal = buildVetProposal(getVettedRegistry(), result, "3.0.69");
-		expect(proposal.replaces?.model).toBe("GLM-4.7-Flash-GGUF");
+		expect(proposal.replaces?.model).toBe("Gemma-4-12B-it-GGUF");
 		expect(proposal.entry.roles.dev).toMatchObject({
 			status: "vetted",
 			cliVersion: "3.0.69",
@@ -276,12 +276,12 @@ describe("kanban models vet: harness failures (the first runs, 2026-10-09)", () 
 			fake.session = { ...summary("running", 0), stateChangedAt: 0, lastHookAt: 0, updatedAt: at };
 		});
 		const holds: string[] = [];
-		loading.deps.probe = async () => ({ failure: null, hold: "lemonade is still loading GLM-4.7-Flash-GGUF" });
+		loading.deps.probe = async () => ({ failure: null, hold: "lemonade is still loading Gemma-4-12B-it-GGUF" });
 		loading.deps.log = (line) => holds.push(line);
 		// No silent_stall at stallMin: the run goes on to the time cap.
 		expect((await runVet(loading.input, loading.deps)).failure?.kind).toBe("time_cap");
 		expect(holds.filter((line) => line.includes("not judging silence"))).toEqual([
-			"vet r1: not judging silence: lemonade is still loading GLM-4.7-Flash-GGUF",
+			"vet r1: not judging silence: lemonade is still loading Gemma-4-12B-it-GGUF",
 		]);
 	});
 
@@ -314,7 +314,7 @@ describe("kanban models vet: harness failures (the first runs, 2026-10-09)", () 
 		// A registry without the combination's entry, so no recorded capability carries over.
 		const registry = getVettedRegistry();
 		const proposal = buildVetProposal(
-			{ ...registry, entries: registry.entries.filter((entry) => entry.model !== "GLM-4.7-Flash-GGUF") },
+			{ ...registry, entries: registry.entries.filter((entry) => entry.model !== "Gemma-4-12B-it-GGUF") },
 			{ ...result, toolUse: { native: 0, textual: 0, turns: 1 } },
 			null,
 		);
@@ -383,11 +383,11 @@ describe("kanban models vet: provider capacity and provider errors (issue #25)",
 		const result = await runVet(input, deps);
 		expect(result.outcome).toBe("passed");
 		expect(calls.slice(0, 5)).toEqual([
-			"capacity lemonade GLM-4.7-Flash-GGUF",
-			"capacity lemonade GLM-4.7-Flash-GGUF",
-			"capacity lemonade GLM-4.7-Flash-GGUF",
-			"capacity lemonade GLM-4.7-Flash-GGUF",
-			'create cline {"providerId":"lemonade","modelId":"GLM-4.7-Flash-GGUF"}',
+			"capacity lemonade Gemma-4-12B-it-GGUF",
+			"capacity lemonade Gemma-4-12B-it-GGUF",
+			"capacity lemonade Gemma-4-12B-it-GGUF",
+			"capacity lemonade Gemma-4-12B-it-GGUF",
+			'create cline {"providerId":"lemonade","modelId":"Gemma-4-12B-it-GGUF"}',
 		]);
 		// The same hold is logged once.
 		expect(logs.filter((line) => line.includes("waiting for capacity"))).toEqual([
@@ -400,7 +400,7 @@ describe("kanban models vet: provider capacity and provider errors (issue #25)",
 		const { deps, calls, input } = createHarness(goodDevAgent);
 		deps.findCapacityHold = async () => ({
 			...HOLD,
-			holders: ["d2222 (GLM-4.7-Flash-GGUF)"],
+			holders: ["d2222 (Gemma-4-12B-it-GGUF)"],
 			otherWorkspaceHolders: 0,
 		});
 		const result = await runVet({ ...input, limits: { ...input.limits, capacityWaitMin: 5 } }, deps);
@@ -411,11 +411,11 @@ describe("kanban models vet: provider capacity and provider errors (issue #25)",
 				kind: "capacity",
 				harness: true,
 				detail:
-					"still no room after 5 min (models.providerCapacity): lemonade holds 2 of 2 model(s): d2222 (GLM-4.7-Flash-GGUF)",
+					"still no room after 5 min (models.providerCapacity): lemonade holds 2 of 2 model(s): d2222 (Gemma-4-12B-it-GGUF)",
 			},
 		});
 		expect(calls).toEqual([]);
-		// GLM's dev role is vetted: an inconclusive run leaves it as it is.
+		// Gemma-4-12B's dev role is vetted: an inconclusive run leaves it as it is.
 		const proposal = buildVetProposal(getVettedRegistry(), result, null);
 		expect(proposal.unchanged).toBe(true);
 		expect(proposal.entry).toBe(proposal.replaces);

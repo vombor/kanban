@@ -3,7 +3,11 @@ import { describe, expect, it } from "vitest";
 import { parsePipelineConfig } from "../../../src/config/pipeline-config";
 import { checkKitLemonadeModels, checkKitRecommendedSettings } from "../../../src/doctor/kit-settings-checks";
 import { loadKitCatalog } from "../../../src/kits/resolve-kit";
-import { createFakeLemonadeFetch, LEMONADE_HEALTH_IDLE_PAYLOAD } from "../../utilities/lemonade-fixtures";
+import {
+	createFakeLemonadeFetch,
+	LEMONADE_HEALTH_IDLE_PAYLOAD,
+	LEMONADE_MODELS_PAYLOAD,
+} from "../../utilities/lemonade-fixtures";
 import { createTempDir } from "../../utilities/temp-dir";
 
 async function builtInCatalog() {
@@ -19,6 +23,25 @@ const LEMONADE = { url: "http://localhost:13305", requireLabels: ["tool-calling"
 const LOCAL_ON = {
 	agents: { cline: { turnDetector: { mode: "on" } } },
 	pipeline: { recovery: { mode: "on" } },
+};
+
+/** The fixture list plus team-local's dev, QA and fallback models (on the pod since 2026-10-10). */
+const WITH_TEAM_LOCAL_ROLES = {
+	...LEMONADE_MODELS_PAYLOAD,
+	data: [
+		...LEMONADE_MODELS_PAYLOAD.data,
+		...[
+			"Qwen3.8-27B-GGUF-UD-Q4_K_XL",
+			"gemma-4-31B-it-qat-q4_0-gguf-Q4_0",
+			"Devstral-Small-2-24B-Instruct-2512-GGUF-Q4_K_M",
+		].map((id) => ({
+			id,
+			object: "model",
+			owned_by: "lemonade",
+			downloaded: true,
+			labels: ["vision", "tool-calling"],
+		})),
+	],
 };
 
 function onTeamLocal(extra: Record<string, unknown> = {}) {
@@ -60,8 +83,11 @@ describe("kit settings doctor rows", () => {
 			entries: [{ workspaceId: "local" }, { workspaceId: "foo" }],
 			lemonadeModelList: LEMONADE,
 		};
-		// The fixture is the pod's list of 10/07, without the DeepSeek import.
-		const findings = await checkKitLemonadeModels({ ...context, fetch: createFakeLemonadeFetch() });
+		// The fixture is the pod's list of 10/07 plus the role models, without the DeepSeek import.
+		const findings = await checkKitLemonadeModels({
+			...context,
+			fetch: createFakeLemonadeFetch({ models: WITH_TEAM_LOCAL_ROLES }),
+		});
 		expect(findings).toHaveLength(1);
 		expect(findings[0]).toMatchObject({
 			level: "warn",

@@ -27,7 +27,10 @@ describe("provider capacity for kanban models vet (issue #25)", () => {
 	it("counts every project's In Progress cards, naming only the asking project's own", async () => {
 		const api = createApi({
 			"kanban-2uge": workspace([], [onLemonade("r0001", "Gemma-4-12B-it-GGUF")]),
-			notes: workspace([onLemonade("d2222", "GLM-4.7-Flash-GGUF"), onLemonade("q3333", "Gemma-4-12B-it-GGUF")]),
+			notes: workspace([
+				onLemonade("d2222", "Qwen3.8-27B-GGUF-UD-Q4_K_XL"),
+				onLemonade("q3333", "Gemma-4-12B-it-GGUF"),
+			]),
 		});
 		const { hold } = await api.check({
 			workspaceId: "kanban-2uge",
@@ -43,11 +46,14 @@ describe("provider capacity for kanban models vet (issue #25)", () => {
 	});
 
 	it("lets a model run that is already loaded, or while the provider has room", async () => {
-		const notes = workspace([onLemonade("d2222", "GLM-4.7-Flash-GGUF"), onLemonade("q3333", "Gemma-4-12B-it-GGUF")]);
+		const notes = workspace([
+			onLemonade("d2222", "Qwen3.8-27B-GGUF-UD-Q4_K_XL"),
+			onLemonade("q3333", "Gemma-4-12B-it-GGUF"),
+		]);
 		const api = createApi({ "kanban-2uge": workspace([]), notes });
 		const loaded = await api.check({
 			workspaceId: "kanban-2uge",
-			request: { provider: "lemonade", model: "GLM-4.7-Flash-GGUF" },
+			request: { provider: "lemonade", model: "Qwen3.8-27B-GGUF-UD-Q4_K_XL" },
 		});
 		expect(loaded.hold).toBeNull();
 		const roomy = createApi({ "kanban-2uge": workspace([]), notes }, 3);
@@ -63,7 +69,7 @@ describe("provider capacity for kanban models vet (issue #25)", () => {
 	it("reads a card's model through its effective model (the agent's default for a card that names none)", async () => {
 		const api = createApi({
 			"kanban-2uge": workspace([createCard({ id: "c0001", agentId: "cline" })]),
-			notes: workspace([onLemonade("d2222", "GLM-4.7-Flash-GGUF")]),
+			notes: workspace([onLemonade("d2222", "Qwen3.8-27B-GGUF-UD-Q4_K_XL")]),
 		});
 		const { hold } = await api.check({
 			workspaceId: "kanban-2uge",
