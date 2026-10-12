@@ -13,6 +13,7 @@ import { setPipelineCardStages } from "@/stores/pipeline-card-stage-store";
 import { setSelectedAgentId } from "@/stores/selected-agent-store";
 import { setTaskTokenUsage } from "@/stores/task-token-usage-store";
 import type { ReviewTaskWorkspaceSnapshot } from "@/types";
+import type * as ReactUse from "@/utils/react-use";
 
 let mockWorkspaceSnapshot: ReviewTaskWorkspaceSnapshot | undefined;
 let mockMeasureWidths = [240, 240, 240];
@@ -45,7 +46,8 @@ vi.mock("@/stores/workspace-metadata-store", () => ({
 	useTaskWorkspaceSnapshotValue: () => mockWorkspaceSnapshot,
 }));
 
-vi.mock("@/utils/react-use", () => ({
+vi.mock("@/utils/react-use", async (importOriginal) => ({
+	useInterval: (await importOriginal<typeof ReactUse>()).useInterval,
 	useMedia: () => false,
 	useMeasure: () => {
 		mockMeasureCallCount += 1;
@@ -896,7 +898,7 @@ describe("BoardCard", () => {
 	const agentPill = (taskId: string) =>
 		container.querySelector(`[data-task-id="${taskId}"] [data-testid="board-card-agent"]`);
 
-	it("starts the agent row with the task id, then the agent pill, and shows no token count there", async () => {
+	it("starts the agent row with the task id, then the agent pill, and keeps the token count off it", async () => {
 		setSelectedAgentId("claude");
 		setTaskTokenUsage([{ taskId: "7ad4d", input: 1_000, output: 20_000, cacheRead: 1_150_000, cacheWrite: 30_000 }]);
 		await renderCard(
@@ -913,8 +915,11 @@ describe("BoardCard", () => {
 		expect(taskId?.textContent).toBe("7ad4d");
 		expect(pill?.textContent).toBe("Cline · gpt-x");
 		expect(pill?.getAttribute("title")).toBe("Cline · gpt-x");
-		// The card has a count, but the second row takes it (In Progress and Review): never the agent line.
-		expect(container.querySelector('[data-testid="board-card-token-usage"]')).toBeNull();
+		// The card has a count, but the second row takes it: never the agent line.
+		expect(row?.querySelector('[data-testid="board-card-token-usage"]')).toBeNull();
+		expect(
+			container.querySelector('[data-testid="board-card-second-row"] [data-testid="board-card-token-usage"]'),
+		).not.toBeNull();
 		expect(Array.from(row?.children ?? [])).toEqual([taskId, pill]);
 		// The id and pill share one line that never wraps: only the model text truncates.
 		expect(taskId?.className).toContain("whitespace-nowrap");
@@ -963,9 +968,8 @@ describe("BoardCard", () => {
 		expect(metaRow?.compareDocumentPosition(secondRow as Node)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
 	});
 
-	it("shows no second row on Backlog cards without prerequisites or on cards past Backlog", async () => {
+	it("shows no second row on Backlog cards without prerequisites, nor on later cards with nothing counted", async () => {
 		setSelectedAgentId("claude");
-		setTaskTokenUsage([{ taskId: "c41d0", input: 5, output: 5, cacheRead: 0, cacheWrite: 0 }]);
 		await renderCard(
 			<>
 				<BoardCard card={createCard({ id: "b31c9" })} index={0} columnId="backlog" />
@@ -986,6 +990,87 @@ describe("BoardCard", () => {
 
 		expect(container.querySelector('[data-testid="board-card-second-row"]')).toBeNull();
 		expect(container.querySelector('[data-testid="board-card-prerequisites"]')).toBeNull();
+	});
+
+	const secondRowOf = (taskId: string) =>
+		container.querySelector(`[data-task-id="${taskId}"] [data-testid="board-card-second-row"]`);
+
+	it("shows a running card's tokens and live running time in the centered second row, never a cost", async () => {
+		vi.useFakeTimers();
+		try {
+			const now = Date.parse("2026-10-12T12:00:00Z");
+			vi.setSystemTime(now);
+			setSelectedAgentId("claude");
+			setTaskTokenUsage([{ taskId: "c41d0", input: 2_000, output: 6_000, cacheRead: 40_000, cacheWrite: 0 }]);
+			await renderCard(
+				<BoardCard
+					card={createCard({ id: "c41d0" })}
+					sessionSummary={createSummary("running", {
+						taskId: "c41d0",
+						startedAt: now - 2 * 60_000,
+						stateChangedAt: now - 2 * 60_000,
+						runningMs: 10 * 60_000,
+						runCount: 2,
+						firstRunStartedAt: now - 3_600_000,
+					})}
+					index={0}
+					columnId="in_progress"
+				/>,
+			);
+
+			const row = secondRowOf("c41d0");
+			expect(row?.className).toContain("justify-center");
+			expect(row?.textContent).toBe("48k tok·12m");
+			expect(row?.textContent).not.toMatch(/\$|cost/iu);
+			const metaRow = container.querySelector('[data-testid="board-card-meta-row"]');
+			expect(metaRow?.compareDocumentPosition(row as Node)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+
+			// The time follows the running agent.
+			await act(async () => {
+				vi.advanceTimersByTime(60_000);
+			});
+			expect(row?.querySelector('[data-testid="board-card-running-time"]')?.textContent).toBe("13m");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("shows the totals of Review and Done cards, and just the time before any token is counted", async () => {
+		setSelectedAgentId("claude");
+		setTaskTokenUsage([{ taskId: "d51e1", input: 1_000, output: 2_000, cacheRead: 1_150_000, cacheWrite: 0 }]);
+		await renderCard(
+			<>
+				<BoardCard
+					card={createCard({ id: "d51e1" })}
+					sessionSummary={createSummary("awaiting_review", {
+						taskId: "d51e1",
+						runningMs: 65 * 60_000,
+						runCount: 1,
+					})}
+					index={0}
+					columnId="trash"
+				/>
+				<BoardCard
+					card={createCard({ id: "e61f2" })}
+					sessionSummary={createSummary("awaiting_review", { taskId: "e61f2", runningMs: 45_000, runCount: 1 })}
+					index={1}
+					columnId="review"
+				/>
+				<BoardCard
+					card={createCard({ id: "f71a3" })}
+					sessionSummary={createSummary("awaiting_review", { taskId: "f71a3", runningMs: 45_000 })}
+					prerequisiteStatus={prerequisites}
+					index={2}
+					columnId="backlog"
+				/>
+			</>,
+		);
+
+		expect(secondRowOf("d51e1")?.textContent).toBe("1.2M tok·1h 05m");
+		expect(secondRowOf("e61f2")?.textContent).toBe("45s");
+		expect(secondRowOf("e61f2")?.querySelector('[data-testid="board-card-token-usage"]')).toBeNull();
+		// Never on a Backlog card: its second row keeps the prerequisites only.
+		expect(secondRowOf("f71a3")?.textContent).toBe("Waiting on 1 of 2");
 	});
 
 	it("shows the selected agent on a card with no agent of its own (default kit)", async () => {

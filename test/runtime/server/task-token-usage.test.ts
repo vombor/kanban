@@ -1,12 +1,27 @@
-import { describe, expect, it, vi } from "vitest";
+import { appendFileSync, mkdirSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { RuntimeBoardCard, RuntimeBoardData, RuntimeTaskSessionSummary } from "../../../src/core/api-contract";
 import { createTaskTokenUsageLoader } from "../../../src/server/task-token-usage";
-import type {
-	AgentTokenUsageReader,
-	AgentTokenUsageSources,
-	TokenCounts,
+import {
+	type AgentTokenUsageReader,
+	type AgentTokenUsageSources,
+	createAgentTokenUsageReader,
+	getClaudeProjectTranscriptDir,
+	type TokenCounts,
 } from "../../../src/terminal/agent-token-usage";
+import { createTempDir } from "../../utilities/temp-dir";
+
+let cleanups: Array<() => void> = [];
+
+afterEach(() => {
+	for (const cleanup of cleanups) {
+		cleanup();
+	}
+	cleanups = [];
+});
 
 const SOURCES: AgentTokenUsageSources = {
 	claudeProjectsPath: "/tmp/claude/projects",
@@ -92,5 +107,46 @@ describe("createTaskTokenUsageLoader", () => {
 			await load({ workspaceId: "ws", workspacePath: "/projects/repo" }, [summary("aaaaa", "/projects/repo/")]),
 		).toEqual({ usage: [] });
 		expect(read).not.toHaveBeenCalled();
+	});
+
+	it("keeps its session-file cache between calls: an unchanged file is not read again, a grown one is", async () => {
+		const temp = createTempDir("kanban-task-token-usage-");
+		cleanups.push(temp.cleanup);
+		const sources: AgentTokenUsageSources = {
+			claudeProjectsPath: join(temp.path, "claude", "projects"),
+			clineSessionsPath: join(temp.path, "cline", "sessions"),
+			codexSessionsPath: join(temp.path, "codex", "sessions"),
+			copilotSessionStatePath: join(temp.path, "copilot", "session-state"),
+		};
+		const worktree = join(temp.path, "wt", "aaaaa", "repo");
+		const dir = getClaudeProjectTranscriptDir(sources.claudeProjectsPath, worktree);
+		mkdirSync(dir, { recursive: true });
+		const transcript = join(dir, "session.jsonl");
+		const line = (id: string, output: number) =>
+			`${JSON.stringify({ type: "assistant", message: { id, usage: { input_tokens: 10, output_tokens: output } } })}\n`;
+		writeFileSync(transcript, line("m1", 100));
+		const load = createTaskTokenUsageLoader({
+			reader: createAgentTokenUsageReader(),
+			loadBoard: async () => board({ in_progress: ["aaaaa"] }),
+			readSources: async () => sources,
+		});
+		const scope = { workspaceId: "ws", workspacePath: "/projects/repo" };
+		const summaries = [summary("aaaaa", worktree)];
+
+		expect((await load(scope, summaries)).usage).toEqual([
+			{ taskId: "aaaaa", input: 10, output: 100, cacheRead: 0, cacheWrite: 0 },
+		]);
+
+		// Same size and mtime, other bytes: a cache hit answers the old count without reading the file.
+		const { atime, mtime } = statSync(transcript);
+		writeFileSync(transcript, line("m1", 900));
+		utimesSync(transcript, atime, mtime);
+		expect((await load(scope, summaries)).usage[0]?.output).toBe(100);
+
+		// The agent appends a turn: only the new line is read.
+		appendFileSync(transcript, line("m2", 50));
+		expect((await load(scope, summaries)).usage).toEqual([
+			{ taskId: "aaaaa", input: 20, output: 150, cacheRead: 0, cacheWrite: 0 },
+		]);
 	});
 });

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimePipelineCardStage } from "@/runtime/types";
 import { type UseRuntimeStateStreamResult, useRuntimeStateStream } from "@/runtime/use-runtime-state-stream";
 import { getPipelineCardStage, setPipelineCardStages } from "@/stores/pipeline-card-stage-store";
+import { getTaskTokenUsage, setTaskTokenUsage } from "@/stores/task-token-usage-store";
 
 class FakeWebSocket {
 	static readonly CONNECTING = 0;
@@ -196,5 +197,35 @@ describe("useRuntimeStateStream reconnect", () => {
 			current().send({ type: "pipeline_card_stages_updated", workspaceId: "project-1", stages: [] });
 		});
 		expect(getPipelineCardStage("8c28e")).toBeNull();
+	});
+
+	it("merges the current project's pushed token counts into the store, card by card", () => {
+		const counts = (taskId: string, output: number) => ({ taskId, input: 1, output, cacheRead: 0, cacheWrite: 0 });
+		setTaskTokenUsage([counts("aaaaa", 10), counts("bbbbb", 20)]);
+		try {
+			act(() => {
+				current().open();
+				current().sendSnapshot("project-1");
+			});
+			act(() => {
+				current().send({
+					type: "task_token_usage_updated",
+					workspaceId: "project-2",
+					usage: [counts("aaaaa", 99)],
+				});
+			});
+			expect(getTaskTokenUsage("aaaaa")?.output).toBe(10);
+			act(() => {
+				current().send({
+					type: "task_token_usage_updated",
+					workspaceId: "project-1",
+					usage: [counts("aaaaa", 15)],
+				});
+			});
+			expect(getTaskTokenUsage("aaaaa")?.output).toBe(15);
+			expect(getTaskTokenUsage("bbbbb")?.output).toBe(20);
+		} finally {
+			setTaskTokenUsage([]);
+		}
 	});
 });

@@ -4,13 +4,16 @@ import { getRuntimeTrpcClient } from "@/runtime/trpc-client";
 import { setTaskTokenUsage } from "@/stores/task-token-usage-store";
 import { useInterval } from "@/utils/react-use";
 
-/** Session files change every few seconds while a card runs; a board's counts needn't follow faster than this. */
-export const TASK_TOKEN_USAGE_POLL_MS = 20_000;
+/**
+ * Running cards' counts arrive live over the state stream (`task_token_usage_updated`); this slow re-read only catches
+ * what a dropped stream missed.
+ */
+export const TASK_TOKEN_USAGE_POLL_MS = 60_000;
 
 /**
- * Keeps the board cards' token counts (task-token-usage-store) current for the shown project: at once on a project
- * switch or when the tab comes back, then every TASK_TOKEN_USAGE_POLL_MS while the tab is visible. A failed read (an
- * older runtime) keeps the last counts.
+ * Loads the board cards' token counts (task-token-usage-store) for the shown project: at once on a project switch or
+ * when the tab comes back, then every TASK_TOKEN_USAGE_POLL_MS while the tab is visible; the runtime pushes the
+ * changes in between. A failed read (an older runtime) keeps the last counts.
  */
 export function useTaskTokenUsagePolling(workspaceId: string | null, isDocumentVisible: boolean): void {
 	const workspaceIdRef = useRef(workspaceId);

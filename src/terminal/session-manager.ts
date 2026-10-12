@@ -13,6 +13,7 @@ import type {
 	RuntimeTaskTypedInput,
 } from "../core/api-contract";
 import { isHomeAgentSessionId } from "../core/home-agent-session";
+import { accumulateRunningTime } from "../core/task-running-time";
 import {
 	type AgentAdapterLaunchInput,
 	type AgentOutputTransitionDetector,
@@ -205,10 +206,14 @@ function updateSummary(entry: SessionEntry, patch: Partial<RuntimeTaskSessionSum
 	if (stateChanged) {
 		entry.stateChangedAt = updatedAt;
 	}
+	// The card's running time (src/core/task-running-time.ts): a running span this patch ends is added here, the one
+	// writer of state changes.
+	const runningTime = accumulateRunningTime(entry.summary, patch, updatedAt, { live: entry.active !== null });
 	entry.summary = {
 		...entry.summary,
 		// A turn end holds only for the Review it was reported in.
 		...(stateChanged ? { lastTurnEnd: null } : {}),
+		...runningTime,
 		...patch,
 		...(stateChanged ? { stateChangedAt: updatedAt } : {}),
 		updatedAt,
@@ -776,6 +781,8 @@ export class TerminalSessionManager implements TerminalSessionService {
 		// (restart recovery's resume note).
 		const awaitingInput = request.resumeFromTrash === true && !request.prompt.trim();
 		updateSummary(entry, {
+			runCount: (entry.summary.runCount ?? 0) + 1,
+			firstRunStartedAt: entry.summary.firstRunStartedAt ?? startedAt,
 			state: awaitingInput ? "awaiting_review" : "running",
 			agentId: request.agentId,
 			workspacePath: request.cwd,

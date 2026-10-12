@@ -13,6 +13,7 @@ import type {
 	RuntimeWorkspaceStateResponse,
 } from "@/runtime/types";
 import { setPipelineCardStages } from "@/stores/pipeline-card-stage-store";
+import { mergeTaskTokenUsage } from "@/stores/task-token-usage-store";
 
 // After this long hidden (a backgrounded phone tab), treat an "open" socket as possibly dead and reconnect.
 const STREAM_STALE_AFTER_HIDDEN_MS = 30_000;
@@ -368,6 +369,13 @@ export function useRuntimeStateStream(requestedWorkspaceId: string | null): UseR
 							return;
 						}
 						dispatch({ type: "pipeline_card_stages_updated", stages: payload.stages });
+						return;
+					}
+					if (payload.type === "task_token_usage_updated") {
+						// Only the cards whose counts changed; the store got the rest from workspace.getTaskTokenUsage.
+						if (payload.workspaceId === activeWorkspaceId) {
+							mergeTaskTokenUsage(payload.usage);
+						}
 						return;
 					}
 					if (payload.type === "task_ready_for_review") {

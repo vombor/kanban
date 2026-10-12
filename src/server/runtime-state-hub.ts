@@ -13,9 +13,11 @@ import type {
 	RuntimeStateStreamSnapshotMessage,
 	RuntimeStateStreamTaskReadyForReviewMessage,
 	RuntimeStateStreamTaskSessionsMessage,
+	RuntimeStateStreamTaskTokenUsageMessage,
 	RuntimeStateStreamWorkspaceMetadataMessage,
 	RuntimeStateStreamWorkspaceStateMessage,
 	RuntimeTaskSessionSummary,
+	RuntimeTaskTokenUsage,
 } from "../core/api-contract";
 import { isHomeAgentSessionId } from "../core/home-agent-session";
 import type { TerminalSessionManager } from "../terminal/session-manager";
@@ -72,6 +74,10 @@ export interface RuntimeStateHub {
 	setPipelineCardStages: (workspaceId: string, stages: RuntimePipelineCardStage[]) => void;
 	/** The card stages kept for a workspace (empty: none), for `kanban pipeline status` (tRPC `pipeline.cardStages`). */
 	getPipelineCardStages: (workspaceId: string) => RuntimePipelineCardStage[];
+	/** Whether a browser follows the workspace's state stream. */
+	hasWorkspaceClients: (workspaceId: string) => boolean;
+	/** Cards whose token counts changed, to that workspace's clients only (src/server/task-token-usage-monitor.ts). */
+	broadcastTaskTokenUsageUpdated: (workspaceId: string, usage: RuntimeTaskTokenUsage[]) => void;
 	close: () => Promise<void>;
 }
 
@@ -317,6 +323,17 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 		}
 	};
 
+	const broadcastTaskTokenUsageUpdated = (workspaceId: string, usage: RuntimeTaskTokenUsage[]) => {
+		const payload: RuntimeStateStreamTaskTokenUsageMessage = {
+			type: "task_token_usage_updated",
+			workspaceId,
+			usage,
+		};
+		for (const client of runtimeStateClientsByWorkspaceId.get(workspaceId) ?? []) {
+			sendRuntimeStateMessage(client, payload);
+		}
+	};
+
 	runtimeStateWebSocketServer.on("connection", async (client: WebSocket, context: unknown) => {
 		client.on("close", () => {
 			cleanupRuntimeStateClient(client);
@@ -508,6 +525,8 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 		broadcastProjectShortcutsUpdated,
 		setPipelineCardStages,
 		getPipelineCardStages: (workspaceId) => pipelineCardStagesByWorkspaceId.get(workspaceId) ?? [],
+		hasWorkspaceClients: (workspaceId) => (runtimeStateClientsByWorkspaceId.get(workspaceId)?.size ?? 0) > 0,
+		broadcastTaskTokenUsageUpdated,
 		close: async () => {
 			stopKeepalive();
 			activityListeners.clear();

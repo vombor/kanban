@@ -373,6 +373,14 @@ export const runtimeTaskSessionSummarySchema = z.object({
 	reasoningEffort: z.string().nullable().default(null),
 	latestTurnCheckpoint: runtimeTaskTurnCheckpointSchema.nullable().optional(),
 	previousTurnCheckpoint: runtimeTaskTurnCheckpointSchema.nullable().optional(),
+	/**
+	 * The card's agent running time over all its runs (read through src/core/task-running-time.ts), kept by the session
+	 * manager's updateSummary: ms spent `running` before the current state, the agent sessions started, and when the
+	 * first of them started. Absent on summaries written before Kanban kept them.
+	 */
+	runningMs: z.number().optional(),
+	runCount: z.number().int().optional(),
+	firstRunStartedAt: z.number().optional(),
 });
 export type RuntimeTaskSessionSummary = z.infer<typeof runtimeTaskSessionSummarySchema>;
 
@@ -605,6 +613,14 @@ export type RuntimeStateStreamPipelineCardStagesMessage = z.infer<
 	typeof runtimeStateStreamPipelineCardStagesMessageSchema
 >;
 
+/** Cards whose token counts changed (only those; the browser fetches the rest). Sent to that workspace's clients only. */
+export const runtimeStateStreamTaskTokenUsageMessageSchema = z.object({
+	type: z.literal("task_token_usage_updated"),
+	workspaceId: z.string(),
+	usage: z.array(runtimeTaskTokenUsageSchema),
+});
+export type RuntimeStateStreamTaskTokenUsageMessage = z.infer<typeof runtimeStateStreamTaskTokenUsageMessageSchema>;
+
 export const runtimeStateStreamErrorMessageSchema = z.object({
 	type: z.literal("error"),
 	message: z.string(),
@@ -620,6 +636,7 @@ export const runtimeStateStreamMessageSchema = z.discriminatedUnion("type", [
 	runtimeStateStreamTaskReadyForReviewMessageSchema,
 	runtimeStateStreamProjectShortcutsMessageSchema,
 	runtimeStateStreamPipelineCardStagesMessageSchema,
+	runtimeStateStreamTaskTokenUsageMessageSchema,
 	runtimeStateStreamErrorMessageSchema,
 ]);
 export type RuntimeStateStreamMessage = z.infer<typeof runtimeStateStreamMessageSchema>;

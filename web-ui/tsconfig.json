@@ -30,7 +30,8 @@
       "@runtime-task-worktree-path": ["../src/workspace/task-worktree-path.ts"],
       "@runtime-task-state": ["../src/core/task-board-mutations.ts"],
       "@runtime-task-agent-settings": ["../src/core/task-agent-settings.ts"],
-      "@runtime-effective-agent": ["../src/core/effective-agent.ts"]
+      "@runtime-effective-agent": ["../src/core/effective-agent.ts"],
+      "@runtime-task-running-time": ["../src/core/task-running-time.ts"]
     },
     "types": ["vitest/globals"]
   },

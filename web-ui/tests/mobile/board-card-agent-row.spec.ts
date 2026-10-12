@@ -4,11 +4,23 @@ import { type DevInstance, startDevInstance } from "./dev-instance";
 
 // The board card's agent row on a phone (the config's Pixel 7) and on a narrow desktop column: the task id pill, then
 // the agent pill (the effective agent, the selected one for a card that names none), and under them the centered
-// second row with a Backlog card's prerequisites. The id never wraps and the pill stays on its line; the model text
-// truncates first.
+// second row with a Backlog card's prerequisites, or a running card's live token count and running time. The id never
+// wraps and the pill stays on its line; the model text truncates first.
 
-// A stand-in for Claude Code that just stays running, so its card sits In Progress.
+// A stand-in for Claude Code that stays running, so its card sits In Progress, and writes a transcript where Claude
+// Code does (one 1,500-token message every second), so the card's token count grows while it runs.
 const FAKE_AGENT = `#!/usr/bin/env node
+const { appendFileSync, mkdirSync } = require("node:fs");
+const { homedir } = require("node:os");
+const { join } = require("node:path");
+const dir = join(homedir(), ".claude", "projects", process.cwd().replace(/[^A-Za-z0-9]/g, "-"));
+mkdirSync(dir, { recursive: true });
+let n = 0;
+setInterval(() => {
+	n += 1;
+	const usage = { input_tokens: 1000, output_tokens: 500 };
+	appendFileSync(join(dir, "fake.jsonl"), JSON.stringify({ type: "assistant", message: { id: "m" + n, usage } }) + "\\n");
+}, 1000);
 process.stdout.write("working\\r\\n");
 process.stdin.resume();
 `;
@@ -154,13 +166,28 @@ for (const profile of ["phone", "desktop"] as const) {
 			const pill = running.getByTestId("board-card-agent");
 			await expect(taskId).toHaveText(runningTaskId);
 			await expect(pill).toHaveText("Claude Code");
-			// No token count on the agent line (the second row takes it for In Progress and Review cards).
-			await expect(running.getByTestId("board-card-token-usage")).toHaveCount(0);
+			// No token count on the agent line: the second row takes it.
+			await expect(running.getByTestId("board-card-meta-row").getByTestId("board-card-token-usage")).toHaveCount(0);
 			await expectOneLine(taskId, pill);
 			await expectSameHeight(taskId, pill);
 			await expectInside(pill, running.getByTestId("board-card-meta-row"));
-			// Nothing in the second row past Backlog yet.
-			await expect(running.getByTestId("board-card-second-row")).toHaveCount(0);
+			// The second row: the live token count and running time, centered under the line, growing while it runs.
+			const stats = running.getByTestId("board-card-second-row");
+			await expect(stats).toHaveText(/^\d+(\.\d)?k tok·\d+(s|m)$/u, { timeout: 30_000 });
+			const [tokens, time, line] = await Promise.all([
+				stats.getByTestId("board-card-token-usage").boundingBox(),
+				stats.getByTestId("board-card-running-time").boundingBox(),
+				running.getByTestId("board-card-meta-row").boundingBox(),
+			]);
+			expect(tokens && time && line).toBeTruthy();
+			if (tokens && time && line) {
+				expect(Math.abs(tokens.x - line.x - (line.x + line.width - (time.x + time.width)))).toBeLessThan(2);
+				expect(time.y).toBeGreaterThan(line.y + line.height - 1);
+			}
+			const readTokens = async () =>
+				Number.parseFloat((await stats.getByTestId("board-card-token-usage").textContent()) ?? "");
+			const before = await readTokens();
+			await expect.poll(readTokens, { timeout: 20_000 }).toBeGreaterThan(before);
 			await testInfo.attach("running card", { body: await running.screenshot(), contentType: "image/png" });
 
 			const backlog = page.locator(`[data-task-id="${backlogTaskId}"]`).filter({ visible: true }).first();

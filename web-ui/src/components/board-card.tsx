@@ -10,6 +10,7 @@ import type { KeyboardEvent, MouseEvent } from "react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { BoardCardPipelineStage } from "@/components/board-card-pipeline-stage";
+import { BoardCardRunStats } from "@/components/board-card-run-stats";
 import { BoardCardTaskId } from "@/components/board-card-task-id";
 import { PlanApprovalButton } from "@/components/plan-approval-button";
 import { Button } from "@/components/ui/button";
@@ -790,7 +791,7 @@ export const BoardCard = memo(function BoardCard({
 									</span>
 								) : null}
 							</div>
-							{/* The centered second row: a Backlog card's prerequisites. In Progress and Review cards have none yet. */}
+							{/* The centered second row: a Backlog card's prerequisites, any other card's token count and running time. */}
 							{columnId === "backlog" && prerequisiteLabel ? (
 								<div className="mt-1 flex justify-center" data-testid="board-card-second-row">
 									<Tooltip side="bottom" content={prerequisiteLabel.detail}>
@@ -809,6 +810,9 @@ export const BoardCard = memo(function BoardCard({
 										</span>
 									</Tooltip>
 								</div>
+							) : null}
+							{columnId !== "backlog" ? (
+								<BoardCardRunStats taskId={card.id} sessionSummary={sessionSummary} />
 							) : null}
 							{columnId === "review" || columnId === "in_progress" ? (
 								<BoardCardPipelineStage taskId={card.id} />

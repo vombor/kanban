@@ -97,6 +97,8 @@ import { buildCallerRequest, createRequestCallerResolver } from "./request-calle
 import type { RuntimeStateHub } from "./runtime-state-hub";
 import { createShortcutPortProxyHandler, createShortcutPortRegistry, isShortcutPortProxyPath } from "./shortcut-ports";
 import { createTaskLandingGate } from "./task-landing-gate";
+import { createTaskTokenUsageLoader } from "./task-token-usage";
+import { createTaskTokenUsageMonitor, isTaskTokenUsageSession } from "./task-token-usage-monitor";
 import { createTaskTrashWorkflow, createTrashTaskRequestHandler, type TaskTrashWorkflow } from "./task-trash-workflow";
 import { createTypedInputHold, type TypedInputHold } from "./typed-input-hold";
 import { createWatchdogActionHandler } from "./watchdog-actions";
@@ -283,6 +285,38 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		loadSettings: createClineLemonadeContextSyncSettingsLoader(deps.warn),
 		loadLemonadeModelList: createLemonadeModelListSettingsLoader(deps.warn),
 		log: deps.warn,
+	});
+	// The board cards' token counts: one loader per server, so its session-file cache outlives a request (the
+	// workspace API is built per request), shared by workspace.getTaskTokenUsage and the live push.
+	const loadTaskTokenUsage = createTaskTokenUsageLoader();
+	const taskTokenUsageMonitor = createTaskTokenUsageMonitor({
+		loadUsage: async (workspaceId) => {
+			const workspacePath = deps.workspaceRegistry.getWorkspacePathById(workspaceId);
+			if (!workspacePath) {
+				return null;
+			}
+			const terminalManager = await deps.ensureTerminalManagerForWorkspace(workspaceId, workspacePath);
+			return (await loadTaskTokenUsage({ workspaceId, workspacePath }, terminalManager.listSummaries())).usage;
+		},
+		hasClients: deps.runtimeStateHub.hasWorkspaceClients,
+		listRunningWorkspaces: () =>
+			deps.workspaceRegistry
+				.listManagedWorkspaces()
+				.filter(
+					(workspace) =>
+						deps.runtimeStateHub.hasWorkspaceClients(workspace.workspaceId) &&
+						workspace.terminalManager
+							.listSummaries()
+							.some((summary) => summary.state === "running" && isTaskTokenUsageSession(summary.taskId)),
+				)
+				.map((workspace) => workspace.workspaceId),
+		broadcast: deps.runtimeStateHub.broadcastTaskTokenUsageUpdated,
+		warn: deps.warn,
+	});
+	const unsubscribeTaskTokenUsageActivity = deps.runtimeStateHub.onWorkspaceActivity((activity) => {
+		if (activity.summary) {
+			taskTokenUsageMonitor.noteActivity(activity.workspaceId, activity.summary.taskId);
+		}
 	});
 	// Ends Cline CLI turns that Cline's TaskComplete hook missed, through the same ingest path the hook uses.
 	const inProcessHooksApi = createHooksApi({
@@ -611,6 +645,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 				buildWorkspaceStateSnapshot: deps.workspaceRegistry.buildWorkspaceStateSnapshot,
 				trashTask: handleTrashTaskRequest,
 				prepareTaskProcessReap,
+				loadTaskTokenUsage,
 			}),
 			projectsApi: createProjectsApi({
 				getActiveWorkspacePath: deps.workspaceRegistry.getActiveWorkspacePath,
@@ -923,6 +958,8 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			orphanProcessSweeper.close();
 			clineTurnMonitor.close();
 			clineLemonadeContextSync.close();
+			unsubscribeTaskTokenUsageActivity();
+			taskTokenUsageMonitor.close();
 			await deps.runtimeStateHub.close();
 			await terminalWebSocketBridge.close();
 			await new Promise<void>((resolveClose, rejectClose) => {
