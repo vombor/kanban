@@ -6,6 +6,7 @@ import {
 	detectPrematureStop,
 	detectRunError,
 	findOverflowCulprit,
+	getProviderAccountError,
 	isContextOverflowError,
 	isModelNotLoadedError,
 	isPoisonedHistoryError,
@@ -163,6 +164,33 @@ describe("provider error classes", () => {
 		);
 		expect(isModelNotLoadedError("No model loaded: GLM-4.7-Flash-GGUF")).toBe(true);
 		expect(isModelNotLoadedError("decode() failed: vk::Queue::submit: ErrorDeviceLost")).toBe(false);
+	});
+
+	it("tells ClinePass's account answers apart, as Cline writes them and as its server sends them", () => {
+		const notice = { displayError: true };
+		for (const [error, kind] of [
+			[
+				"No access to ClinePass subscription models yet. Subscribe to ClinePass, the low cost open weights model coding plan: https://app.cline.bot/dashboard/subscription?personal=true",
+				"no_subscription",
+			],
+			["the user is not subscribed to required model plan", "no_subscription"],
+			[
+				"Organization accounts cannot use ClinePass subscriptions. Go to /account -> change account to switch to your personal account for ClinePass",
+				"organization_account",
+			],
+			["organization accounts cannot use individual model inference subscriptions", "organization_account"],
+			["You have reached your ClinePass limit for this period. Please try again later.", "limit"],
+		] as const) {
+			expect(getProviderAccountError(error)).toBe(kind);
+			const found = detectFinalProviderError([text("user", "go"), text("assistant", error, notice)]);
+			expect(found).toEqual({ text: error, notice: true });
+			// A QA card on an account the provider refuses gets no replacement on it (qa-gate.ts); a limit is a provider error.
+			expect(detectRunError(detailOf([text("user", "go"), text("assistant", error, notice)]))?.kind).toBe(
+				kind === "limit" ? "provider_error" : "provider_account",
+			);
+		}
+		expect(getProviderAccountError("You have reached your free limit. Please try again later.")).toBeNull();
+		expect(getProviderAccountError("503 Service Unavailable")).toBeNull();
 	});
 
 	it("never reads the reason of a run Kanban ended through the Cline hub as a provider error (issues #28, #32)", () => {

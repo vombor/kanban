@@ -68,6 +68,7 @@ export const USER_ONLY_COMMANDS = [
 	"cline apply-lemonade-models",
 	"cline apply-localai-provider",
 	"cline store-bedrock-key",
+	"cline store-cline-pass-key",
 	"cline remove-bedrock-key",
 	"plan approve",
 	// Moves team keys into a new user kit and switches the project to it: a change of the project's team.

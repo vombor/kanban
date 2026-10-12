@@ -9,15 +9,24 @@ import {
 	detectFinalProviderError,
 	type FinalProviderError,
 	getClineMessageText,
+	getProviderAccountError,
 	hasClineToolUse,
 	isContextOverflowError,
 	isPoisonedHistoryError,
+	type ProviderAccountErrorKind,
 } from "../terminal/cline-provider-error";
 import type { ClineSessionDetail, ClineSessionDetailMessage } from "../terminal/cline-session-files";
 import { getClineImageRejection } from "../terminal/cline-turn-outcome";
 
 // The final-reply error reader and its patterns live with the turn detector, which reads them too.
-export { detectFinalProviderError, type FinalProviderError, isContextOverflowError, isPoisonedHistoryError };
+export {
+	detectFinalProviderError,
+	type FinalProviderError,
+	getProviderAccountError,
+	isContextOverflowError,
+	isPoisonedHistoryError,
+	type ProviderAccountErrorKind,
+};
 
 // Provider errors worth a backoff retry rather than a nudge (daf86a5: three 5xx in 25 s escalated 0789a; 519d05f:
 // stream timeouts; 6698365: "connection refused" from a restarting Lemonade).
@@ -150,6 +159,8 @@ export type AgentRunError =
 	/** The conversation outgrew the model's context: resending it overflows again (issue #26). */
 	| { kind: "context_overflow"; text: string }
 	| { kind: "provider_error"; text: string }
+	/** The provider refuses the user's account (no subscription, an organization account): no rerun helps. */
+	| { kind: "provider_account"; text: string }
 	| { kind: "session_failed"; text: string };
 
 /**
@@ -171,8 +182,13 @@ export function detectRunError(detail: ClineSessionDetail): AgentRunError | null
 	}
 	const error = detectFinalProviderError(detail.messages);
 	if (error) {
+		const account = getProviderAccountError(error.text);
 		return {
-			kind: isContextOverflowError(error.text) ? "context_overflow" : "provider_error",
+			kind: isContextOverflowError(error.text)
+				? "context_overflow"
+				: account && account !== "limit"
+					? "provider_account"
+					: "provider_error",
 			text: error.text.slice(0, 300),
 		};
 	}

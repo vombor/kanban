@@ -88,6 +88,11 @@ export interface VetRunnerDeps {
 		) => Promise<{ count: number; of: number; call: string } | null>;
 	};
 	/**
+	 * Why the agent's TUI would open its sign-in screen for the combination's provider instead of taking the prompt
+	 * (Cline: readClineTuiSignInGap), null when it starts or this can't tell. Asked before the card is created.
+	 */
+	readSignInGap?: (combination: ModelCombination) => Promise<string | null>;
+	/**
 	 * Who holds the combination's provider at its `models.providerCapacity` limit (every project's In Progress
 	 * cards), null when the model may run now. Asked before the card is created.
 	 */
@@ -209,6 +214,15 @@ export async function runVet(input: VetRunInput, deps: VetRunnerDeps): Promise<V
 
 	if ((await deps.signals.isSignedIn(agentId)) === false) {
 		return finish({ kind: "sign_in", detail: `${agentId} has no login it can start a run with`, harness: true });
+	}
+	// A card on the sign-in screen writes nothing, and the run would only end as `no_session` after the stall time.
+	const signInGap = (await deps.readSignInGap?.(combination)) ?? null;
+	if (signInGap) {
+		return finish({
+			kind: "sign_in",
+			detail: `${agentId} would open its sign-in screen for ${combination.provider ?? "its provider"}: ${signInGap}`,
+			harness: true,
+		});
 	}
 	let lastCapacityHold: string | null = null;
 	for (;;) {

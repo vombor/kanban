@@ -65,7 +65,9 @@ Fix it before anything else.
   Kanban's rules as worktree rules (`.cline/rules/kanban-*.md`, git-excluded) and `CLINE_DISABLE_CLINE_PASS_NOTICE=1`.
   Bedrock needs its key and region stored in Cline's `providers.json`: Cline's TUI doesn't count
   `AWS_BEARER_TOKEN_BEDROCK`/`AWS_REGION` and opens its sign-in screen without them. Run `kanban cline store-bedrock-key`
-  from the environment Kanban starts from to store the env's key ([cline-bedrock-auth.md](../fork/cline-bedrock-auth.md));
+  from the environment Kanban starts from to store the env's key ([cline-bedrock-auth.md](../fork/cline-bedrock-auth.md)).
+  ClinePass (`cline-pass`) is the same: its key comes in as `CLINE_API_KEY` (podman secret) and must be stored in
+  `providers.json` with `kanban cline store-cline-pass-key` ([cline-pass-auth.md](../fork/cline-pass-auth.md));
   `kanban setup` and `kanban doctor` only check and print what to run (status "to do by hand").
   `kanban models providers --cleanup` lists the edits for Cline's files; you make them. `kanban doctor` reports
   Kanban's rules left in `~/.cline/rules` and `*.bak-before-kanban-setup-*` backups with the `rm` command; it never

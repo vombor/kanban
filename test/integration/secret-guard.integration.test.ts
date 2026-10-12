@@ -66,6 +66,7 @@ describe.sequential("scripts/secret-guard.sh", () => {
 			GITHUB_TOKEN: "",
 			COPILOT_GITHUB_TOKEN: "",
 			AWS_BEARER_TOKEN_BEDROCK: "",
+			CLINE_API_KEY: "",
 		});
 		repo = join(tempDir.path, "repo");
 		mkdirSync(repo);
@@ -161,6 +162,18 @@ describe.sequential("scripts/secret-guard.sh", () => {
 		const key = "plain-bedrock-value-1234567890";
 		const commit = commitFile("bedrock.txt", `key: ${key}\n`, "bedrock");
 		env = { ...env, AWS_BEARER_TOKEN_BEDROCK: key };
+
+		const result = runGuard(["--scan", "HEAD"]);
+
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain(`commit ${commit.slice(0, 10)} adds a secret value used on this machine`);
+		expect(result.stderr).not.toContain(key);
+	});
+
+	it("knows the ClinePass key from CLINE_API_KEY as a secret value", () => {
+		const key = "plain-cline-pass-value-1234567890";
+		const commit = commitFile("cline-pass.txt", `key: ${key}\n`, "cline-pass");
+		env = { ...env, CLINE_API_KEY: key };
 
 		const result = runGuard(["--scan", "HEAD"]);
 

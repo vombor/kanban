@@ -45,6 +45,7 @@ import {
 	detectHungRequest,
 	detectPrematureStop,
 	findOverflowCulprit,
+	getProviderAccountError,
 	isContextOverflowError,
 	isModelNotLoadedError,
 	isPoisonedHistoryError,
@@ -301,7 +302,13 @@ function iso(ms: number): string {
 }
 
 function modelLabel(model: EffectiveModel | null): string {
-	return model ? (model.provider ? `${model.provider}/${model.model}` : model.model) : "its default model";
+	if (!model) {
+		return "its default model";
+	}
+	// ClinePass's ids already name it ("cline-pass/kimi-k3").
+	return model.provider && !model.model.startsWith(`${model.provider}/`)
+		? `${model.provider}/${model.model}`
+		: model.model;
 }
 
 function escalate(input: RecoveryCardInput, reason: string, details: string[] = [], patch: RecoveryFlowPatch = {}) {
@@ -363,6 +370,10 @@ function providerHold(
 		},
 	};
 }
+
+/** What the orchestrator does about a provider account error (the escalation's details). */
+const ACCOUNT_ERROR_NEXT_STEP =
+	"no retry, nudge or model of the same account helps: fix the account (docs/fork/cline-pass-auth.md for ClinePass), then restart the card (kanban task resume)";
 
 /** Whether the card's agent is still working (a false Review flip): live process, running, and still writing. */
 function isWorking(input: RecoveryCardInput): boolean {
@@ -704,6 +715,20 @@ function decideSettledReview(input: RecoveryCardInput): RecoveryDecision {
 	// An image rejection reads as a poisoned-history error too ("messages.1.content.86.image…"): it gets the image
 	// note instead, or the cleared conversation opens the same image again (issue #12).
 	const stop = premature?.kind === "no_images" ? null : stopReason(input);
+	const account = stop ? getProviderAccountError(stop.error) : null;
+	if (stop && account && account !== "limit") {
+		// The provider refuses the user's account (ClinePass: no subscription, an organization account): no retry,
+		// nudge or outage probe helps until the user changes the account, so the orchestrator hears it at once, as a
+		// provider error, not the model's.
+		return withPatch(
+			escalate(
+				input,
+				`provider account error on ${modelLabel(input.model)}, not a model failure: ${stop.error.slice(0, 160)}`,
+				[ACCOUNT_ERROR_NEXT_STEP],
+			),
+			clearHold,
+		);
+	}
 	if (stop) {
 		// The provider-error hold is recorded before any capacity wait: a wait leaves no state, so the rework stage
 		// would judge the errored turn as a rework that "came back unchanged" and the QA gate would review it
@@ -712,6 +737,16 @@ function decideSettledReview(input: RecoveryCardInput): RecoveryDecision {
 		const hold = providerHold(input, stop.error, stop.retryable);
 		if (hold) {
 			return withPatch(hold, clearHold);
+		}
+		if (account === "limit") {
+			// The provider's usage limit, still reached after the provider retries: a crash nudge would hit it again.
+			return withPatch(
+				escalate(
+					input,
+					`provider usage limit on ${modelLabel(input.model)} still reached after ${settings.retryBackoffMin.length} provider retries, not a model failure: ${stop.error.slice(0, 160)}`,
+				),
+				clearHold,
+			);
 		}
 		if (input.capacityHold) {
 			return capacityStopWait(input, input.capacityHold, `agent stopped with ${stop.reason}: ${stop.error}`);

@@ -1062,7 +1062,8 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			...dev,
 			qaAgentErrors: [...readQaAgentErrors(dev), errorRecord].slice(-20),
 		}));
-		if (earlier.length < QA_AGENT_ERROR_RETRIES) {
+		// A provider that refuses the account refuses a fresh QA card on it just the same.
+		if (earlier.length < QA_AGENT_ERROR_RETRIES && error.kind !== "provider_account") {
 			const stopped = await markSuperseded(context, qaTaskId, entry);
 			deps.log(
 				`qa-ingest ${qaTaskId}: the QA agent's own run failed (${what}); replacing it (${attempt}/${QA_AGENT_ERROR_RETRIES})`,

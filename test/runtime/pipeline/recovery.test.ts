@@ -491,6 +491,54 @@ describe("decideRecovery: Review cards", () => {
 		});
 	});
 
+	describe("a turn that ends on ClinePass's account answers (cline 3.0.70 notices)", () => {
+		const CLINE_PASS = { provider: "cline-pass", model: "cline-pass/mimo-v2.6-flash" };
+		// The texts Cline wrote into the session file in real TUI runs against a fake server (2026-10-12).
+		const NO_ACCESS =
+			"No access to ClinePass subscription models yet. Subscribe to ClinePass, the low cost open weights model coding plan: https://app.cline.bot/dashboard/subscription?personal=true";
+		const ORGANIZATION =
+			"Organization accounts cannot use ClinePass subscriptions. Go to /account -> change account to switch to your personal account for ClinePass";
+		const LIMIT = "You have reached your ClinePass limit for this period. Please try again later.";
+		const noticeTurn = (error: string) =>
+			detail([message("user", "Implement the thing."), message("assistant", error, { displayError: true })], {
+				writtenAgoMs: MIN,
+			});
+
+		it("escalates a no-subscription or organization-account answer at once, as a provider error, not the model's", () => {
+			for (const error of [NO_ACCESS, ORGANIZATION]) {
+				const decision = expectKind(
+					decideRecovery(input({ model: CLINE_PASS, canProbe: false, detail: noticeTurn(error) })),
+					"escalate",
+				);
+				expect(decision.reason).toContain("provider account error on cline-pass/mimo-v2.6-flash");
+				expect(decision.reason).toContain("not a model failure");
+				expect(decision.details.join(" ")).toContain("fix the account");
+				// No retry, nudge or outage hold is spent on it.
+				expect(decision.patch.retryAt).toBeUndefined();
+				expect(decision.patch.transient).toBeUndefined();
+				expect(decision.patch.nudges).toBeUndefined();
+			}
+		});
+
+		it("retries a usage limit like a provider error, then escalates it instead of nudging into it", () => {
+			const first = expectKind(
+				decideRecovery(input({ model: CLINE_PASS, canProbe: false, detail: noticeTurn(LIMIT) })),
+				"hold",
+			);
+			expect(first.reason).toContain("provider error on cline-pass/mimo-v2.6-flash (1/4)");
+			const usedUp = flow({
+				transient: [1, 2, 3, 4].map((n) => ({ at: new Date(NOW - n * MIN).toISOString(), warn: LIMIT })),
+			});
+			const decision = expectKind(
+				decideRecovery(input({ model: CLINE_PASS, canProbe: false, flow: usedUp, detail: noticeTurn(LIMIT) })),
+				"escalate",
+			);
+			expect(decision.reason).toContain("provider usage limit on cline-pass/mimo-v2.6-flash");
+			expect(decision.reason).toContain("after 4 provider retries");
+			expect(decision.patch.nudges).toBeUndefined();
+		});
+	});
+
 	describe("a stop seen while the provider is at capacity (follow-up of issue #32)", () => {
 		const LEMONADE = { provider: "lemonade", model: "Qwen3.8-27B-GGUF-UD-Q4_K_XL" };
 		const OVERFLOW = "Context size has been exceeded.";

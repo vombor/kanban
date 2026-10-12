@@ -258,6 +258,18 @@ describe("getModelVendor", () => {
 		expect(getModelVendor(null)).toBeNull();
 	});
 
+	it("reads ClinePass's cline-pass/<model> ids by the model, not the gateway (cline 3.0.70's catalog)", () => {
+		expect(getModelVendor("cline-pass/glm-5.3-flash")).toBe("zai");
+		expect(getModelVendor("cline-pass/glm-5.3")).toBe(getModelVendor("GLM-4.7-Flash-GGUF"));
+		expect(getModelVendor("cline-pass/deepseek-v4.1-flash")).toBe("deepseek");
+		expect(getModelVendor("cline-pass/qwen3.8-max")).toBe("qwen");
+		expect(getModelVendor("cline-pass/mimo-v2.6-flash")).toBe("xiaomi");
+		expect(getModelVendor("cline-pass/kimi-k3")).toBe(getModelVendor("us.moonshotai.kimi-k3"));
+		expect(getModelVendor("cline-pass/minimax-m3")).toBe("minimax");
+		expect(getModelVendor("cline-pass/muse-spark-1.3-contributor")).toBe("meta");
+		expect(getModelVendor("cline-pass/something-new")).toBeNull();
+	});
+
 	it("reads LocalAI's lower-case ids (2026-10-11) to the vendor of their base model", () => {
 		expect(getModelVendor("glm-5.3-flash-q2-k")).toBe("zai");
 		expect(getModelVendor("qwen3-coder-next-q8-0-qwen")).toBe("qwen");

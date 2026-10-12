@@ -26,8 +26,8 @@ Create a **classic** PAT (Settings → Developer settings → Personal access to
 | CI publish (`publish.yml`) | `NODE_AUTH_TOKEN: ${{ secrets.GH_PAT }}` for `npm publish`, and the GitHub release |
 | GHCR push (`image.yml`) | `docker/login-action` with `secrets.GH_PAT` |
 | Agent sessions (Claude, Codex, Cline, Copilot, ...) | keep `GH_TOKEN`: PR-mode cards need gh, and `/root/.config/gh` is readable by them anyway (Copilot itself runs on `COPILOT_GITHUB_TOKEN`, see below) |
-| Pipeline checks (`src/pipeline/checks.ts`) | never see it: `GH_TOKEN`, `GITHUB_TOKEN`, `COPILOT_GITHUB_TOKEN` and `AWS_BEARER_TOKEN_BEDROCK` are removed, so a project's tests can't read them |
-| `scripts/secret-guard.sh` | counts the values of `GH_TOKEN` / `GITHUB_TOKEN` / `COPILOT_GITHUB_TOKEN` / `AWS_BEARER_TOKEN_BEDROCK` as known secrets and blocks a push that adds one |
+| Pipeline checks (`src/pipeline/checks.ts`) | never see it: `GH_TOKEN`, `GITHUB_TOKEN`, `COPILOT_GITHUB_TOKEN`, `AWS_BEARER_TOKEN_BEDROCK` and `CLINE_API_KEY` are removed, so a project's tests can't read them |
+| `scripts/secret-guard.sh` | counts the values of `GH_TOKEN` / `GITHUB_TOKEN` / `COPILOT_GITHUB_TOKEN` / `AWS_BEARER_TOKEN_BEDROCK` / `CLINE_API_KEY` as known secrets and blocks a push that adds one |
 
 `GITHUB_TOKEN` is accepted as a fallback for `GH_TOKEN` in the container, but set `GH_TOKEN`.
 
@@ -42,6 +42,11 @@ it and secret-guard knows its value. `AWS_REGION` is not a secret and stays ever
 runs in, only counts a key and region stored in `providers.json` (with the env alone it opens Cline's sign-in screen,
 issue #9). So the user's `kanban cline store-bedrock-key` copies the env's key there, and `kanban doctor` warns when
 none is stored or the stored one differs ([cline-bedrock-auth.md](cline-bedrock-auth.md)).
+
+The ClinePass key `CLINE_API_KEY` (Cline's subscription provider `cline-pass`) takes the same route
+(`Secret=<name>,type=env,target=CLINE_API_KEY`), is handled the same way, and has the same TUI rule: the user's
+`kanban cline store-cline-pass-key` stores it in `providers.json`, and doctor warns when it isn't stored or differs
+([cline-pass-auth.md](cline-pass-auth.md)).
 
 The entrypoint changes nothing when neither variable is set (gh then uses its login in `/root/.config/gh`). It never
 prints the token, also not under `set -x`, and never writes it to a file. Its `.npmrc` edit is idempotent and keeps

@@ -1,6 +1,6 @@
-// `kanban cline apply-lemonade-models`, `apply-localai-provider` and `store-bedrock-key`: the user's commands that
-// write Cline's files (src/setup/cline-lemonade-apply.ts, src/setup/cline-localai-provider.ts,
-// src/setup/cline-bedrock-key.ts). `kanban setup` and doctor only print
+// `kanban cline apply-lemonade-models`, `apply-localai-provider`, `store-bedrock-key` and `store-cline-pass-key`:
+// the user's commands that write Cline's files (src/setup/cline-lemonade-apply.ts, src/setup/cline-localai-provider.ts,
+// src/setup/cline-bedrock-key.ts, src/setup/cline-pass-key.ts). `kanban setup` and doctor only print
 // them; an agent session can't run them (USER_ONLY_COMMANDS in src/isolation/cli-scope.ts). `remove-bedrock-key`
 // only refuses: Cline's TUI needs the stored key (issue #9).
 import type { Command } from "commander";
@@ -16,6 +16,7 @@ import {
 import { getClineBackupDir } from "../setup/cline-file-write";
 import { applyClineLemonadeEntry, getClineModelsBackupDir } from "../setup/cline-lemonade-apply";
 import { applyClineLocalAiProvider } from "../setup/cline-localai-provider";
+import { type ClinePassKeyCommandResult, storeClinePassKey } from "../setup/cline-pass-key";
 import { getClineModelsSettingsPath, getClineProvidersSettingsPath, getKanbanHomePath } from "../state/kanban-home";
 import { resolveSetupOrigin } from "./setup";
 
@@ -44,9 +45,10 @@ function toErrorMessage(error: unknown): string {
 	return error instanceof Error && error.message.trim().length > 0 ? error.message : String(error);
 }
 
-function printBedrockKeyResult(
+/** Prints the result of a store-*-key command (both have the same shape). */
+function printKeyCommandResult(
 	providersPath: string,
-	result: ClineBedrockKeyCommandResult,
+	result: ClineBedrockKeyCommandResult | ClinePassKeyCommandResult,
 	options: BedrockKeyOptions,
 ): void {
 	if (options.json) {
@@ -209,9 +211,33 @@ export function registerClineCommand(program: Command): void {
 					dryRun: options.dryRun === true,
 					backupDir: getClineBackupDir(homePath),
 				});
-				printBedrockKeyResult(providersPath, result, options);
+				printKeyCommandResult(providersPath, result, options);
 			} catch (error) {
 				process.stderr.write(`store-bedrock-key failed: ${toErrorMessage(error)}\n`);
+				process.exitCode = 1;
+			}
+		});
+	cline
+		.command("store-cline-pass-key")
+		.description(
+			"Store the ClinePass key from Kanban's environment (CLINE_API_KEY; podman: Secret=<name>,type=env,target=CLINE_API_KEY) in Cline's providers.json as the cline-pass provider's apiKey. Cline's TUI only counts a stored key: without one every Cline card on cline-pass opens Cline's sign-in screen. Only that field changes: the model, the cline entry and the other providers stay. Refuses while a Cline account sign-in is stored (Cline sends it for ClinePass before any key). Run it again after the secret rotates. Backs up providers.json into the Kanban home (backups/cline/) first, writes atomically and prints how to roll back. Never prints a key.",
+		)
+		.option("--dry-run", "Print what would change; write nothing.")
+		.option("--json", "Print the result as JSON.")
+		.action(async (options: BedrockKeyOptions) => {
+			try {
+				const homePath = getKanbanHomePath();
+				const { config } = await readPipelineConfig();
+				const providersPath = getClineProvidersSettingsPath(config.agents.cline.dataDir);
+				const result = await storeClinePassKey({
+					providersPath,
+					env: process.env,
+					dryRun: options.dryRun === true,
+					backupDir: getClineBackupDir(homePath),
+				});
+				printKeyCommandResult(providersPath, result, options);
+			} catch (error) {
+				process.stderr.write(`store-cline-pass-key failed: ${toErrorMessage(error)}\n`);
 				process.exitCode = 1;
 			}
 		});
@@ -225,7 +251,7 @@ export function registerClineCommand(program: Command): void {
 		.action(async (options: BedrockKeyOptions) => {
 			try {
 				const { config } = await readPipelineConfig();
-				printBedrockKeyResult(
+				printKeyCommandResult(
 					getClineProvidersSettingsPath(config.agents.cline.dataDir),
 					refuseRemoveClineBedrockKey(),
 					options,

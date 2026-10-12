@@ -24,6 +24,32 @@ const POISONED_PATTERN = new RegExp(
 	"i",
 );
 
+/**
+ * A provider's answer about the user's account rather than the model or the request: ClinePass's (cline 3.0.70's
+ * texts and matchers in its bundle, checked 2026-10-12 with real TUI runs against a fake server, where Cline wrote each
+ * as an error notice): `no_subscription` ("No access to ClinePass subscription models yet. Subscribe to ClinePass..."),
+ * `organization_account` ("Organization accounts cannot use ClinePass subscriptions...") and `limit` ("You have
+ * reached your ClinePass limit... Please try again later."). The first two last until the user changes the account,
+ * so no retry, nudge or other model of the same account helps; a limit ends with its period.
+ */
+export type ProviderAccountErrorKind = "no_subscription" | "organization_account" | "limit";
+
+const PROVIDER_ACCOUNT_ERROR_PATTERNS: ReadonlyArray<{ kind: ProviderAccountErrorKind; pattern: RegExp }> = [
+	{
+		kind: "no_subscription",
+		pattern: /the user is not subscribed to required model plan|no access to clinepass subscription models yet/i,
+	},
+	{
+		kind: "organization_account",
+		pattern: /organization accounts cannot use (?:individual model inference subscriptions|clinepass subscriptions)/i,
+	},
+	{ kind: "limit", pattern: /you have reached your\b[\s\S]*?clinepass limit[\s\S]*?please try again later\./i },
+];
+
+export function getProviderAccountError(text: string): ProviderAccountErrorKind | null {
+	return PROVIDER_ACCOUNT_ERROR_PATTERNS.find(({ pattern }) => pattern.test(text))?.kind ?? null;
+}
+
 /** A fatal API error shown as the whole final reply is at most this long (longer text is the agent talking). */
 const FINAL_ERROR_MAX_LENGTH = 600;
 

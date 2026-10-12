@@ -1073,6 +1073,25 @@ describe("QA gate", () => {
 			expect(replacement?.prompt).toContain("outgrew the model's context window: keep every tool output small");
 		});
 
+		it("records STALLED at once for a QA card the provider refuses the account for: a replacement is refused too", async () => {
+			const harness = createHarness({ config });
+			await startQa(harness);
+			harness.setRunError("qa001", {
+				kind: "provider_account",
+				text: "No access to ClinePass subscription models yet. Subscribe to ClinePass",
+			});
+			await endInReview(harness, "qa001", T0 + 60_000);
+
+			const state = await harness.store.load("foo");
+			expect(readQaVerdictRecords(state.cards.d1111)).toMatchObject([
+				{ qaTaskId: "qa001", verdict: "STALLED", qaAgentError: expect.stringContaining("provider account") },
+			]);
+			expect(harness.actions.filter((action) => action.kind === "deliverInput")).toEqual([]);
+			const escalated = (state.cards.d1111?.qaflow as Record<string, unknown> | undefined)?.escalated;
+			expect(escalated).toMatchObject({ to: "orchestrator", cause: "qa_agent_error" });
+			expect(createdTasks(harness.actions)).toEqual([]);
+		});
+
 		it("still nudges a QA card that just stopped without a verdict", async () => {
 			const harness = createHarness({ config });
 			await startQa(harness);

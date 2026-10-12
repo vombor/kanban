@@ -161,6 +161,20 @@ run with no tool calls. It exits 0 when the run passed, 1 when it failed and 2 w
 registry. One failed run may be bad luck: the orchestrator decides what to commit. The run lasts minutes, so an
 orchestrator starts it in the background of its own session (it must stay in the session's process tree).
 
+## ClinePass (`cline-pass`)
+
+ClinePass is Cline's subscription provider (ids `cline-pass/<model>`, e.g. `cline-pass/mimo-v2.6-flash`,
+`cline-pass/glm-5.3-flash`, `cline-pass/kimi-k3`). Its key comes from Kanban's environment (`CLINE_API_KEY`, a podman
+secret) and must be stored in Cline's providers.json with the user's `kanban cline store-cline-pass-key`, because
+Cline's TUI doesn't count the env's key (verified with real TUI runs, 2026-10-12): [cline-pass-auth.md](../fork/cline-pass-auth.md).
+For Kanban it is a cloud provider: a QA card on it takes a cloud QA slot. Its turns price at 0 by provider
+(`SUBSCRIPTION_PROVIDER_IDS`, as Cline itself prices them), `getModelVendor()` reads the model after the
+`cline-pass/` prefix, and its account answers ("No access to ClinePass subscription models yet", "Organization
+accounts cannot use ClinePass subscriptions") escalate to the orchestrator at once as provider errors, while its usage
+limit gets the provider retries first. It has no outage probe. No ClinePass combination is vetted yet:
+`kanban models vet --agent cline --provider cline-pass --model cline-pass/<model> --role <role>` proposes one, and ends
+inconclusive (`sign_in`) at once while no key is stored.
+
 ## Local providers: Lemonade and LocalAI
 
 Two providers run models on the user's own hardware and cost nothing per token (`LOCAL_PROVIDER_IDS` in

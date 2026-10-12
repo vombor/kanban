@@ -31,13 +31,29 @@ function readNonEmptyString(value: unknown): string | null {
 	return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-export type ClineBedrockRead =
+export type ClineProvidersRead =
 	| { kind: "absent" }
 	| { kind: "invalid"; detail: string }
+	| { kind: "found"; raw: string; document: JsonObject };
+
+export type ClineBedrockRead =
+	| Exclude<ClineProvidersRead, { kind: "found" }>
 	/** `settings`: `providers.bedrock.settings`, null when providers.json has no Bedrock entry. */
 	| { kind: "found"; raw: string; document: JsonObject; settings: JsonObject | null };
 
 export async function readClineBedrockSettings(providersPath: string): Promise<ClineBedrockRead> {
+	const read = await readClineProvidersFile(providersPath);
+	if (read.kind !== "found") {
+		return read;
+	}
+	const { document } = read;
+	const entry = isJsonObject(document.providers) ? document.providers.bedrock : null;
+	const settings = isJsonObject(entry) && isJsonObject(entry.settings) ? entry.settings : null;
+	return { ...read, settings };
+}
+
+/** Cline's providers.json as text and parsed, for the commands and checks that read it (never one that can't parse). */
+export async function readClineProvidersFile(providersPath: string): Promise<ClineProvidersRead> {
 	let raw: string;
 	try {
 		raw = await readFile(providersPath, "utf8");
@@ -56,9 +72,7 @@ export async function readClineBedrockSettings(providersPath: string): Promise<C
 	if (!isJsonObject(document)) {
 		return { kind: "invalid", detail: "not a JSON object (Kanban never edits it)" };
 	}
-	const entry = isJsonObject(document.providers) ? document.providers.bedrock : null;
-	const settings = isJsonObject(entry) && isJsonObject(entry.settings) ? entry.settings : null;
-	return { kind: "found", raw, document, settings };
+	return { kind: "found", raw, document };
 }
 
 export interface ClineBedrockKeyFacts {

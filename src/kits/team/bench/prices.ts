@@ -49,7 +49,10 @@ export interface PriceTable {
 	/** Where the table came from (a file path, or "seed"). */
 	source: string;
 	file: PriceTableFile;
-	/** A turn on a local provider (`LOCAL_PROVIDER_IDS`) is free whatever its model id; else the first matching entry. */
+	/**
+	 * A turn on a local or subscription provider (`isUnmeteredProvider`) is free whatever its model id; else the first
+	 * matching entry.
+	 */
 	priceFor: (model: string | null | undefined, provider?: string | null) => PriceEntry | null;
 }
 
@@ -67,6 +70,24 @@ export function isLocalProvider(provider: string | null | undefined): boolean {
 	return Boolean(provider && LOCAL_PROVIDER_IDS.includes(provider));
 }
 
+/**
+ * Providers paid by a flat subscription, not per token: ClinePass (`cline-pass`, Cline's subscription provider). Cline
+ * 3.0.70 itself prices every ClinePass turn at 0 (its catalog lists every `cline-pass/<model>` at 0 and its usage
+ * code zeroes the provider's cost) and calls the provider's cost display "subscription", so there is no per-token
+ * price to put in prices.json; usage limits are the provider's (recovery reads its limit errors). They are cloud
+ * providers: a QA card on one takes a cloud QA slot.
+ */
+export const SUBSCRIPTION_PROVIDER_IDS: readonly string[] = ["cline-pass"];
+
+export function isSubscriptionProvider(provider: string | null | undefined): boolean {
+	return Boolean(provider && SUBSCRIPTION_PROVIDER_IDS.includes(provider));
+}
+
+/** No per-token cost: a local provider or a subscription one. Priced at 0 and left out of the AWS price check. */
+export function isUnmeteredProvider(provider: string | null | undefined): boolean {
+	return isLocalProvider(provider) || isSubscriptionProvider(provider);
+}
+
 const LOCAL_PROVIDER_PRICE: PriceEntry = {
 	pattern: ".*",
 	in: 0,
@@ -76,6 +97,11 @@ const LOCAL_PROVIDER_PRICE: PriceEntry = {
 	pin: true,
 	source: "manual",
 	note: "local provider: no per-token cost",
+};
+
+const SUBSCRIPTION_PROVIDER_PRICE: PriceEntry = {
+	...LOCAL_PROVIDER_PRICE,
+	note: "subscription provider: no per-token cost",
 };
 
 function compilePattern(pattern: string): RegExp | null {
@@ -96,7 +122,9 @@ export function createPriceTable(file: PriceTableFile, source: string): PriceTab
 		priceFor: (model, provider) =>
 			isLocalProvider(provider)
 				? LOCAL_PROVIDER_PRICE
-				: (compiled.find(({ re }) => re.test(model ?? ""))?.entry ?? null),
+				: isSubscriptionProvider(provider)
+					? SUBSCRIPTION_PROVIDER_PRICE
+					: (compiled.find(({ re }) => re.test(model ?? ""))?.entry ?? null),
 	};
 }
 

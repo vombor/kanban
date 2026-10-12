@@ -11,8 +11,12 @@
 // screen, although Cline's Bedrock client (headless runs) would use them. A custom provider from models.json (Lemonade,
 // LocalAI) needs no key, but without one its stored settings must hold both `baseUrl` and `model` (cline 3.0.70, `jp`
 // in the bundle, real TUI runs against LocalAI 2026-10-11: `{provider, model}` alone opened the sign-in screen, and
-// models.json's baseUrl doesn't count). For other providers only "no stored entry" is certain; the rest depends on
-// Cline's provider catalog, so it is not judged here.
+// models.json's baseUrl doesn't count). ClinePass (`cline-pass`; cline 3.0.70, real TUI runs against a fake
+// OpenAI-compatible server, 2026-10-12) is an OAuth provider whose credentials Cline stores under `cline`
+// (`storageProviderId`): its settings are `providers.cline.settings`' `auth`, `apiKey` and `baseUrl` under
+// `providers["cline-pass"].settings`, and they must hold a key (a Cline account sign-in's `auth.accessToken` first,
+// then `apiKey`, then `auth.apiKey`); CLINE_API_KEY in the env never counts. For other providers only "no stored
+// entry" is certain; the rest depends on Cline's provider catalog, so it is not judged here.
 // Read by doctor and setup (src/setup/cline-bedrock-key.ts) and by the silent-stall reason (cline-turn-check.ts).
 import { readFile } from "node:fs/promises";
 
@@ -22,6 +26,10 @@ type JsonObject = Record<string, unknown>;
 
 /** The custom (models.json) providers Kanban sets up for Cline cards: Lemonade and LocalAI. */
 const CLINE_CUSTOM_PROVIDER_IDS: readonly string[] = ["lemonade", "localai"];
+
+export const CLINE_PASS_PROVIDER_ID = "cline-pass";
+/** Providers whose credentials Cline keeps under another provider's entry (`storageProviderId` in the bundle). */
+const CLINE_STORAGE_PROVIDER_IDS: Readonly<Record<string, string>> = { [CLINE_PASS_PROVIDER_ID]: "cline" };
 
 function isJsonObject(value: unknown): value is JsonObject {
 	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -41,10 +49,50 @@ export function getClineProviderSettings(document: unknown, providerId: string):
 	return isJsonObject(entry.settings) ? entry.settings : null;
 }
 
+/**
+ * A provider's settings as Cline resolves them (`resolveProviderSettings` in the bundle): for a provider stored under
+ * another one (ClinePass under `cline`), that entry's `auth`, `apiKey` and `baseUrl` with the provider's own settings
+ * on top, named after the provider. Null when neither entry has settings.
+ */
+export function resolveClineProviderSettings(document: unknown, providerId: string): JsonObject | null {
+	const own = getClineProviderSettings(document, providerId);
+	const storageId = CLINE_STORAGE_PROVIDER_IDS[providerId];
+	const stored = storageId ? getClineProviderSettings(document, storageId) : null;
+	if (!stored) {
+		return own;
+	}
+	return {
+		...(stored.auth === undefined ? {} : { auth: stored.auth }),
+		...(stored.apiKey === undefined ? {} : { apiKey: stored.apiKey }),
+		...(stored.baseUrl === undefined ? {} : { baseUrl: stored.baseUrl }),
+		...own,
+		provider: providerId,
+	};
+}
+
+/**
+ * The stored credential Cline sends, in its order (`getApiKey` in the bundle): a sign-in's `auth.accessToken`, then
+ * `apiKey`, then `auth.apiKey`. Null when none is stored.
+ */
+export function getClineStoredCredential(
+	settings: JsonObject,
+): { kind: "access-token" | "api-key"; value: string } | null {
+	const auth = readObject(settings.auth);
+	for (const [kind, value] of [
+		["access-token", auth.accessToken],
+		["api-key", settings.apiKey],
+		["api-key", auth.apiKey],
+	] as const) {
+		if (typeof value === "string" && value.trim()) {
+			return { kind, value: value.trim() };
+		}
+	}
+	return null;
+}
+
 /** A key Cline's TUI counts as stored credentials (`rn` in the bundle). */
 export function hasClineStoredKey(settings: JsonObject): boolean {
-	const auth = readObject(settings.auth);
-	return hasText(settings.apiKey) || hasText(auth.apiKey) || hasText(auth.accessToken);
+	return getClineStoredCredential(settings) !== null;
 }
 
 function hasStoredAwsCredentials(settings: JsonObject): boolean {
@@ -67,7 +115,7 @@ export function hasClineStoredBedrockRegion(settings: JsonObject): boolean {
  * entry).
  */
 export function describeClineTuiSignInGap(document: unknown, providerId: string): string | null {
-	const settings = getClineProviderSettings(document, providerId);
+	const settings = resolveClineProviderSettings(document, providerId);
 	if (!settings) {
 		return `providers.json has no ${providerId} entry`;
 	}
@@ -79,6 +127,11 @@ export function describeClineTuiSignInGap(document: unknown, providerId: string)
 			return null;
 		}
 		return `providers.json's ${providerId} entry has no baseUrl and model (Cline's TUI needs both for a provider without a key)`;
+	}
+	if (providerId === CLINE_PASS_PROVIDER_ID) {
+		return hasClineStoredKey(settings)
+			? null
+			: "providers.json stores no ClinePass key (Cline's TUI doesn't count CLINE_API_KEY)";
 	}
 	if (providerId !== "bedrock") {
 		return null;

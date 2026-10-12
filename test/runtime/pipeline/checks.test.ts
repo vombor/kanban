@@ -80,6 +80,7 @@ describe("check step environment", () => {
 		vi.stubEnv("GITHUB_TOKEN", "user-pat");
 		vi.stubEnv("COPILOT_GITHUB_TOKEN", "copilot-token");
 		vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-key");
+		vi.stubEnv("CLINE_API_KEY", "cline-pass-key");
 		vi.stubEnv("AWS_REGION", "us-east-1");
 		try {
 			const settings = parsePipelineConfig({ pipeline: { checks: { maxWorkers: 3 } } }).config.pipeline.checks;
@@ -100,6 +101,7 @@ describe("check step environment", () => {
 				"GITHUB_TOKEN",
 				"COPILOT_GITHUB_TOKEN",
 				"AWS_BEARER_TOKEN_BEDROCK",
+				"CLINE_API_KEY",
 			]) {
 				expect(env[key]).toBeUndefined();
 			}

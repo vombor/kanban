@@ -27,6 +27,7 @@ import { checkClineBedrockKey } from "./cline-bedrock-key-checks";
 import { checkKanbanFilesUnderClineDir } from "./cline-dir-checks";
 import { checkClineLocalAiProvider } from "./cline-localai-checks";
 import { checkClineLemonadeModels } from "./cline-models-checks";
+import { checkClinePassKey } from "./cline-pass-key-checks";
 import { createDeepCheckDeps, type DeepCheckDeps, runDeepChecks } from "./deep-checks";
 import {
 	checkHome,
@@ -148,6 +149,13 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
 	);
 	findings.push(
 		...(await checkClineBedrockKey({
+			providersPath: getClineProvidersSettingsPath(config.agents.cline.dataDir),
+			defaultProvider: config.models.providers.default,
+			env: process.env,
+		})),
+	);
+	findings.push(
+		...(await checkClinePassKey({
 			providersPath: getClineProvidersSettingsPath(config.agents.cline.dataDir),
 			defaultProvider: config.models.providers.default,
 			env: process.env,

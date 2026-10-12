@@ -203,6 +203,17 @@ describe("kanban models vet: the runner", () => {
 		});
 		expect(notSignedIn.calls).toEqual([]);
 
+		// Cline's TUI would open its sign-in screen for the provider (ClinePass without a stored key): no card at all.
+		const signInScreen = createHarness(goodDevAgent);
+		signInScreen.deps.readSignInGap = async () =>
+			"providers.json stores no ClinePass key (Cline's TUI doesn't count CLINE_API_KEY)";
+		expect(await runVet(signInScreen.input, signInScreen.deps)).toMatchObject({
+			outcome: "inconclusive",
+			failure: { kind: "sign_in", detail: expect.stringContaining("stores no ClinePass key") },
+			taskId: null,
+		});
+		expect(signInScreen.calls).toEqual([]);
+
 		const noTurn = createHarness(() => {});
 		noTurn.fake.startedTurn = false;
 		expect((await runVet(noTurn.input, noTurn.deps)).failure?.kind).toBe("no_session");

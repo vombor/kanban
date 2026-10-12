@@ -114,7 +114,7 @@ switching a workspace to landing `qa` starts the worker without a Kanban restart
 |---|---|---|
 | `paused` | `false` | stops the worker for landing and recovery on every project (the watchdog still runs if `watchdog.mode` is not `off`). One project: `kanban pipeline pause` (`workspaces.<id>.pipeline.paused`) |
 | `workerEntry` | null | another build's `dist/cli.js` for the worker (the dev pod's "fix it live" loop); the host runs `<entry> pipeline worker` |
-| `qa.slots` | 2 | cloud QA cards running at once, machine-wide; a QA card on a local provider (Lemonade) takes no slot and waits only for `models.providerCapacity` |
+| `qa.slots` | 2 | cloud QA cards running at once, machine-wide; a QA card on a local provider (Lemonade, LocalAI) takes no slot and waits only for `models.providerCapacity`; ClinePass (`cline-pass`, priced at 0 as a subscription) is cloud and takes one |
 | `qa.timeoutMin` | 60 | a running QA card's slot is freed after this |
 | `qa.maxNudges` | 2 | nudges for a missing or invalid `verdict.json` before STALLED |
 | `qa.verdictGraceSec` | 20 | wait for `verdict.json` after the QA card stops (8495ed2) |
@@ -194,7 +194,7 @@ session `__home_agent__:<ws>:<selected agent>` of the workspace the items are ab
 
 | Key | Default | What |
 |---|---|---|
-| `models.providers.default` | `bedrock` | the provider for Cline models |
+| `models.providers.default` | `bedrock` | the provider for Cline models. A card names another with its own provider (`-P`), e.g. ClinePass (`cline-pass`, key `CLINE_API_KEY`, stored by `kanban cline store-cline-pass-key`: [cline-pass-auth.md](../fork/cline-pass-auth.md)); no config key for it |
 | `models.providers.fallback` | `{}` | model id → provider, for models proven not to work on the default |
 | `models.providers.deprecated` | `{}` | documented workarounds `kanban models providers --cleanup` removes |
 | `models.providerCapacity.<id>.maxLoadedModels` | `lemonade: 1`, `localai: 1` | recovery's retries, nudges and resumes wait while another In Progress card of the project holds a different model on that provider, and the QA gate's QA card starts while In Progress cards of any project do (dev, fallback and QA cards alike); a local provider's QA cards are limited only by this, never by `pipeline.qa.slots`; `kanban bench calibrate` refuses a spec that would run more at once (merged over the default). Must match what the server keeps loaded (doctor and `kit show` compare): Lemonade's `max_models.llm`, LocalAI's `max_active_backends` (`/api/settings`). The user's LocalAI host has four GPUs and could hold four models, but LocalAI keeps one (`max_active_backends` 1, `single_backend` true on 2026-10-11), so the default is 1; to run four, start LocalAI with `LOCALAI_MAX_ACTIVE_BACKENDS=4`, then set `localai.maxLoadedModels` to 4 |

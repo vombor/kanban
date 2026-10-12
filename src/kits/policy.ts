@@ -149,6 +149,12 @@ export function isSameEscalationModel(current: EffectiveModel | null, target: Ef
 }
 
 const BEDROCK_REGION_PREFIX = /^(?:us|eu|apac|ap|jp|au|ca|us-gov|global)\./u;
+/**
+ * A gateway's own prefix on the model ids it serves, which names the gateway, not the vendor: ClinePass lists its
+ * models as `cline-pass/<model>` (cline 3.0.70's catalog: `cline-pass/glm-5.3-flash`, `cline-pass/kimi-k3`, ...),
+ * whose rest is a bare family name like a local id's.
+ */
+const GATEWAY_MODEL_PREFIX = /^cline-pass\//u;
 
 /**
  * Bare model family names → vendor, named like the Bedrock vendor prefixes (`qwen.`, `deepseek.`, `mistral.`,
@@ -156,9 +162,11 @@ const BEDROCK_REGION_PREFIX = /^(?:us|eu|apac|ap|jp|au|ca|us-gov|global)\./u;
  * so LocalAI's ids ("glm-5.3-flash-q2-k", "qwen3-coder-next-q8-0-qwen") read like Lemonade's. A fine-tune counts as
  * its base model's vendor: `lmx-omni` is Lemonade's collection whose LLM is Qwen3.6-35B-A3B (its `components` in
  * Lemonade's /models), and Ornith AI's Ornith models are post-trained Qwen 3.5 (9B, 35B-A3B, 397B) or Gemma 4 (31B)
- * models (LocalAI's gallery, 2026-10-11). Laguna is Poolside's own family.
+ * models (LocalAI's gallery, 2026-10-11). Laguna is Poolside's own family. ClinePass's ids (after GATEWAY_MODEL_PREFIX)
+ * are bare names too, with families of their own (cline 3.0.70's catalog, 2026-10-12): MiMo is Xiaomi's, Kimi
+ * Moonshot AI's (Bedrock's `moonshotai.`), MiniMax MiniMax's and Muse Spark Meta's.
  */
-const LOCAL_MODEL_FAMILIES: ReadonlyArray<{ pattern: RegExp; vendor: string }> = [
+const BARE_MODEL_FAMILIES: ReadonlyArray<{ pattern: RegExp; vendor: string }> = [
 	{ pattern: /^ornith-[\d.]+-31b/u, vendor: "google" },
 	{ pattern: /^(?:qwen|qwq|lmx-omni|ornith)/u, vendor: "qwen" },
 	{ pattern: /^deepseek/u, vendor: "deepseek" },
@@ -169,6 +177,10 @@ const LOCAL_MODEL_FAMILIES: ReadonlyArray<{ pattern: RegExp; vendor: string }> =
 	{ pattern: /^(?:phi-|phi\d)/u, vendor: "microsoft" },
 	{ pattern: /^(?:gpt-oss)/u, vendor: "openai" },
 	{ pattern: /^laguna/u, vendor: "poolside" },
+	{ pattern: /^mimo-/u, vendor: "xiaomi" },
+	{ pattern: /^kimi-/u, vendor: "moonshotai" },
+	{ pattern: /^minimax-/u, vendor: "minimax" },
+	{ pattern: /^muse-spark/u, vendor: "meta" },
 ];
 
 /**
@@ -177,7 +189,7 @@ const LOCAL_MODEL_FAMILIES: ReadonlyArray<{ pattern: RegExp; vendor: string }> =
  * region prefix (`us.openai.gpt-6.1-sol` → `openai`). Null when it can't tell.
  */
 export function getModelVendor(model: string | null | undefined): string | null {
-	const id = model?.trim().toLowerCase().replace(BEDROCK_REGION_PREFIX, "");
+	const id = model?.trim().toLowerCase().replace(BEDROCK_REGION_PREFIX, "").replace(GATEWAY_MODEL_PREFIX, "");
 	if (!id) {
 		return null;
 	}
@@ -191,9 +203,9 @@ export function getModelVendor(model: string | null | undefined): string | null 
 	if (id.startsWith("gemini")) {
 		return "google";
 	}
-	// Local (Lemonade, LocalAI) ids are bare family names with dots in their version ("GLM-4.7-Flash-GGUF",
-	// "Qwen3.6-35B-A3B-MTP-GGUF"), so the Bedrock-style prefix rule below would read "glm-4" or "qwen3".
-	const family = LOCAL_MODEL_FAMILIES.find(({ pattern }) => pattern.test(id));
+	// Local (Lemonade, LocalAI) and ClinePass ids are bare family names with dots in their version ("GLM-4.7-Flash-GGUF",
+	// "Qwen3.6-35B-A3B-MTP-GGUF", "glm-5.3-flash"), so the Bedrock-style prefix rule below would read "glm-4" or "qwen3".
+	const family = BARE_MODEL_FAMILIES.find(({ pattern }) => pattern.test(id));
 	if (family) {
 		return family.vendor;
 	}

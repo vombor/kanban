@@ -43,8 +43,10 @@ import { buildVetProposal, formatVetReport } from "../models/vetting/vet-report"
 import { DEFAULT_VET_LIMITS, runVet, type VetLimits } from "../models/vetting/vet-runner";
 import { createVetTask, readTextIfExists, type VetCheckDeps, writeScratchFiles } from "../models/vetting/vet-tasks";
 import { createAgentToolProcessFinder } from "../server/process-reaper";
-import { getModelVettingRunsPath } from "../state/kanban-home";
+import { getClineDataDirPath, getModelVettingRunsPath } from "../state/kanban-home";
 import { createAgentRunSignals } from "../terminal/agent-run-signals";
+import { getAgentTurnEndSource } from "../terminal/agent-session-adapters";
+import { readClineTuiSignInGap } from "../terminal/cline-tui-sign-in";
 import { runGit } from "../workspace/git-utils";
 import { getTaskWorktreeCandidatePaths } from "../workspace/task-worktree";
 import { createRuntimeTrpcClient } from "./runtime-trpc-client";
@@ -373,6 +375,10 @@ async function runVetCommand(options: VetOptions): Promise<number> {
 				countToolUse: (id, path) => signals.countToolUse(id, path),
 				findToolCallLoop: (id, path, last) => signals.findToolCallLoop(id, path, last),
 			},
+			readSignInGap: async ({ agentId, provider }) =>
+				getAgentTurnEndSource(agentId) === "cline-session-files"
+					? await readClineTuiSignInGap(getClineDataDirPath(config.agents.cline.dataDir), provider)
+					: null,
 			findCapacityHold: async ({ provider, model }) => {
 				if (!provider || !model || capacityUnknown) {
 					return null;

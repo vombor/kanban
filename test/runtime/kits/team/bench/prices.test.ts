@@ -7,6 +7,8 @@ import {
 	createPriceTable,
 	getSeedPriceTableFile,
 	isLocalProvider,
+	isSubscriptionProvider,
+	isUnmeteredProvider,
 	loadPriceTable,
 	turnCost,
 } from "../../../../../src/kits/team/bench/prices";
@@ -21,6 +23,22 @@ describe("price table", () => {
 		expect(seed.priceFor("global.anthropic.claude-opus-5-5")?.tier).toBe("global");
 		expect(seed.priceFor("us.anthropic.claude-opus-5-5")?.tier).toBe("standard");
 		expect(seed.priceFor("not-a-model")).toBeNull();
+	});
+
+	it("prices ClinePass (a subscription, as Cline itself prices it) at 0, but doesn't count it as local", () => {
+		const table = createPriceTable({ prices: [{ pattern: ".*", in: 1, cacheRead: 1, cacheWrite: 1, out: 1 }] }, "x");
+		for (const model of ["cline-pass/mimo-v2.6-flash", "cline-pass/glm-5.3-flash", "cline-pass/kimi-k3"]) {
+			const price = table.priceFor(model, "cline-pass");
+			expect(price?.note).toBe("subscription provider: no per-token cost");
+			expect(price && turnCost(price, { input: 1000, cacheRead: 10, cacheWrite: 10, output: 100 })).toBe(0);
+		}
+		// A QA card on it takes a cloud QA slot: it isn't local.
+		expect(isLocalProvider("cline-pass")).toBe(false);
+		expect(isSubscriptionProvider("cline-pass")).toBe(true);
+		expect(isUnmeteredProvider("cline-pass")).toBe(true);
+		expect(isUnmeteredProvider("bedrock")).toBe(false);
+		// The same id on another provider is priced by the table.
+		expect(table.priceFor("cline-pass/kimi-k3", "bedrock")?.in).toBe(1);
 	});
 
 	it("prices every model on a local provider at 0, whatever its id, even in a table without a rule for it", () => {
