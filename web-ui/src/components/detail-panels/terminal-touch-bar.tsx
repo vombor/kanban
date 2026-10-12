@@ -7,9 +7,9 @@ import {
 	ChevronLeft,
 	ChevronRight,
 	ChevronUp,
+	ClipboardPaste,
 	CornerDownLeft,
 	Keyboard,
-	Space,
 	Volume2,
 	VolumeX,
 } from "lucide-react";
@@ -29,6 +29,7 @@ import { cn } from "@/components/ui/cn";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip } from "@/components/ui/tooltip";
 import { usePressRepeat } from "@/hooks/use-press-repeat";
+import { useTouchPaste } from "@/hooks/use-touch-paste";
 import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import { LocalStorageKey } from "@/storage/local-storage-store";
 import { isTerminalArrowKey, type TerminalTouchKey } from "@/terminal/terminal-touch-keys";
@@ -44,7 +45,7 @@ import { useVoiceChat, type VoiceChatControls } from "@/voice/use-voice-chat";
 // (above the row, with its X, which also stops the mic) holds one, and is the terminal's Enter
 // otherwise. While the pad is open a row right above the controls holds the
 // keys a phone keyboard lacks to answer a TUI's pickers (arrows, Tab,
-// Shift+Tab, Esc) plus Space. It is in the bar's flow, not floating over the
+// Shift+Tab, Esc) plus Paste. It is in the bar's flow, not floating over the
 // terminal: a TUI's input line is its last rows and xterm can't scroll past
 // them, so an overlay would hide exactly what the keys answer; the terminal
 // refits once instead.
@@ -67,12 +68,13 @@ interface PadKey {
 	content: ReactNode;
 }
 
-// One row: Esc, Shift+Tab, Tab, Space, then the arrows.
-const PAD_KEYS: PadKey[] = [
+// One row: Esc, Shift+Tab, Tab, Paste, then the arrows. No Space: the phone
+// keyboard has one, and nothing else pastes into a terminal on a phone.
+const PAD_KEYS: Array<PadKey | "paste"> = [
 	{ key: "escape", label: "Send Esc", content: <span className="text-xs font-medium">Esc</span> },
 	{ key: "shiftTab", label: "Send Shift+Tab", content: <ArrowLeftToLine size={16} /> },
 	{ key: "tab", label: "Send Tab", content: <ArrowRightToLine size={16} /> },
-	{ key: "space", label: "Send Space", content: <Space size={16} /> },
+	"paste",
 	{ key: "left", label: "Send Left", content: <ChevronLeft size={18} /> },
 	{ key: "up", label: "Send Up", content: <ChevronUp size={18} /> },
 	{ key: "down", label: "Send Down", content: <ChevronDown size={18} /> },
@@ -99,11 +101,30 @@ function RepeatingPadKey({ padKey, onKey }: { padKey: PadKey; onKey: (key: Termi
 	);
 }
 
-function TerminalTouchKeyPad({ onKey }: { onKey: (key: TerminalTouchKey) => void }): ReactElement {
+function TerminalTouchKeyPad({
+	onKey,
+	onPaste,
+}: {
+	onKey: (key: TerminalTouchKey) => void;
+	// Reads the clipboard, so it runs in the click: the user gesture iOS's paste access needs.
+	onPaste: () => void;
+}): ReactElement {
 	return (
 		<div role="toolbar" aria-label="Terminal keys" className="grid grid-cols-8 gap-1">
 			{PAD_KEYS.map((padKey) =>
-				isTerminalArrowKey(padKey.key) ? (
+				padKey === "paste" ? (
+					<button
+						key="paste"
+						type="button"
+						aria-label="Paste"
+						className={PAD_KEY_CLASS}
+						{...KEEP_FOCUS_PROPS}
+						onContextMenu={keepTerminalFocus}
+						onClick={onPaste}
+					>
+						<ClipboardPaste size={16} />
+					</button>
+				) : isTerminalArrowKey(padKey.key) ? (
 					<RepeatingPadKey key={padKey.key} padKey={padKey} onKey={onKey} />
 				) : (
 					<button
@@ -195,6 +216,8 @@ export interface TerminalTouchBarProps {
 	onJumpToBottom: () => void;
 	// The terminal refuses a key while it takes no input (terminal-ime-input.ts).
 	onKey: (key: TerminalTouchKey) => void;
+	// The pad's Paste: a paste after any pending dictation; false while the terminal takes no input.
+	onPaste: (text: string) => boolean;
 	// An agent session's voice chat, where the browser has a speech API.
 	voice?: VoiceChatControls | null;
 }
@@ -203,9 +226,11 @@ export function TerminalTouchBar({
 	showJumpToBottom,
 	onJumpToBottom,
 	onKey,
+	onPaste,
 	voice = null,
 }: TerminalTouchBarProps): ReactElement {
 	const [isPadOpen, setIsPadOpen] = useBooleanLocalStorageValue(LocalStorageKey.TerminalTouchKeysExpanded, false);
+	const touchPaste = useTouchPaste(onPaste);
 	return (
 		<div className="flex shrink-0 flex-col gap-1 border-t border-border px-1.5 py-1">
 			{voice ? (
@@ -215,7 +240,12 @@ export function TerminalTouchBar({
 					<VoiceError voice={voice} />
 				</>
 			) : null}
-			{isPadOpen ? <TerminalTouchKeyPad onKey={onKey} /> : null}
+			{touchPaste.message ? (
+				<div role="status" className="text-xs text-status-orange">
+					{touchPaste.message}
+				</div>
+			) : null}
+			{isPadOpen ? <TerminalTouchKeyPad onKey={onKey} onPaste={touchPaste.paste} /> : null}
 			<div role="toolbar" aria-label="Terminal controls" className="flex items-center gap-1.5">
 				{voice?.voiceInput.supported ? <VoiceMicButton voice={voice} /> : null}
 				{voice?.replySpeech.supported ? <ReplySpeechButton voice={voice} /> : null}

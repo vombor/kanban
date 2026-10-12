@@ -490,13 +490,12 @@ describe("persistent terminal reconnect", () => {
 		terminal.modes.applicationCursorKeysMode = true;
 		persistentTerminal.sendKey("down");
 		persistentTerminal.sendKey("shiftTab");
-		persistentTerminal.sendKey("space");
 		persistentTerminal.sendKey("enter");
-		expect(stream.sent).toEqual(["\x1b[B", "\x1bOB", "\x1b[Z", " ", "\r"]);
+		expect(stream.sent).toEqual(["\x1b[B", "\x1bOB", "\x1b[Z", "\r"]);
 
 		stream.serverClose(1006);
 		expect(persistentTerminal.sendKey("up")).toBe(false);
-		expect(stream.sent).toHaveLength(5);
+		expect(stream.sent).toHaveLength(4);
 	});
 
 	it("gives up after the attempt limit and reconnects from the retry button", async () => {

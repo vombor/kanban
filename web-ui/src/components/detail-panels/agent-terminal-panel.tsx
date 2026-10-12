@@ -31,6 +31,7 @@ interface AgentTerminalSessionControls {
 	retryConnection: () => void;
 	scrollToBottom: () => void;
 	sendKey: (key: TerminalTouchKey) => void;
+	paste: (text: string) => boolean;
 	stopTerminal: () => Promise<void>;
 }
 
@@ -207,6 +208,7 @@ function AgentTerminalPanelLayout({
 		retryConnection,
 		scrollToBottom,
 		sendKey,
+		paste,
 		stopTerminal,
 	} = sessionControls;
 	// Phones only: desktop has the scrollbar and the wheel, and stays unchanged.
@@ -374,9 +376,15 @@ function AgentTerminalPanelLayout({
 						showJumpToBottom={showJumpToBottom}
 						onJumpToBottom={scrollToBottom}
 						onKey={sendKey}
+						onPaste={paste}
 					/>
 				) : (
-					<TerminalTouchBar showJumpToBottom={showJumpToBottom} onJumpToBottom={scrollToBottom} onKey={sendKey} />
+					<TerminalTouchBar
+						showJumpToBottom={showJumpToBottom}
+						onJumpToBottom={scrollToBottom}
+						onKey={sendKey}
+						onPaste={paste}
+					/>
 				)
 			) : voiceChat ? (
 				<VoiceChatBar taskId={taskId} workspaceId={workspaceId} summary={summary} />

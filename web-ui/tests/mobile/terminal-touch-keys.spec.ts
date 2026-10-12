@@ -59,11 +59,11 @@ test("Down then the bar's Enter answers a picker, and the keyboard keeps its foc
 	await expect.poll(readProbe).toBe(`\x1b[B${ENTER}`);
 	expect(await isTerminalFocused(page)).toBe(true);
 
-	// A multi-select question: Space toggles, Tab and Shift+Tab move, Esc leaves.
-	for (const name of ["Send Space", "Send Tab", "Send Shift+Tab", "Send Up", "Send Left", "Send Right", "Send Esc"]) {
+	// A picker: Tab and Shift+Tab move, Esc leaves.
+	for (const name of ["Send Tab", "Send Shift+Tab", "Send Up", "Send Left", "Send Right", "Send Esc"]) {
 		await tapButton(cdp, page.getByRole("button", { name }));
 	}
-	await expect.poll(readProbe).toBe(`\x1b[B${ENTER} \t\x1b[Z\x1b[A\x1b[D\x1b[C\x1b`);
+	await expect.poll(readProbe).toBe(`\x1b[B${ENTER}\t\x1b[Z\x1b[A\x1b[D\x1b[C\x1b`);
 	const after = await readTextarea(page);
 	expect(after.focused).toBe(true);
 	expect(after.value).toBe(before.value);
@@ -197,4 +197,54 @@ test("the bar sits under the terminal, and its key pad opens above it and refits
 	expect(closed - opened).toBe(1);
 	expect(resizes.at(-1)).toBe(fullRows);
 	expect(await isTerminalFocused(page)).toBe(true);
+});
+
+async function writeClipboard(page: Page, text: string): Promise<void> {
+	await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: instance.baseUrl });
+	await page.evaluate(async (value) => await navigator.clipboard.writeText(value), text);
+}
+
+test("Paste sends the clipboard as one bracketed paste after the pending dictation, and the keyboard keeps its text", async ({
+	page,
+}) => {
+	const { cdp, readProbe } = await startInputProbe(page, instance, "bracketed-paste");
+	await writeClipboard(page, "copied log\nline two");
+	await openKeyPad(page, cdp);
+	const before = await readTextarea(page);
+
+	await dictate(page, cdp, ["s", "see"]);
+	await tapButton(cdp, page.getByRole("button", { name: "Paste" }));
+	await expect.poll(readProbe).toBe("see\x1b[200~copied log\rline two\x1b[201~");
+	// xterm's own paste would have emptied the textarea under the keyboard.
+	const after = await readTextarea(page);
+	expect(after.focused).toBe(true);
+	expect(after.value).toBe(`${before.value}see`);
+	// The keyboard keeps dictating after the paste: only the new words go out.
+	await dictate(page, cdp, [" this"]);
+	await expect.poll(readProbe).toBe("see\x1b[200~copied log\rline two\x1b[201~ this");
+	await expect(page.getByRole("status").filter({ hasText: "clipboard" })).toHaveCount(0);
+	await stopInputProbe(page);
+});
+
+test("Paste without bracketed paste sends the text with its line breaks as Enter", async ({ page }) => {
+	const { cdp, readProbe } = await startInputProbe(page, instance);
+	await writeClipboard(page, "one\ntwo");
+	await openKeyPad(page, cdp);
+
+	await tapButton(cdp, page.getByRole("button", { name: "Paste" }));
+	await expect.poll(readProbe).toBe(`one${ENTER}two`);
+	expect(await isTerminalFocused(page)).toBe(true);
+	await stopInputProbe(page);
+});
+
+test("Paste says why when the clipboard holds no text, and sends nothing", async ({ page }) => {
+	const { cdp, readProbe } = await startInputProbe(page, instance);
+	await writeClipboard(page, "");
+	await openKeyPad(page, cdp);
+
+	await tapButton(cdp, page.getByRole("button", { name: "Paste" }));
+	await expect(page.getByRole("status").filter({ hasText: "The clipboard holds no text." })).toBeVisible();
+	expect(readProbe()).toBe("");
+	expect(await isTerminalFocused(page)).toBe(true);
+	await stopInputProbe(page);
 });

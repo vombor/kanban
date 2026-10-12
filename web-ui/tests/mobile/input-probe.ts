@@ -12,18 +12,20 @@ import { openShellTerminal, tapToFocus } from "./terminal-page";
 // With "busy" it also repaints like a thinking TUI: cursor hidden, a spinner
 // and status lines rewritten every frame, the cursor parked elsewhere.
 // With "app-cursor" it switches the terminal to application cursor keys
-// (DECCKM) like a picker TUI, and is up once the terminal has answered a
+// (DECCKM) like a picker TUI, with "bracketed-paste" to bracketed paste
+// (DECSET 2004) like an agent TUI, and is up once the terminal has answered a
 // status report sent after the switch, so the switch has been parsed.
 const INPUT_PROBE = `
 const fs = require("node:fs");
 const out = process.argv[2];
 const mode = process.argv[4];
 process.stdin.setRawMode(true);
-let isUp = mode !== "app-cursor";
+const SWITCHES = { "app-cursor": "\\x1b[?1h", "bracketed-paste": "\\x1b[?2004h" };
+let isUp = !SWITCHES[mode];
 if (isUp) {
 	fs.writeFileSync(process.argv[3], "up");
 } else {
-	process.stdout.write("\\x1b[?1h\\x1b[5n");
+	process.stdout.write(SWITCHES[mode] + "\\x1b[5n");
 }
 process.stdin.on("data", (data) => {
 	if (!isUp && data.includes("\\x1b[0n")) {
@@ -33,7 +35,7 @@ process.stdin.on("data", (data) => {
 	}
 	fs.appendFileSync(out, data);
 	if (data.includes("\\x03")) {
-		process.stdout.write("\\x1b[?25h\\x1b[?1l");
+		process.stdout.write("\\x1b[?25h\\x1b[?1l\\x1b[?2004l");
 		process.exit(0);
 	}
 });
@@ -59,7 +61,7 @@ if (mode === "busy") {
 export const ENTER = "\r";
 export const DEL = "\x7f";
 
-export type InputProbeMode = "quiet" | "busy" | "app-cursor";
+export type InputProbeMode = "quiet" | "busy" | "app-cursor" | "bracketed-paste";
 
 export async function startInputProbe(
 	page: Page,

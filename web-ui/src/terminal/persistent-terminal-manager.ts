@@ -19,6 +19,7 @@ import { splitRestoreSnapshot } from "@/terminal/restore-snapshot-chunks";
 import { clearTerminalGeometry, reportTerminalGeometry } from "@/terminal/terminal-geometry-registry";
 import { attachTerminalImeInput, type TerminalImeInput } from "@/terminal/terminal-ime-input";
 import { createKanbanTerminalOptions } from "@/terminal/terminal-options";
+import { encodeTerminalPaste } from "@/terminal/terminal-paste";
 import {
 	appendTerminalHeuristicText,
 	hasInterruptAcknowledgement,
@@ -892,7 +893,7 @@ class PersistentTerminal {
 		return true;
 	}
 
-	// A key of the panel's touch bar (Enter, arrows, Tab, Esc, Space). On a
+	// A key of the panel's touch bar (Enter, arrows, Tab, Esc). On a
 	// phone it sends what has been dictated so far first and leaves the textarea
 	// alone, so the keyboard keeps listening (terminal-ime-input.ts); Enter is
 	// the keyboard's own submit, so the submitted text is final.
@@ -913,9 +914,17 @@ class PersistentTerminal {
 		return true;
 	}
 
+	// A paste, bracketed while the TUI has bracketed paste on. On a phone it goes
+	// out after what has been dictated so far, like a touch bar key, and leaves
+	// the textarea alone: xterm's paste() empties it (terminal-paste.ts).
 	paste(text: string): boolean {
 		if (!this.isIoOpen()) {
 			return false;
+		}
+		if (this.imeInput && isTouchInput()) {
+			const bracketed =
+				this.terminal.modes.bracketedPasteMode && this.terminal.options.ignoreBracketedPasteMode !== true;
+			return this.imeInput.sendKey(encodeTerminalPaste(text, bracketed));
 		}
 		this.terminal.paste(text);
 		return true;

@@ -158,8 +158,15 @@ row on a phone, so there is no separate voice bar (user request, 2026-10-12):
   "Reading the reply…", and a tap stops that reading without turning the toggle off.
 
 The toggle opens a row right above the controls with the keys a phone keyboard lacks for an agent's pickers: Esc, Shift+Tab, Tab,
-Space and the arrows (held arrows repeat, arrows follow the TUI's cursor-key mode). No button takes the keyboard's
-focus, so dictation keeps going. The row is part of the bar, not a panel over the terminal (an agent's input line is the
+Paste and the arrows (held arrows repeat, arrows follow the TUI's cursor-key mode). There is no Space key, since the
+phone keyboard has one. Paste is the only way to paste into a terminal on a phone (user request 2026-10-12, a copied voice
+log). It reads the clipboard inside the tap (`navigator.clipboard.readText()`). WebKit's `Clipboard::readText` needs that
+tap's transient activation, then asks for paste access, so iOS shows its "Paste" bubble unless the text was copied on this
+page. The text goes to the PTY as one paste, the way xterm.js sends a paste: line breaks become Enter, and it is bracketed
+while the TUI has bracketed paste on. It goes out after any pending dictation and leaves the keyboard's textarea as it is.
+xterm's own `paste()` empties that textarea, which would end the dictation. A refused bubble, an empty clipboard, a page
+that isn't https or localhost (no clipboard API there) or a terminal that takes no input shows a short line above the pad
+for a few seconds. No button takes the keyboard's focus, so dictation keeps going. The row is part of the bar, not a panel over the terminal (an agent's input line is the
 terminal's last rows, which an overlay would hide), so the terminal refits once when it opens or closes. The desktop
 keeps the voice bar with its Send and stop buttons.
 
@@ -175,5 +182,6 @@ keeps the voice bar with its Send and stop buttons.
 - `web-ui/src/components/detail-panels/voice-chat-bar.tsx`: the desktop bar, shown by `AgentTerminalPanel`'s
   `voiceChat` prop; its mic, preview and status are `voice-chat-controls.tsx`.
 - `web-ui/src/components/detail-panels/terminal-touch-bar.tsx`: the touch bar (`VoiceTerminalTouchBar` on an agent
-  session); its keys and Enter go through `web-ui/src/terminal/terminal-ime-input.ts` like the keyboard's. Its button
+  session); its keys, Enter and Paste go through `web-ui/src/terminal/terminal-ime-input.ts` like the keyboard's
+  (Paste: `web-ui/src/hooks/use-touch-paste.ts`, `web-ui/src/terminal/clipboard-text.ts`, `terminal-paste.ts`). Its button
   styles are `touch-bar-buttons.ts`; the preview's X taps through `web-ui/src/hooks/use-pointer-tap.ts`.

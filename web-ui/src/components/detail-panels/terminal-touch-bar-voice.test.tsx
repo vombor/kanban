@@ -87,6 +87,7 @@ describe("VoiceTerminalTouchBar", () => {
 						showJumpToBottom
 						onJumpToBottom={() => {}}
 						onKey={(key) => keys.push(key)}
+						onPaste={() => true}
 					/>
 				</TooltipProvider>,
 			);

@@ -35,9 +35,11 @@ export interface UsePersistentTerminalSessionResult {
 	isScrolledUp: boolean;
 	clearTerminal: () => void;
 	scrollToBottom: () => void;
-	// A touch bar key (Enter, arrows, Tab, Esc, Space) that keeps a phone
+	// A touch bar key (Enter, arrows, Tab, Esc) that keeps a phone
 	// keyboard and its dictation going (terminal-ime-input.ts).
 	sendKey: (key: TerminalTouchKey) => void;
+	// The touch bar's Paste, the same way; false when the terminal takes no input.
+	paste: (text: string) => boolean;
 	stopTerminal: () => Promise<void>;
 	retryConnection: () => void;
 }
@@ -221,6 +223,8 @@ export function usePersistentTerminalSession({
 		terminalRef.current?.sendKey(key);
 	}, []);
 
+	const paste = useCallback((text: string) => terminalRef.current?.paste(text) ?? false, []);
+
 	const retryConnection = useCallback(() => {
 		terminalRef.current?.retryConnection();
 	}, []);
@@ -235,6 +239,7 @@ export function usePersistentTerminalSession({
 		clearTerminal,
 		scrollToBottom,
 		sendKey,
+		paste,
 		stopTerminal,
 		retryConnection,
 	};

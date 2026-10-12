@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TerminalTouchBar } from "@/components/detail-panels/terminal-touch-bar";
 import { PRESS_REPEAT_DELAY_MS, PRESS_REPEAT_INTERVAL_MS } from "@/hooks/use-press-repeat";
+import { PASTE_MESSAGE_MS, PASTE_NOT_SENT_MESSAGE } from "@/hooks/use-touch-paste";
+import { CLIPBOARD_TEXT_MESSAGES } from "@/terminal/clipboard-text";
 import type { TerminalTouchKey } from "@/terminal/terminal-touch-keys";
 
 // jsdom has no PointerEvent; React reads `button` from any MouseEvent.
@@ -58,6 +60,7 @@ describe("TerminalTouchBar", () => {
 						jumps += 1;
 					}}
 					onKey={(key) => keys.push(key)}
+					onPaste={() => true}
 				/>,
 			);
 		});
@@ -136,7 +139,6 @@ describe("TerminalTouchBar", () => {
 			["Send Tab", "tab"],
 			["Send Shift+Tab", "shiftTab"],
 			["Send Esc", "escape"],
-			["Send Space", "space"],
 		];
 		for (const label of [...labels.map(([buttonLabel]) => buttonLabel), "Hide terminal keys"]) {
 			const { pointerDown, mouseDown } = tap(button(label));
@@ -182,7 +184,7 @@ describe("TerminalTouchBar", () => {
 		expect(keys).toHaveLength(4);
 	});
 
-	it("does not repeat Tab, Esc or Space", () => {
+	it("does not repeat Tab or Esc", () => {
 		vi.useFakeTimers();
 		render();
 		tap(button("Show terminal keys"));
@@ -194,5 +196,148 @@ describe("TerminalTouchBar", () => {
 			tab.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
 		});
 		expect(keys).toEqual(["tab"]);
+	});
+
+	describe("Paste", () => {
+		let readText: ReturnType<typeof vi.fn>;
+		let pasted: string[];
+		let pasteAccepted: boolean;
+		let originalClipboard: PropertyDescriptor | undefined;
+		let originalSecure: PropertyDescriptor | undefined;
+
+		function setSecureContext(secure: boolean) {
+			Object.defineProperty(window, "isSecureContext", { configurable: true, value: secure });
+		}
+
+		beforeEach(() => {
+			readText = vi.fn(async () => "copied log\nline two");
+			pasted = [];
+			pasteAccepted = true;
+			originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+			originalSecure = Object.getOwnPropertyDescriptor(window, "isSecureContext");
+			Object.defineProperty(navigator, "clipboard", { configurable: true, value: { readText } });
+			setSecureContext(true);
+		});
+
+		afterEach(() => {
+			if (originalClipboard) {
+				Object.defineProperty(navigator, "clipboard", originalClipboard);
+			} else {
+				Reflect.deleteProperty(navigator, "clipboard");
+			}
+			if (originalSecure) {
+				Object.defineProperty(window, "isSecureContext", originalSecure);
+			} else {
+				Reflect.deleteProperty(window, "isSecureContext");
+			}
+		});
+
+		function renderWithPaste() {
+			act(() => {
+				root.render(
+					<TerminalTouchBar
+						showJumpToBottom={false}
+						onJumpToBottom={() => {}}
+						onKey={(key) => keys.push(key)}
+						onPaste={(text) => {
+							pasted.push(text);
+							return pasteAccepted;
+						}}
+					/>,
+				);
+			});
+			tap(button("Show terminal keys"));
+		}
+
+		async function tapPaste() {
+			const events = tap(button("Paste"));
+			// The clipboard read resolves after the click.
+			await act(async () => {
+				await Promise.resolve();
+			});
+			return events;
+		}
+
+		function message(): string | null {
+			return container.querySelector('[role="status"]')?.textContent ?? null;
+		}
+
+		it("sits in Space's place, between Tab and the arrows", () => {
+			renderWithPaste();
+			const pad = container.querySelector('[role="toolbar"][aria-label="Terminal keys"]');
+			const labels = Array.from(pad?.querySelectorAll("button") ?? []).map((found) =>
+				found.getAttribute("aria-label"),
+			);
+			expect(labels).toEqual([
+				"Send Esc",
+				"Send Shift+Tab",
+				"Send Tab",
+				"Paste",
+				"Send Left",
+				"Send Up",
+				"Send Down",
+				"Send Right",
+			]);
+			expect(container.querySelector('button[aria-label="Send Space"]')).toBeNull();
+		});
+
+		it("reads the clipboard in the tap and hands its text to the terminal's paste, keeping focus", async () => {
+			renderWithPaste();
+			const { pointerDown, mouseDown } = await tapPaste();
+			expect(pointerDown.defaultPrevented).toBe(true);
+			expect(mouseDown.defaultPrevented).toBe(true);
+			expect(readText).toHaveBeenCalledTimes(1);
+			expect(pasted).toEqual(["copied log\nline two"]);
+			// Not as typed keys.
+			expect(keys).toEqual([]);
+			expect(message()).toBeNull();
+			expect(document.activeElement).toBe(textarea);
+			expect(textarea.value).toBe("dictated");
+		});
+
+		it("says so when the clipboard read is refused, and the message goes away", async () => {
+			vi.useFakeTimers();
+			readText.mockRejectedValue(new DOMException("Denied", "NotAllowedError"));
+			renderWithPaste();
+			await tapPaste();
+			expect(pasted).toEqual([]);
+			expect(message()).toBe(CLIPBOARD_TEXT_MESSAGES.refused);
+			expect(document.activeElement).toBe(textarea);
+			act(() => {
+				vi.advanceTimersByTime(PASTE_MESSAGE_MS);
+			});
+			expect(message()).toBeNull();
+		});
+
+		it("says so when the clipboard holds no text", async () => {
+			readText.mockResolvedValue("");
+			renderWithPaste();
+			await tapPaste();
+			expect(pasted).toEqual([]);
+			expect(message()).toBe(CLIPBOARD_TEXT_MESSAGES.empty);
+		});
+
+		it("says so outside a secure context, without asking for the clipboard", async () => {
+			setSecureContext(false);
+			renderWithPaste();
+			await tapPaste();
+			expect(readText).not.toHaveBeenCalled();
+			expect(message()).toBe(CLIPBOARD_TEXT_MESSAGES.insecure);
+		});
+
+		it("says so when the browser has no clipboard read", async () => {
+			Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+			renderWithPaste();
+			await tapPaste();
+			expect(message()).toBe(CLIPBOARD_TEXT_MESSAGES.unsupported);
+		});
+
+		it("says so when the terminal takes no input", async () => {
+			pasteAccepted = false;
+			renderWithPaste();
+			await tapPaste();
+			expect(pasted).toEqual(["copied log\nline two"]);
+			expect(message()).toBe(PASTE_NOT_SENT_MESSAGE);
+		});
 	});
 });
