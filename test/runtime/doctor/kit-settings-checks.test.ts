@@ -25,16 +25,12 @@ const LOCAL_ON = {
 	pipeline: { recovery: { mode: "on" } },
 };
 
-/** The fixture list plus team-local's dev, QA and fallback models (on the pod since 2026-10-10). */
+/** The fixture list plus team-local's dev and QA models (on the pod since 2026-10-12), without its fallback model. */
 const WITH_TEAM_LOCAL_ROLES = {
 	...LEMONADE_MODELS_PAYLOAD,
 	data: [
 		...LEMONADE_MODELS_PAYLOAD.data,
-		...[
-			"Qwen3.8-27B-GGUF-UD-Q4_K_XL",
-			"gemma-4-31B-it-qat-q4_0-gguf-Q4_0",
-			"Devstral-Small-2-24B-Instruct-2512-GGUF-Q4_K_M",
-		].map((id) => ({
+		...["Muse-Glimmer-30B-GGUF-Q4_K_M", "gemma-4-31B-it-qat-q4_0-gguf-Q4_0"].map((id) => ({
 			id,
 			object: "model",
 			owned_by: "lemonade",
@@ -83,7 +79,7 @@ describe("kit settings doctor rows", () => {
 			entries: [{ workspaceId: "local" }, { workspaceId: "foo" }],
 			lemonadeModelList: LEMONADE,
 		};
-		// The fixture is the pod's list of 10/07 plus the role models, without the DeepSeek import.
+		// The fixture is the pod's list of 10/07 plus the dev and QA models, without the fallback model.
 		const findings = await checkKitLemonadeModels({
 			...context,
 			fetch: createFakeLemonadeFetch({ models: WITH_TEAM_LOCAL_ROLES }),
@@ -92,7 +88,7 @@ describe("kit settings doctor rows", () => {
 		expect(findings[0]).toMatchObject({
 			level: "warn",
 			message:
-				"local: kit team-local routes to Lemonade models it can't run: DeepSeek-V4-Flash-0731-GGUF-BF16 is not listed by Lemonade",
+				"local: kit team-local routes to Lemonade models it can't run: Laguna-XS-2.1-GGUF-Q4_K_M is not listed by Lemonade",
 		});
 		const down = await checkKitLemonadeModels({ ...context, fetch: createFakeLemonadeFetch({ down: true }) });
 		expect(down).toMatchObject([{ level: "info", message: expect.stringContaining("did not answer") }]);

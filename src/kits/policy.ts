@@ -155,7 +155,9 @@ const GATEWAY_MODEL_PREFIX = /^cline-pass\//u;
  * `components` in Lemonade's /models), and Ornith AI's Ornith models are post-trained Qwen 3.5 (9B, 35B-A3B, 397B) or
  * Gemma 4 (31B) models (the user's Triton serves `ornith-1.5-35b-a3b`, 2026-10-12). Laguna is Poolside's own family. ClinePass's ids (after GATEWAY_MODEL_PREFIX)
  * are bare names too, with families of their own (cline 3.0.70's catalog, 2026-10-12): MiMo is Xiaomi's, Kimi
- * Moonshot AI's (Bedrock's `moonshotai.`), MiniMax MiniMax's and Muse Spark Meta's.
+ * Moonshot AI's (Bedrock's `moonshotai.`), MiniMax MiniMax's and Muse Spark Meta's. Muse Glimmer (Lemonade's
+ * `Muse-Glimmer-30B-GGUF-Q4_K_M`) is Meta Superintelligence Lab's too, distilled from Muse Spark (its model card at
+ * huggingface.co/meta-models/Muse-Glimmer-30B), so every `muse-` id is Meta's.
  */
 const BARE_MODEL_FAMILIES: ReadonlyArray<{ pattern: RegExp; vendor: string }> = [
 	{ pattern: /^ornith-[\d.]+-31b/u, vendor: "google" },
@@ -171,7 +173,7 @@ const BARE_MODEL_FAMILIES: ReadonlyArray<{ pattern: RegExp; vendor: string }> = 
 	{ pattern: /^mimo-/u, vendor: "xiaomi" },
 	{ pattern: /^kimi-/u, vendor: "moonshotai" },
 	{ pattern: /^minimax-/u, vendor: "minimax" },
-	{ pattern: /^muse-spark/u, vendor: "meta" },
+	{ pattern: /^muse-/u, vendor: "meta" },
 ];
 
 /**

@@ -274,20 +274,20 @@ describe("rework limits", () => {
 			throw new Error(resolved.error);
 		}
 		const policy = createRoutingPolicy(resolved.kit);
-		const qwen = { providerId: "lemonade", modelId: "Qwen3.8-27B-GGUF-UD-Q4_K_XL" };
-		const dev = { ...DEV, agentSettings: qwen };
+		const muse = { providerId: "lemonade", modelId: "Muse-Glimmer-30B-GGUF-Q4_K_M" };
+		const dev = { ...DEV, agentSettings: muse };
 		const fails = [failVerdict(1), failVerdict(2), failVerdict(3)];
 
 		const first = createHarness({ onFail: (input) => policy.onFail(input) });
 		await first.seed("d1111", { qaVerdicts: fails });
 		await first.tick({ review: [dev] }, [
-			{ taskId: "d1111", agentId: "cline", modelId: "Qwen3.8-27B-GGUF-UD-Q4_K_XL" },
+			{ taskId: "d1111", agentId: "cline", modelId: "Muse-Glimmer-30B-GGUF-Q4_K_M" },
 		]);
 		expect(kinds(first.actions)).toEqual(["createTask:s0001", "startTask:s0001", "blockTask:d1111"]);
 		expect(first.actions[0]).toMatchObject({
 			task: {
 				agentId: "cline",
-				agentSettings: { providerId: "lemonade", modelId: "Devstral-Small-2-24B-Instruct-2512-GGUF-Q4_K_M" },
+				agentSettings: { providerId: "lemonade", modelId: "Laguna-XS-2.1-GGUF-Q4_K_M" },
 			},
 		});
 
@@ -296,14 +296,14 @@ describe("rework limits", () => {
 		const sibling = {
 			...DEV,
 			id: "s0001",
-			agentSettings: { providerId: "lemonade", modelId: "Devstral-Small-2-24B-Instruct-2512-GGUF-Q4_K_M" },
+			agentSettings: { providerId: "lemonade", modelId: "Laguna-XS-2.1-GGUF-Q4_K_M" },
 		};
 		await fallback.seed("s0001", {
 			qaVerdicts: fails.map((verdict) => ({ ...verdict, snapshot: "snap-s0001" })),
 			sibling: { of: "d1111", kind: "escalation", at: new Date(REWORK_T0 - 60_000).toISOString() },
 		});
 		await fallback.tick({ review: [sibling] }, [
-			{ taskId: "s0001", agentId: "cline", modelId: "Devstral-Small-2-24B-Instruct-2512-GGUF-Q4_K_M" },
+			{ taskId: "s0001", agentId: "cline", modelId: "Laguna-XS-2.1-GGUF-Q4_K_M" },
 		]);
 		expect(kinds(fallback.actions)).toEqual(["blockTask:s0001"]);
 		expect(readEscalationRecord(readQaflow(await fallback.entry("s0001")))).toMatchObject({ to: "orchestrator" });

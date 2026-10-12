@@ -10,9 +10,9 @@ import { loadKitCatalog } from "../../../src/kits/resolve-kit";
 import { createTempDir } from "../../utilities/temp-dir";
 import { createBoard, createCard } from "../../utilities/workspace-state-store";
 
-const QWEN = "Qwen3.8-27B-GGUF-UD-Q4_K_XL";
+const MUSE = "Muse-Glimmer-30B-GGUF-Q4_K_M";
 const GEMMA = "gemma-4-31B-it-qat-q4_0-gguf-Q4_0";
-const DEVSTRAL = "Devstral-Small-2-24B-Instruct-2512-GGUF-Q4_K_M";
+const LAGUNA = "Laguna-XS-2.1-GGUF-Q4_K_M";
 
 describe("doctor: Cline's models.json is the allow list", () => {
 	let root: { path: string; cleanup: () => void };
@@ -57,29 +57,29 @@ describe("doctor: Cline's models.json is the allow list", () => {
 	}
 
 	it("warns about a kit role on a Lemonade model the record doesn't list, nothing more", async () => {
-		writeModels({ [QWEN]: {}, [GEMMA]: {} });
+		writeModels({ [MUSE]: {}, [GEMMA]: {} });
 		const findings = await check({ kit: "team-local" });
 		expect(findings).toEqual([
 			{
 				level: "warn",
 				area: "project",
-				message: `local: kit team-local roles.fallback puts Cline cards on lemonade + ${DEVSTRAL}, which lemonade's models record in Cline's models.json doesn't list, so Cline couldn't select it`,
+				message: `local: kit team-local roles.fallback puts Cline cards on lemonade + ${LAGUNA}, which lemonade's models record in Cline's models.json doesn't list, so Cline couldn't select it`,
 				hint: expect.stringContaining("kanban models vet"),
 			},
 		]);
-		writeModels([QWEN, GEMMA, DEVSTRAL]);
+		writeModels([MUSE, GEMMA, LAGUNA]);
 		expect(await check({ kit: "team-local" })).toEqual([]);
 	});
 
 	it("warns about open Cline cards on an unlisted model; other agents, providers without a record and Done cards are not checked", async () => {
-		writeModels({ [QWEN]: {} });
+		writeModels({ [MUSE]: {} });
 		const board = createBoard({
 			backlog: [
 				createCard({ id: "c0001", agentSettings: { providerId: "lemonade", modelId: "Other-GGUF" } }),
 				// The selected agent (Cline) with a provider from models.providers: bedrock has no record here.
 				createCard({ id: "c0002", agentSettings: { modelId: "us.openai.gpt-6.1-sol" } }),
 				createCard({ id: "c0003", agentId: "claude", agentSettings: { providerId: "lemonade", modelId: "x" } }),
-				createCard({ id: "c0004", agentSettings: { providerId: "lemonade", modelId: QWEN } }),
+				createCard({ id: "c0004", agentSettings: { providerId: "lemonade", modelId: MUSE } }),
 			],
 			trash: [createCard({ id: "c0005", agentSettings: { providerId: "lemonade", modelId: "Gone-GGUF" } })],
 		});

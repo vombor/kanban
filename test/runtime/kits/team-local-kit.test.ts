@@ -9,8 +9,8 @@ import { getBuiltInKits, getDefaultKit, resolveKitLayers } from "../../../src/ki
 import { listKitModels } from "../../../src/kits/team/bench/price-sync-job";
 import { createCardHistory, createEffectiveCard } from "../../utilities/effective-card";
 
-const QWEN = { provider: "lemonade", model: "Qwen3.8-27B-GGUF-UD-Q4_K_XL" };
-const DEVSTRAL = { provider: "lemonade", model: "Devstral-Small-2-24B-Instruct-2512-GGUF-Q4_K_M" };
+const MUSE = { provider: "lemonade", model: "Muse-Glimmer-30B-GGUF-Q4_K_M" };
+const LAGUNA = { provider: "lemonade", model: "Laguna-XS-2.1-GGUF-Q4_K_M" };
 const GEMMA = { provider: "lemonade", model: "gemma-4-31B-it-qat-q4_0-gguf-Q4_0" };
 
 function resolveTeamLocal(overrides: Record<string, unknown> = {}) {
@@ -73,13 +73,13 @@ describe("team-local kit", () => {
 			}),
 		).toEqual({
 			agentId: "cline",
-			model: QWEN,
+			model: MUSE,
 			tier: "dev",
 		});
 		expect(answerPlanAssignment(kit)).toEqual({
 			kind: "plan",
 			agentId: "cline",
-			model: QWEN,
+			model: MUSE,
 			tier: "dev",
 			startInPlanMode: true,
 			rules: [],
@@ -94,16 +94,8 @@ describe("team-local kit", () => {
 				round: 1,
 				history: createCardHistory(),
 			});
-		expect(qaFor(QWEN)).toMatchObject({ kind: "qa", agentId: "cline", model: GEMMA, route: null });
-		expect(qaFor(DEVSTRAL)).toMatchObject({ kind: "qa", model: GEMMA, route: null });
-		expect(qaFor({ provider: "lemonade", model: "Qwen3.6-35B-A3B-MTP-GGUF" })).toMatchObject({
-			kind: "qa",
-			model: GEMMA,
-		});
-		expect(qaFor({ provider: "lemonade", model: "DeepSeek-V4-Flash-0731-GGUF-BF16" })).toMatchObject({
-			kind: "qa",
-			model: GEMMA,
-		});
+		expect(qaFor(MUSE)).toMatchObject({ kind: "qa", agentId: "cline", model: GEMMA, route: null });
+		expect(qaFor(LAGUNA)).toMatchObject({ kind: "qa", model: GEMMA, route: null });
 	});
 
 	it("refuses QA by the dev model's own family", () => {
@@ -122,7 +114,7 @@ describe("team-local kit", () => {
 
 	it("reworks on the same model, then hands the task to the fallback local model at once, and waits out Lemonade outages", () => {
 		const policy = createRoutingPolicy(resolveTeamLocal().kit);
-		const dev = createEffectiveCard({ agentId: "cline", model: QWEN });
+		const dev = createEffectiveCard({ agentId: "cline", model: MUSE });
 		const limits = { maxFailRounds: 3 };
 		expect(policy.onFail({ dev, cause: "fail", verdict: null, history: createCardHistory([1]), limits })).toEqual({
 			action: "rework",
@@ -130,19 +122,24 @@ describe("team-local kit", () => {
 		});
 		expect(
 			policy.onFail({ dev, cause: "fail", verdict: null, history: createCardHistory([1, 2, 3]), limits }),
-		).toMatchObject({ action: "escalate", to: { agentId: "cline", model: DEVSTRAL }, requireApproval: false });
+		).toMatchObject({ action: "escalate", to: { agentId: "cline", model: LAGUNA }, requireApproval: false });
 		expect(policy.onOutage({ dev, heldMin: 400, maxMin: 360 })).toMatchObject({ action: "hold" });
 	});
 
 	it("routes its roles to its local models with no overrides, as a fresh kit apply team-local does", () => {
 		const { kit } = resolveTeamLocal();
-		expect(listKitRoutes(kit).map(({ label, combination }) => [label, combination.model])).toEqual([
-			["roles.dev", QWEN.model],
-			["roles.qa", GEMMA.model],
-			["roles.plan", QWEN.model],
-			["roles.fallback", DEVSTRAL.model],
+		const onCline = (model: { provider: string; model: string }) => ({ agentId: "cline", ...model });
+		expect(listKitRoutes(kit)).toEqual([
+			{ label: "roles.dev", combination: onCline(MUSE) },
+			{ label: "roles.qa", combination: onCline(GEMMA) },
+			{ label: "roles.plan", combination: onCline(MUSE) },
+			{ label: "roles.fallback", combination: onCline(LAGUNA) },
 		]);
-		expect(collectModelProviders(kit).map(({ model }) => model)).not.toContain("GLM-4.7-Flash-GGUF");
+		// No text in the kit names the models it ran before 2026-10-12.
+		const text = JSON.stringify(kit);
+		for (const old of ["Qwen3.8-27B", "Devstral-Small-2-24B", "GLM", "98304", "Gemma-4-12B"]) {
+			expect(text).not.toContain(old);
+		}
 	});
 
 	it("leaves its local models out of the AWS price check", () => {
@@ -195,7 +192,7 @@ describe("team-local kit", () => {
 		expect(report.recommendedLandingMode).toBe("qa");
 		const text = formatKitReport(report).join("\n");
 		expect(text).toContain(
-			"New dev cards (when the creator sets no agent):\n  cline on lemonade/Qwen3.8-27B-GGUF-UD-Q4_K_XL (tier dev)",
+			"New dev cards (when the creator sets no agent):\n  cline on lemonade/Muse-Glimmer-30B-GGUF-Q4_K_M (tier dev)",
 		);
 		expect(text).not.toContain("[qa.routes[");
 		expect(text).toContain("Settings this kit needs (config.json; the kit never applies them):");

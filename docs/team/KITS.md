@@ -372,7 +372,7 @@ user's command (an agent session can't run it; doctor `--fix` doesn't either). I
 
 A model id's vendor (for `qa.requireDifferentVendor`) is `getModelVendor()` in `src/kits/policy.ts`: a Bedrock
 `<vendor>.` prefix, or a known family name for bare local ids (`GLM` → `zai`, `Devstral`/`Mistral` → `mistral`,
-`Qwen` → `qwen`, `Gemma` → `google`, `DeepSeek` → `deepseek`), named like the Bedrock vendors so a local and a
+`Qwen` → `qwen`, `Gemma` → `google`, `DeepSeek` → `deepseek`, `Muse` → `meta`, `Laguna` → `poolside`), named like the Bedrock vendors so a local and a
 Bedrock model of one family count as one vendor. An id it can't place gives no vendor, and the rule doesn't refuse.
 
 A tier lookup returns the tier's `default` entry, else its first usable one, and skips the kit's `dropped` models
@@ -478,21 +478,20 @@ override (plan §12).
 
 `kits/team-local.json`: the team workflow on the local Lemonade server (http://localhost:13305/api/v1, OpenAI
 compatible) through the Cline CLI with provider `lemonade`. No paid or cloud provider appears anywhere in it
-(`test/runtime/kits/team-local-kit.test.ts` checks every model and agent). Every route passed `kanban models vet` for its role
-(2026-10-10, cline 3.0.70; its models must be in Cline's models.json record); `kanban bench calibrate` can still compare candidates on the project.
+(`test/runtime/kits/team-local-kit.test.ts` checks every model and agent). All three models passed `kanban models vet` for dev
+and QA (2026-10-12, cline 3.0.70); none was vetted for plan. Its models must be in Cline's models.json record;
+`kanban bench calibrate` can still compare candidates on the project.
 
 | Role | Model (passed `kanban models vet`) | Why |
 |---|---|---|
-| Dev (`roles.dev`: tier `dev`), plan cards (`roles.plan`, Cline `--plan`) | `Qwen3.8-27B-GGUF-UD-Q4_K_XL` | tool-calling + vision; a dense 27B (17.2 GB), 65536 context as Lemonade loads it (max 262144). Plans on the dev model need no model swap. Replaced `GLM-4.7-Flash-GGUF`, which the user dropped (2026-10-11) |
-| QA (`roles.qa`) | `gemma-4-31B-it-qat-q4_0-gguf-Q4_0` | another family (google) than the dev and fallback models, vision + tool-calling; 17.6 GB, 98304 context as Lemonade loads it. Replaced `Gemma-4-12B-it-GGUF` (2026-10-11, no longer on the pod's Lemonade). No `qa.routes`, so a card someone builds on Gemma itself gets no QA (`kit show` warns) |
-| Fallback dev model (`roles.fallback`: tier `senior`) | `Devstral-Small-2-24B-Instruct-2512-GGUF-Q4_K_M` | a third family (Mistral), neither the dev nor the QA model, so its sibling is still reviewed by Gemma. 14.2 GB, 65536 context as Lemonade loads it |
+| Dev (`roles.dev`: tier `dev`), plan cards (`roles.plan`, Cline `--plan`) | `Muse-Glimmer-30B-GGUF-Q4_K_M` | Meta's Muse Glimmer (Meta Superintelligence Lab, distilled from Muse Spark): a dense 30B with tool-calling + vision, 16.9 GB, 65536 context as Lemonade loads it (max 131072). Plans on the dev model need no model swap (not vetted for plan) |
+| QA (`roles.qa`) | `gemma-4-31B-it-qat-q4_0-gguf-Q4_0` | another family (google) than the dev (meta) and fallback (poolside) models, vision + tool-calling; 17.6 GB, 65536 context as Lemonade loads it. No `qa.routes`, so a card someone builds on Gemma itself gets no QA (`kit show` warns) |
+| Fallback dev model (`roles.fallback`: tier `senior`) | `Laguna-XS-2.1-GGUF-Q4_K_M` | Poolside's Laguna, a third family, neither the dev nor the QA model, so its sibling is still reviewed by Gemma. Tool-calling, 18.9 GB, 65536 context as Lemonade loads it |
 
-These are the defaults the notes project already set as overrides (2026-10-10). The other coding models are
-candidates in `tiers` (`Devstral-Small-2507`, `Qwen3.6` and `DeepSeek-V4-Flash-0731-GGUF-BF16` for dev;
-`Devstral-Small-2507` and `Qwen3.6` for QA). `LMX-Omni-52B-Halo` is not one: it is a Lemonade collection (Qwen3.6
-+ image + speech models) without the tool-calling label, so it doesn't belong in Cline's models.json record.
+These are the defaults since 2026-10-12. The dev tier lists Laguna-XS as its second candidate; the kit names no
+model that the pod's Lemonade doesn't have.
 
-- **FAIL:** same-model rework for 3 rounds (conflicts too), then the fallback: a sibling card on Devstral-Small-2 takes the
+- **FAIL:** same-model rework for 3 rounds (conflicts too), then the fallback: a sibling card on Laguna-XS takes the
   task over and starts at once (`requireApproval: false`: a local run costs nothing). The core never hands a task
   onto the model the card runs on, and a fallback sibling that fails in turn goes to the orchestrator, never to
   another sibling (`refuseTakeover()` in `src/pipeline/rework.ts`). So the orchestrator is the last resort, after
@@ -513,7 +512,7 @@ candidates in `tiers` (`Devstral-Small-2507`, `Qwen3.6` and `DeepSeek-V4-Flash-0
 
 ### One GPU: keep dev, QA and fallback loaded
 
-team-local runs three local models at the same time: Qwen3.8 (dev and plan), Gemma (QA) and Devstral-Small-2
+team-local runs three local models at the same time: Muse-Glimmer (dev and plan), Gemma (QA) and Laguna-XS
 (fallback).
 Lemonade keeps at most `max_loaded_models` LLMs resident (`/api/v1/health` `max_models.llm`, default 1). When it is
 full it evicts the least recently used one, so with one slot every dev ↔ QA switch reloads a model. Raise it to 3:
@@ -535,30 +534,29 @@ Kanban's own limit, `models.providerCapacity.lemonade.maxLoadedModels` (default 
 Above Lemonade's value, cards on different models make it reload on every request. Below it, QA cards wait for
 nothing. `kanban doctor` and `kanban kit show` read `/api/v1/health` and warn about both cases, and when
 `max_models.llm` is below the 3 models the kit runs. With Lemonade at 1 and Kanban at 1, work runs one model at a
-time: a QA card waits until no dev card runs on Qwen3.8, and every switch still costs a model load. Not covered yet: a
+time: a QA card waits until no dev card runs on Muse-Glimmer, and every switch still costs a model load. Not covered yet: a
 card a human starts by hand, and the rework stage's sibling and resume starts.
 
 **Memory budget** (`tierNotes.dev`): the three models must stay resident within 80 GB of the 96 GB the iGPU can
-address (Ryzen AI MAX+ 395, 125 GB RAM), leaving 16 GB headroom. Weights are Lemonade's sizes, at the contexts
-Lemonade loads them with (2026-10-11):
+address (Ryzen AI MAX+ 395, 125 GB RAM), leaving 16 GB headroom. Weights are Lemonade's sizes (`GET /api/v1/models` `size`), at the
+context the user set on every Lemonade model (2026-10-12):
 
 | Model | Context | Weights |
 |---|---|---|
-| Qwen3.8-27B (UD-Q4_K_XL, dense) | 65536 | 17.2 GB |
-| gemma-4-31B QAT (Q4_0, dense) | 98304 | 17.6 GB |
-| Devstral-Small-2-24B (Q4_K_M, dense) | 65536 | 14.2 GB |
-| **sum** | | **49 GB** |
+| Muse-Glimmer-30B (Q4_K_M) | 65536 | 16.9 GB |
+| gemma-4-31B QAT (Q4_0) | 65536 | 17.6 GB |
+| Laguna-XS-2.1 (Q4_K_M) | 65536 | 18.9 GB |
+| **sum** | | **53.4 GB** |
 
-On top come each model's KV cache at that context and about 1.5 GB of compute buffers each. The KV caches haven't
-been worked out for these three (the old GLM/Gemma-12B/Qwen3.6 set came to about 62 GB); all three are dense, so
-check the free memory with all three loaded before raising a context. `--save-options` replaces the model's stored
+On top come each model's KV cache at that context and its compute buffers. Their sizes are not measured yet for
+these three, so check the free memory with all three loaded before raising a context. `--save-options` replaces the model's stored
 options, so repeat the backend. Cline's models.json follows by itself: the server's Lemonade context sync
 (`agents.cline.lemonadeContextSync`, on by default) writes the new `contextWindow`/`maxTokens` within 30 s and
 before the next Cline launch. Which models are in the record is the Kanban orchestrator's (by hand, with models that
 passed `kanban models vet`); `kanban setup-provider lemonade` fills in their metadata:
 
 ```sh
-lemonade load Qwen3.8-27B-GGUF-UD-Q4_K_XL --ctx-size 65536 --llamacpp vulkan --save-options
+lemonade load Muse-Glimmer-30B-GGUF-Q4_K_M --ctx-size 65536 --llamacpp vulkan --save-options
 kanban setup-provider lemonade    # metadata of the record's models, drops a modelsSourceUrl; doctor prints it
 ```
 
@@ -576,8 +574,10 @@ applied for you:
 
 The other local gotchas:
 
-- **Images.** The dev model (Qwen3.8), the QA model (Gemma) and the fallback (Devstral-Small-2) all read images, so the kit has no
-  `qa.promptNotes.screenshotFallback`. Recovery clears and resends an image a model rejects (too large or no vision).
+- **Images.** The dev model (Muse-Glimmer) and the QA model (Gemma) read images, so the kit has no
+  `qa.promptNotes.screenshotFallback`. The fallback (Laguna-XS) has no vision label in Lemonade, so a fallback
+  sibling that reads a screenshot gets a no-images rejection. Recovery clears and resends an image a model rejects
+  (too large or no vision).
 - **Context overflow.** Cline compacts at 0.9 × the `contextWindow` in its models.json, so that window must be the
   one Lemonade really loads. The server's Lemonade context sync keeps it so after a reload (`report`/`off` in
   `agents.cline.lemonadeContextSync` stop it), `kanban doctor`'s "cline lemonade models" row compares them, and

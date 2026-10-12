@@ -16,9 +16,9 @@ function resolveBuiltIn(name: string, overrides: Record<string, unknown> = {}) {
 }
 
 const TEAM_LOCAL_SET = [
-	"Qwen3.8-27B-GGUF-UD-Q4_K_XL",
+	"Muse-Glimmer-30B-GGUF-Q4_K_M",
 	"gemma-4-31B-it-qat-q4_0-gguf-Q4_0",
-	"Devstral-Small-2-24B-Instruct-2512-GGUF-Q4_K_M",
+	"Laguna-XS-2.1-GGUF-Q4_K_M",
 ];
 
 describe("local residency", () => {
