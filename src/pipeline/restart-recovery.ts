@@ -26,6 +26,7 @@ import type { RuntimeBoardCard, RuntimeBoardColumn, RuntimeTaskRole } from "../c
 import { resolveCardRole } from "../core/card-role";
 import { lockedFileSystem } from "../fs/locked-file-system";
 import { getRestartManifestPath, getRestartRecoverRequestPath, getServerStartRecordPath } from "../state/kanban-home";
+import { containerImageBuildSchema } from "../update/container-image";
 import type { PipelineSessionView } from "./engine";
 
 const restartManifestCardSchema = z
@@ -45,11 +46,23 @@ const restartManifestCardSchema = z
 export const RESTART_MANIFEST_SOURCES = ["prepare", "periodic", "shutdown"] as const;
 export type RestartManifestSource = (typeof RESTART_MANIFEST_SOURCES)[number];
 
+/**
+ * Why `kanban restart update` restarted: the running image build and the registry's `:latest` it asked for (either
+ * null when unknown, e.g. a `--force` without a reachable registry). The restart wake says "updated from … to …".
+ */
+export const restartManifestUpdateSchema = z.object({
+	from: containerImageBuildSchema.nullable(),
+	to: containerImageBuildSchema.nullable(),
+});
+export type RestartManifestUpdate = z.infer<typeof restartManifestUpdateSchema>;
+
 export const restartManifestSchema = z
 	.object({
 		at: z.string(),
 		kanbanStart: z.string().nullable().optional(),
 		source: z.enum(RESTART_MANIFEST_SOURCES).optional(),
+		/** Only from `kanban restart update` (a `prepare` manifest): the image update the restart is for. */
+		update: restartManifestUpdateSchema.optional(),
 		/** Set by restart recovery once it has planned this start with the manifest (markRestartManifestPlanned). */
 		plannedAt: z.string().optional(),
 		cards: z.array(restartManifestCardSchema),

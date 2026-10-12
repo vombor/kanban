@@ -279,6 +279,32 @@ while :; do sleep 0.05; done
 		expect(readEvents()).toEqual([]);
 	});
 
+	it("passes an update restart's exit 75 through and logs it as one, without running the pre-stop hook", async () => {
+		const entry = startEntrypoint(["sh", "-c", "exit 75"], {
+			KANBAN_START_HOOK: "",
+			KANBAN_PRESTOP_HOOK: 'echo "hook ran" >> "$EVENTS"',
+		});
+
+		expect(await entry.exited).toBe(75);
+		expect(readEvents()).toEqual([]);
+		expect(entry.stderr()).toContain("exit 75: Kanban asked for an update restart (kanban restart update)");
+	});
+
+	it("does not call a 75 after a stop signal an update restart", async () => {
+		const entry = startEntrypoint(
+			["sh", "-c", `trap 'exit 75' TERM; echo "child ready" >> "$EVENTS"; while :; do sleep 0.05; done`],
+			{
+				KANBAN_START_HOOK: "",
+				KANBAN_PRESTOP_HOOK: "",
+			},
+		);
+		await waitForEvent("child ready");
+		entry.process.kill("SIGTERM");
+
+		expect(await entry.exited).toBe(75);
+		expect(entry.stderr()).not.toContain("update restart");
+	});
+
 	it("starts the start hook detached: the child starts at once and the entrypoint does not wait for the hook", async () => {
 		const entry = startEntrypoint(["sh", "-c", 'echo "child ran" >> "$EVENTS"'], {
 			KANBAN_START_HOOK: 'sleep 1; echo "start hook done" >> "$EVENTS"',

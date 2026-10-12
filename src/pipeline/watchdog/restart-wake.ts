@@ -11,8 +11,9 @@
 // (`restartWake` in watchdog-state.json), so a worker restart within the same server start sends nothing again.
 import { readFile } from "node:fs/promises";
 
+import { type ContainerImageBuild, describeImageBuild, isSameImageBuild } from "../../update/container-image";
 import type { PipelineDecisionRecord } from "../decision-log";
-import { isManifestForStart, type RestartManifest } from "../restart-recovery";
+import { isManifestForStart, type RestartManifest, type RestartManifestUpdate } from "../restart-recovery";
 
 /** Every restart wake item carries it, so the watchdog can tell whether a wake delivered it. */
 export const RESTART_WAKE_ITEM_MARKER = "Kanban restarted";
@@ -26,6 +27,8 @@ export interface RestartStop {
 	kind: "clean" | "planned" | "unclean";
 	/** The manifest's time: the stop (clean/planned), or the last periodic write before an unclean stop. */
 	at: string | null;
+	/** A planned stop by `kanban restart update`: the build it ran and the `:latest` it asked for. */
+	update?: RestartManifestUpdate | null;
 }
 
 /** The previous stop, from the manifest found at this start (only one written for this start counts). */
@@ -40,7 +43,10 @@ export function describePreviousStop(
 	if (manifest.source === "shutdown") {
 		return { kind: "clean", at: manifest.at };
 	}
-	return { kind: manifest.source === "periodic" ? "unclean" : "planned", at: manifest.at };
+	if (manifest.source === "periodic") {
+		return { kind: "unclean", at: manifest.at };
+	}
+	return { kind: "planned", at: manifest.at, ...(manifest.update ? { update: manifest.update } : {}) };
 }
 
 /** What restart recovery did for one workspace's cards, from its `restart` records of this server start. */
@@ -156,6 +162,8 @@ export type RestartWakeSession =
 export interface RestartWakeItemInput {
 	serverStartedAt: number;
 	stop: RestartStop;
+	/** This server's image build (the image's env), null when unknown; read for an update restart. */
+	runningBuild?: ContainerImageBuild | null;
 	/** Why restart recovery doesn't run for the workspace, or null when it does. */
 	recoveryNotRunning: string | null;
 	/** Recovery's pass has run in this worker life (its records are then complete, or still coming for resumes). */
@@ -170,11 +178,34 @@ function formatTime(at: number | string): string {
 	return new Date(at).toISOString().replace("T", " ").slice(0, 19).concat("Z");
 }
 
-function formatStop(stop: RestartStop): string {
+/**
+ * An update restart's line: "updated from <old> to <new>" by the build this server runs, or, when it still runs the old
+ * build, that the container came back without pulling (the unit's Pull=newer is the only thing that pulls).
+ */
+function formatUpdate(
+	update: RestartManifestUpdate,
+	at: string | null,
+	runningBuild: ContainerImageBuild | null,
+): string {
+	const when = `kanban restart update at ${formatTime(at ?? 0)}`;
+	const from = describeImageBuild(update.from);
+	if (runningBuild && update.from && isSameImageBuild(runningBuild, update.from)) {
+		return `the restart was an update (${when}), but this server still runs ${from}: the container started without the newer image (${describeImageBuild(update.to)}), so check the Quadlet unit's Pull=newer`;
+	}
+	const to = runningBuild
+		? describeImageBuild(runningBuild)
+		: `${describeImageBuild(update.to)} (the registry's :latest then)`;
+	return `the restart was an update (${when}): updated from ${from} to ${to}`;
+}
+
+function formatStop(stop: RestartStop, runningBuild: ContainerImageBuild | null): string {
 	switch (stop.kind) {
 		case "clean":
 			return `the previous server stopped cleanly (shutdown at ${formatTime(stop.at ?? 0)})`;
 		case "planned":
+			if (stop.update) {
+				return formatUpdate(stop.update, stop.at, runningBuild);
+			}
 			return `the restart was planned (kanban restart prepare at ${formatTime(stop.at ?? 0)})`;
 		case "unclean":
 			return `the previous server did not stop cleanly (no shutdown record${stop.at ? `; its last restart manifest is of ${formatTime(stop.at)}` : ""})`;
@@ -235,7 +266,7 @@ function formatSession(session: RestartWakeSession | null): string | null {
 /** One line, like the other wake items. */
 export function buildRestartWakeItem(input: RestartWakeItemInput): string {
 	const session = formatSession(input.session);
-	return `- ${RESTART_WAKE_ITEM_MARKER} at ${formatTime(input.serverStartedAt)}; ${formatStop(input.stop)}; ${formatRecovery(input)}${session ? `; ${session}` : ""}. Check the board, finish the recovery that didn't happen automatically (kanban task resume <id>), and tell the user what the restart did`;
+	return `- ${RESTART_WAKE_ITEM_MARKER} at ${formatTime(input.serverStartedAt)}; ${formatStop(input.stop, input.runningBuild ?? null)}; ${formatRecovery(input)}${session ? `; ${session}` : ""}. Check the board, finish the recovery that didn't happen automatically (kanban task resume <id>), and tell the user what the restart did`;
 }
 
 export function isRestartWakeItem(item: string): boolean {

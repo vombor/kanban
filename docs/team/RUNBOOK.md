@@ -162,7 +162,11 @@ Each step logs one result line to `<kit home>/logs/kanban-entrypoint.log` (`rest
 `timed out`); a failed or hung step never holds up the stop (`deploy/kanban-entrypoint.sh`,
 `docs/fork/container-lifecycle.md`). Only a Kanban-only restart (no container stop) needs both run by hand first.
 `kanban restart recover --dry-run` shows what restart recovery would do on the live board. Without `--dry-run` it
-asks the worker to check now. Never restart the pod yourself: that is the user's step on the host.
+asks the worker to check now. Never restart the pod yourself, with one exception: the Kanban project's orchestrator
+may run `kanban restart update` (user, 2026-10-12) to move the pod onto a newer `ghcr.io/vombor/kanban:latest`. It
+refuses without a newer image or while cards are In Progress (`--force`), runs restart prepare and exits 75; the unit's
+`Restart=always` + `Pull=newer` bring the container back on the new image (docs/fork/container-lifecycle.md,
+"Updating from inside").
 
 - Until the cutover, restart resumes come from the legacy autoland. `pipeline.recovery.mode` stays `report`, so
   never both: a double resume starts two sessions. Both resume a Claude card the same way: `claude --continue` with

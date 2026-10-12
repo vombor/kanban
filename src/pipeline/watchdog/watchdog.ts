@@ -73,6 +73,7 @@ import {
 	hasHeadlessOrchestratorRunner,
 	isAgentWorkspaceTrusted,
 } from "../../terminal/orchestrator-agents";
+import { type ContainerImageBuild, readRunningImageBuild } from "../../update/container-image";
 import type { ChecksRunnerStatus } from "../checks";
 import { createWorkspaceJsonLinesLog, type WorkspaceJsonLinesLog } from "../decision-log";
 import {
@@ -229,6 +230,8 @@ export interface WatchdogDependencies {
 	readChecksStatus?: () => ChecksRunnerStatus | null;
 	/** Restart recovery's pass over a workspace in this worker life (RecoveryStage.restartPass), for the restart wake. */
 	readRestartPass?: (workspaceId: string) => RestartPassView | null;
+	/** This server's image build (default: readRunningImageBuild, the image's env), for an update restart's wake. */
+	readRunningBuild?: () => ContainerImageBuild | null;
 	/** The workspace's restart manifest (default: readRestartManifest), read when a server start is first seen. */
 	readRestartManifest?: (workspaceId: string) => Promise<RestartManifest | null>;
 	/** The workspace's pipeline-decisions.jsonl, whose `restart` records the restart wake reports. */
@@ -353,6 +356,7 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 	const clineReader = deps.readSilentStall ? null : createClineSessionFileReader();
 	const findRunningTool = deps.findRunningTool ?? createAgentToolProcessFinder();
 	const readManifest = deps.readRestartManifest ?? readRestartManifest;
+	const readRunningBuild = deps.readRunningBuild ?? (() => readRunningImageBuild());
 	const getDecisionsPath =
 		deps.getPipelineDecisionsPath ?? ((workspaceId: string) => getPipelineDecisionLogPath(workspaceId));
 	const continuesConversation = deps.continuesConversationOnResume ?? agentContinuesConversationOnResume;
@@ -1143,6 +1147,7 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 		return buildRestartWakeItem({
 			serverStartedAt,
 			stop: entry.stop ?? { kind: "unclean", at: null },
+			runningBuild: readRunningBuild(),
 			recoveryNotRunning,
 			passRan: pass !== null || summary.orphans > 0,
 			summary,

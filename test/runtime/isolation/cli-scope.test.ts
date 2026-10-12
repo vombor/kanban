@@ -5,7 +5,12 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { applyCliSessionScope } from "../../../src/isolation/cli-scope";
+import {
+	applyCliSessionScope,
+	KANBAN_ORCHESTRATOR_OR_USER_COMMANDS,
+	MACHINE_WIDE_COMMANDS,
+	matchesCommandPath,
+} from "../../../src/isolation/cli-scope";
 import { KANBAN_SESSION_CREDENTIAL_ENV, KANBAN_SESSION_WORKSPACE_ENV } from "../../../src/isolation/session-identity";
 import { getKanbanGlobalConfigPath } from "../../../src/state/kanban-home";
 import {
@@ -173,6 +178,27 @@ describe("applyCliSessionScope", () => {
 				}),
 			).toBeNull();
 			expect(other).not.toHaveBeenCalled();
+		});
+	});
+
+	it("asks the server about restart update with its own command name", async () => {
+		await withTemporaryKanbanHome(async () => {
+			const query = vi.fn(async () => ({ allowed: false, message: "restart update refused" }));
+			const createClient = () => ({ providers: { authorizeSetup: { query } } });
+			expect(KANBAN_ORCHESTRATOR_OR_USER_COMMANDS).toContain("restart update");
+			expect(
+				await applyCliSessionScope({
+					commandPath: "restart update",
+					options: {},
+					createClient: createClient as never,
+					env: {},
+					isServerRunning: () => false,
+				}),
+			).toBe("restart update refused");
+			expect(query).toHaveBeenCalledWith({ command: "restart update" });
+			// Not a machine-wide command: under enforce the Kanban orchestrator may still run it.
+			expect(matchesCommandPath("restart update", MACHINE_WIDE_COMMANDS)).toBe(false);
+			expect(matchesCommandPath("restart prepare", MACHINE_WIDE_COMMANDS)).toBe(true);
 		});
 	});
 

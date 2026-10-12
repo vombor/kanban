@@ -60,6 +60,9 @@ export function renderClaudeMdSection(): string {
   (\`gh issue list|view\`) is fine. Kanban bug reports: search first (\`gh issue list --repo vombor/kanban --search
   "<words>"\`), comment on an existing issue with \`kanban github issue comment --repo vombor/kanban --number <n>
   --body-file <file>\`, else \`kanban github issue create --repo vombor/kanban --title "<short summary>" --body-file <file>\`.
+- Only the Kanban project's orchestrator (and the user) may move the pod onto a newer image: \`kanban restart update\`
+  (\`--dry-run\` first; it refuses without a newer image or while cards are In Progress, then restarts the container,
+  which stops every project's agents). Any other orchestrator tells the user instead.
 
 **If you are a task agent on a Kanban card:** follow your card prompt. Don't run \`kanban doctor --fix\`,
 \`kanban setup\` or \`kanban config import-kit\` unless the prompt says so; \`kanban kit apply|set\`

@@ -302,7 +302,10 @@ async function tryOpenExistingServer(options: { noOpen: boolean; shouldAutoOpenB
 	return true;
 }
 
-async function startServer(): Promise<{
+async function startServer(serverOptions: {
+	/** Graceful shutdown with an exit code (`kanban restart update`); set once the shutdown handlers are installed. */
+	requestExit: (exitCode: number) => void;
+}): Promise<{
 	url: string;
 	close: () => Promise<void>;
 	shutdown: (options?: { skipSessionCleanup?: boolean }) => Promise<void>;
@@ -470,6 +473,7 @@ async function startServer(): Promise<{
 
 	const runtimeServer = await createRuntimeServer({
 		workspaceRegistry,
+		requestExit: serverOptions.requestExit,
 		sessionSyncEnabled: sessionSyncSetting.enabled,
 		reviewSettleMs: sessionSyncSetting.reviewSettleMs,
 		onTaskLanded: (event) => pipelineWorkerHost?.notifyLanded(event),
@@ -782,14 +786,17 @@ async function startServer(): Promise<{
 	};
 }
 
-async function startServerWithAutoPortRetry(options: CliOptions): Promise<Awaited<ReturnType<typeof startServer>>> {
+async function startServerWithAutoPortRetry(
+	options: CliOptions,
+	serverOptions: Parameters<typeof startServer>[0],
+): Promise<Awaited<ReturnType<typeof startServer>>> {
 	if (options.port?.mode !== "auto") {
-		return await startServer();
+		return await startServer(serverOptions);
 	}
 
 	while (true) {
 		try {
-			return await startServer();
+			return await startServer(serverOptions);
 		} catch (error) {
 			if (!isAddressInUseError(error)) {
 				throw error;
@@ -842,9 +849,18 @@ async function runMainCommand(options: CliOptions, shouldAutoOpenBrowser: boolea
 		currentVersion: KANBAN_VERSION,
 	});
 
+	// `kanban restart update` asks for the same graceful shutdown as a signal, with its own exit code.
+	let requestShutdown: ((exitCode: number) => void) | null = null;
+	const requestExit = (exitCode: number) => {
+		if (requestShutdown) {
+			requestShutdown(exitCode);
+			return;
+		}
+		console.error("[kanban] an exit was requested before the shutdown handlers were installed; ignored.");
+	};
 	let runtime: Awaited<ReturnType<typeof startServer>>;
 	try {
-		runtime = await startServerWithAutoPortRetry(options);
+		runtime = await startServerWithAutoPortRetry(options, { requestExit });
 	} catch (error) {
 		if (
 			options.port?.mode !== "auto" &&
@@ -893,7 +909,7 @@ async function runMainCommand(options: CliOptions, shouldAutoOpenBrowser: boolea
 		}
 	};
 
-	installGracefulShutdownHandlers({
+	({ requestShutdown } = installGracefulShutdownHandlers({
 		process,
 		delayMs: 10000,
 		exit: (code) => {
@@ -927,7 +943,7 @@ async function runMainCommand(options: CliOptions, shouldAutoOpenBrowser: boolea
 			console.error(`Forced exit on second signal: ${signal}`);
 		},
 		suppressImmediateDuplicateSignals: shouldSuppressImmediateDuplicateShutdownSignals(),
-	});
+	}));
 }
 
 async function runUpdateCommand(): Promise<void> {

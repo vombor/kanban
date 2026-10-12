@@ -95,7 +95,10 @@ jobs:
           labels: |
             ${{ steps.meta.outputs.labels }}
             dev.vombor.agent-clis=${{ steps.clis.outputs.list }}
+          # The image's build stamp for `kanban restart update`: the same values as the revision/created labels.
           build-args: |
             AGENT_CLIS=${{ steps.clis.outputs.list }}
+            KANBAN_IMAGE_REVISION=${{ github.sha }}
+            KANBAN_IMAGE_CREATED=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

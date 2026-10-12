@@ -1,4 +1,4 @@
-// `kanban restart prepare|recover`: around a planned Kanban or container restart.
+// `kanban restart prepare|recover|update`: around a planned Kanban or container restart.
 //
 //   prepare  run just before the restart (the image entrypoint can run it on container stop): tags the worktree of
 //            every In Progress / Review dev card whose session is running (preserve/<id>-wip-<stamp>-restart,
@@ -9,6 +9,10 @@
 //            no prepare; this one adds the WIP tags, and the server leaves it in place for a while.
 //   recover  asks the pipeline worker to check a workspace for orphaned cards now; --dry-run prints what restart
 //            recovery would do with the live board instead.
+//   update   restarts the pod's container onto the registry's newer image: the server checks, runs the same prepare
+//            with the update in the manifest, shuts down and exits with 75, and the Quadlet unit's Restart=always and
+//            Pull=newer bring it back on the new image (src/trpc/restart-update-api.ts decides everything; only the
+//            user and the Kanban project's orchestrator, KANBAN_ORCHESTRATOR_OR_USER_COMMANDS in cli-scope.ts).
 //
 // Ported from archive/devteam-kit:bin/prepare-restart.mjs@6da71597 and bin/recover-restart.mjs@6da71597. Restart
 // recovery acts only with `pipeline.recovery.mode: "on"` (src/pipeline/recovery-stage.ts); until the cutover the
@@ -18,19 +22,15 @@ import type { Command } from "commander";
 import { getWorkspacePipelineSettings, readPipelineConfig } from "../config/pipeline-config";
 import type { RuntimeWorkspaceStateResponse } from "../core/api-contract";
 import { getRecoveryScope, type PipelineSessionView } from "../pipeline/engine";
+import { isProcessAlive, prepareWorkspaceRestart } from "../pipeline/restart-prepare";
 import {
-	listRestartManifestCandidates,
 	planRestartRecovery,
-	type RestartManifest,
-	type RestartManifestCard,
 	readRestartManifest,
 	readRunningServerStart,
 	requestRestartRecovery,
-	writeRestartManifest,
 } from "../pipeline/restart-recovery";
-import { nextRestartWipTag, tagRestartWip } from "../pipeline/wip-tag";
 import { listWorkspaceIndexEntries } from "../state/workspace-state";
-import { getTaskWorkspacePathInfo } from "../workspace/task-worktree";
+import type { RestartUpdateResponse } from "../trpc/restart-update-api";
 import { createRuntimeTrpcClient } from "./runtime-trpc-client";
 import { resolveWorkspaceTarget, type WorkspaceTarget } from "./workspace-target";
 
@@ -49,18 +49,6 @@ async function listTargets(workspace: string | undefined): Promise<Array<Workspa
 	}));
 }
 
-function isProcessAlive(pid: number | null): boolean {
-	if (!pid) {
-		return false;
-	}
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch {
-		return false;
-	}
-}
-
 async function readLiveState(workspaceId: string): Promise<RuntimeWorkspaceStateResponse> {
 	return await createRuntimeTrpcClient(workspaceId).workspace.getState.query();
 }
@@ -70,46 +58,13 @@ async function prepareWorkspace(
 	dryRun: boolean,
 	print: (line: string) => void,
 ): Promise<number> {
-	const state = await readLiveState(target.workspaceId);
-	const cards: RestartManifestCard[] = [];
-	for (const { card, column, role, model, notListed } of listRestartManifestCandidates(
-		state.board.columns,
-		(taskId) => state.sessions[taskId],
-	)) {
-		if (notListed) {
-			print(`${card.id} (${role}, ${column}): ${notListed}; not listed`);
-			continue;
-		}
-		let wipTag: string | null = null;
-		if (role === "dev") {
-			const info = await getTaskWorkspacePathInfo({
-				cwd: target.repoPath,
-				taskId: card.id,
-				baseRef: card.baseRef,
-			}).catch(() => null);
-			if (info?.exists) {
-				wipTag = dryRun
-					? await nextRestartWipTag(info.path, card.id, new Date())
-					: await tagRestartWip(info.path, card.id);
-			}
-		}
-		cards.push({ id: card.id, column, model, wipTag, kind: role });
-		print(`${card.id} (${role}, ${column}, ${model ?? "default model"})${wipTag ? `: WIP tag ${wipTag}` : ""}`);
-	}
-	const kanbanStart = await readRunningServerStart(isProcessAlive);
-	const manifest: RestartManifest = {
-		at: new Date().toISOString(),
-		kanbanStart: kanbanStart ? new Date(kanbanStart).toISOString() : null,
-		source: "prepare",
-		cards,
-	};
-	if (dryRun) {
-		print(`${target.workspaceId}: would write the restart manifest with ${cards.length} card(s) [dry-run]`);
-		return 0;
-	}
-	const path = await writeRestartManifest(target.workspaceId, manifest);
-	print(`${target.workspaceId}: wrote ${path}: ${cards.length} card(s)`);
-	return 0;
+	return await prepareWorkspaceRestart({
+		target,
+		state: await readLiveState(target.workspaceId),
+		dryRun,
+		print,
+		isProcessAlive,
+	});
 }
 
 async function recoverWorkspace(
@@ -168,6 +123,25 @@ async function recoverWorkspace(
 	return 0;
 }
 
+export interface RestartUpdateOptions {
+	force?: boolean;
+	dryRun?: boolean;
+}
+
+/** The server's answer as the CLI prints it; exit code 1 for a refusal. */
+export function formatRestartUpdateResponse(response: RestartUpdateResponse): { stdout: string; exitCode: 0 | 1 } {
+	const lines = [...response.lines, response.status === "refused" ? `refused: ${response.message}` : response.message];
+	return { stdout: `${lines.join("\n")}\n`, exitCode: response.status === "refused" ? 1 : 0 };
+}
+
+export async function runRestartUpdateCommand(
+	options: RestartUpdateOptions,
+	update: (request: { force: boolean; dryRun: boolean }) => Promise<RestartUpdateResponse> = async (request) =>
+		await createRuntimeTrpcClient(null).restart.update.mutate(request),
+): Promise<{ stdout: string; exitCode: 0 | 1 }> {
+	return formatRestartUpdateResponse(await update({ force: options.force === true, dryRun: options.dryRun === true }));
+}
+
 export function registerRestartCommand(program: Command): void {
 	const restart = program
 		.command("restart")
@@ -211,6 +185,24 @@ export function registerRestartCommand(program: Command): void {
 				options.workspace,
 				async (target, print) => await prepareWorkspace(target, options.dryRun === true, print),
 			);
+		});
+
+	restart
+		.command("update")
+		.description(
+			"Restart the pod's container onto a newer ghcr.io/vombor/kanban:latest: checks a newer image exists and no card is In Progress, runs restart prepare, then Kanban shuts down and exits with 75 so the Quadlet unit (Restart=always, Pull=newer) starts it again on the new image. Only in a container; only the user and the Kanban project's orchestrator.",
+		)
+		.option("--force", "Restart even without a newer image, an unreachable registry or with cards In Progress.")
+		.option("--dry-run", "Check and print what would happen; tag, write and stop nothing.")
+		.action(async (options: RestartUpdateOptions) => {
+			try {
+				const output = await runRestartUpdateCommand(options);
+				process.stdout.write(output.stdout);
+				process.exitCode = output.exitCode;
+			} catch (error) {
+				process.stderr.write(`restart update failed: ${toErrorMessage(error)}\n`);
+				process.exitCode = 1;
+			}
 		});
 
 	restart

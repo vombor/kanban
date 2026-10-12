@@ -51,7 +51,6 @@ export const MACHINE_WIDE_COMMANDS = [
 	"home migrate",
 	"models providers",
 	"models prices sync",
-	"restart",
 	"restart prepare",
 	"restart recover",
 	"pipeline import-legacy",
@@ -129,17 +128,29 @@ function orchestratorOrUserRefusal(commandPath: string): string {
 /**
  * Commands only the user and the Kanban project's own orchestrator (its sidebar session or headless wake; the workspace
  * is `providers.setupWorkspaceId`, default kanban-2uge) may run, whatever the isolation mode: `setup-provider` writes
- * a model provider's settings into Cline's files, which every project's Cline cards use. Every other project's
- * orchestrator and every card session are refused. The running server decides who calls (`providers.authorizeSetup`,
+ * a model provider's settings into Cline's files, which every project's Cline cards use, and `restart update` restarts
+ * the pod's container onto a newer image, which stops every project's agents (the server's `restart.update` route
+ * checks the caller again, src/trpc/restart-update-api.ts). Every other project's orchestrator and every card session
+ * are refused. The running server decides who calls (`providers.authorizeSetup`,
  * the strict caller lookup: a session without its credential is traced to its process tree, an unidentified caller is
  * refused), outside a session too, since a card that drops its credential looks like the user from here.
  */
-export const KANBAN_ORCHESTRATOR_OR_USER_COMMANDS = ["setup-provider"] as const;
+export const KANBAN_ORCHESTRATOR_OR_USER_COMMANDS = ["setup-provider", "restart update"] as const;
 
 export type KanbanOrchestratorCallerDecision = { allowed: true } | { allowed: false; message: string };
 
 function kanbanOrchestratorOrUserRefusal(commandPath: string, kanbanWorkspaceId: string, who: string): string {
-	return `\`kanban ${commandPath}\` writes model providers' settings into Cline's files, which every project's Cline cards use, so only the user or the Kanban project's orchestrator (workspace ${kanbanWorkspaceId}) runs it; ${who} can't. Tell your orchestrator or the user which provider needs setting up.`;
+	const [why, ask] =
+		commandPath === "restart update"
+			? [
+					"restarts the pod's container onto a newer image, which stops every project's agents",
+					"that an update is due",
+				]
+			: [
+					"writes model providers' settings into Cline's files, which every project's Cline cards use",
+					"which provider needs setting up",
+				];
+	return `\`kanban ${commandPath}\` ${why}, so only the user or the Kanban project's orchestrator (workspace ${kanbanWorkspaceId}) runs it; ${who} can't. Tell your orchestrator or the user ${ask}.`;
 }
 
 /** The one rule for KANBAN_ORCHESTRATOR_OR_USER_COMMANDS, asked by the server's route with the strict caller. */
@@ -181,9 +192,10 @@ async function requireKanbanOrchestratorOrUser(input: {
 	isServerRunning: () => boolean;
 	timeoutMs?: number;
 }): Promise<string | null> {
+	const command = KANBAN_ORCHESTRATOR_OR_USER_COMMANDS.find((entry) => matchesCommandPath(input.commandPath, [entry]));
 	const answer = await Promise.race([
 		Promise.resolve()
-			.then(() => input.createClient().providers.authorizeSetup.query())
+			.then(() => input.createClient().providers.authorizeSetup.query({ command }))
 			.catch(() => null),
 		new Promise<null>((resolve) => setTimeout(() => resolve(null), input.timeoutMs ?? 5000).unref()),
 	]);

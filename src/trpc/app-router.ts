@@ -206,7 +206,16 @@ import {
 	providerCapacityResponseSchema,
 	type RuntimeProviderCapacityApi,
 } from "./provider-capacity-api";
-import { providerSetupAuthorizeResponseSchema, type RuntimeProviderSetupApi } from "./provider-setup-api";
+import {
+	providerSetupAuthorizeRequestSchema,
+	providerSetupAuthorizeResponseSchema,
+	type RuntimeProviderSetupApi,
+} from "./provider-setup-api";
+import {
+	type RuntimeRestartUpdateApi,
+	restartUpdateRequestSchema,
+	restartUpdateResponseSchema,
+} from "./restart-update-api";
 import {
 	type RuntimeShortcutsApi,
 	shortcutAddRequestSchema,
@@ -253,6 +262,8 @@ export interface RuntimeTrpcContext {
 	orchestratorInboxApi?: RuntimeOrchestratorInboxApi;
 	/** Who may run `kanban setup-provider` (src/trpc/provider-setup-api.ts); absent = nobody but asked here. */
 	providerSetupApi?: RuntimeProviderSetupApi;
+	/** `kanban restart update` (src/trpc/restart-update-api.ts); absent = not available (no server shutdown to ask). */
+	restartUpdateApi?: RuntimeRestartUpdateApi;
 	/** A project's shortcuts from the CLI, and a run's port (src/trpc/shortcuts-api.ts); absent = not available. */
 	shortcutsApi?: RuntimeShortcutsApi;
 	/** GitHub issues and comments as the Kanban GitHub App (src/trpc/github-api.ts); absent = not available. */
@@ -973,13 +984,34 @@ export const runtimeAppRouter = t.router({
 	// `kanban setup-provider` asks before it writes a provider's Cline settings: the user's and the Kanban project's
 	// orchestrator's (KANBAN_ORCHESTRATOR_OR_USER_COMMANDS in src/isolation/cli-scope.ts).
 	providers: t.router({
-		authorizeSetup: t.procedure.output(providerSetupAuthorizeResponseSchema).query(async ({ ctx }) => {
-			if (!ctx.providerSetupApi) {
-				return { allowed: false, message: "This Kanban server can't check who may run kanban setup-provider." };
-			}
-			// In every isolation mode: a session without its credential is traced to its process tree.
-			return await ctx.providerSetupApi.authorize(await readStrictCaller(ctx));
-		}),
+		authorizeSetup: t.procedure
+			.input(providerSetupAuthorizeRequestSchema)
+			.output(providerSetupAuthorizeResponseSchema)
+			.query(async ({ ctx, input }) => {
+				const command = input?.command ?? "setup-provider";
+				if (!ctx.providerSetupApi) {
+					return { allowed: false, message: `This Kanban server can't check who may run kanban ${command}.` };
+				}
+				// In every isolation mode: a session without its credential is traced to its process tree.
+				return await ctx.providerSetupApi.authorize(await readStrictCaller(ctx), command);
+			}),
+	}),
+	// `kanban restart update`: the pod's container restarted onto a newer image, the user's and the Kanban project's
+	// orchestrator's (the route checks the strict caller itself, in every isolation mode; src/trpc/restart-update-api.ts).
+	restart: t.router({
+		update: t.procedure
+			.input(restartUpdateRequestSchema)
+			.output(restartUpdateResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.restartUpdateApi) {
+					return {
+						status: "refused" as const,
+						message: "This Kanban server can't restart itself for an update.",
+						lines: [],
+					};
+				}
+				return await ctx.restartUpdateApi.update(await readStrictCaller(ctx), input);
+			}),
 	}),
 	// A Review dev card snapshotted again and sent to the QA gate (src/trpc/pipeline-resubmit-api.ts), and the
 	// workspace's QA pipeline paused or resumed (src/trpc/pipeline-pause-api.ts): the user's and that project's

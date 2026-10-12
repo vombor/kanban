@@ -85,6 +85,14 @@ LABEL io.containers.autoupdate=registry
 # GHCR links the ghcr.io/vombor/kanban package to the repository through this label, so the repo's PAT can push it and
 # the package shows on the repo. CI's docker/metadata-action sets the same label from the repo it runs in.
 LABEL org.opencontainers.image.source=https://github.com/vombor/kanban
+# The image's own build, for `kanban restart update` (src/update/container-image.ts): CI passes the commit and
+# docker/metadata-action's created time, the same values as the org.opencontainers.image.revision/.created labels, so
+# Kanban compares its env with the labels of the registry's :latest. Last, so a new build only changes this layer's
+# metadata. Unset in a local build: `restart update` then needs --force.
+ARG KANBAN_IMAGE_REVISION=""
+ARG KANBAN_IMAGE_CREATED=""
+ENV KANBAN_IMAGE_REVISION=$KANBAN_IMAGE_REVISION \
+    KANBAN_IMAGE_CREATED=$KANBAN_IMAGE_CREATED
 ENTRYPOINT ["/usr/local/bin/kanban-entrypoint"]
 
 CMD ["kanban", "--port", "3485", "--no-open", "--no-passcode", "--skip-shutdown-cleanup"]

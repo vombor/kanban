@@ -6,6 +6,7 @@ import { readFile } from "node:fs/promises";
 import { z } from "zod";
 
 import { lockedFileSystem } from "../../fs/locked-file-system";
+import { restartManifestUpdateSchema } from "../restart-recovery";
 
 /** Entries older than this are dropped on save, so the maps don't grow forever. */
 const KEEP_MS = 7 * 24 * 60 * 60_000;
@@ -40,7 +41,11 @@ export const watchdogWorkspaceStateSchema = z.object({
 			serverStartedAt: z.number(),
 			firstSeenAt: z.string(),
 			stop: z
-				.object({ kind: z.enum(["clean", "planned", "unclean"]), at: z.string().nullable() })
+				.object({
+					kind: z.enum(["clean", "planned", "unclean"]),
+					at: z.string().nullable(),
+					update: restartManifestUpdateSchema.nullable().optional(),
+				})
 				.nullable()
 				.default(null),
 			sentAt: z.string().nullable().default(null),

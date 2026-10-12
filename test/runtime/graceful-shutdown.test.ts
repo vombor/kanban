@@ -137,6 +137,52 @@ describe("installGracefulShutdownHandlers", () => {
 
 		deferred.resolve();
 	});
+
+	it("requestShutdown runs the same shutdown without a signal and exits with its code, never re-raising", async () => {
+		const processDouble = createProcessDouble();
+		const exit = vi.fn();
+		const reraiseSignal = vi.fn();
+		const onShutdown = vi.fn(async () => {});
+		const handlers = installGracefulShutdownHandlers({
+			process: processDouble,
+			delayMs: 10_000,
+			exit,
+			reraiseSignal,
+			onShutdown,
+		});
+
+		handlers.requestShutdown(75);
+		// A second request while one runs changes nothing.
+		handlers.requestShutdown(1);
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(onShutdown).toHaveBeenCalledTimes(1);
+		expect(onShutdown).toHaveBeenCalledWith(null);
+		expect(exit).toHaveBeenCalledTimes(1);
+		expect(exit).toHaveBeenCalledWith(75);
+		expect(reraiseSignal).not.toHaveBeenCalled();
+	});
+
+	it("a signal during a requested shutdown force-exits with the signal's code", async () => {
+		const processDouble = createProcessDouble();
+		const exit = vi.fn();
+		const deferred = createDeferredPromise();
+		const handlers = installGracefulShutdownHandlers({
+			process: processDouble,
+			delayMs: 10_000,
+			exit,
+			onShutdown: async () => {
+				await deferred.promise;
+			},
+		});
+
+		handlers.requestShutdown(75);
+		processDouble.emitSignal("SIGTERM");
+
+		expect(exit).toHaveBeenCalledWith(143);
+		deferred.resolve();
+	});
 });
 
 describe("shouldSuppressImmediateDuplicateShutdownSignals", () => {

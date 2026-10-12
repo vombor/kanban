@@ -74,6 +74,7 @@ import { createPlansApi } from "../trpc/plans-api";
 import { createProjectsApi } from "../trpc/projects-api";
 import { createProviderCapacityApi } from "../trpc/provider-capacity-api";
 import { createProviderSetupApi } from "../trpc/provider-setup-api";
+import { createRestartUpdateApi } from "../trpc/restart-update-api";
 import { createRuntimeApi } from "../trpc/runtime-api";
 import { createShortcutsApi } from "../trpc/shortcuts-api";
 import { createWorkspaceApi } from "../trpc/workspace-api";
@@ -140,6 +141,10 @@ export interface CreateRuntimeServerDependencies {
 	reviewSettleMs?: number;
 	/** Asks the pipeline worker host for a workspace's snapshot now (`kanban task resubmit`, `kanban pipeline resume`). */
 	requestPipelineSnapshot?: (workspaceId: string) => void;
+	/**
+	 * Shuts the server down gracefully and exits with the code (`kanban restart update`); without it the route refuses.
+	 */
+	requestExit?: (exitCode: number) => void;
 }
 
 export interface RuntimeServer {
@@ -420,6 +425,21 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 	const kitSettingsApi = createKitSettingsApi({ log: isolation.log });
 	const orchestratorInboxApi = createOrchestratorInboxApi({ inbox: orchestratorInbox, log: deps.warn });
 	const providerSetupApi = createProviderSetupApi({ log: isolation.log });
+	const requestExit = deps.requestExit;
+	const restartUpdateApi = requestExit
+		? createRestartUpdateApi({
+				log: isolation.log,
+				warn: deps.warn,
+				listWorkspaces: async () =>
+					(await listWorkspaceIndexEntries()).map((entry) => ({
+						workspaceId: entry.workspaceId,
+						repoPath: entry.repoPath,
+					})),
+				loadState: async (target) =>
+					await deps.workspaceRegistry.buildWorkspaceStateSnapshot(target.workspaceId, target.repoPath),
+				requestExit,
+			})
+		: undefined;
 	const pipelineResubmitApi = createPipelineResubmitApi({
 		log: isolation.log,
 		loadWorkspaceState: loadWorkspaceStateById,
@@ -576,6 +596,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			kitSettingsApi,
 			orchestratorInboxApi,
 			providerSetupApi,
+			restartUpdateApi,
 			pipelineResubmitApi,
 			providerCapacityApi,
 			pipelinePauseApi,

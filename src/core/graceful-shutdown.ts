@@ -68,7 +68,8 @@ export interface GracefulShutdownProcess {
 
 interface GracefulShutdownOptions {
 	delayMs: number;
-	onShutdown: (signal: HandledShutdownSignal) => Promise<void>;
+	/** `signal` is null for a requestShutdown(). */
+	onShutdown: (signal: HandledShutdownSignal | null) => Promise<void>;
 	onShutdownError?: (error: unknown) => void;
 	onSecondSignal?: (signal: HandledShutdownSignal) => void;
 	onTimeout?: (delayMs: number) => void;
@@ -118,6 +119,12 @@ export function shouldSuppressImmediateDuplicateShutdownSignals(options?: {
 
 export function installGracefulShutdownHandlers(options: GracefulShutdownOptions): {
 	uninstall: () => void;
+	/**
+	 * Starts the same graceful shutdown without a signal (`kanban restart update`) and exits with `exitCode` once it is
+	 * done (1 when it fails or times out, as for a signal). A signal during it force-exits as usual; a shutdown already
+	 * under way is left alone.
+	 */
+	requestShutdown: (exitCode: number) => void;
 } {
 	const processRef = options.process;
 	const now = options.now ?? (() => Date.now());
@@ -126,6 +133,7 @@ export function installGracefulShutdownHandlers(options: GracefulShutdownOptions
 	let timeoutId: ReturnType<typeof setTimeout> | null = null;
 	let shutdownPromise: Promise<void> | null = null;
 	let shutdownSignal: HandledShutdownSignal | null = null;
+	let requestedExitCode = 0;
 	let shutdownStartedAt = 0;
 	let finalized = false;
 	let installed = true;
@@ -158,7 +166,7 @@ export function installGracefulShutdownHandlers(options: GracefulShutdownOptions
 		options.exit(code);
 	};
 
-	const startShutdown = (signal: HandledShutdownSignal) => {
+	const startShutdown = (signal: HandledShutdownSignal | null) => {
 		if (shutdownPromise !== null) {
 			return;
 		}
@@ -173,7 +181,7 @@ export function installGracefulShutdownHandlers(options: GracefulShutdownOptions
 		shutdownPromise = (async () => {
 			try {
 				await options.onShutdown(signal);
-				finalizeExit(getExitCodeForSignal(signal));
+				finalizeExit(signal ? getExitCodeForSignal(signal) : requestedExitCode);
 			} catch (error) {
 				options.onShutdownError?.(error);
 				finalizeExit(1);
@@ -207,5 +215,14 @@ export function installGracefulShutdownHandlers(options: GracefulShutdownOptions
 		processRef.on(signal, listener);
 	}
 
-	return { uninstall };
+	return {
+		uninstall,
+		requestShutdown: (exitCode) => {
+			if (shutdownPromise !== null) {
+				return;
+			}
+			requestedExitCode = exitCode;
+			startShutdown(null);
+		},
+	};
 }

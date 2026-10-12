@@ -13,7 +13,9 @@
 #    signal to the child and waits for it. A failing, missing or hung step never blocks the stop (each logs one
 #    result line); a second signal cuts the running step short and skips the rest (or, after them, is forwarded
 #    at once).
-#  - exits with the child's exit status (128+N when a signal killed it).
+#  - exits with the child's exit status (128+N when a signal killed it). Status 75 is Kanban's own update restart
+#    (`kanban restart update` ran restart prepare and shut Kanban down): the entrypoint only logs it and exits with it,
+#    so the container exits and the quadlet unit's Restart=always starts it again, Pull=newer pulling the newer image.
 # Hooks are `sh -c` strings; set one to the empty string to turn it off. <kit> is $KANBAN_KIT_HOME, default
 # /root/.kanban (the persistent volume). Hook output goes to <kit>/logs/kanban-entrypoint.log when that dir is
 # writable, else stderr; the step lines go to stderr (podman logs) and that log. The restart prepare step gets the
@@ -305,4 +307,7 @@ while :; do
 	kill -"$sig" "$child" 2>/dev/null
 done
 log "pid $child exited with status $status"
+if [ "$status" -eq 75 ] && [ -z "$stopping" ]; then
+	log "exit 75: Kanban asked for an update restart (kanban restart update); the container exits, and the unit's Restart=always starts it again (Pull=newer pulls the newer image first)"
+fi
 exit "$status"
