@@ -4,6 +4,8 @@
 
 export interface SpeechRecognitionErrorLike extends Event {
 	readonly error: string;
+	/** Safari says why ("Source is muted", "Another request is started"); Chrome sends an empty string. */
+	readonly message?: string;
 }
 
 export interface SpeechRecognitionResultEventLike extends Event {
@@ -16,6 +18,8 @@ export interface SpeechRecognitionLike extends EventTarget {
 	interimResults: boolean;
 	lang: string;
 	onstart: ((event: Event) => void) | null;
+	/** The microphone delivers audio: only from here on can anything be heard. */
+	onaudiostart: ((event: Event) => void) | null;
 	onresult: ((event: SpeechRecognitionResultEventLike) => void) | null;
 	onerror: ((event: SpeechRecognitionErrorLike) => void) | null;
 	onend: ((event: Event) => void) | null;

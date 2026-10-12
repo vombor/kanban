@@ -1,22 +1,41 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { holdRecognition, releaseRecognition, waitForRecognitionEnd } from "@/voice/live-recognition";
+import { abortLiveRecognition, holdRecognition, releaseRecognition } from "@/voice/live-recognition";
 import {
 	getSpeechRecognitionConstructor,
 	readSpeechTranscript,
 	type SpeechRecognitionConstructor,
+	type SpeechRecognitionErrorLike,
 	type SpeechRecognitionLike,
+	type SpeechRecognitionResultEventLike,
 	type SpeechTranscript,
 } from "@/voice/speech-apis";
+import { logVoiceEvent } from "@/voice/voice-debug-log";
 
 const EMPTY_TRANSCRIPT: SpeechTranscript = { finalText: "", interimText: "" };
 
 /** A session the browser hasn't started by then is given up on (long enough for the first microphone prompt). */
 export const RECOGNITION_START_TIMEOUT_MS = 15_000;
+/**
+ * A started session whose microphone hasn't delivered audio by then is aborted with a message: the browser's `start`
+ * only says the recognizer is set up, and Safari sends `start` and then nothing at all when the capture gets no audio.
+ */
+export const RECOGNITION_AUDIO_TIMEOUT_MS = 4_000;
 /** A stopped session that hasn't ended by then is aborted, so it can't stay "listening". */
 export const RECOGNITION_STOP_TIMEOUT_MS = 3_000;
-/** How long a new start waits for the page's previous session to end before it gives up on that one. */
-export const RECOGNITION_RELEASE_TIMEOUT_MS = 2_000;
+
+// Events logged for the diagnostic log only (the hook acts on start, audiostart, result, error and end).
+const LOGGED_EVENTS = [
+	"start",
+	"audiostart",
+	"soundstart",
+	"speechstart",
+	"speechend",
+	"soundend",
+	"audioend",
+	"nomatch",
+	"end",
+];
 
 // After the user's own stop these only mean "nothing more was said".
 const QUIET_AFTER_STOP_ERRORS = new Set(["no-speech", "aborted"]);
@@ -26,7 +45,7 @@ function describeRecognitionError(error: string): string {
 		return "Microphone access was denied.";
 	}
 	if (error === "audio-capture") {
-		return "No microphone was found.";
+		return "The microphone isn't available (none found, or something else is using it).";
 	}
 	if (error === "network") {
 		return "Speech recognition needs a network connection in this browser.";
@@ -41,12 +60,21 @@ function describeRecognitionError(error: string): string {
 }
 
 const START_TIMEOUT_MESSAGE = "Speech recognition didn't start. Tap the mic to try again.";
+const NO_AUDIO_MESSAGE = "The microphone didn't open, so nothing was heard. Tap the mic to try again.";
 
-type RecognitionStatus = "idle" | "starting" | "listening";
+// "opening": the recognizer has started, its microphone hasn't delivered audio yet.
+type RecognitionStatus = "idle" | "starting" | "opening" | "listening";
+
+let nextSessionNumber = 1;
 
 interface RecognitionSession {
 	recognition: SpeechRecognitionLike;
+	/** Its number in the diagnostic log. */
+	number: number;
+	/** The browser's `start` event came. */
 	started: boolean;
+	/** The microphone delivers audio (`audiostart`, or a first result from a browser without that event). */
+	hearing: boolean;
 	stopRequested: boolean;
 	/** Length of the session's result list at its last result event. */
 	resultCount: number;
@@ -64,13 +92,16 @@ function clearSessionTimer(session: RecognitionSession): void {
 
 export interface SpeechRecognitionControls {
 	supported: boolean;
-	/** True only between the session's `start` and its `end` (or error): the browser is really listening. */
+	/** True only between the session's `audiostart` and its `end` (or error): the microphone really delivers audio. */
 	listening: boolean;
-	/** start() was called and the browser hasn't started the session yet. */
+	/** start() was called and the microphone doesn't deliver audio yet. */
 	starting: boolean;
 	transcript: SpeechTranscript;
 	error: string | null;
-	/** Starts a new recognition; the previous transcript is dropped. */
+	/**
+	 * Starts a new recognition at once, so call it from the user's tap; the previous transcript is dropped, and a
+	 * session still live on the page is aborted first.
+	 */
 	start: () => void;
 	/** Stops listening; the recognizer still delivers the final text of what was already heard. */
 	stop: () => void;
@@ -85,8 +116,9 @@ export interface SpeechRecognitionControls {
 
 /**
  * Speech in through the browser's SpeechRecognition (continuous, with interim results for the preview). The state
- * follows the session's own events, and a session this hook drops (reset, unmount, a new start) is aborted but stays
- * the page's live session until its `end` (live-recognition.ts), so a new one never starts on top of it.
+ * follows the session's own events: "listening" only once its microphone delivers audio. A session this hook drops
+ * (reset, unmount, a new start) is aborted and stays the page's live session until its `end` (live-recognition.ts),
+ * so a reopened bar can abort it too. Every event goes to the diagnostic log (voice-debug-log.ts).
  */
 export function useSpeechRecognition(): SpeechRecognitionControls {
 	const [supported] = useState(() => getSpeechRecognitionConstructor() !== null);
@@ -94,9 +126,6 @@ export function useSpeechRecognition(): SpeechRecognitionControls {
 	const [transcript, setTranscript] = useState<SpeechTranscript>(EMPTY_TRANSCRIPT);
 	const [error, setError] = useState<string | null>(null);
 	const sessionRef = useRef<RecognitionSession | null>(null);
-	// Bumped by every start and drop, so a start still waiting for the previous session's end can tell it was replaced.
-	const attemptRef = useRef(0);
-	const mountedRef = useRef(false);
 
 	// The session is over for this hook (its end, an error, or given up on); what it sends later is ignored.
 	const finish = useCallback((session: RecognitionSession, message: string | null) => {
@@ -118,19 +147,20 @@ export function useSpeechRecognition(): SpeechRecognitionControls {
 			if (sessionRef.current !== session) {
 				return;
 			}
+			logVoiceEvent("gave up", message ?? "stopped session didn't end", session.number);
 			finish(session, message);
 			session.recognition.abort();
 		},
 		[finish],
 	);
 
-	// Ends this hook's session without its results, and cancels a start that is still waiting.
-	const dropSession = useCallback(() => {
-		attemptRef.current += 1;
+	// Ends this hook's session without its results.
+	const dropSession = useCallback((reason: string) => {
 		const session = sessionRef.current;
 		if (session) {
 			sessionRef.current = null;
 			clearSessionTimer(session);
+			logVoiceEvent("abort()", reason, session.number);
 			session.recognition.abort();
 		}
 	}, []);
@@ -140,13 +170,39 @@ export function useSpeechRecognition(): SpeechRecognitionControls {
 			const recognition = new Recognition();
 			const session: RecognitionSession = {
 				recognition,
+				number: nextSessionNumber++,
 				started: false,
+				hearing: false,
 				stopRequested: false,
 				resultCount: 0,
 				clearedBefore: 0,
 				timer: null,
 			};
 			const isCurrent = () => sessionRef.current === session;
+			// Listeners, not the on* handlers: they keep logging after the hook dropped the session.
+			for (const type of LOGGED_EVENTS) {
+				recognition.addEventListener(type, () => logVoiceEvent(type, null, session.number));
+			}
+			recognition.addEventListener("result", (event) => {
+				const { results } = event as SpeechRecognitionResultEventLike;
+				const all = Array.from({ length: results.length }, (_, index) => results[index]);
+				const finals = all.filter((result) => result?.isFinal).length;
+				const last = all.at(-1)?.[0]?.transcript ?? "";
+				logVoiceEvent("result", `${results.length} (${finals} final) "${last}"`, session.number);
+			});
+			recognition.addEventListener("error", (event) => {
+				const { error: code, message } = event as SpeechRecognitionErrorLike;
+				logVoiceEvent("error", message ? `${code}: ${message}` : code, session.number);
+			});
+			// From the browser's `start` until its microphone delivers audio.
+			const hear = () => {
+				if (session.hearing) {
+					return;
+				}
+				session.hearing = true;
+				clearSessionTimer(session);
+				setStatus("listening");
+			};
 			recognition.continuous = true;
 			recognition.interimResults = true;
 			recognition.lang = typeof navigator === "undefined" ? "" : navigator.language;
@@ -156,12 +212,22 @@ export function useSpeechRecognition(): SpeechRecognitionControls {
 				}
 				session.started = true;
 				clearSessionTimer(session);
-				setStatus("listening");
+				if (session.hearing) {
+					return;
+				}
+				setStatus("opening");
+				session.timer = setTimeout(() => giveUp(session, NO_AUDIO_MESSAGE), RECOGNITION_AUDIO_TIMEOUT_MS);
+			};
+			recognition.onaudiostart = () => {
+				if (isCurrent()) {
+					hear();
+				}
 			};
 			recognition.onresult = (event) => {
 				if (!isCurrent()) {
 					return;
 				}
+				hear();
 				session.resultCount = event.results.length;
 				// A list shorter than the cleared part is a new one: the browser didn't keep the session's results.
 				if (session.resultCount < session.clearedBefore) {
@@ -184,14 +250,14 @@ export function useSpeechRecognition(): SpeechRecognitionControls {
 			sessionRef.current = session;
 			holdRecognition(recognition);
 			session.timer = setTimeout(() => giveUp(session, START_TIMEOUT_MESSAGE), RECOGNITION_START_TIMEOUT_MS);
+			logVoiceEvent("start()", `lang ${recognition.lang || "(none)"}`, session.number);
 			try {
 				recognition.start();
 			} catch (startError) {
+				const text = startError instanceof Error ? `${startError.name}: ${startError.message}` : String(startError);
+				logVoiceEvent("start() threw", text, session.number);
 				releaseRecognition(recognition);
-				finish(
-					session,
-					describeRecognitionError(startError instanceof Error ? startError.message : String(startError)),
-				);
+				finish(session, describeRecognitionError(text));
 			}
 		},
 		[finish, giveUp],
@@ -202,28 +268,23 @@ export function useSpeechRecognition(): SpeechRecognitionControls {
 		if (!Recognition) {
 			return;
 		}
-		dropSession();
+		dropSession("a new start");
+		// A session an earlier bar left (closed while it was ending): the browser would end it for the new one anyway.
+		if (abortLiveRecognition()) {
+			logVoiceEvent("abort()", "the page's previous session, for a new start");
+		}
 		setTranscript(EMPTY_TRANSCRIPT);
 		setError(null);
 		setStatus("starting");
-		const previousEnd = waitForRecognitionEnd(RECOGNITION_RELEASE_TIMEOUT_MS);
-		if (!previousEnd) {
-			launch(Recognition);
-			return;
-		}
-		const attempt = attemptRef.current;
-		void previousEnd.then(() => {
-			if (mountedRef.current && attemptRef.current === attempt) {
-				launch(Recognition);
-			}
-		});
+		// Still inside the user's tap: nothing may wait before the browser's start().
+		launch(Recognition);
 	}, [dropSession, launch]);
 
 	const stop = useCallback(() => {
 		const session = sessionRef.current;
 		if (!session?.started) {
-			// Not listening yet: cancel the start.
-			dropSession();
+			// Not started yet: cancel the start.
+			dropSession("stopped before the browser started it");
 			setStatus("idle");
 			return;
 		}
@@ -231,6 +292,8 @@ export function useSpeechRecognition(): SpeechRecognitionControls {
 			return;
 		}
 		session.stopRequested = true;
+		clearSessionTimer(session);
+		logVoiceEvent("stop()", null, session.number);
 		session.recognition.stop();
 		session.timer = setTimeout(() => giveUp(session, null), RECOGNITION_STOP_TIMEOUT_MS);
 	}, [dropSession, giveUp]);
@@ -245,24 +308,18 @@ export function useSpeechRecognition(): SpeechRecognitionControls {
 	}, []);
 
 	const reset = useCallback(() => {
-		dropSession();
+		dropSession("reset");
 		setStatus("idle");
 		setTranscript(EMPTY_TRANSCRIPT);
 		setError(null);
 	}, [dropSession]);
 
-	useEffect(() => {
-		mountedRef.current = true;
-		return () => {
-			mountedRef.current = false;
-			dropSession();
-		};
-	}, [dropSession]);
+	useEffect(() => () => dropSession("the voice bar closed"), [dropSession]);
 
 	return {
 		supported,
 		listening: status === "listening",
-		starting: status === "starting",
+		starting: status === "starting" || status === "opening",
 		transcript,
 		error,
 		start,

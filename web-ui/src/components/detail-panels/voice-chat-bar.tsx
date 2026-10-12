@@ -2,6 +2,7 @@ import { Square, Volume2, VolumeX } from "lucide-react";
 import type { ReactElement } from "react";
 
 import { VoiceError, VoiceMicButton, VoicePreview, VoiceStatus } from "@/components/detail-panels/voice-chat-controls";
+import { VoiceDebugPanel } from "@/components/detail-panels/voice-debug-panel";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -30,6 +31,7 @@ export function VoiceChatBar({ taskId, workspaceId, summary }: VoiceChatBarProps
 
 	return (
 		<div className="flex flex-col gap-2 border-t border-border px-2 py-2">
+			<VoiceDebugPanel voice={voice} />
 			<VoicePreview voice={voice} showSend />
 			<VoiceError voice={voice} />
 			<div className="flex items-center gap-2">

@@ -1,6 +1,6 @@
 import { Mic, MicOff, SendHorizontal, X } from "lucide-react";
 import type { KeyboardEvent, PointerEvent, ReactElement } from "react";
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
@@ -13,6 +13,8 @@ import type { VoiceChatControls } from "@/voice/use-voice-chat";
 
 /** A mouse press held at least this long is push-to-talk: releasing it stops listening. */
 export const PUSH_TO_TALK_HOLD_MS = 400;
+/** A touch on the mic held this long shows or hides the voice diagnostic log (voice-debug-panel.tsx). */
+export const VOICE_DEBUG_HOLD_MS = 1_000;
 
 interface MicPress {
 	startedAt: number;
@@ -21,14 +23,31 @@ interface MicPress {
 
 export function VoiceMicButton({ voice }: { voice: VoiceChatControls }): ReactElement {
 	const micPressRef = useRef<MicPress | null>(null);
+	const debugHoldRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const { micActive } = voice;
 
-	// Tap toggles; a mouse press held past PUSH_TO_TALK_HOLD_MS listens until it is released.
+	const cancelDebugHold = () => {
+		if (debugHoldRef.current !== null) {
+			clearTimeout(debugHoldRef.current);
+			debugHoldRef.current = null;
+		}
+	};
+	useEffect(() => cancelDebugHold, []);
+
+	// Tap toggles; a mouse press held past PUSH_TO_TALK_HOLD_MS listens until it is released; a touch held past
+	// VOICE_DEBUG_HOLD_MS also shows or hides the diagnostic log. The start itself stays inside the tap.
 	const handlePointerDown = (event: PointerEvent<HTMLButtonElement>) => {
 		if (event.button !== 0) {
 			return;
 		}
 		event.preventDefault();
+		cancelDebugHold();
+		if (event.pointerType === "touch") {
+			debugHoldRef.current = setTimeout(() => {
+				debugHoldRef.current = null;
+				voice.debugLog.toggle();
+			}, VOICE_DEBUG_HOLD_MS);
+		}
 		if (micActive) {
 			micPressRef.current = null;
 			voice.stopListening();
@@ -40,6 +59,7 @@ export function VoiceMicButton({ voice }: { voice: VoiceChatControls }): ReactEl
 	};
 
 	const handlePointerUp = () => {
+		cancelDebugHold();
 		const press = micPressRef.current;
 		micPressRef.current = null;
 		if (press && press.pointerType !== "touch" && Date.now() - press.startedAt >= PUSH_TO_TALK_HOLD_MS) {
@@ -59,6 +79,8 @@ export function VoiceMicButton({ voice }: { voice: VoiceChatControls }): ReactEl
 				onPointerCancel={handlePointerUp}
 				// A tap must not take the terminal's focus (and close the phone's keyboard).
 				onMouseDown={(event) => event.preventDefault()}
+				// A long press is the log's, not the browser's menu.
+				onContextMenu={(event) => event.preventDefault()}
 				// Pointer presses are handled above; a click without a pointer is the keyboard.
 				onClick={(event) => {
 					if (event.detail === 0) {
@@ -70,7 +92,7 @@ export function VoiceMicButton({ voice }: { voice: VoiceChatControls }): ReactEl
 					}
 				}}
 				className={cn(
-					"inline-flex size-11 shrink-0 cursor-pointer touch-none select-none items-center justify-center rounded-full border",
+					"inline-flex size-11 shrink-0 cursor-pointer touch-none select-none items-center [-webkit-touch-callout:none] justify-center rounded-full border",
 					micActive
 						? "animate-pulse border-status-red/50 bg-status-red/15 text-status-red"
 						: "border-border-bright bg-surface-2 text-text-primary hover:bg-surface-3 active:bg-surface-4",

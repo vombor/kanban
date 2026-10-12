@@ -4,12 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FakeSpeechRecognition } from "@/voice/test-speech-fakes";
 import {
-	RECOGNITION_RELEASE_TIMEOUT_MS,
+	RECOGNITION_AUDIO_TIMEOUT_MS,
 	RECOGNITION_START_TIMEOUT_MS,
 	RECOGNITION_STOP_TIMEOUT_MS,
 	type SpeechRecognitionControls,
 	useSpeechRecognition,
 } from "@/voice/use-speech-recognition";
+import { clearVoiceDebugLog, formatVoiceDebugLog, getVoiceDebugEntries } from "@/voice/voice-debug-log";
 
 type ActGlobal = typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
 
@@ -43,15 +44,9 @@ describe("useSpeechRecognition", () => {
 		return latest;
 	}
 
-	// Lets a start that waits for the previous session's end go on.
-	async function flush() {
-		await act(async () => {});
-	}
-
 	function startListening(): FakeSpeechRecognition {
 		act(() => controls().start());
 		const recognition = FakeSpeechRecognition.latest();
-		expect(recognition.blocked).toBe(false);
 		act(() => recognition.emitStart());
 		return recognition;
 	}
@@ -60,6 +55,7 @@ describe("useSpeechRecognition", () => {
 		(globalThis as ActGlobal).IS_REACT_ACT_ENVIRONMENT = true;
 		vi.useFakeTimers();
 		FakeSpeechRecognition.reset();
+		clearVoiceDebugLog();
 		vi.stubGlobal("webkitSpeechRecognition", FakeSpeechRecognition);
 		container = document.createElement("div");
 		document.body.appendChild(container);
@@ -67,6 +63,7 @@ describe("useSpeechRecognition", () => {
 	});
 
 	afterEach(() => {
+		vi.restoreAllMocks();
 		act(() => root.unmount());
 		act(() => FakeSpeechRecognition.endAll());
 		container.remove();
@@ -76,7 +73,7 @@ describe("useSpeechRecognition", () => {
 		latest = null;
 	});
 
-	it("is listening only between the session's start and end events", () => {
+	it("is listening only between the session's audiostart and end events", () => {
 		mount();
 		act(() => controls().start());
 		const recognition = FakeSpeechRecognition.latest();
@@ -84,7 +81,11 @@ describe("useSpeechRecognition", () => {
 		expect(controls().starting).toBe(true);
 		expect(controls().listening).toBe(false);
 
-		act(() => recognition.emitStart());
+		act(() => recognition.emitStart({ audio: false }));
+		// The recognizer is set up; its microphone doesn't deliver audio yet.
+		expect(controls().starting).toBe(true);
+		expect(controls().listening).toBe(false);
+		act(() => recognition.emitAudioStart());
 		expect(controls().starting).toBe(false);
 		expect(controls().listening).toBe(true);
 
@@ -191,11 +192,10 @@ describe("useSpeechRecognition", () => {
 		expect(controls().listening).toBe(false);
 		expect(controls().transcript).toEqual({ finalText: "new words", interimText: "" });
 
-		// The session ended by itself: the next start is at once, inside the tap.
+		// The next start is at once, inside the tap.
 		act(() => controls().start());
 		const next = FakeSpeechRecognition.latest();
 		expect(next).not.toBe(recognition);
-		expect(next.blocked).toBe(false);
 		act(() => next.emitStart());
 		act(() => next.emitResults([{ transcript: "third", isFinal: true }]));
 		expect(controls().transcript.finalText).toBe("third");
@@ -238,7 +238,7 @@ describe("useSpeechRecognition", () => {
 		expect(controls().transcript.finalText).toBe("fresh");
 	});
 
-	it("clear after the session ended leaves nothing to wait for", () => {
+	it("clear after the session ended, then record again", () => {
 		mount();
 		const first = startListening();
 		act(() => first.emitResults([{ transcript: "said", isFinal: true }]));
@@ -250,7 +250,6 @@ describe("useSpeechRecognition", () => {
 		act(() => controls().start());
 		const second = FakeSpeechRecognition.latest();
 		expect(second).not.toBe(first);
-		expect(second.blocked).toBe(false);
 		act(() => second.emitStart());
 		act(() => second.emitResults([{ transcript: "again", isFinal: true }]));
 		expect(controls().listening).toBe(true);
@@ -292,7 +291,7 @@ describe("useSpeechRecognition", () => {
 		expect(controls().error).toBeNull();
 	});
 
-	it("reset while listening aborts the session, and the next start waits for its end", async () => {
+	it("reset while listening aborts the session, and the next start starts at once, inside the tap", () => {
 		mount();
 		const first = startListening();
 		act(() => first.emitResults([{ transcript: "drop me", isFinal: false }]));
@@ -305,42 +304,20 @@ describe("useSpeechRecognition", () => {
 		act(() => first.emitResults([{ transcript: "late", isFinal: true }]));
 		expect(controls().transcript.finalText).toBe("");
 
+		// The browser hasn't ended the aborted session yet: the new one starts anyway, and the browser ends the old one.
 		act(() => controls().start());
-		expect(FakeSpeechRecognition.instances).toHaveLength(1);
-		expect(controls().starting).toBe(true);
-
-		act(() => first.emitEnd());
-		await flush();
 		const second = FakeSpeechRecognition.latest();
 		expect(second).not.toBe(first);
-		expect(second.blocked).toBe(false);
+		expect(second.started).toBe(true);
+		expect(first.ended).toBe(true);
 		act(() => second.emitStart());
 		act(() => second.emitResults([{ transcript: "heard again", isFinal: true }]));
 		expect(controls().listening).toBe(true);
 		expect(controls().transcript.finalText).toBe("heard again");
+		expect(controls().error).toBeNull();
 	});
 
-	it("clear while listening, then close and reopen: the new start waits for the closed session's end", async () => {
-		mount();
-		const first = startListening();
-		act(() => first.emitResults([{ transcript: "hello", isFinal: true }]));
-		act(() => controls().clear());
-		unmount();
-		expect(first.aborted).toBe(true);
-
-		mount();
-		act(() => controls().start());
-		expect(FakeSpeechRecognition.instances).toHaveLength(1);
-		act(() => first.emitEnd());
-		await flush();
-		const second = FakeSpeechRecognition.latest();
-		expect(second.blocked).toBe(false);
-		act(() => second.emitStart());
-		act(() => second.emitResults([{ transcript: "after reopen", isFinal: true }]));
-		expect(controls().transcript.finalText).toBe("after reopen");
-	});
-
-	it("close while listening, then reopen and record again", async () => {
+	it("close while listening, then reopen and record again at once", () => {
 		mount();
 		const first = startListening();
 		act(() => first.emitResults([{ transcript: "hello", isFinal: true }]));
@@ -350,48 +327,120 @@ describe("useSpeechRecognition", () => {
 		mount();
 		expect(controls().listening).toBe(false);
 		act(() => controls().start());
-		// Still the page's live session: the reopened bar doesn't start on top of it.
-		expect(FakeSpeechRecognition.instances).toHaveLength(1);
-		act(() => first.emitEnd());
-		await flush();
-
 		const second = FakeSpeechRecognition.latest();
-		expect(second.blocked).toBe(false);
-		expect(controls().listening).toBe(false);
+		expect(second).not.toBe(first);
+		expect(second.started).toBe(true);
 		act(() => second.emitStart());
 		act(() => second.emitResults([{ transcript: "second time", isFinal: true }]));
 		expect(controls().listening).toBe(true);
 		expect(controls().transcript.finalText).toBe("second time");
 	});
 
-	it("starts anyway once the previous session hasn't ended within the release timeout", async () => {
+	it("aborts the page's previous session before a reopened bar starts its own", () => {
 		mount();
 		const first = startListening();
+		// A session an earlier bar left: dropped by its hook, never ended by the browser.
+		act(() => controls().clear());
 		unmount();
+		first.aborted = false;
 		mount();
 		act(() => controls().start());
-		await act(async () => {
-			await vi.advanceTimersByTimeAsync(RECOGNITION_RELEASE_TIMEOUT_MS);
-		});
-		expect(FakeSpeechRecognition.instances).toHaveLength(2);
 		expect(first.aborted).toBe(true);
-		// On a phone that recognizer may still be stuck: it shows "starting", then the start timeout's message.
-		expect(controls().listening).toBe(false);
-		act(() => vi.advanceTimersByTime(RECOGNITION_START_TIMEOUT_MS));
-		expect(controls().error).toBe("Speech recognition didn't start. Tap the mic to try again.");
+		expect(FakeSpeechRecognition.latest()).not.toBe(first);
 	});
 
-	it("stop before the browser started the session cancels it", async () => {
+	it("a new start while the previous session is still stopping starts at once", () => {
 		mount();
 		const first = startListening();
-		act(() => controls().reset());
-		act(() => controls().start());
+		act(() => first.emitResults([{ transcript: "first", isFinal: true }]));
 		act(() => controls().stop());
-		expect(controls().starting).toBe(false);
-		act(() => first.emitEnd());
-		await flush();
-		// The cancelled start never creates its session.
-		expect(FakeSpeechRecognition.instances).toHaveLength(1);
+		act(() => controls().start());
+		const second = FakeSpeechRecognition.latest();
+		expect(second).not.toBe(first);
+		expect(second.started).toBe(true);
+		expect(controls().transcript.finalText).toBe("");
+		act(() => second.emitStart());
+		expect(controls().listening).toBe(true);
+	});
+
+	it("is not listening until the microphone delivers audio (the browser's audiostart)", () => {
+		mount();
+		act(() => controls().start());
+		const recognition = FakeSpeechRecognition.latest();
+		act(() => recognition.emitStart({ audio: false }));
+		expect(controls().starting).toBe(true);
 		expect(controls().listening).toBe(false);
+		act(() => recognition.emitAudioStart());
+		expect(controls().starting).toBe(false);
+		expect(controls().listening).toBe(true);
+	});
+
+	it("gives up with a message when the microphone never delivers audio (Safari's start and then nothing)", () => {
+		mount();
+		act(() => controls().start());
+		const recognition = FakeSpeechRecognition.latest();
+		act(() => recognition.emitStart({ audio: false }));
+		act(() => vi.advanceTimersByTime(RECOGNITION_AUDIO_TIMEOUT_MS - 1));
+		expect(controls().starting).toBe(true);
+		act(() => vi.advanceTimersByTime(1));
+		expect(recognition.aborted).toBe(true);
+		expect(controls().starting).toBe(false);
+		expect(controls().listening).toBe(false);
+		expect(controls().error).toBe("The microphone didn't open, so nothing was heard. Tap the mic to try again.");
+	});
+
+	it("counts a first result as hearing, for a browser without audiostart", () => {
+		mount();
+		act(() => controls().start());
+		const recognition = FakeSpeechRecognition.latest();
+		act(() => recognition.emitStart({ audio: false }));
+		act(() => recognition.emitResults([{ transcript: "hi", isFinal: false }]));
+		expect(controls().listening).toBe(true);
+		act(() => vi.advanceTimersByTime(RECOGNITION_AUDIO_TIMEOUT_MS));
+		expect(recognition.aborted).toBe(false);
+	});
+
+	it("reports a start() the browser refuses", () => {
+		mount();
+		vi.spyOn(FakeSpeechRecognition.prototype, "start").mockImplementationOnce(() => {
+			throw Object.assign(new Error("recognition has already started."), { name: "InvalidStateError" });
+		});
+		act(() => controls().start());
+		expect(controls().starting).toBe(false);
+		expect(controls().error).toBe("Speech recognition failed (InvalidStateError: recognition has already started.).");
+		expect(getVoiceDebugEntries().map((entry) => entry.event)).toContain("start() threw");
+	});
+
+	it("stop before the browser started the session cancels it", () => {
+		mount();
+		act(() => controls().start());
+		const recognition = FakeSpeechRecognition.latest();
+		act(() => controls().stop());
+		expect(recognition.aborted).toBe(true);
+		expect(controls().starting).toBe(false);
+		expect(controls().listening).toBe(false);
+	});
+
+	it("logs the session's events, with the error's message, for the diagnostic log", () => {
+		mount();
+		const recognition = startListening();
+		act(() => recognition.emitResults([{ transcript: "hello there", isFinal: true }]));
+		act(() => controls().stop());
+		act(() => recognition.emitError("audio-capture", "Source is muted"));
+		act(() => recognition.emitEnd());
+		const lines = getVoiceDebugEntries()
+			.filter((entry) => entry.session !== null)
+			.map((entry) => `${entry.event}${entry.detail ? ` ${entry.detail}` : ""}`);
+		expect(lines).toEqual([
+			expect.stringMatching(/^start\(\) lang /),
+			"start",
+			"audiostart",
+			'result 1 (1 final) "hello there"',
+			"stop()",
+			"error audio-capture: Source is muted",
+			"end",
+		]);
+		expect(getVoiceDebugEntries()[0]?.event).toBe("page");
+		expect(formatVoiceDebugLog()).toMatch(/^\d\d:\d\d:\d\d\.\d{3}Z page /);
 	});
 });

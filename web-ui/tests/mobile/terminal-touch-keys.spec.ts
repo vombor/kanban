@@ -142,14 +142,22 @@ test("the bar sits under the terminal, and its key pad refits the terminal once 
 	const fullRows = resizes.at(-1) ?? 0;
 	// Below the TUI, never over it.
 	expect((await boxOf(bar)).top).toBeGreaterThanOrEqual((await boxOf(terminal)).bottom - 0.5);
-	// One row: the key pad toggle and the round Enter (a shell has no voice), thumb-sized.
+	// One row: the key pad toggle and the round Enter (a shell has no voice), thumb-sized, at the row's right edge.
 	const rowButtons = await bar.getByRole("button").evaluateAll((buttons) =>
 		buttons.map((button) => {
 			const rect = button.getBoundingClientRect();
-			return { label: button.getAttribute("aria-label"), top: rect.top, width: rect.width, height: rect.height };
+			return {
+				label: button.getAttribute("aria-label"),
+				top: rect.top,
+				right: rect.right,
+				width: rect.width,
+				height: rect.height,
+			};
 		}),
 	);
 	expect(rowButtons.map((button) => button.label)).toEqual(["Show terminal keys", "Send Enter"]);
+	const barBox = await bar.boundingBox();
+	expect(rowButtons[1]?.right ?? 0).toBeGreaterThan((barBox?.x ?? 0) + (barBox?.width ?? 0) - 1);
 	expect(new Set(rowButtons.map((button) => Math.round(button.top))).size).toBe(1);
 	for (const button of rowButtons) {
 		expect(Math.min(button.width, button.height), button.label ?? "").toBeGreaterThanOrEqual(40);

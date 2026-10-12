@@ -63,6 +63,7 @@ test("a swipe scrolls the scrollback, a fling keeps going, and Jump to bottom re
 	const jumpToBottom = page.getByRole("button", { name: "Jump to bottom" });
 	await expect(jumpToBottom).toHaveCount(0);
 	await page.waitForTimeout(1_000);
+	const enterBefore = await page.getByRole("button", { name: "Send Enter" }).boundingBox();
 	const bottomTop = await sliderTop(terminal);
 	const terminalBox = await boxOf(terminal);
 	const resizeCount = await settledCount(resizes);
@@ -70,11 +71,13 @@ test("a swipe scrolls the scrollback, a fling keeps going, and Jump to bottom re
 	// Finger down: older output.
 	await swipe(cdp, { x: center.x, y: center.y - 120 }, { x: center.x, y: center.y + 120 });
 	await expect(jumpToBottom).toBeVisible();
-	// On the bar's one row, past Enter at its far end.
+	// On the bar's one row, left of the key pad toggle; Enter stays where it was, at the row's right end.
 	const enterBox = await page.getByRole("button", { name: "Send Enter" }).boundingBox();
+	const toggleBox = await page.getByRole("button", { name: "Show terminal keys" }).boundingBox();
 	const jumpBox = await jumpToBottom.boundingBox();
 	expect(Math.round(jumpBox?.y ?? -1)).toBe(Math.round(enterBox?.y ?? -2));
-	expect(jumpBox?.x ?? 0).toBeGreaterThan((enterBox?.x ?? 0) + (enterBox?.width ?? 0));
+	expect((jumpBox?.x ?? 0) + (jumpBox?.width ?? 0)).toBeLessThanOrEqual(toggleBox?.x ?? 0);
+	expect(enterBox).toEqual(enterBefore);
 	// The button sits in the bar under the terminal: the terminal keeps its size.
 	expect(await boxOf(terminal)).toEqual(terminalBox);
 	const afterSwipe = await sliderTop(terminal);

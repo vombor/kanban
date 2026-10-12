@@ -119,7 +119,8 @@ describe("VoiceChatBar", () => {
 		);
 		expect(preview()?.value).toBe("fix the login bug ple");
 		expect(preview()?.readOnly).toBe(true);
-		expect(button("Send voice message").disabled).toBe(true);
+		// While listening Send stops the mic and sends the final text (terminal-touch-bar-voice.test.tsx).
+		expect(button("Send voice message").disabled).toBe(false);
 
 		tapMic("Stop listening");
 		expect(recognition.stopped).toBe(true);
@@ -269,7 +270,6 @@ describe("VoiceChatBar", () => {
 		tapMic("Talk to the agent");
 		const second = FakeSpeechRecognition.latest();
 		expect(second).not.toBe(first);
-		expect(second.blocked).toBe(false);
 		act(() => second.emitStart());
 		act(() => second.emitResults([{ transcript: "please", isFinal: true }]));
 		expect(container.textContent).toContain("Listening…");
@@ -302,7 +302,6 @@ describe("VoiceChatBar", () => {
 		tapMic("Talk to the agent");
 		const second = FakeSpeechRecognition.latest();
 		expect(second).not.toBe(first);
-		expect(second.blocked).toBe(false);
 		act(() => second.emitStart());
 		act(() => second.emitResults([{ transcript: "the real request", isFinal: true }]));
 		expect(container.textContent).toContain("Listening…");
@@ -355,7 +354,6 @@ describe("VoiceChatBar", () => {
 		await act(async () => {});
 		const second = FakeSpeechRecognition.latest();
 		expect(second).not.toBe(first);
-		expect(second.blocked).toBe(false);
 		act(() => second.emitStart());
 		act(() => second.emitResults([{ transcript: "heard this time", isFinal: true }]));
 		expect(container.textContent).toContain("Listening…");

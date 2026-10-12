@@ -16,6 +16,7 @@ import {
 import type { ReactElement, ReactNode, SyntheticEvent } from "react";
 
 import { VoiceError, VoiceMicButton, VoicePreview, VoiceStatus } from "@/components/detail-panels/voice-chat-controls";
+import { VoiceDebugPanel } from "@/components/detail-panels/voice-debug-panel";
 import { cn } from "@/components/ui/cn";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -27,17 +28,20 @@ import { useBooleanLocalStorageValue } from "@/utils/react-use";
 import { useVoiceChat, type VoiceChatControls } from "@/voice/use-voice-chat";
 
 // The bar under a terminal on a phone, in the panel's flow so it never covers
-// the TUI. One row: on an agent session the mic and the speaker (replies read
-// aloud; tapped while a reply is read, it stops the reading), then the key pad
-// toggle and Enter, and jump to bottom at the far end. Enter sends the voice
-// message while the voice preview (above the row, with its X) holds one, and
-// is the terminal's Enter otherwise. While the pad is open a second row holds
-// the keys a phone keyboard lacks to answer a TUI's pickers (arrows, Tab,
-// Shift+Tab, Esc) plus Space.
+// the TUI. One row: on the left, on an agent session, the mic and the speaker
+// (replies read aloud; tapped while a reply is read, it stops the reading); on
+// the right jump to bottom (while scrolled up), the key pad toggle and Enter,
+// which stay at the row's right edge whether jump to bottom is there or not.
+// Enter sends the voice message while the mic is on or the voice preview
+// (above the row, with its X) holds one, and is the terminal's Enter
+// otherwise. While the pad is open a second row holds the keys a phone
+// keyboard lacks to answer a TUI's pickers (arrows, Tab, Shift+Tab, Esc) plus
+// Space.
 //
 // The row keeps one height while jump to bottom comes and goes (scrolling must
-// not refit the terminal); only the pad toggle and the voice preview change the
-// bar's height, and the terminal's resize observer fits once after that.
+// not refit the terminal); only the pad toggle, the voice preview and the
+// voice log change the bar's height, and the terminal's resize observer fits
+// once after that.
 //
 // No button may take focus from the terminal's textarea: the on-screen keyboard
 // would close, and its dictation would end (terminal-ime-input.ts).
@@ -148,7 +152,8 @@ function ReplySpeechButton({ voice }: { voice: VoiceChatControls }): ReactElemen
 	);
 }
 
-// The voice message while the preview holds one (with the send button's disabled state and spinner), else the terminal's Enter.
+// The voice message while the mic is on or the preview holds one (with the send button's disabled state and spinner):
+// while listening it stops the mic and sends what was heard. Otherwise the terminal's Enter.
 function EnterButton({
 	voice,
 	onKey,
@@ -156,7 +161,7 @@ function EnterButton({
 	voice: VoiceChatControls | null;
 	onKey: (key: TerminalTouchKey) => void;
 }): ReactElement {
-	const sendsVoice = voice?.hasPreview ?? false;
+	const sendsVoice = (voice?.hasPreview || voice?.micActive) ?? false;
 	const disabled = sendsVoice && !voice?.canSend;
 	return (
 		<button
@@ -203,6 +208,7 @@ export function TerminalTouchBar({
 		<div className="flex shrink-0 flex-col gap-1 border-t border-border px-1.5 py-1">
 			{voice ? (
 				<>
+					<VoiceDebugPanel voice={voice} />
 					<VoicePreview voice={voice} showSend={false} />
 					<VoiceError voice={voice} />
 				</>
@@ -210,6 +216,19 @@ export function TerminalTouchBar({
 			<div role="toolbar" aria-label="Terminal controls" className="flex items-center gap-1.5">
 				{voice?.voiceInput.supported ? <VoiceMicButton voice={voice} /> : null}
 				{voice?.replySpeech.supported ? <ReplySpeechButton voice={voice} /> : null}
+				{voice ? <VoiceStatus voice={voice} showReading /> : <span className="flex-1" />}
+				{showJumpToBottom ? (
+					<button
+						type="button"
+						onClick={onJumpToBottom}
+						// Keeps the terminal focused, so an open on-screen keyboard stays open.
+						{...KEEP_FOCUS_PROPS}
+						aria-label="Jump to bottom"
+						className={cn(SQUARE_BUTTON_CLASS, NEUTRAL_CLASS)}
+					>
+						<ArrowDown size={18} />
+					</button>
+				) : null}
 				<button
 					type="button"
 					onClick={() => setIsPadOpen((open) => !open)}
@@ -226,19 +245,6 @@ export function TerminalTouchBar({
 					<Keyboard size={18} />
 				</button>
 				<EnterButton voice={voice} onKey={onKey} />
-				{voice ? <VoiceStatus voice={voice} showReading /> : <span className="flex-1" />}
-				{showJumpToBottom ? (
-					<button
-						type="button"
-						onClick={onJumpToBottom}
-						// Keeps the terminal focused, so an open on-screen keyboard stays open.
-						{...KEEP_FOCUS_PROPS}
-						aria-label="Jump to bottom"
-						className={cn(SQUARE_BUTTON_CLASS, NEUTRAL_CLASS)}
-					>
-						<ArrowDown size={18} />
-					</button>
-				) : null}
 			</div>
 			{isPadOpen ? <TerminalTouchKeyPad onKey={onKey} /> : null}
 		</div>

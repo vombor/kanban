@@ -5,6 +5,7 @@ import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import { useBooleanLocalStorageValue, useLatest } from "@/utils/react-use";
 import { toSpeakableText } from "@/voice/speakable-text";
 import { getSpeechSynthesis } from "@/voice/speech-apis";
+import { logVoiceEvent } from "@/voice/voice-debug-log";
 
 /** A turn end must hold this long before it is read (some agents flip to Review for a moment mid-turn). */
 export const REPLY_SETTLE_MS = 1500;
@@ -46,10 +47,14 @@ export function useReplySpeech(taskId: string, summary: RuntimeTaskSessionSummar
 	const handledRef = useRef<{ taskId: string; key: number | null } | null>(null);
 	const enabledRef = useLatest(enabled);
 
+	// Also cancels what the synthesizer still says without an utterance of ours (the silent primer, or a reply whose
+	// `end` never came): on iOS a synthesizer that speaks can keep the audio session from the microphone.
 	const stop = useCallback(() => {
-		if (utteranceRef.current) {
+		const synthesis = getSpeechSynthesis();
+		if (utteranceRef.current || synthesis?.speaking || synthesis?.pending) {
 			utteranceRef.current = null;
-			getSpeechSynthesis()?.cancel();
+			logVoiceEvent("speech cancel()", synthesis?.speaking ? "was speaking" : null);
+			synthesis?.cancel();
 		}
 		setSpeaking(false);
 	}, []);
@@ -63,7 +68,9 @@ export function useReplySpeech(taskId: string, summary: RuntimeTaskSessionSummar
 			stop();
 			const utterance = new SpeechSynthesisUtterance(text);
 			utterance.lang = typeof navigator === "undefined" ? "" : navigator.language;
-			const finish = () => {
+			const finish = (event?: Event) => {
+				const code = (event as (Event & { error?: string }) | undefined)?.error;
+				logVoiceEvent(event?.type === "error" ? "speech error" : "speech end", code ?? null);
 				if (utteranceRef.current === utterance) {
 					utteranceRef.current = null;
 					setSpeaking(false);
@@ -75,6 +82,7 @@ export function useReplySpeech(taskId: string, summary: RuntimeTaskSessionSummar
 			setSpeaking(true);
 			// Chrome can leave the synthesizer paused (a backgrounded tab), and then speak() only queues.
 			synthesis.resume();
+			logVoiceEvent("speech speak()", `${text.length} chars`);
 			synthesis.speak(utterance);
 		},
 		[stop],

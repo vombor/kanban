@@ -1,57 +1,35 @@
 import type { SpeechRecognitionLike } from "@/voice/speech-apis";
 
-// The page's one live recognition session, kept from its start() until the browser's `end` event. abort() and stop()
-// only ask the browser to end a session: it ends (and lets go of the mic) later, and a phone's recognizer serves one
-// session at a time, so a new session started before the old one's `end` can sit "started" and never hear anything
-// until the page reloads. Kept per page, not per hook, because closing the voice bar unmounts the hook while its
-// session is still ending, and the reopened bar is a new hook.
+// The page's one live recognition session, kept from its start() until the browser's `end` event. Kept per page, not
+// per hook, because closing the voice bar unmounts the hook while its session is still ending, and the reopened bar is
+// a new hook that must end it before it starts its own.
+//
+// A new start never waits for the old session's end: both engines end the previous session themselves when a new
+// one starts (Chromium's SpeechRecognitionManagerImpl::StartSession aborts the other microphone session, WebKit's
+// SpeechRecognitionServer::handleRequest aborts its recognizer with "Another request is started"), and a start that
+// waited ran from a timer, outside the user's tap (docs/fork/voice-chat.md).
 
-interface LiveRecognition {
-	recognition: SpeechRecognitionLike;
-	ended: Promise<void>;
-	markEnded: () => void;
-}
-
-let live: LiveRecognition | null = null;
+let live: SpeechRecognitionLike | null = null;
 
 /** Records `recognition` as the page's live session until releaseRecognition() is called for it. */
 export function holdRecognition(recognition: SpeechRecognitionLike): void {
-	let markEnded = () => {};
-	const ended = new Promise<void>((resolve) => {
-		markEnded = resolve;
-	});
-	live = { recognition, ended, markEnded };
+	live = recognition;
 }
 
 /** Called from the session's `end` event: the browser has let go of it. */
 export function releaseRecognition(recognition: SpeechRecognitionLike): void {
-	if (live?.recognition === recognition) {
-		live.markEnded();
+	if (live === recognition) {
 		live = null;
 	}
 }
 
-/**
- * Null when no session is live (start at once, still inside the user's tap). Otherwise resolves once the live session
- * has ended, or after `timeoutMs`, when it is aborted once more and given up on, so a browser that never sends `end`
- * can't block every later start.
- */
-export function waitForRecognitionEnd(timeoutMs: number): Promise<void> | null {
-	const waitingFor = live;
-	if (!waitingFor) {
-		return null;
+/** Aborts the page's live session, if any, and forgets it. True when there was one. */
+export function abortLiveRecognition(): boolean {
+	const previous = live;
+	if (!previous) {
+		return false;
 	}
-	return new Promise<void>((resolve) => {
-		const timer = setTimeout(() => {
-			if (live === waitingFor) {
-				live = null;
-				waitingFor.recognition.abort();
-			}
-			resolve();
-		}, timeoutMs);
-		void waitingFor.ended.then(() => {
-			clearTimeout(timer);
-			resolve();
-		});
-	});
+	live = null;
+	previous.abort();
+	return true;
 }

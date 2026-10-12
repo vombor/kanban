@@ -15,22 +15,31 @@ dependency or secret for it. Shell terminals don't get the bar.
   it.
 - Send (or Enter in the preview) delivers the text like typed input: `runtime.deliverTaskInput` types it into the
   agent's TUI, presses Enter and confirms the agent picked it up (`src/terminal/deliver-task-input.ts`). Shift+Enter
-  is a line break, Escape or the X discards. Interim results never reach the PTY, and nothing is sent until you press
-  Send.
-- Starting to talk stops a reply that is being read out.
-- "Listening…" is shown only between the recognizer's own `start` and `end` events ("Starting…" before the browser
-  has started it). An error ends listening with its message, including "No speech was heard" and "was interrupted"
-  (those two stay quiet after your own stop). A session that doesn't start within 15 s, or doesn't end within 3 s of
-  a stop, is aborted with a message, so the bar never says it listens while nothing does.
+  is a line break, Escape or the X discards. Nothing is sent until you press Send.
+- Send while the mic is on stops listening, waits for the final text of what you were saying (at most 1.5 s,
+  `SEND_FINAL_WAIT_MS`) and sends it, with the spinner meanwhile. If the final text doesn't come in time it sends
+  what the preview shows, the words not yet final included (the one case where interim text is sent), and drops the
+  session. With nothing heard it only stops listening (and sends what an earlier recording left in the preview).
+- Starting to talk stops a reply that is being read out, before the microphone opens: the synthesizer is cancelled
+  whenever it still speaks, even without a reply of ours (the silent primer, or a reply whose `end` never came),
+  since on iOS a speaking synthesizer can keep the audio session from the microphone.
+- "Listening…" is shown only once the microphone delivers audio: the recognizer's `audiostart` event (or its first
+  result, for a browser without that event), until its `end`. Before that the bar says "Starting…". The browser's
+  `start` event only means the recognizer is set up: Safari sends `start` and then nothing at all when its
+  capture gets no audio, which used to read "Listening…" with nothing ever heard. A session whose microphone hasn't
+  delivered audio 4 s after `start` (`RECOGNITION_AUDIO_TIMEOUT_MS`) is aborted with "The microphone didn't open,
+  so nothing was heard. Tap the mic to try again." An error ends listening with its message, including "No speech
+  was heard" and "was interrupted" (those two stay quiet after your own stop). A session that doesn't start within
+  15 s (room for the first permission prompts), or doesn't end within 3 s of a stop, is aborted with a message, so
+  the bar never says it listens while nothing does.
 - Discarding (X, Escape) clears only the text: while listening, the mic keeps listening and what you say next fills
   the empty preview (the recognizer's results from before the clear are skipped by index, the words being said at
-  that moment included). Closing the bar, or switching it to another session, aborts the recognition, but the
-  browser ends a session (and lets go of the mic) a moment later, and a phone's recognizer serves one session at a
-  time. So the page keeps one live session until its `end` (`web-ui/src/voice/live-recognition.ts`), and the next
-  start waits for that (at most 2 s, then it aborts the old one again and starts anyway). Before this, recording
-  again after a discard showed "Listening…" with no speech recognised until the page was reloaded (phone reports,
-  2026-10-12): a discard used to abort too, and a tap on the mic right after it started a session while the
-  aborted one was still ending.
+  that moment included). Closing the bar, or switching it to another session, aborts the recognition. The page keeps
+  its live session until its `end` (`web-ui/src/voice/live-recognition.ts`) so a reopened bar can abort it too.
+- Every start runs inside the mic's tap: a new `SpeechRecognition` instance, `start()` called at once. It never
+  waits for an old session to end. Both engines end the previous session themselves when a new one starts (see
+  below), and the earlier 2 s wait for that end (35818fdd) ran the start from a timer, outside the tap, whenever the
+  old session's `end` was late.
 
 ## Speech out
 
@@ -55,6 +64,49 @@ card keep their own setting.
   such click; on those browsers turn it off and on once. Each reply also calls `speechSynthesis.resume()` first,
   since Chrome can leave the synthesizer paused after the tab was in the background.
 
+## Engine behaviour this relies on
+
+Checked in the engines' sources (2026-10-12), not in the test fake, which twice didn't match the user's phone:
+
+- **Both:** a new session's start ends the previous one. Chromium's `SpeechRecognitionManagerImpl::StartSession`
+  aborts any other microphone session; WebKit's `SpeechRecognitionServer::handleRequest` aborts its recognizer
+  with "Another request is started". `start()` has no user-gesture check in either (Blink only for on-device
+  models being downloaded). A start inside the tap is kept anyway, since iOS ties audio to user interaction.
+- **iOS Safari (WebKit):** `start` is sent when the recognizer is set up, before the capture runs; `audiostart`
+  comes from the capture source once it delivers audio. A capture that delivers nothing sends no event at all, a
+  muted source sends `audio-capture` with the message "Source is muted". Error events carry a `message`, which the
+  log records. `stop()` finishes the SFSpeech task, and `end` follows the final result.
+- **Chrome Android:** `abort()` cancels and destroys Android's recognizer at once and sends `end`; `stop()` ends
+  once Android delivers its results. A busy recognizer (`ERROR_RECOGNIZER_BUSY`) is reported as `not-allowed`,
+  which reads "Microphone access was denied". In continuous mode Chrome marks every partial result final, so a long
+  utterance can show its words more than once (known, not handled yet; nothing reported).
+
+What is still unverified on the real phone, and what the diagnostic log shows for it:
+
+- that the second session gets `audiostart` after a reply was read aloud (look for `speech speak()`, `speech
+  cancel()` and then the session's `start` without `audiostart`, ending in "gave up");
+- that `end` comes after `stop()` (a `stop()` line with no `end` before the next `start()`);
+- which error iOS sends when the microphone is taken (`error audio-capture: …` with its message).
+
+## Diagnostic log
+
+The voice chat records what the browser's recognizer and synthesizer do: each session's `start()`, `start`,
+`audiostart`, `soundstart`, `speechstart`, `result` (count, final count, last text), `speechend`, `soundend`,
+`audioend`, `nomatch`, `error` (code and message), `end`, Kanban's own `stop()`, `abort()` and "gave up", reply
+speech's `speak()`, `cancel()` and its `end`/`error`, and once per page whether it runs as a home-screen web app
+and the browser's user agent. Times are UTC, and `#n` is the session's number on the page.
+
+It records always (the last 120 entries, in memory only: nothing leaves the page) and is shown only on demand, so
+after a failure it already holds what happened:
+
+- **On a phone:** hold the mic for 1 s. The press starts listening as any tap does (that session shows in the log
+  too); tap the mic again to stop. Hold it again, or the X in the log's header, to hide the log.
+- **Anywhere:** open Kanban with `?voiceDebug=1` (`?voiceDebug=0` hides it). In a home-screen web app the URL is
+  fixed, so use the long press there.
+
+The setting is remembered in localStorage (`kanban.voice-debug-log`). Copy puts the whole log on the clipboard for a
+report; Clear empties it.
+
 ## Browser support
 
 The bar is shown only where the browser has the API. The mic and the speaker are detected separately, and where
@@ -78,13 +130,15 @@ anything you wouldn't send to that service.
 
 On a touch screen every terminal panel (card agent, sidebar orchestrator, shell terminals) has a touch bar under the
 terminal, in the panel, so it never covers the TUI and moves above the on-screen keyboard with the panel. Its one row
-holds, in this order, the mic and the speaker (agent sessions only), the key pad toggle and the round Enter, and,
-while you are scrolled up, Jump to bottom at the far end (the row keeps its height when it comes and goes). The
-voice bar's controls live in this row on a phone, so there is no separate voice bar (user request, 2026-10-12):
+holds the mic and the speaker on the left (agent sessions only), and on the right, while you are scrolled up, Jump to
+bottom, then the key pad toggle and the round Enter. Enter and the toggle stay at the row's right edge whether Jump to
+bottom is there or not, and the row keeps its height when it comes and goes. The voice bar's controls live in this
+row on a phone, so there is no separate voice bar (user request, 2026-10-12):
 
-- Enter sends the dictated text while the preview above the row holds some, exactly as the desktop's Send button
-  (same delivery, the same spinner, and it does nothing while listening, so stop the mic first); otherwise it is the
-  terminal's Enter, the keyboard's own submit, so text dictated into the terminal goes out first and stays sent.
+- Enter sends the dictated text while the mic is on or the preview above the row holds some, exactly as the
+  desktop's Send button: while listening it stops the mic and sends what you said once its final text is in (see
+  "Speech in"), with nothing heard it only stops the mic. Otherwise it is the terminal's Enter, the keyboard's own
+  submit, so text dictated into the terminal goes out first and stays sent.
 - The X that clears the dictated text sits next to the preview, not in the row.
 - The speaker turns reading replies aloud on and off. While a reply is being read its icon moves, the row says
   "Reading the reply…", and a tap stops that reading without turning the toggle off.
@@ -100,6 +154,8 @@ focus, so dictation keeps going. The desktop keeps the voice bar with its Send a
   speech in.
 - `web-ui/src/voice/use-reply-speech.ts`, `speakable-text.ts`: speech out.
 - `web-ui/src/voice/use-voice-chat.ts`: the voice chat state both layouts share (when Send/Enter may send, the preview).
+- `web-ui/src/voice/voice-debug-log.ts`, `use-voice-debug-log.ts`,
+  `web-ui/src/components/detail-panels/voice-debug-panel.tsx`: the diagnostic log.
 - `web-ui/src/components/detail-panels/voice-chat-bar.tsx`: the desktop bar, shown by `AgentTerminalPanel`'s
   `voiceChat` prop; its mic, preview and status are `voice-chat-controls.tsx`.
 - `web-ui/src/components/detail-panels/terminal-touch-bar.tsx`: the touch bar (`VoiceTerminalTouchBar` on an agent
