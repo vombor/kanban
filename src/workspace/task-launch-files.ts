@@ -10,7 +10,15 @@ function toSafeFileName(value: string): string {
 	return value.replace(/[^A-Za-z0-9._-]/gu, "_");
 }
 
-/** A guarded Claude card's own --settings file (the shared settings.json is also the orchestrator's). */
+/**
+ * An orchestrator sidebar's own Claude --settings file: its notices prompt hook names its workspace. Not a card's
+ * launch file (no worktree to go with); each sidebar launch rewrites it.
+ */
+export function getClaudeSidebarSettingsPath(taskId: string): string {
+	return join(getRuntimeHomePath(), "hooks", "claude", "sidebars", `${toSafeFileName(taskId)}.json`);
+}
+
+/** A guarded Claude card's own --settings file (the shared settings.json is every unguarded session's). */
 export function getClaudeCardSettingsPath(taskId: string): string {
 	return join(getRuntimeHomePath(), "hooks", "claude", "cards", `${toSafeFileName(taskId)}.json`);
 }

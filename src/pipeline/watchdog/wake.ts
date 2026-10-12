@@ -10,12 +10,17 @@
 //   - neither: `orchestrator.wake.mode` "headless" and the agent has a headless runner → a headless run; otherwise
 //     the sidebar session is started server-side with the text as its first input. Only a browser starts it
 //     otherwise (web-ui use-home-agent-session.ts), so after a Kanban restart there may be none.
+//   A live sidebar whose user is working in it gets the wake silently instead (decideWakeDelivery,
+//   `orchestrator.wake.delivery`): the server queues it in the workspace's orchestrator inbox and the sidebar agent takes
+//   it with the user's next prompt through its prompt hook (src/server/orchestrator-inbox.ts); unread, it is typed
+//   `quietMin` later. A queue that fails falls back to typing.
 // Typing that fails leaves the items due with no cooldown (queued items are kept in `wakeRetry`); text that was typed
 // but whose Enter showed no activity gets only an Enter on the next tick (`wakeEnter`), so it is never typed twice.
 //
 // Ported from kit main 00514f2 lib/sidebar-wake.cjs (after the archive cut at 6da71597; wakeKey, pickFresh, markWoken,
 // keepForRetry, wakeText, wake) and archive/devteam-kit:services/review-watch.mjs@6da71597 (wakeOrchestrator). The
 // legacy fallback "typing failed twice → headless" is dropped: it started a second orchestrator beside a live sidebar.
+import type { OrchestratorWakeDelivery } from "../../config/pipeline-config";
 import type { RuntimeAgentId, RuntimeTaskInputDeliveryResponse } from "../../core/api-contract";
 import type { PipelineSessionView } from "../engine";
 import type { WatchdogWorkspaceState } from "./watchdog-state";
@@ -72,6 +77,48 @@ export function describeWakeAudience(userTypedAt: number | null | undefined, now
 	}
 	const minutes = Math.max(0, Math.floor((now - userTypedAt) / 60_000));
 	return `the user typed in this sidebar ${minutes < 1 ? "under a minute" : `${minutes} min`} ago and may be reading`;
+}
+
+export interface WakeDeliveryInput {
+	policy: OrchestratorWakeDelivery;
+	/** The sidebar's agent takes queued notices with the next prompt (orchestrator-agents.ts agentTakesSilentNotices). */
+	agentTakesSilentNotices: boolean;
+	/** When the user last typed into the sidebar (epoch ms), or null. */
+	userTypedAt: number | null | undefined;
+	now: number;
+	quietMs: number;
+	/** Some item needs the user or an answer now (a card waiting for approval, an outage escalation, a stop). */
+	urgent: boolean;
+}
+
+export interface WakeDeliveryDecision {
+	silent: boolean;
+	reason: string;
+}
+
+/**
+ * Whether a wake into a live sidebar is queued silently for the agent's next prompt or typed as a prompt. `silent`
+ * queues every wake, `type` none; `auto` queues while the user typed in the sidebar within `quietMs`, unless an item
+ * is urgent (typed at once, so the orchestrator acts without the user).
+ */
+export function decideWakeDelivery(input: WakeDeliveryInput): WakeDeliveryDecision {
+	if (!input.agentTakesSilentNotices) {
+		return { silent: false, reason: "the sidebar's agent has no prompt hook for queued notices" };
+	}
+	if (input.policy === "type") {
+		return { silent: false, reason: "delivery type" };
+	}
+	if (input.policy === "silent") {
+		return { silent: true, reason: "delivery silent" };
+	}
+	if (input.urgent) {
+		return { silent: false, reason: "an item needs the user or an answer now" };
+	}
+	const typedAt = input.userTypedAt ?? null;
+	if (typedAt !== null && input.now - typedAt < input.quietMs) {
+		return { silent: true, reason: "the user is working in the sidebar" };
+	}
+	return { silent: false, reason: "the user hasn't typed in the sidebar recently" };
 }
 
 /** One line: which workspace and project, the items, and where to look. */
@@ -180,10 +227,24 @@ export interface WakeDependencies {
 	/** Queues the items and starts a headless run. */
 	startHeadless: (items: readonly string[]) => Promise<{ ok: boolean; error?: string }>;
 	deliver: (text: string) => Promise<RuntimeTaskInputDeliveryResponse>;
+	/** Queues the wake in the sidebar's inbox for the agent's next prompt, typed as `text` at `typeAfter` if unread. */
+	queueSilent?: (
+		items: readonly string[],
+		text: string,
+		typeAfter: number,
+	) => Promise<{ ok: boolean; pending: number; error?: string }>;
 	startSession: (prompt: string) => Promise<{ ok: boolean; error?: string }>;
 }
 
-export type WakePath = "none" | "queued" | "sidebar" | "sidebar-enter" | "sidebar-started" | "headless" | "retry";
+export type WakePath =
+	| "none"
+	| "queued"
+	| "sidebar"
+	| "sidebar-silent"
+	| "sidebar-enter"
+	| "sidebar-started"
+	| "headless"
+	| "retry";
 
 export interface WakeOutcome {
 	path: WakePath;
@@ -204,6 +265,10 @@ export interface WakeInput {
 	now: number;
 	cooldownMs: number;
 	retryMs: number;
+	/** How a wake into the live sidebar is delivered (decideWakeDelivery for these items); absent = typed. */
+	delivery?: (items: readonly string[]) => WakeDeliveryDecision;
+	/** How long a silent notice waits unread before it is typed. */
+	quietMs?: number;
 	deps: WakeDependencies;
 }
 
@@ -267,13 +332,32 @@ export async function wakeOrchestrator(input: WakeInput): Promise<WakeOutcome> {
 		if (fresh.length === 0) {
 			return { path: "none", ok: true, items: [], detail: "nothing due" };
 		}
+		const decision = input.delivery?.(fresh) ?? null;
+		let fallback = "";
+		if (decision?.silent && deps.queueSilent) {
+			const text = input.text(fresh);
+			const queued = await deps
+				.queueSilent(fresh, text, now + (input.quietMs ?? WAKE_USER_ACTIVE_MS))
+				.catch((error: unknown) => ({ ok: false, pending: 0, error: String(error) }));
+			if (queued.ok) {
+				markWoken(state, fresh, now);
+				return {
+					path: "sidebar-silent",
+					ok: true,
+					items: fresh,
+					detail: `queued silently for ${target.sessionId}'s next prompt (${decision.reason}; ${queued.pending} pending, typed in ${Math.round((input.quietMs ?? WAKE_USER_ACTIVE_MS) / 60_000)} min if unread)`,
+				};
+			}
+			fallback = `; the silent queue failed (${queued.error ?? "?"}), so it was typed`;
+		}
 		const result = await deps.deliver(input.text(fresh));
 		if (result.ok) {
 			markWoken(state, fresh, now);
-			const detail =
+			const detail = `${
 				result.status === "queued"
 					? `held for ${target.sessionId} while the user types there; typed once their input clears`
-					: `typed into ${target.sessionId}: ${result.status}`;
+					: `typed into ${target.sessionId}: ${result.status}`
+			}${decision && !decision.silent ? ` (${decision.reason})` : ""}${fallback}`;
 			return { path: "sidebar", ok: true, items: fresh, detail };
 		}
 		keepForRetry(state, fresh, input.queued, now);

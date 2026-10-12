@@ -12,6 +12,20 @@ export type WatchdogActionRequest =
 	 * sends its own workspace here: a workspace's items wake only its own orchestrator.
 	 */
 	| { kind: "deliverInput"; workspaceId: string; taskId: string; text: string; fromWorkspaceId?: string }
+	/**
+	 * Queues a wake for the workspace's orchestrator sidebar silently (src/server/orchestrator-inbox.ts): its agent takes
+	 * it with the user's next prompt, and it is typed as `text` at `typeAfter` (epoch ms) if no prompt took it.
+	 * `fromWorkspaceId` is required and must be `workspaceId`, and `taskId` that workspace's home-agent session.
+	 */
+	| {
+			kind: "queueOrchestratorNotices";
+			workspaceId: string;
+			taskId: string;
+			items: string[];
+			text: string;
+			typeAfter: number;
+			fromWorkspaceId: string;
+	  }
 	/** Sends Esc to a running agent (PID brownout: the agent cancels its turn, the card keeps its session). */
 	| { kind: "interrupt"; workspaceId: string; taskId: string }
 	/**
@@ -45,6 +59,7 @@ export type WatchdogActionRequest =
 
 export interface WatchdogActionResults {
 	deliverInput: RuntimeTaskInputDeliveryResponse;
+	queueOrchestratorNotices: { ok: boolean; pending: number; error?: string };
 	interrupt: { ok: boolean; error?: string };
 	startOrchestratorSession: { ok: boolean; taskId: string; error?: string };
 	pruneDone: { ok: boolean; summary: string; error?: string };

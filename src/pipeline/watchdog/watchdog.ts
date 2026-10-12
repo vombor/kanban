@@ -68,6 +68,7 @@ import {
 import {
 	agentContinuesConversationOnResume,
 	agentHooksOnPromptSubmit,
+	agentTakesSilentNotices,
 	getAgentLabel,
 	hasHeadlessOrchestratorRunner,
 	isAgentWorkspaceTrusted,
@@ -137,6 +138,7 @@ import {
 } from "./stalls";
 import {
 	buildWakeText,
+	decideWakeDelivery,
 	isOrchestratorSessionLive,
 	planWakeRoute,
 	type WakeMode,
@@ -217,6 +219,8 @@ export interface WatchdogDependencies {
 	isTrusted?: (agentId: RuntimeAgentId, directory: string) => Promise<boolean | null>;
 	hooksOnPromptSubmit?: (agentId: RuntimeAgentId) => boolean;
 	hasHeadlessRunner?: (agentId: RuntimeAgentId) => boolean;
+	/** The sidebar's agent takes silent wakes with its next prompt (agentTakesSilentNotices). */
+	takesSilentNotices?: (agentId: RuntimeAgentId) => boolean;
 	/** A card worktree's silent Cline stall (readClineSilentStall, the reader recovery decides on too). */
 	readSilentStall?: (input: SilentStallReadInput) => Promise<ClineSilentStall | null>;
 	/** A process the agent started that still runs in the worktree (recovery asks the same, findAgentToolProcess). */
@@ -345,6 +349,7 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 	const isTrusted = deps.isTrusted ?? isAgentWorkspaceTrusted;
 	const hooksOnPromptSubmit = deps.hooksOnPromptSubmit ?? agentHooksOnPromptSubmit;
 	const hasHeadlessRunner = deps.hasHeadlessRunner ?? hasHeadlessOrchestratorRunner;
+	const takesSilentNotices = deps.takesSilentNotices ?? agentTakesSilentNotices;
 	const clineReader = deps.readSilentStall ? null : createClineSessionFileReader();
 	const findRunningTool = deps.findRunningTool ?? createAgentToolProcessFinder();
 	const readManifest = deps.readRestartManifest ?? readRestartManifest;
@@ -514,6 +519,8 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 		);
 		const attention: string[] = [];
 		const queued: string[] = [];
+		// Items that need the user or an answer now: typed into the sidebar even while the user works there.
+		const urgent = new Set<string>();
 		const triageCooldownMs = config.watchdog.triageCooldownMin * MIN;
 		// Wakes off for this workspace: nothing reaches an orchestrator (never another workspace's instead), so what
 		// would have woken it is listed in its own ATTENTION.md, every tick while it holds.
@@ -759,25 +766,29 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 				}
 				const verdict = readTriageVerdict(qaLog, taskId) ?? "no triage yet";
 				if (verdict !== "fixed") {
-					attention.push(
-						`- **${taskId}** (${column}): escalated ${escalation.at} (${escalation.reason}); triage: ${verdict}`,
-					);
+					const item = `- **${taskId}** (${column}): escalated ${escalation.at} (${escalation.reason}); triage: ${verdict}`;
+					attention.push(item);
+					if (escalation.cause === "outage" || escalation.requireApproval) {
+						urgent.add(item);
+					}
 				}
 			}
 			// The kit answered `stop` after a FAIL: the card waits in Review for a human (plan §4.0, onFail default).
 			for (const [taskId, entry] of Object.entries(pipelineState.cards)) {
 				const stop = readStop(entry);
 				if (stop && !readEscalation(entry) && columns.get(taskId) === "review") {
-					attention.push(
-						`- **${taskId}** (review): stopped ${stop.at} (${stop.reason}); the kit does not rework it`,
-					);
+					const item = `- **${taskId}** (review): stopped ${stop.at} (${stop.reason}); the kit does not rework it`;
+					attention.push(item);
+					urgent.add(item);
 				}
 			}
 		}
 
 		for (const wait of promptWaits) {
 			if (!userItemIds.has(wait.taskId)) {
-				attention.push(`- **${wait.taskId}** (prompt): ${wait.text}`);
+				const item = `- **${wait.taskId}** (prompt): ${wait.text}`;
+				attention.push(item);
+				urgent.add(item);
 				record(records, context, {
 					workspaceId,
 					taskId: wait.taskId,
@@ -910,7 +921,7 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 			wakeItems.push(...notes);
 		}
 		if (wakeItems.length > 0 || state.wakeRetry.length > 0 || state.wakeEnter) {
-			const outcome = await wake(snapshot, paths, state, wakeItems, queued, context, records);
+			const outcome = await wake(snapshot, paths, state, wakeItems, queued, urgent, context, records);
 			// Delivered (typed, held while the user types, queued for a headless run, or a sidebar started with it).
 			if (state.restartWake && outcome?.ok && outcome.items.some(isRestartWakeItem)) {
 				state.restartWake.sentAt = new Date(context.now).toISOString();
@@ -1145,6 +1156,7 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 		state: WatchdogWorkspaceState,
 		items: readonly string[],
 		queued: readonly string[],
+		urgent: ReadonlySet<string>,
 		context: TickContext,
 		records: WatchdogDecisionRecord[],
 	): Promise<WakeOutcome | null> => {
@@ -1185,6 +1197,16 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 				now: new Date(context.now),
 				userTypedAt: reportedSession?.viewerTypedAt ?? null,
 			});
+		const quietMs = wakeSettings.quietMin * MIN;
+		const delivery = (fresh: readonly string[]) =>
+			decideWakeDelivery({
+				policy: wakeSettings.delivery,
+				agentTakesSilentNotices: takesSilentNotices(agentId),
+				userTypedAt: reportedSession?.viewerTypedAt ?? null,
+				now: context.now,
+				quietMs,
+				urgent: fresh.some((item) => urgent.has(item)),
+			});
 		const queueForHeadless = async (fresh: readonly string[]) =>
 			await appendOrchestratorQueue(paths.orchestratorQueue, workspaceId, fresh, new Date(context.now));
 
@@ -1193,7 +1215,9 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 				resolved.route === "headless-queue"
 					? `queue for the running headless run in ${workspaceId}`
 					: resolved.route === "sidebar"
-						? `type into ${sessionId}`
+						? delivery(items).silent
+							? `queue silently for ${sessionId}'s next prompt`
+							: `type into ${sessionId}`
 						: resolved.route === "headless"
 							? `start a headless ${agentId} run in ${workspaceId}`
 							: `start ${sessionId} with the wake as its first input${resolved.continueConversation ? ", continuing its conversation" : ""}`;
@@ -1222,6 +1246,8 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 				now: context.now,
 				cooldownMs: wakeSettings.cooldownMin * MIN,
 				retryMs: context.parsed.config.watchdog.triageCooldownMin * MIN,
+				delivery,
+				quietMs,
 				deps: {
 					headlessPid: () => runningHeadlessPid,
 					hasHeadlessRunner: hasHeadlessRunner(agentId),
@@ -1280,6 +1306,18 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 										error: String(error),
 									}) as const,
 							),
+					queueSilent: async (fresh, input, typeAfter) =>
+						await deps.actions
+							.request({
+								kind: "queueOrchestratorNotices",
+								workspaceId,
+								taskId: sessionId,
+								items: [...fresh],
+								text: input,
+								typeAfter,
+								fromWorkspaceId: workspaceId,
+							})
+							.catch((error: unknown) => ({ ok: false, pending: 0, error: String(error) })),
 					startSession: async (prompt) => {
 						const result = await deps.actions
 							.request({

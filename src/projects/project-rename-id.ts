@@ -9,7 +9,8 @@
 // `providers.setupWorkspaceId` (the removed `orchestrator.wake.target` is deleted), the home-agent session ids (`__home_agent__:<id>:<agent>`, in every
 // workspace's sessions.json), every workspace's messages.jsonl (replies look the original up by `toWorkspaceId`),
 // calibration specs' `workspace`, the `[<id>]` tags of its headless orchestrator queue (a run drops lines tagged with
-// another id), and `kanban restart recover` requests. History (left as written): decision logs, the
+// another id), the `workspaceId`/`taskId` of its orchestrator inbox's silent wakes (handed out only to their own
+// workspace), and `kanban restart recover` requests. History (left as written): decision logs, the
 // watchdog's, isolation.jsonl, scoreboard.jsonl, qa-log.md, ATTENTION.md, orchestrator notes, logs/,
 // pipeline-state.json's `importedFrom`, trashed-task patches, and backups. Task worktrees are keyed by task id and
 // per-launch files (hook commands, rules) are rewritten by the next launch, so neither is touched; nor is anything
@@ -79,6 +80,7 @@ const stepSchema = z.discriminatedUnion("kind", [
 			"calibration-specs",
 			"restart-requests",
 			"orchestrator-queue",
+			"orchestrator-inbox",
 			"config",
 			"index",
 		]),
@@ -445,6 +447,42 @@ const rewriteOrchestratorQueue: Rewriter = async ({ homePath, fromId, toId, appl
 	return [{ file: relative(homePath, path), detail: `${changed} queued line(s): [${fromId}] → [${toId}]` }];
 };
 
+/** The orchestrator inbox's entries name their workspace and its sidebar session; the server hands out only its own. */
+const rewriteOrchestratorInbox: Rewriter = async ({ homePath, fromId, toId, apply }) => {
+	const data = currentDataDir(homePath, fromId, toId);
+	const path = getWatchdogWorkspacePaths(data.id, homePath).orchestratorInbox;
+	if (!existsSync(path)) {
+		return [];
+	}
+	let changed = 0;
+	const lines = readFileSync(path, "utf8")
+		.split("\n")
+		.map((line) => {
+			let entry: unknown;
+			try {
+				entry = JSON.parse(line);
+			} catch {
+				return line;
+			}
+			if (!isObject(entry) || entry.workspaceId !== fromId) {
+				return line;
+			}
+			changed += 1;
+			const taskId =
+				typeof entry.taskId === "string" && isHomeAgentSessionIdForWorkspace(entry.taskId, fromId)
+					? renameHomeAgentSessionId(entry.taskId, fromId, toId)
+					: entry.taskId;
+			return JSON.stringify({ ...entry, workspaceId: toId, taskId });
+		});
+	if (changed === 0) {
+		return [];
+	}
+	if (apply) {
+		await writeText(path, lines.join("\n"));
+	}
+	return [{ file: relative(homePath, path), detail: `${changed} queued notice(s): ${fromId} → ${toId}` }];
+};
+
 const rewriteIndex: Rewriter = async ({ homePath, fromId, toId, repoPath, apply }) => {
 	const index = readIndex(homePath);
 	if (!index?.entries[fromId]) {
@@ -470,6 +508,7 @@ const REWRITERS: Record<RewriteTarget, Rewriter> = {
 	"calibration-specs": rewriteCalibrationSpecs,
 	"restart-requests": rewriteRestartRequests,
 	"orchestrator-queue": rewriteOrchestratorQueue,
+	"orchestrator-inbox": rewriteOrchestratorInbox,
 	config: rewriteConfig,
 	// Last: until it runs, the old id is the registered one.
 	index: rewriteIndex,

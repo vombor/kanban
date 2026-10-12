@@ -108,6 +108,14 @@ export type WorkspaceIssuesSettings = z.infer<typeof workspaceIssuesSettingsSche
 
 export const orchestratorWakeModeSchema = z.enum(["headless", "sidebar"]);
 export type OrchestratorWakeMode = z.infer<typeof orchestratorWakeModeSchema>;
+/**
+ * How a wake reaches a live orchestrator sidebar (src/pipeline/watchdog/wake.ts decideWakeDelivery): `type` types it
+ * as a prompt; `silent` queues it for the sidebar agent's next prompt (its prompt hook, src/server/orchestrator-inbox.ts);
+ * `auto` queues it while the user typed in the sidebar within `quietMin` and the items don't need the user, else types
+ * it. Agents without a prompt hook for it are always typed into; unread notices are typed `quietMin` after queueing.
+ */
+export const orchestratorWakeDeliverySchema = z.enum(["type", "silent", "auto"]);
+export type OrchestratorWakeDelivery = z.infer<typeof orchestratorWakeDeliverySchema>;
 
 export const workspacePipelineSettingsSchema = z
 	.object({
@@ -177,12 +185,15 @@ export const workspacePipelineSettingsSchema = z
 						mode: orchestratorWakeModeSchema.nullable().default(null),
 						// This workspace's override of `watchdog.restartWake.enabled` (null keeps it).
 						restart: z.boolean().nullable().default(null),
+						// This workspace's overrides of `orchestrator.wake.delivery` / `.quietMin` (null keeps them).
+						delivery: orchestratorWakeDeliverySchema.nullable().default(null),
+						quietMin: z.number().positive().nullable().default(null),
 					})
 					.strict()
-					.default({ enabled: null, mode: null, restart: null }),
+					.default({ enabled: null, mode: null, restart: null, delivery: null, quietMin: null }),
 			})
 			.strict()
-			.default({ wake: { enabled: null, mode: null, restart: null } }),
+			.default({ wake: { enabled: null, mode: null, restart: null, delivery: null, quietMin: null } }),
 	})
 	.strict()
 	.transform(({ models: _removed, ...settings }) => settings);
@@ -352,6 +363,8 @@ const ORCHESTRATOR_WAKE_DEFAULTS = {
 	cooldownMin: 30,
 	timeoutMin: 45,
 	liveSessionMin: 10,
+	delivery: "auto",
+	quietMin: 30,
 } as const;
 
 // There is no `orchestrator.agent`: the orchestrator is always the agent selected in Kanban settings. Every wake goes
@@ -367,6 +380,10 @@ const orchestratorSectionSchema = z
 				cooldownMin: z.number().nonnegative().default(ORCHESTRATOR_WAKE_DEFAULTS.cooldownMin),
 				timeoutMin: z.number().positive().default(ORCHESTRATOR_WAKE_DEFAULTS.timeoutMin),
 				liveSessionMin: z.number().nonnegative().default(ORCHESTRATOR_WAKE_DEFAULTS.liveSessionMin),
+				delivery: orchestratorWakeDeliverySchema.default(ORCHESTRATOR_WAKE_DEFAULTS.delivery),
+				// `auto`: the user typed in the sidebar this recently = queue silently; also how long a silent notice
+				// waits unread before it is typed.
+				quietMin: z.number().positive().default(ORCHESTRATOR_WAKE_DEFAULTS.quietMin),
 				// Removed: one workspace whose sidebar got every workspace's wakes (legacy kit `wakeTarget`). It broke
 				// project isolation (foo's stalls were typed into kanban-2uge's sidebar, 10/07). Still parsed, so an old
 				// config.json keeps its other wake settings, but dropped here: nothing reads it, migrateLegacyConfigKeys()
@@ -836,6 +853,8 @@ export function resolveWorkspaceWakeSettings(config: PipelineConfig, workspaceId
 		...config.orchestrator.wake,
 		enabled: overrides.enabled ?? config.orchestrator.wake.enabled,
 		mode: overrides.mode ?? config.orchestrator.wake.mode,
+		delivery: overrides.delivery ?? config.orchestrator.wake.delivery,
+		quietMin: overrides.quietMin ?? config.orchestrator.wake.quietMin,
 	};
 }
 

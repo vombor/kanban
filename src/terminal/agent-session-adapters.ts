@@ -28,7 +28,7 @@ import { CLINE_RULE_FILES } from "../prompts/cline-rules";
 import { getClineDataPath } from "../state/kanban-home";
 import { getRuntimeHomePath } from "../state/workspace-state";
 import { getGitStdout } from "../workspace/git-utils";
-import { getClaudeCardSettingsPath } from "../workspace/task-launch-files";
+import { getClaudeCardSettingsPath, getClaudeSidebarSettingsPath } from "../workspace/task-launch-files";
 import {
 	buildClaudePermissionDeny,
 	buildCodexRulesFile,
@@ -62,6 +62,7 @@ import {
 	getOpenCodeConfigPathCandidates,
 	getOpenCodeModelStatePathCandidates,
 } from "./opencode-paths";
+import { agentTakesSilentNotices } from "./orchestrator-agents";
 import { stripAnsi } from "./output-utils";
 import type { SessionTransitionEvent } from "./session-state-machine";
 import { prepareTaskPromptWithImages } from "./task-image-prompt";
@@ -798,6 +799,19 @@ function buildOpenCodePluginContent(
 `;
 }
 
+/**
+ * Claude Code's UserPromptSubmit hook for an orchestrator sidebar: `kanban hooks orchestrator-notices` prints the
+ * workspace's queued Kanban notices as `additionalContext` (added to the prompt, never shown in the input box). It
+ * names its workspace itself (an argument, not the env) and always exits 0, so it never blocks the user's prompt.
+ */
+function buildOrchestratorNoticesHook(workspaceId: string): { type: "command"; command: string; timeout: number } {
+	return {
+		type: "command",
+		command: buildHooksCommand(["orchestrator-notices", "--workspace-id", workspaceId]),
+		timeout: 15,
+	};
+}
+
 function getHookAgentDirectory(agentId: RuntimeAgentId): string {
 	return join(getRuntimeHomePath(), "hooks", agentId);
 }
@@ -880,11 +894,19 @@ const claudeAdapter: AgentSessionAdapter = {
 
 		const hooks = resolveHookContext(input);
 		const guardrails = getSessionGuardrails(input);
+		// The orchestrator sidebar takes its workspace's silent wakes with each prompt (src/server/orchestrator-inbox.ts).
+		const noticesHook =
+			hooks && isHomeAgentSessionId(input.taskId) && agentTakesSilentNotices("claude")
+				? buildOrchestratorNoticesHook(hooks.workspaceId)
+				: null;
 		if (hooks || guardrails) {
-			// A session with guardrails gets its own file: the shared one is every unguarded session's.
+			// A session with guardrails, or a sidebar whose notices hook names its workspace, gets its own file: the
+			// shared one is every other session's.
 			const settingsPath = guardrails
 				? getClaudeCardSettingsPath(input.taskId)
-				: join(getHookAgentDirectory("claude"), "settings.json");
+				: noticesHook
+					? getClaudeSidebarSettingsPath(input.taskId)
+					: join(getHookAgentDirectory("claude"), "settings.json");
 			// Kanban's matcher on every Bash call (agent-guardrails.ts): the deny rules only match the command as written.
 			const guardPolicy: CommandGuardPolicy | null = guardrails && {
 				deniedCommands: listMatcherDeniedCommands(guardrails),
@@ -943,7 +965,10 @@ const claudeAdapter: AgentSessionAdapter = {
 				],
 				UserPromptSubmit: [
 					{
-						hooks: [{ type: "command", command: buildHookCommand("to_in_progress", { source: "claude" }) }],
+						hooks: [
+							{ type: "command", command: buildHookCommand("to_in_progress", { source: "claude" }) },
+							...(noticesHook ? [noticesHook] : []),
+						],
 					},
 				],
 			};

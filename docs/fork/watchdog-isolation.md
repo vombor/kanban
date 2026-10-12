@@ -40,7 +40,8 @@ target won.
   falls back to anything else.
 - **Per-workspace state.** Wake cooldowns (`woken`), retries (`wakeRetry`), the pending Enter (`wakeEnter`), triage
   cooldowns, resumes, pauses and job times live in `data/<ws>/watchdog-state.json`. Wake requests live in
-  `data/<ws>/orchestrator-wake-requests.json`, the headless queue in `data/<ws>/orchestrator-queue.txt`, and the
+  `data/<ws>/orchestrator-wake-requests.json`, the headless queue in `data/<ws>/orchestrator-queue.txt`, silent wakes in
+  `data/<ws>/orchestrator-inbox.jsonl`, and the
   headless lock in `run/orchestrator-<ws>.lock`. The worker's in-memory "just started" guard is keyed by the session
   id or `headless:<ws>`. Each of these names one workspace, so a pending wake in one project can't block or retarget
   another's. The issue import follows the same rules: its job runs per workspace, `applyIssues` names its own
@@ -66,6 +67,39 @@ target won.
   per tick for the machine, and their notices go to the server log (`watchdog: PID pressure, level ...` and the
   process-sweep lines). A workspace's ATTENTION.md carries a PID-pressure line only because its own new work is
   held, and that line never wakes anyone. Prune-done runs per workspace, on that workspace's board only.
+
+## Silent wakes
+
+User request, 2026-10-12: "is there any way to have kanban message you silently so it doesn't interrupt what I'm
+typing". The typed-input hold (issue #35) keeps a wake out of the user's draft, but the wake still lands in the
+sidebar as a new prompt as soon as the user pauses. With `orchestrator.wake.delivery` `auto` (the default) or
+`silent`, a wake into X's live sidebar can wait for the agent's next prompt instead:
+
+- **Who decides.** The watchdog, per wake (`decideWakeDelivery` in `src/pipeline/watchdog/wake.ts`): silent when the
+  sidebar's agent has the prompt hook (`agentTakesSilentNotices`, `src/terminal/orchestrator-agents.ts`: Claude Code
+  only) and, in `auto`, the user typed in that sidebar within `quietMin` (`viewerTypedAt`, the same signal the wake
+  text reads) and no item is urgent. Urgent items are the ones that need the user or an answer now: a card stuck on a
+  prompt or approval, an escalation with cause `outage` or waiting for approval, a card the kit stopped. They are typed
+  at once, as before. A headless run, a sidebar the watchdog starts and an agent without the hook are unchanged.
+- **The inbox.** The watchdog asks the server (`queueOrchestratorNotices`, refused unless `fromWorkspaceId` and the
+  session id name X itself); the server appends one JSON line tagged with X to `data/X/orchestrator-inbox.jsonl`
+  (`src/server/orchestrator-inbox.ts`, the file's only writer). If the queue fails, the wake is typed.
+- **The hook.** X's Claude sidebar launch gets its own `--settings` file with a second `UserPromptSubmit` hook,
+  `kanban hooks orchestrator-notices --workspace-id X`. The workspace comes from the argument, never the env. The hook
+  calls tRPC `orchestratorInbox.take` (a workspace procedure, strict caller: only X's orchestrator or the user; the
+  hook sends the sidebar's session credential), and prints the notices as `hookSpecificOutput.additionalContext`
+  framed "Kanban notices since your last turn: ...", which Claude Code adds to the prompt without showing it in the
+  input box (checked with claude 2.1.296). Any failure prints nothing and exits 0, so the prompt is never blocked;
+  the notices then stay queued.
+- **Nothing waits forever.** Each entry carries `typeAfter` (queued + `quietMin`). A server sweep (every 15 s) takes
+  the entries that are due and types them into X's sidebar as one wake through the typed-input hold (never into a
+  draft). A Kanban-typed prompt fires the hook too, so it carries whatever else is queued. Entries whose sidebar has
+  no process are kept until an hour past `typeAfter`, then dropped with a log line; by then the watchdog has woken
+  again for whatever still holds.
+- **The badge.** The sidebar's Kanban Agent header shows "N Kanban notices queued" from `orchestratorInbox.status`
+  (workspace-scoped, polled every 15 s), never from the project list.
+- **Rename.** `kanban project rename-id` rewrites the entries' `workspaceId` and `taskId`, since the server only
+  hands out lines tagged with the workspace.
 
 ## One worker, not one watchdog process per project
 

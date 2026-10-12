@@ -8,7 +8,8 @@ import type { RuntimeAppRouter } from "../trpc/app-router";
  * The headers of a CLI runtime call: the workspace when given, and, inside an agent session, its credential
  * (src/isolation/session-identity.ts), so the server knows which session calls (it checks the calling process itself). The hook commands
  * (src/commands/hooks.ts) use their own client without them: Cline runs hooks in its shared daemon with another
- * card's env.
+ * card's env. The one exception is the orchestrator sidebar's notices hook, which runs in the sidebar's own Claude
+ * Code process tree and must be that workspace's orchestrator to take its inbox.
  */
 export function buildRuntimeRequestHeaders(
 	workspaceId: string | null,

@@ -67,6 +67,7 @@ import { createGitHubApi } from "../trpc/github-api";
 import { createHooksApi } from "../trpc/hooks-api";
 import { createIsolationApi } from "../trpc/isolation-api";
 import { createKitSettingsApi } from "../trpc/kit-settings-api";
+import { createOrchestratorInboxApi } from "../trpc/orchestrator-inbox-api";
 import { createPipelinePauseApi } from "../trpc/pipeline-pause-api";
 import { createPipelineResubmitApi } from "../trpc/pipeline-resubmit-api";
 import { createPlansApi } from "../trpc/plans-api";
@@ -86,6 +87,7 @@ import { createClineLemonadeContextSyncMonitor } from "./cline-lemonade-context-
 import { createGitHubAppRequestHandler } from "./github-app-route";
 import { handleHttpRequest, handleSocketUpgrade } from "./middleware";
 import { createModelListsRequestHandler } from "./model-lists-route";
+import { createOrchestratorInbox } from "./orchestrator-inbox";
 import { createOrphanProcessSweeper } from "./orphan-process-sweeper";
 import { createPipelineActionRunner } from "./pipeline-actions";
 import { createProcessReaper, type PreparedWorktreeReap } from "./process-reaper";
@@ -351,6 +353,14 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		log: deps.warn,
 	});
 	typedInputHold.start();
+	// Silent watchdog wakes for the orchestrator sidebar: taken by its prompt hook, typed once due (orchestrator-inbox.ts).
+	const orchestratorInbox = createOrchestratorInbox({
+		getTerminal: (workspaceId) => deps.workspaceRegistry.getTerminalManagerForWorkspace(workspaceId) ?? null,
+		hold: typedInputHold,
+		listWorkspaceIds: () => deps.workspaceRegistry.listManagedWorkspaces().map((workspace) => workspace.workspaceId),
+		log: deps.warn,
+	});
+	orchestratorInbox.start();
 	const runtimeApi = createRuntimeApi({
 		typedInputHold,
 		getActiveWorkspaceId: deps.workspaceRegistry.getActiveWorkspaceId,
@@ -408,6 +418,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 	});
 	const plansApi = createPlansApi({ log: isolation.log });
 	const kitSettingsApi = createKitSettingsApi({ log: isolation.log });
+	const orchestratorInboxApi = createOrchestratorInboxApi({ inbox: orchestratorInbox, log: deps.warn });
 	const providerSetupApi = createProviderSetupApi({ log: isolation.log });
 	const pipelineResubmitApi = createPipelineResubmitApi({
 		log: isolation.log,
@@ -479,6 +490,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		startTaskSession: async (scope, input) => await runtimeApi.startTaskSession(scope, input),
 		credentials: isolation,
 		inputHold: typedInputHold,
+		orchestratorInbox,
 		runProcessSweep: async () => {
 			await orphanProcessSweeper.sweep();
 			return await orphanProcessSweeper.getStatus();
@@ -562,6 +574,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			isolationApi,
 			plansApi,
 			kitSettingsApi,
+			orchestratorInboxApi,
 			providerSetupApi,
 			pipelineResubmitApi,
 			providerCapacityApi,
@@ -884,6 +897,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		close: async () => {
 			messageNotices.close();
 			typedInputHold.close();
+			orchestratorInbox.close();
 			clearInterval(credentialSweep);
 			orphanProcessSweeper.close();
 			clineTurnMonitor.close();

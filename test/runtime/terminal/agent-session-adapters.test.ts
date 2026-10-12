@@ -146,6 +146,45 @@ describe("prepareAgentLaunch hook strategies", () => {
 		);
 	});
 
+	it("gives the Claude orchestrator sidebar its own settings with the notices prompt hook naming its workspace", async () => {
+		setupTempHome();
+		setKanbanProcessContext();
+		const readUserPromptSubmit = (args: string[]) => {
+			const settingsPath = args[args.indexOf("--settings") + 1] ?? "";
+			const settings = JSON.parse(readFileSync(settingsPath, "utf8")) as {
+				hooks: Record<string, Array<{ hooks: Array<{ command: string; timeout?: number }> }>>;
+			};
+			return { settingsPath, hooks: settings.hooks.UserPromptSubmit?.[0]?.hooks ?? [] };
+		};
+		const sidebar = await prepareAgentLaunch({
+			taskId: "__home_agent__:workspace-1:claude",
+			agentId: "claude",
+			binary: "claude",
+			args: [],
+			cwd: "/tmp",
+			prompt: "",
+			workspaceId: "workspace-1",
+		});
+		const card = await prepareAgentLaunch({
+			taskId: "task-1",
+			agentId: "claude",
+			binary: "claude",
+			args: [],
+			cwd: "/tmp",
+			prompt: "",
+			workspaceId: "workspace-1",
+		});
+		const sidebarHooks = readUserPromptSubmit(sidebar.args);
+		const cardHooks = readUserPromptSubmit(card.args);
+		expect(sidebarHooks.settingsPath).not.toBe(cardHooks.settingsPath);
+		expect(sidebarHooks.hooks.map((hook) => hook.command)).toEqual([
+			expect.stringContaining("to_in_progress"),
+			expect.stringContaining("hooks' 'orchestrator-notices' '--workspace-id' 'workspace-1'"),
+		]);
+		expect(sidebarHooks.hooks[1]?.timeout).toBe(15);
+		expect(cardHooks.hooks.map((hook) => hook.command).join(" ")).not.toContain("orchestrator-notices");
+	});
+
 	it("appends Kanban sidebar instructions for home Codex sessions", async () => {
 		setupTempHome();
 		setKanbanProcessContext();

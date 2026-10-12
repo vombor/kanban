@@ -21,6 +21,8 @@ import {
 import { enrichDroidReviewMetadata } from "./hook-events/droid-hook-events";
 import { asRecord, normalizeWhitespace, readNestedString, readStringField } from "./hook-events/hook-utils";
 import { normalizeKiroHookMetadata } from "./hook-events/kiro-hook-events";
+import { runOrchestratorNoticesHook } from "./hook-events/orchestrator-notices-hook";
+import { createRuntimeTrpcClient } from "./runtime-trpc-client";
 
 export {
 	createCodexWatcherState,
@@ -889,6 +891,23 @@ export function registerHooksCommand(program: Command): void {
 		.requiredOption("--policy-base64 <base64>", "Base64-encoded JSON guard policy.")
 		.action(async (options: { policyBase64: string }) => {
 			await runClaudeGuardSubcommand(options.policyBase64);
+		});
+
+	hooks
+		.command("orchestrator-notices")
+		.description(
+			"Orchestrator sidebar prompt hook: prints the workspace's queued Kanban notices as Claude Code additionalContext.",
+		)
+		.requiredOption("--workspace-id <id>", "The sidebar's workspace (the hook never reads it from the env).")
+		.action(async (options: { workspaceId: string }) => {
+			await runOrchestratorNoticesHook({
+				workspaceId: options.workspaceId,
+				payload: await readStdinText().catch(() => ""),
+				// Unlike the other hooks this call carries the session credential: it runs in the sidebar's own process
+				// tree with its env, and the server gives the inbox only to that workspace's orchestrator (or the user).
+				take: async (workspaceId) => await createRuntimeTrpcClient(workspaceId).orchestratorInbox.take.mutate(),
+				write: (text) => process.stdout.write(text),
+			});
 		});
 
 	hooks

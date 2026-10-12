@@ -616,6 +616,8 @@ export interface WatchdogWorkspacePaths {
 	decisions: string;
 	orchestratorPlan: string;
 	orchestratorQueue: string;
+	/** Wake items queued silently for the sidebar's next prompt (src/state/orchestrator-inbox.ts); the server's only. */
+	orchestratorInbox: string;
 	orchestratorActions: string;
 	/** `kanban orchestrator wake` requests (immediate and `--when-*`) the watchdog picks up. */
 	wakeRequests: string;
@@ -633,6 +635,7 @@ export function getWatchdogWorkspacePaths(workspaceId: string, homePath = getKan
 		decisions: join(dataDir, "watchdog-decisions.jsonl"),
 		orchestratorPlan: join(dataDir, "orchestrator-plan.md"),
 		orchestratorQueue: join(dataDir, "orchestrator-queue.txt"),
+		orchestratorInbox: join(dataDir, "orchestrator-inbox.jsonl"),
 		orchestratorActions: join(dataDir, "orchestrator-actions.md"),
 		wakeRequests: join(dataDir, "orchestrator-wake-requests.json"),
 		runoffs: join(dataDir, "runoffs.json"),

@@ -148,6 +148,10 @@ export function readNewestHandledVerdictAt(entry: PipelineCardState | undefined)
 export interface EscalationInfo {
 	at: string;
 	reason: string;
+	/** `qaflow.escalated.cause` (rework.ts EscalationCause), or null. */
+	cause?: string | null;
+	/** The escalation waits for an approval (`requireApproval`). */
+	requireApproval?: boolean;
 }
 
 export function readEscalation(entry: PipelineCardState | undefined): EscalationInfo | null {
@@ -159,6 +163,8 @@ export function readEscalation(entry: PipelineCardState | undefined): Escalation
 	return {
 		at: typeof record.at === "string" ? record.at : "?",
 		reason: typeof record.reason === "string" ? record.reason : "escalated",
+		cause: typeof record.cause === "string" ? record.cause : null,
+		requireApproval: record.requireApproval === true,
 	};
 }
 

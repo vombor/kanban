@@ -177,6 +177,8 @@ describe("pipeline config", () => {
 			cooldownMin: 5,
 			timeoutMin: 45,
 			liveSessionMin: 10,
+			delivery: "auto",
+			quietMin: 30,
 		});
 		expect(
 			migrateLegacyConfigKeys({ a: 1, orchestrator: { wake: { mode: "sidebar", target: "kanban-2uge" } } }),

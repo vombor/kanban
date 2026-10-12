@@ -86,6 +86,7 @@ export function createWatchdogHarness(options: WatchdogHarnessOptions = {}) {
 				}
 				const fallback: { [Kind in WatchdogActionRequest["kind"]]: WatchdogActionResults[Kind] } = {
 					deliverInput: deliveryResult("delivered"),
+					queueOrchestratorNotices: { ok: true, pending: 1 },
 					interrupt: { ok: true },
 					startOrchestratorSession: { ok: true, taskId: "x" },
 					pruneDone: { ok: true, summary: "prune-done: nothing" },

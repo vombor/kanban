@@ -13,9 +13,12 @@ vi.mock("@/resize/layout-customizations", () => ({
 	useLayoutResetEffect: () => {},
 }));
 
-// Only the add-project dialog talks to the runtime here.
+// The add-project dialog and the queued-notices badge talk to the runtime here.
 vi.mock("@/runtime/trpc-client", () => ({
-	getRuntimeTrpcClient: () => ({
+	getRuntimeTrpcClient: (workspaceId: string | null) => ({
+		orchestratorInbox: {
+			status: { query: async () => ({ pending: workspaceId === "alpha" ? 2 : 0, oldestAt: null }) },
+		},
 		projects: {
 			roots: { query: async () => ({ roots: ["/projects"] }) },
 			listDirectoryContents: {
@@ -354,6 +357,18 @@ describe("ProjectNavigationPanel width persistence", () => {
 			header?.click();
 		});
 		expect(container.querySelector('[data-testid="agent-session"]')?.textContent).toBe("agent session of alpha");
+	});
+
+	it("shows how many Kanban notices wait silently for the selected project's agent", async () => {
+		act(() => {
+			root.render(<SwitchingPanel />);
+		});
+		await act(async () => {
+			await Promise.resolve();
+		});
+		const badge = container.querySelector('[data-testid="kanban-agent-queued-notices"]');
+		expect(badge?.textContent).toBe("2 Kanban notices queued");
+		expect(badge?.getAttribute("role")).toBe("status");
 	});
 
 	it("asks for a project in the agent panel when there is no agent session", () => {

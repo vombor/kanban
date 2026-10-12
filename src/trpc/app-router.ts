@@ -180,6 +180,11 @@ import {
 	type RuntimeKitSettingsApi,
 } from "./kit-settings-api";
 import {
+	orchestratorInboxStatusResponseSchema,
+	orchestratorInboxTakeResponseSchema,
+	type RuntimeOrchestratorInboxApi,
+} from "./orchestrator-inbox-api";
+import {
 	pipelinePauseRequestSchema,
 	pipelinePauseResponseSchema,
 	type RuntimePipelinePauseApi,
@@ -244,6 +249,8 @@ export interface RuntimeTrpcContext {
 	plansApi?: RuntimePlansApi;
 	/** A project's settings on its kit (src/trpc/kit-settings-api.ts); absent = not available. */
 	kitSettingsApi?: RuntimeKitSettingsApi;
+	/** The orchestrator sidebar's silent wakes (src/trpc/orchestrator-inbox-api.ts); absent = not available. */
+	orchestratorInboxApi?: RuntimeOrchestratorInboxApi;
 	/** Who may run `kanban setup-provider` (src/trpc/provider-setup-api.ts); absent = nobody but asked here. */
 	providerSetupApi?: RuntimeProviderSetupApi;
 	/** A project's shortcuts from the CLI, and a run's port (src/trpc/shortcuts-api.ts); absent = not available. */
@@ -890,6 +897,23 @@ export const runtimeAppRouter = t.router({
 					request: input,
 				});
 			}),
+	}),
+	orchestratorInbox: t.router({
+		take: workspaceProcedure.output(orchestratorInboxTakeResponseSchema).mutation(async ({ ctx }) => {
+			if (!ctx.orchestratorInboxApi) {
+				return { ok: false, notices: null, count: 0, error: "The orchestrator inbox is not available here." };
+			}
+			// In every isolation mode: the hook sends the sidebar's credential, and the process tree is checked too.
+			return await ctx.orchestratorInboxApi.take({
+				caller: await readStrictCaller(ctx),
+				workspaceId: ctx.workspaceScope.workspaceId,
+			});
+		}),
+		status: workspaceProcedure.output(orchestratorInboxStatusResponseSchema).query(async ({ ctx }) => {
+			return ctx.orchestratorInboxApi
+				? await ctx.orchestratorInboxApi.status(ctx.workspaceScope.workspaceId)
+				: { pending: 0, oldestAt: null };
+		}),
 	}),
 	// A project's kit and its settings on it (models, project facts): the user's and that project's orchestrator's.
 	kit: t.router({

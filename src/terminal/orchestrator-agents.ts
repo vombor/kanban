@@ -12,7 +12,10 @@
 //   and how big its current session is (Cline's session files), for the `/clear` thresholds;
 // - for restart recovery and `kanban task resume`: whether a resume (the adapter's `resumeFromTrash`) continues the
 //   agent's last conversation in the worktree with a launch prompt, so the agent gets a short resume note instead of
-//   its whole card prompt again.
+//   its whole card prompt again;
+// - for silent wakes (src/server/orchestrator-inbox.ts): whether the agent's sidebar launch gets a prompt hook that
+//   hands the workspace's queued Kanban notices to the model with the user's next prompt, so a wake can wait there
+//   instead of being typed into the sidebar.
 import { open, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -62,6 +65,12 @@ interface OrchestratorAgentProfile {
 	/** The size of the agent's current session in this worktree, or null when unknown. */
 	sessionSize?: (worktreePath: string, options: AgentSessionSizeOptions) => Promise<ClineSessionSize | null>;
 	headless?: (prompt: string) => HeadlessOrchestratorCommand;
+	/**
+	 * The sidebar launch gets a prompt hook that takes the workspace's orchestrator inbox (`kanban hooks
+	 * orchestrator-notices`) and adds it to the user's prompt without showing it in the input box. Verified against
+	 * the installed CLI before setting it; the adapter (agent-session-adapters.ts) writes the hook where this is set.
+	 */
+	takesSilentNotices?: boolean;
 	/** The agent fires a hook when it takes its prompt (a start with no hook is a stuck start). */
 	hooksOnPromptSubmit?: boolean;
 	trusted?: (directory: string) => Promise<boolean | null>;
@@ -125,6 +134,9 @@ const PROFILES: Partial<Record<RuntimeAgentId, OrchestratorAgentProfile>> = {
 		// Ported from kit main a2b4695 lib/resume.mjs (resumeClaude): `claude --continue <prompt>` continues the most
 		// recent conversation in the current directory (claude --help, 2.1.292).
 		continuesConversationOnResume: true,
+		// UserPromptSubmit's JSON `hookSpecificOutput.additionalContext` reaches the model with the prompt, and a hook
+		// that fails doesn't block it (checked with claude 2.1.296, 2026-10-12).
+		takesSilentNotices: true,
 	},
 	// Ported from archive/devteam-kit:services/kanban-autoland.mjs@6da71597 (rework: `/clear` resets the Cline
 	// conversation, sessionSize from Cline's session files).
@@ -211,4 +223,9 @@ export async function readAgentSessionSize(
 /** Whether a resume (`resumeFromTrash`) continues the agent's last conversation in the worktree with a launch prompt. */
 export function agentContinuesConversationOnResume(agentId: RuntimeAgentId): boolean {
 	return PROFILES[agentId]?.continuesConversationOnResume === true;
+}
+
+/** Whether the agent's orchestrator sidebar takes queued Kanban notices with the user's next prompt (silent wakes). */
+export function agentTakesSilentNotices(agentId: RuntimeAgentId): boolean {
+	return PROFILES[agentId]?.takesSilentNotices === true;
 }

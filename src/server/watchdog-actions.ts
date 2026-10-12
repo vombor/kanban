@@ -4,6 +4,8 @@
 //     behind the typed-input hold: a wake into the orchestrator sidebar and the pipeline's input into a card (recovery,
 //     rework, the QA gate) are held while the user is typing in that terminal and typed once they are done
 //     (src/server/typed-input-hold.ts, issue #35);
+//   - a silent wake goes into the workspace's orchestrator inbox instead (src/server/orchestrator-inbox.ts), for the
+//     sidebar agent's next prompt;
 //   - the orchestrator sidebar session is started like the browser starts it (runtime.startTaskSession with the home
 //     agent session id), so a browser that opens later attaches to the same session instead of starting a second;
 //     after a restart the watchdog may ask it to continue the sidebar's earlier conversation (resumeFromTrash);
@@ -28,6 +30,7 @@ import type { IsolationService } from "../isolation/isolation-service";
 import type { WatchdogActionRequest, WatchdogActionResults } from "../pipeline/watchdog/actions";
 import { pruneDoneCards } from "../pipeline/watchdog/prune-done";
 import { deliverTaskInput, type TaskInputTerminal } from "../terminal/deliver-task-input";
+import type { OrchestratorInbox } from "./orchestrator-inbox";
 import type { TypedInputHold } from "./typed-input-hold";
 
 const ESC = "\u001b";
@@ -49,6 +52,8 @@ export interface WatchdogActionDependencies {
 	pruneDone?: typeof pruneDoneCards;
 	/** Holds typed input while the user types in that terminal (absent: deliverTaskInput refuses it, `user_typing`). */
 	inputHold?: Pick<TypedInputHold, "deliver">;
+	/** Silent wakes for the sidebar's next prompt (absent: refused, so the watchdog types the wake instead). */
+	orchestratorInbox?: Pick<OrchestratorInbox, "queue">;
 	/** The isolation service's credentials (absent: headless runs get none). */
 	credentials?: Pick<IsolationService, "issueCredential" | "bindCredential">;
 }
@@ -110,6 +115,27 @@ export function createWatchdogActionHandler(
 				}
 				const terminal = await deps.getTerminal(scopeOf(request.workspaceId));
 				return await deliverTaskInput(terminal, request.taskId, request.text);
+			}
+			case "queueOrchestratorNotices": {
+				const refused =
+					refuseCrossWorkspace(request.fromWorkspaceId, request.workspaceId) ??
+					(isHomeAgentSessionIdForWorkspace(request.taskId, request.workspaceId)
+						? null
+						: `${request.taskId} is not ${request.workspaceId}'s orchestrator session.`);
+				if (refused) {
+					return { ok: false, pending: 0, error: refused };
+				}
+				if (!deps.orchestratorInbox) {
+					return { ok: false, pending: 0, error: "no orchestrator inbox" };
+				}
+				scopeOf(request.workspaceId); // throws for a workspace that isn't registered
+				return await deps.orchestratorInbox.queue({
+					workspaceId: request.workspaceId,
+					taskId: request.taskId,
+					items: request.items,
+					text: request.text,
+					typeAfter: request.typeAfter,
+				});
 			}
 			case "interrupt": {
 				const terminal = await deps.getTerminal(scopeOf(request.workspaceId));

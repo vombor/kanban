@@ -20,6 +20,7 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useIsMobile } from "@/hooks/use-is-mobile";
+import { useOrchestratorNoticeCount } from "@/hooks/use-orchestrator-notice-count";
 import type { RuntimeProjectSummary } from "@/runtime/types";
 import { useUnmount, useWindowEvent } from "@/utils/react-use";
 
@@ -63,6 +64,7 @@ export function ProjectNavigationPanel({
 }): React.ReactElement {
 	const sortedProjects = [...projects].sort((a, b) => a.path.localeCompare(b.path));
 	const currentProject = sortedProjects.find((project) => project.id === currentProjectId) ?? null;
+	const queuedNotices = useOrchestratorNoticeCount(currentProjectId);
 
 	const [pendingProjectRemoval, setPendingProjectRemoval] = useState<RuntimeProjectSummary | null>(null);
 	const isProjectRemovalPending = pendingProjectRemoval !== null && removingProjectId === pendingProjectRemoval.id;
@@ -326,6 +328,7 @@ export function ProjectNavigationPanel({
 				agentLabel={agentLabel}
 				wait={currentProject?.orchestratorWait ?? null}
 				waitFlashing={currentProject ? (flashingProjectIds?.has(currentProject.id) ?? false) : false}
+				queuedNotices={queuedNotices}
 			/>
 			<div className="flex flex-1 min-h-0 overflow-hidden bg-surface-1 p-1.5">
 				{agentSectionContent ?? (

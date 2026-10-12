@@ -109,7 +109,17 @@ function seedHome(): void {
 		getWatchdogWorkspacePaths("kanban-2uge", home).orchestratorQueue,
 		"2026-10-07T11:00:00.000Z [kanban-2uge] a0001: queued\n2026-10-07T11:00:01.000Z [foo] 6f756: foreign\n",
 	);
+	writeText(getWatchdogWorkspacePaths("kanban-2uge", home).orchestratorInbox, `${JSON.stringify(INBOX_ENTRY)}\n`);
 }
+
+const INBOX_ENTRY = {
+	workspaceId: "kanban-2uge",
+	taskId: "__home_agent__:kanban-2uge:claude",
+	at: "2026-10-07T11:00:00.000Z",
+	typeAfter: "2026-10-07T11:30:00.000Z",
+	items: ["- a0001: stalled"],
+	text: "a0001: stalled",
+};
 
 function options(overrides: Partial<ProjectRenameIdOptions> = {}): ProjectRenameIdOptions {
 	return { fromId: "kanban-2uge", toId: "kanban", now: () => NOW, probeRuntimeServer: async () => null, ...overrides };
@@ -143,6 +153,11 @@ function expectRenamed(): void {
 	expect(readFileSync(getWatchdogWorkspacePaths("kanban", home).orchestratorQueue, "utf8")).toBe(
 		"2026-10-07T11:00:00.000Z [kanban] a0001: queued\n2026-10-07T11:00:01.000Z [foo] 6f756: foreign\n",
 	);
+	expect(JSON.parse(readFileSync(getWatchdogWorkspacePaths("kanban", home).orchestratorInbox, "utf8"))).toEqual({
+		...INBOX_ENTRY,
+		workspaceId: "kanban",
+		taskId: "__home_agent__:kanban:claude",
+	});
 	expect(existsSync(getKanbanWorkspaceStatePath("kanban-2uge", home))).toBe(false);
 	expect(existsSync(getKanbanWorkspaceDataPath("kanban-2uge", home))).toBe(false);
 	expect(existsSync(getBoardBackupsPath("kanban-2uge", home))).toBe(false);
@@ -238,6 +253,7 @@ describe("kanban project rename-id", () => {
 				"data/kanban-2uge/calibration/c1/spec.json",
 				"run/restart-recover.now",
 				"data/kanban-2uge/orchestrator-queue.txt",
+				"data/kanban-2uge/orchestrator-inbox.jsonl",
 				"config.json",
 				"workspaces/index.json",
 			]);

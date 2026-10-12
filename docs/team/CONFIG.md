@@ -182,10 +182,13 @@ The watchdog runs in the pipeline worker. With `watchdog.mode` not `off`, the wo
 | `orchestrator.wake.mode` | `headless` | `headless` (a `claude -p` / `codex exec` run; falls back to `sidebar` when the selected agent has no headless runner) or `sidebar` |
 | `orchestrator.wake.target` | removed | ignored; `kanban doctor --fix` deletes it. Each workspace wakes only its own orchestrator ([watchdog-isolation.md](../fork/watchdog-isolation.md)) |
 | `workspaces.<id>.orchestrator.wake.restart` | null | this workspace's override of `watchdog.restartWake.enabled` |
+| `workspaces.<id>.orchestrator.wake.delivery`, `.quietMin` | null | this workspace's override of `orchestrator.wake.delivery` / `.quietMin` |
 | `workspaces.<id>.orchestrator.wake.enabled`, `.mode` | null | this workspace's override of `orchestrator.wake.enabled` / `.mode`. With wakes off its items stay in its own ATTENTION.md (stalls and pending `kanban orchestrator wake` requests listed every tick) |
 | `orchestrator.wake.cooldownMin` | 30 | per item |
 | `orchestrator.wake.timeoutMin` | 45 | a headless run |
 | `orchestrator.wake.liveSessionMin` | 10 | an interactive session active this recently holds a headless run |
+| `orchestrator.wake.delivery` | `auto` | how a wake reaches a live orchestrator sidebar: `type` types it as a prompt (held while the user has a draft, issue #35); `silent` queues it in `data/<ws>/orchestrator-inbox.jsonl` and the sidebar agent gets it with the user's next prompt through its prompt hook, without anything in the input box; `auto` queues it while the user typed in the sidebar within `quietMin`, and types it when the user is away longer or an item is urgent (a card waiting on a prompt or approval, an outage or approval-waiting escalation, a card the kit stopped). Agents without the hook (only Claude Code has it) are always typed into; a headless run and a sidebar the watchdog starts are unchanged ([watchdog-isolation.md](../fork/watchdog-isolation.md#silent-wakes)) |
+| `orchestrator.wake.quietMin` | 30 | `auto`: the user typed in the sidebar this recently = queue silently. Also how long a silent notice waits unread before it is typed into the sidebar, so nothing waits forever |
 
 There is no `orchestrator.agent`: the orchestrator is always the agent selected in Kanban settings, in the sidebar
 session `__home_agent__:<ws>:<selected agent>` of the workspace the items are about, never another workspace's.
