@@ -109,7 +109,10 @@ describe("describeUserInputWait", () => {
 
 	it("reads a turn that ended on a question as a question; any other turn end waits for nothing", () => {
 		const stop = (finalMessage: string) =>
-			session({ latestHookActivity: activity({ hookEventName: "Stop", finalMessage }) });
+			session({
+				latestHookActivity: activity({ hookEventName: "Stop", finalMessage }),
+				lastTurnEnd: { at: HOOK_AT, finalMessage },
+			});
 		expect(describeUserInputWait(stop("I moved the cards. Should I also land 4a1f2 now?"))).toEqual({
 			kind: "question",
 			since: HOOK_AT,
@@ -118,6 +121,20 @@ describe("describeUserInputWait", () => {
 		expect(describeUserInputWait(stop("Do you want **option A** or **option B?**"))?.kind).toBe("question");
 		expect(describeUserInputWait(stop("Done: all three cards landed."))).toBe(null);
 		expect(describeUserInputWait(stop("Is this right? I checked it and it is."))).toBe(null);
+		// Claude Code's idle Notification right after Stop is the newest hook: the turn end still holds.
+		expect(
+			describeUserInputWait(
+				session({
+					lastHookAt: HOOK_AT + 3,
+					latestHookActivity: activity({
+						hookEventName: "Notification",
+						notificationType: "idle_prompt",
+						finalMessage: "Ready to land?",
+					}),
+					lastTurnEnd: { at: HOOK_AT, finalMessage: "Ready to land?" },
+				}),
+			),
+		).toEqual({ kind: "question", since: HOOK_AT + 3, text: "Ready to land?" });
 		// The same final message with a later tool hook (the merge kept it) is not a turn end.
 		expect(
 			describeUserInputWait(

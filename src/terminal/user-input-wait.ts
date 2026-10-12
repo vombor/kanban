@@ -44,7 +44,7 @@ export type UserInputWaitSession = Pick<RuntimeTaskSessionSummary, "state"> &
 	Partial<
 		Pick<
 			RuntimeTaskSessionSummary,
-			"reviewReason" | "lastHookAt" | "stateChangedAt" | "updatedAt" | "latestHookActivity"
+			"reviewReason" | "lastHookAt" | "stateChangedAt" | "updatedAt" | "latestHookActivity" | "lastTurnEnd"
 		>
 	>;
 

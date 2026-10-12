@@ -50,7 +50,22 @@ function turnEnd(finalMessage: string, at: number, hookEventName = "Stop"): Runt
 			notificationType: null,
 			source: null,
 		},
+		lastTurnEnd: { at, finalMessage },
 	});
+}
+
+/** Claude Code's idle Notification after the Stop: the newest hook, with the Stop's turn end kept. */
+function idleNotification(after: RuntimeTaskSessionSummary, at: number): RuntimeTaskSessionSummary {
+	return {
+		...after,
+		updatedAt: at,
+		lastHookAt: at,
+		latestHookActivity: after.latestHookActivity && {
+			...after.latestHookActivity,
+			hookEventName: "Notification",
+			notificationType: "idle_prompt",
+		},
+	};
 }
 
 describe("useReplySpeech", () => {
@@ -136,16 +151,55 @@ describe("useReplySpeech", () => {
 		expect(synthesis.spoken).toHaveLength(0);
 	});
 
-	it("doesn't read a leftover final message under a later hook, or a Review that doesn't hold", () => {
+	it("reads Claude Code's turn end under the idle Notification that follows its Stop", () => {
 		window.localStorage.setItem(getSpeakRepliesStorageKey("task-1"), "true");
 		render(createSummary());
-		render(turnEnd("Leftover.", 10, "PreToolUse"));
+		const stop = turnEnd("Ready to land.", 10);
+		render(stop);
+		act(() => vi.advanceTimersByTime(REPLY_SETTLE_MS / 3));
+		render(idleNotification(stop, 12));
 		act(() => vi.advanceTimersByTime(REPLY_SETTLE_MS));
-		render(turnEnd("Brief flip.", 20));
+		render(idleNotification(stop, 14));
+		act(() => vi.advanceTimersByTime(REPLY_SETTLE_MS * 2));
+		expect(synthesis.spoken.map((utterance) => utterance.text)).toEqual(["Ready to land."]);
+	});
+
+	it("reads the same text again when a later turn ends with it", () => {
+		window.localStorage.setItem(getSpeakRepliesStorageKey("task-1"), "true");
+		render(createSummary());
+		render(turnEnd("Done.", 10));
+		act(() => vi.advanceTimersByTime(REPLY_SETTLE_MS));
+		render(createSummary({ updatedAt: 11 }));
+		render(turnEnd("Done.", 20));
+		act(() => vi.advanceTimersByTime(REPLY_SETTLE_MS));
+		expect(synthesis.spoken.map((utterance) => utterance.text)).toEqual(["Done.", "Done."]);
+	});
+
+	it("doesn't read a final message without a turn end, or a Review that doesn't hold", () => {
+		window.localStorage.setItem(getSpeakRepliesStorageKey("task-1"), "true");
+		render(createSummary());
+		render({ ...turnEnd("Leftover.", 10, "PermissionRequest"), lastTurnEnd: null });
+		act(() => vi.advanceTimersByTime(REPLY_SETTLE_MS));
+		render(turnEnd("Brief flip.", 20, "agentStop"));
 		act(() => vi.advanceTimersByTime(REPLY_SETTLE_MS / 2));
 		render(createSummary({ updatedAt: 21 }));
 		act(() => vi.advanceTimersByTime(REPLY_SETTLE_MS));
 		expect(synthesis.spoken).toHaveLength(0);
+	});
+
+	it("primes speech with a silent utterance from the click that turns it on, and resumes before each reply", () => {
+		const resume = vi.spyOn(synthesis, "resume");
+		render(createSummary());
+		act(() => controls().setEnabled(true));
+		expect(synthesis.spoken.map((utterance) => [utterance.text, utterance.volume])).toEqual([["", 0]]);
+		act(() => controls().setEnabled(false));
+		expect(synthesis.spoken).toHaveLength(1);
+
+		act(() => controls().setEnabled(true));
+		render(turnEnd("Loud.", 10));
+		act(() => vi.advanceTimersByTime(REPLY_SETTLE_MS));
+		expect(synthesis.spoken.map((utterance) => utterance.text)).toEqual(["", "", "Loud."]);
+		expect(resume).toHaveBeenCalledTimes(1);
 	});
 
 	it("stays quiet while off, and stop() cancels what is being read", () => {
@@ -158,7 +212,7 @@ describe("useReplySpeech", () => {
 		act(() => controls().setEnabled(true));
 		render(turnEnd("Loud.", 20));
 		act(() => vi.advanceTimersByTime(REPLY_SETTLE_MS));
-		expect(synthesis.spoken).toHaveLength(1);
+		expect(synthesis.spoken.map((utterance) => utterance.text)).toEqual(["", "Loud."]);
 		act(() => controls().stop());
 		expect(cancel).toHaveBeenCalled();
 		expect(controls().speaking).toBe(false);

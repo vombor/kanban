@@ -9,6 +9,7 @@ import type {
 	RuntimeTaskSessionState,
 	RuntimeTaskSessionSummary,
 	RuntimeTaskTurnCheckpoint,
+	RuntimeTaskTurnEnd,
 	RuntimeTaskTypedInput,
 } from "../core/api-contract";
 import { isHomeAgentSessionId } from "../core/home-agent-session";
@@ -157,6 +158,7 @@ function createDefaultSummary(taskId: string): RuntimeTaskSessionSummary {
 		exitCode: null,
 		lastHookAt: null,
 		latestHookActivity: null,
+		lastTurnEnd: null,
 		warningMessage: null,
 		modelId: null,
 		reasoningEffort: null,
@@ -171,6 +173,32 @@ function cloneSummary(summary: RuntimeTaskSessionSummary): RuntimeTaskSessionSum
 	};
 }
 
+export interface HookActivityOptions {
+	/** The hook moves the session to Review (hook ingest's `to_review`): its final message is the turn's. */
+	turnEnd?: boolean;
+}
+
+/**
+ * The summary's turn end after a hook: a `to_review` hook with a final message, while the session is in Review through
+ * a hook, records it; any other hook (Claude Code's idle Notification after Stop) keeps it. A second turn-end hook in
+ * the same Review (Codex reports final_answer, then task_complete) keeps the first one's `at`, so it is one turn end.
+ */
+function resolveLastTurnEnd(
+	summary: RuntimeTaskSessionSummary,
+	activity: Partial<RuntimeTaskHookActivity>,
+	options: HookActivityOptions,
+): RuntimeTaskTurnEnd | null {
+	const current = summary.lastTurnEnd ?? null;
+	const finalMessage = activity.finalMessage?.trim() ?? "";
+	if (!options.turnEnd || !finalMessage || summary.state !== "awaiting_review" || summary.reviewReason !== "hook") {
+		return current;
+	}
+	if (current?.finalMessage === finalMessage) {
+		return current;
+	}
+	return { at: current?.at ?? now(), finalMessage };
+}
+
 function updateSummary(entry: SessionEntry, patch: Partial<RuntimeTaskSessionSummary>): RuntimeTaskSessionSummary {
 	const updatedAt = now();
 	const stateChanged = patch.state !== undefined && patch.state !== entry.summary.state;
@@ -179,6 +207,8 @@ function updateSummary(entry: SessionEntry, patch: Partial<RuntimeTaskSessionSum
 	}
 	entry.summary = {
 		...entry.summary,
+		// A turn end holds only for the Review it was reported in.
+		...(stateChanged ? { lastTurnEnd: null } : {}),
 		...patch,
 		...(stateChanged ? { stateChangedAt: updatedAt } : {}),
 		updatedAt,
@@ -695,6 +725,7 @@ export class TerminalSessionManager implements TerminalSessionService {
 				exitCode: null,
 				lastHookAt: null,
 				latestHookActivity: null,
+				lastTurnEnd: null,
 				latestTurnCheckpoint: null,
 				previousTurnCheckpoint: null,
 			});
@@ -755,6 +786,7 @@ export class TerminalSessionManager implements TerminalSessionService {
 			exitCode: null,
 			lastHookAt: null,
 			latestHookActivity: null,
+			lastTurnEnd: null,
 			warningMessage: launch.sessionWarning ?? null,
 			modelId: request.agentSettings?.modelId ?? null,
 			reasoningEffort: request.agentSettings?.reasoningEffort ?? null,
@@ -872,6 +904,7 @@ export class TerminalSessionManager implements TerminalSessionService {
 				exitCode: null,
 				lastHookAt: null,
 				latestHookActivity: null,
+				lastTurnEnd: null,
 				latestTurnCheckpoint: null,
 				previousTurnCheckpoint: null,
 			});
@@ -914,6 +947,7 @@ export class TerminalSessionManager implements TerminalSessionService {
 			exitCode: null,
 			lastHookAt: null,
 			latestHookActivity: null,
+			lastTurnEnd: null,
 			warningMessage: null,
 			latestTurnCheckpoint: null,
 			previousTurnCheckpoint: null,
@@ -944,6 +978,7 @@ export class TerminalSessionManager implements TerminalSessionService {
 			exitCode: null,
 			lastHookAt: null,
 			latestHookActivity: null,
+			lastTurnEnd: null,
 			latestTurnCheckpoint: null,
 			previousTurnCheckpoint: null,
 		});
@@ -1052,7 +1087,11 @@ export class TerminalSessionManager implements TerminalSessionService {
 		return cloneSummary(summary);
 	}
 
-	applyHookActivity(taskId: string, activity: Partial<RuntimeTaskHookActivity>): RuntimeTaskSessionSummary | null {
+	applyHookActivity(
+		taskId: string,
+		activity: Partial<RuntimeTaskHookActivity>,
+		options: HookActivityOptions = {},
+	): RuntimeTaskSessionSummary | null {
 		const entry = this.entries.get(taskId);
 		if (!entry) {
 			return null;
@@ -1098,13 +1137,15 @@ export class TerminalSessionManager implements TerminalSessionService {
 			next.hookEventName !== (previous?.hookEventName ?? null) ||
 			next.notificationType !== (previous?.notificationType ?? null) ||
 			next.source !== (previous?.source ?? null);
-		if (!didChange) {
+		const lastTurnEnd = resolveLastTurnEnd(entry.summary, activity, options);
+		if (!didChange && lastTurnEnd === entry.summary.lastTurnEnd) {
 			return cloneSummary(entry.summary);
 		}
 
 		const summary = updateSummary(entry, {
 			lastHookAt: now(),
 			latestHookActivity: next,
+			lastTurnEnd,
 		});
 		if (entry.active) {
 			for (const listener of entry.listeners.values()) {

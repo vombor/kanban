@@ -68,7 +68,7 @@ export function createHooksApi(deps: CreateHooksApiDependencies): RuntimeTrpcCon
 
 				if (!canTransitionTaskForHookEvent(summary, event)) {
 					if (body.metadata) {
-						manager.applyHookActivity(taskId, body.metadata);
+						manager.applyHookActivity(taskId, body.metadata, { turnEnd: event === "to_review" });
 					}
 					return {
 						ok: true,
@@ -109,7 +109,7 @@ export function createHooksApi(deps: CreateHooksApiDependencies): RuntimeTrpcCon
 				}
 
 				if (body.metadata) {
-					manager.applyHookActivity(taskId, body.metadata);
+					manager.applyHookActivity(taskId, body.metadata, { turnEnd: event === "to_review" });
 				}
 
 				void deps.broadcastRuntimeWorkspaceStateUpdated(workspaceId, workspacePath);

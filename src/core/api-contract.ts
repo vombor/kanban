@@ -330,6 +330,19 @@ export const runtimeTaskHookActivitySchema = z.object({
 });
 export type RuntimeTaskHookActivity = z.infer<typeof runtimeTaskHookActivitySchema>;
 
+/**
+ * The turn end the session is in Review for: the final message of the `to_review` hook that ended the turn, kept apart
+ * from `latestHookActivity` because a later hook (Claude Code's idle Notification right after Stop) replaces the newest
+ * event name there. Recorded by the session manager's applyHookActivity, cleared on every state change, read through
+ * readTurnFinalMessage (src/core/turn-final-message.ts).
+ */
+export const runtimeTaskTurnEndSchema = z.object({
+	/** When the turn end was first reported in this Review: one value per ended turn. */
+	at: z.number(),
+	finalMessage: z.string(),
+});
+export type RuntimeTaskTurnEnd = z.infer<typeof runtimeTaskTurnEndSchema>;
+
 export const runtimeTaskTurnCheckpointSchema = z.object({
 	turn: z.number().int().positive(),
 	ref: z.string(),
@@ -354,6 +367,7 @@ export const runtimeTaskSessionSummarySchema = z.object({
 	exitCode: z.number().nullable(),
 	lastHookAt: z.number().nullable().default(null),
 	latestHookActivity: runtimeTaskHookActivitySchema.nullable().default(null),
+	lastTurnEnd: runtimeTaskTurnEndSchema.nullable().optional(),
 	warningMessage: z.string().nullable().optional(),
 	modelId: z.string().nullable().default(null),
 	reasoningEffort: z.string().nullable().default(null),

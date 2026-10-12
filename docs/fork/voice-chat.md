@@ -39,14 +39,20 @@ remembered per session in localStorage (`kanban.voice-chat.speak-replies:<task i
 card keep their own setting.
 
 - The text is the turn's final message from the session summary, read through `readTurnFinalMessage()`
-  (`src/core/turn-final-message.ts`, the same reader the orchestrator wait's question check uses): only when the
-  session is in Review because of a hook and the latest hook is a turn end. A final message left over under a later
-  hook is not read. The PTY output is never read.
+  (`src/core/turn-final-message.ts`, the same reader the orchestrator wait's question check uses): the summary's
+  `lastTurnEnd`, the final message of the `to_review` hook that ended the turn,
+  only while the session is in Review because of a hook. It survives later hooks of the same Review (Claude Code's
+  idle Notification right after Stop replaced the newest event name, so nothing was read until 2026-10-12) and is
+  cleared on every state change, so a final message of an older turn is never read. The PTY output is never read.
 - Code blocks are replaced by "code block"; markdown markup, URLs and table pipes are dropped; a long reply is cut
   after about 1200 characters with "The rest is in the terminal." (`web-ui/src/voice/speakable-text.ts`).
-- Only turns that end while the panel is open are read, and a turn end has to hold for 1.5 s first (some agents
-  flip to Review for a moment mid-turn). The stop button, turning the toggle off, talking, or closing the panel ends
-  the reading.
+- Only turns that end while the panel is open are read, each once (keyed by when the turn ended, so the same text in
+  a later turn is read again), and a turn end has to hold for 1.5 s first (some agents flip to Review for a moment
+  mid-turn). The stop button, turning the toggle off, talking, or closing the panel ends the reading.
+- Turning the speaker on speaks a silent, empty utterance from that click: some browsers (Safari, some Android
+  Chrome builds) speak only after a `speak()` from a user gesture. A speaker left on from an earlier visit has no
+  such click; on those browsers turn it off and on once. Each reply also calls `speechSynthesis.resume()` first,
+  since Chrome can leave the synthesizer paused after the tab was in the background.
 
 ## Browser support
 

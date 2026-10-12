@@ -113,6 +113,7 @@ export class FakeSpeechRecognition extends EventTarget implements SpeechRecognit
 
 export class FakeUtterance {
 	lang = "";
+	volume = 1;
 	onend: (() => void) | null = null;
 	onerror: (() => void) | null = null;
 	constructor(readonly text: string) {}
@@ -126,5 +127,6 @@ export function createFakeSpeechSynthesis() {
 			spoken.push(utterance);
 		},
 		cancel: () => {},
+		resume: () => {},
 	};
 }

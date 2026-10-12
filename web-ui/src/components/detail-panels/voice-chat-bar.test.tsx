@@ -218,9 +218,11 @@ describe("VoiceChatBar", () => {
 				notificationType: null,
 				source: null,
 			},
+			lastTurnEnd: { at: 2, finalMessage: "I fixed it. Anything else?" },
 		});
 		act(() => vi.advanceTimersByTime(REPLY_SETTLE_MS));
-		expect(synthesis.spoken.map((utterance) => utterance.text)).toEqual(["I fixed it. Anything else?"]);
+		// The silent utterance from the click that turned the speaker on, then the reply.
+		expect(synthesis.spoken.map((utterance) => utterance.text)).toEqual(["", "I fixed it. Anything else?"]);
 		expect(button("Stop reading the reply")).toBeTruthy();
 
 		tapMic("Talk to the agent");

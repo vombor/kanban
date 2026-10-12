@@ -2,14 +2,17 @@ import { describe, expect, it } from "vitest";
 
 import { parseHooksIngestArgs } from "../../src/commands/hooks";
 import type { RuntimeHookEvent, RuntimeTaskHookActivity } from "../../src/core/api-contract";
+import { TerminalSessionManager } from "../../src/terminal/session-manager";
 import { describeUserInputWait } from "../../src/terminal/user-input-wait";
+
+const TASK_ID = "__home_agent__:alpha:claude";
 
 // From the agent's hook payload to "what does the orchestrator wait for" (issue #10): hook ingest must put the
 // question and the tool asked about where the reader looks (the activity text), for Claude Code's payloads.
 function ingest(event: RuntimeHookEvent, payload: Record<string, unknown>): RuntimeTaskHookActivity {
 	const args = parseHooksIngestArgs(
 		event,
-		{ taskId: "__home_agent__:alpha:claude", workspaceId: "alpha", source: "claude" },
+		{ taskId: TASK_ID, workspaceId: "alpha", source: "claude" },
 		undefined,
 		JSON.stringify(payload),
 	);
@@ -66,13 +69,54 @@ describe("hook ingest → user input wait", () => {
 		});
 	});
 
-	it("reads a Stop whose last message asks something as a question", () => {
-		const latestHookActivity = ingest("to_review", {
-			hook_event_name: "Stop",
-			last_assistant_message: "Both cards are in Review.\n\nShould I start the QA cards now?",
+	it("reads a Stop whose last message asks something as a question, also under the idle Notification after it", () => {
+		const manager = new TerminalSessionManager();
+		manager.hydrateFromRecord({
+			[TASK_ID]: {
+				taskId: TASK_ID,
+				state: "running",
+				agentId: "claude",
+				workspacePath: "/tmp/repo",
+				pid: 1234,
+				startedAt: 1,
+				updatedAt: 1,
+				lastOutputAt: 1,
+				reviewReason: null,
+				exitCode: null,
+				lastHookAt: null,
+				latestHookActivity: null,
+				modelId: null,
+				reasoningEffort: null,
+			},
 		});
-		expect(
-			describeUserInputWait({ state: "awaiting_review", reviewReason: "hook", lastHookAt: 4, latestHookActivity }),
-		).toMatchObject({ kind: "question", text: "Should I start the QA cards now?" });
+		// What the hooks route does with each hook (src/trpc/hooks-api.ts): the transition, then the metadata.
+		manager.transitionToReview(TASK_ID, "hook");
+		manager.applyHookActivity(
+			TASK_ID,
+			ingest("to_review", {
+				hook_event_name: "Stop",
+				last_assistant_message: "Both cards are in Review.\n\nShould I start the QA cards now?",
+			}),
+			{ turnEnd: true },
+		);
+		expect(describeUserInputWait(manager.getSummary(TASK_ID))).toMatchObject({
+			kind: "question",
+			text: "Should I start the QA cards now?",
+		});
+
+		manager.applyHookActivity(
+			TASK_ID,
+			ingest("activity", {
+				hook_event_name: "Notification",
+				notification_type: "idle_prompt",
+				message: "Claude is waiting for your input",
+			}),
+			{ turnEnd: false },
+		);
+		expect(manager.getSummary(TASK_ID)?.latestHookActivity?.hookEventName).toBe("Notification");
+		expect(describeUserInputWait(manager.getSummary(TASK_ID))).toMatchObject({
+			kind: "question",
+			text: "Should I start the QA cards now?",
+		});
 	});
 });

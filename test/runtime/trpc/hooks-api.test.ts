@@ -80,10 +80,14 @@ describe("createHooksApi", () => {
 		expect(response).toEqual({ ok: true });
 		expect(manager.transitionToRunning).not.toHaveBeenCalled();
 		expect(manager.transitionToReview).not.toHaveBeenCalled();
-		expect(manager.applyHookActivity).toHaveBeenCalledWith("task-1", {
-			source: "claude",
-			activityText: "Using Read",
-		});
+		expect(manager.applyHookActivity).toHaveBeenCalledWith(
+			"task-1",
+			{
+				source: "claude",
+				activityText: "Using Read",
+			},
+			{ turnEnd: false },
+		);
 	});
 
 	it("captures a turn checkpoint when transitioning to review", async () => {
