@@ -4,6 +4,7 @@ import type { RuntimeAgentId, RuntimeTaskSessionSummary } from "../../../src/cor
 import {
 	type DeliverTaskInputResult,
 	deliverTaskInput,
+	describeTypedInputState,
 	flattenTaskInputText,
 	type TaskInputTerminal,
 } from "../../../src/terminal/deliver-task-input";
@@ -152,6 +153,29 @@ describe("deliverTaskInput", () => {
 
 		expect(delivery).toMatchObject({ ok: false, status: "user_typing", enterAttempts: 0 });
 		expect(terminal.writeInput).not.toHaveBeenCalled();
+	});
+
+	it("says why the user counts as typing: a draft since when, or a recent keystroke (issue #39)", async () => {
+		const terminal = createFakeTerminal({ userTyping: true });
+		const typing = {
+			draftSince: Date.parse("2026-10-12T03:54:02Z"),
+			draftTypedAt: Date.parse("2026-10-12T03:54:02Z"),
+			viewerTypedAt: Date.parse("2026-10-12T03:54:02Z"),
+		};
+		const withReason = { ...terminal, describeTypedInput: vi.fn(() => typing) };
+
+		const delivery = await runDelivery(deliverTaskInput(withReason, "task-1", "go"));
+
+		expect(delivery).toMatchObject({ status: "user_typing", typing });
+		expect(delivery.error).toContain("a draft in the input box since 2026-10-12T03:54:02.000Z");
+		expect(terminal.writeInput).not.toHaveBeenCalled();
+		const now = Date.parse("2026-10-12T05:39:02Z");
+		expect(describeTypedInputState(typing, now)).toBe(
+			"a draft in the input box since 2026-10-12T03:54:02.000Z (text last typed 1 h 45 min ago)",
+		);
+		expect(describeTypedInputState({ draftSince: null, draftTypedAt: null, viewerTypedAt: now - 3_000 }, now)).toBe(
+			"a keystroke 3 s ago",
+		);
 	});
 
 	it("reports no_session and writes nothing when the task has no session", async () => {

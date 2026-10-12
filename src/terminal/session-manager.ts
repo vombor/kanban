@@ -9,6 +9,7 @@ import type {
 	RuntimeTaskSessionState,
 	RuntimeTaskSessionSummary,
 	RuntimeTaskTurnCheckpoint,
+	RuntimeTaskTypedInput,
 } from "../core/api-contract";
 import {
 	type AgentAdapterLaunchInput,
@@ -37,6 +38,7 @@ import {
 } from "./terminal-protocol-filter";
 import type { TerminalSessionListener, TerminalSessionService } from "./terminal-session-service";
 import { TerminalStateMirror } from "./terminal-state-mirror";
+import { readTypedInput } from "./typed-input-text";
 
 const MAX_WORKSPACE_TRUST_BUFFER_CHARS = 16_384;
 const AUTO_RESTART_WINDOW_MS = 5_000;
@@ -64,10 +66,12 @@ interface ActiveProcessState {
 	shouldInspectOutputForTransition: AgentOutputTransitionInspectionPredicate | null;
 	awaitingCodexPromptAfterEnter: boolean;
 	/**
-	 * Text was typed into the TUI since the last Enter (writeInput): the input box may hold a draft, so nothing may
-	 * type into it and press Enter (orchestrator message notices, src/isolation/message-notices.ts).
+	 * Printable text was typed into the TUI since the last Enter, Ctrl-C or Ctrl-U (writeInput): the input box may
+	 * hold a draft, so nothing may type into it and press Enter (orchestrator message notices,
+	 * src/isolation/message-notices.ts). `since`: its first text, `typedAt`: its last; it counts for DRAFT_MAX_AGE_MS
+	 * after `typedAt`.
 	 */
-	typedSinceEnter: boolean;
+	draft: { since: number; typedAt: number } | null;
 	/**
 	 * When the user last pressed Enter in the session's terminal (writeInput `fromViewer`): an answer to whatever the
 	 * agent asked, for agents that report no hook on it (src/terminal/user-input-wait.ts).
@@ -131,6 +135,12 @@ function now(): number {
 
 /** How long after the user's last keystroke in a terminal Kanban still counts them as typing there. */
 export const VIEWER_TYPING_QUIET_MS = 10_000;
+
+/**
+ * How long a draft counts after the last text typed into it (issue #39): Kanban can't see a TUI's input box, so a
+ * draft it misread, or one the user abandoned, must not refuse every delivery into that terminal forever.
+ */
+export const DRAFT_MAX_AGE_MS = 30 * 60_000;
 
 function createDefaultSummary(taskId: string): RuntimeTaskSessionSummary {
 	return {
@@ -406,14 +416,26 @@ export class TerminalSessionManager implements TerminalSessionService {
 	 * the watchdog's sidebar wakes).
 	 */
 	hasTypedInputSinceEnter(taskId: string): boolean {
+		return this.describeTypedInput(taskId) !== null;
+	}
+
+	/** Why hasTypedInputSinceEnter holds (a draft, a recent keystroke), or null when it doesn't. */
+	describeTypedInput(taskId: string): RuntimeTaskTypedInput | null {
 		const active = this.entries.get(taskId)?.active;
 		if (!active) {
-			return false;
+			return null;
 		}
-		return (
-			active.typedSinceEnter ||
-			(active.viewerTypedAt !== null && now() - active.viewerTypedAt < VIEWER_TYPING_QUIET_MS)
-		);
+		const current = now();
+		const draft = active.draft && current - active.draft.typedAt < DRAFT_MAX_AGE_MS ? active.draft : null;
+		const typingNow = active.viewerTypedAt !== null && current - active.viewerTypedAt < VIEWER_TYPING_QUIET_MS;
+		if (!draft && !typingNow) {
+			return null;
+		}
+		return {
+			draftSince: draft?.since ?? null,
+			draftTypedAt: draft?.typedAt ?? null,
+			viewerTypedAt: active.viewerTypedAt,
+		};
 	}
 
 	/** Whether the task's session has a process now (false for a summary hydrated after a restart). */
@@ -687,7 +709,7 @@ export class TerminalSessionManager implements TerminalSessionService {
 			detectOutputTransition: launch.detectOutputTransition ?? null,
 			shouldInspectOutputForTransition: launch.shouldInspectOutputForTransition ?? null,
 			awaitingCodexPromptAfterEnter: false,
-			typedSinceEnter: false,
+			draft: null,
 			viewerSubmittedAt: null,
 			viewerTypedAt: null,
 			autoConfirmedWorkspaceTrust: false,
@@ -858,7 +880,7 @@ export class TerminalSessionManager implements TerminalSessionService {
 			detectOutputTransition: null,
 			shouldInspectOutputForTransition: null,
 			awaitingCodexPromptAfterEnter: false,
-			typedSinceEnter: false,
+			draft: null,
 			viewerSubmittedAt: null,
 			viewerTypedAt: null,
 			autoConfirmedWorkspaceTrust: false,
@@ -937,18 +959,20 @@ export class TerminalSessionManager implements TerminalSessionService {
 		) {
 			entry.active.awaitingCodexPromptAfterEnter = true;
 		}
-		// Escape sequences alone (focus-in, arrows) don't change whether the input box holds a draft.
-		// biome-ignore lint/suspicious/noControlCharactersInRegex: strips terminal escape sequences from typed input.
-		const text = data.toString("utf8").replace(/\u001b\[[0-9;?]*[A-Za-z~]|\u001b./gu, "");
-		const submitted = /[\r\n]/u.test(text);
-		if (submitted) {
-			entry.active.typedSinceEnter = !/[\r\n]\s*$/u.test(text);
-		} else if (text.length > 0) {
-			entry.active.typedSinceEnter = true;
+		// Terminal sequences alone (focus-in, arrows, mouse reports, the terminal's replies) don't change whether the
+		// input box holds a draft; only printable text does (typed-input-text.ts).
+		const typed = readTypedInput(data.toString("utf8"));
+		const { submitted } = typed;
+		const typedAt = now();
+		if (typed.cleared) {
+			entry.active.draft = null;
+		}
+		if (typed.typesDraft) {
+			entry.active.draft = { since: entry.active.draft?.since ?? typedAt, typedAt };
 		}
 		entry.active.session.write(data);
-		if (options.fromViewer && text.length > 0) {
-			entry.active.viewerTypedAt = now();
+		if (options.fromViewer && typed.hasKeys) {
+			entry.active.viewerTypedAt = typedAt;
 		}
 		if (submitted && options.fromViewer) {
 			entry.active.viewerSubmittedAt = now();

@@ -1207,7 +1207,7 @@ export type RuntimeTaskInputDeliveryRequest = z.infer<typeof runtimeTaskInputDel
  * - `queued`: nothing typed yet: the user is typing in that terminal, so Kanban's own input (a watchdog wake, a
  *   pipeline nudge or rework) is held and typed once their input clears (src/server/typed-input-hold.ts).
  * - `user_typing`: refused, nothing typed: the user is typing in that terminal (a draft since their last Enter, or a
- *   keystroke within the quiet time; TerminalSessionManager.hasTypedInputSinceEnter).
+ *   keystroke within the quiet time; TerminalSessionManager.hasTypedInputSinceEnter); `typing` says which.
  * - `busy`: refused, nothing typed: held Kanban input for that terminal is waiting or being typed.
  * - `no_session`: the task has no running session; nothing was written.
  * - `session_ended`: the session went away (or stopped) part-way through.
@@ -1231,6 +1231,17 @@ export type RuntimeTaskInputDeliveryStatus = z.infer<typeof runtimeTaskInputDeli
 export const runtimeTaskInputDeliveryEvidenceSchema = z.enum(["state", "hook", "output"]);
 export type RuntimeTaskInputDeliveryEvidence = z.infer<typeof runtimeTaskInputDeliveryEvidenceSchema>;
 
+/** Why the user counts as typing in a terminal (TerminalSessionManager.describeTypedInput), epoch ms. */
+export const runtimeTaskTypedInputSchema = z.object({
+	/** When the draft in the input box was started, or null (only a recent keystroke). */
+	draftSince: z.number().nullable(),
+	/** When text was last typed into that draft, or null. */
+	draftTypedAt: z.number().nullable(),
+	/** When the user last pressed a key in the terminal, or null (none since it started). */
+	viewerTypedAt: z.number().nullable(),
+});
+export type RuntimeTaskTypedInput = z.infer<typeof runtimeTaskTypedInputSchema>;
+
 export const runtimeTaskInputDeliveryResponseSchema = z.object({
 	ok: z.boolean(),
 	status: runtimeTaskInputDeliveryStatusSchema,
@@ -1238,6 +1249,8 @@ export const runtimeTaskInputDeliveryResponseSchema = z.object({
 	enterAttempts: z.number().int().nonnegative(),
 	summary: runtimeTaskSessionSummarySchema.nullable(),
 	error: z.string().optional(),
+	/** With `user_typing`: why the user counts as typing there. */
+	typing: runtimeTaskTypedInputSchema.optional(),
 });
 export type RuntimeTaskInputDeliveryResponse = z.infer<typeof runtimeTaskInputDeliveryResponseSchema>;
 

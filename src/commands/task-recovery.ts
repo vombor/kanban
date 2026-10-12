@@ -33,6 +33,7 @@ import { updateTrackedPipelineCardFlow } from "../pipeline/recovery-runtime";
 import { hasTrackedChanges, nextRestartWipTag, preserveWorktree, tagRestartWip } from "../pipeline/wip-tag";
 import { resolveProjectInputPath } from "../projects/project-path";
 import { loadWorkspaceContext, mutateWorkspaceState } from "../state/workspace-state";
+import { describeTypedInputState } from "../terminal/deliver-task-input";
 import { runGit } from "../workspace/git-utils";
 import { getTaskWorkspacePathInfo } from "../workspace/task-worktree";
 import {
@@ -184,6 +185,7 @@ export async function sendTaskMessage(input: {
 		enterAttempts: result.enterAttempts,
 		sessionState: result.summary?.state ?? null,
 		...(result.error ? { error: describeTaskSendError(result) } : {}),
+		...(result.typing ? { typing: result.typing } : {}),
 	};
 }
 
@@ -202,7 +204,7 @@ export function describeTaskSendResult(result: RuntimeTaskInputDeliveryResponse)
 		case "undelivered":
 			return "typed, but the agent showed no activity after Enter (twice)";
 		case "user_typing":
-			return "NOT SENT: the user is typing in this card's terminal; nothing was typed. Send it again later.";
+			return `NOT SENT: the user is typing in this card's terminal${result.typing ? ` (${describeTypedInputState(result.typing)})` : ""}; nothing was typed. Send it again later.`;
 		case "busy":
 			return "NOT SENT: Kanban input held for this card's terminal is waiting to be typed; nothing was typed. Send it again in a few seconds.";
 		case "queued":
@@ -219,7 +221,10 @@ export function describeTaskSendResult(result: RuntimeTaskInputDeliveryResponse)
 }
 
 function describeTaskSendError(result: RuntimeTaskInputDeliveryResponse): string | undefined {
-	return result.status === "user_typing" ? "user is typing in this card's terminal, not sent" : result.error;
+	if (result.status !== "user_typing") {
+		return result.error;
+	}
+	return `user is typing in this card's terminal${result.typing ? ` (${describeTypedInputState(result.typing)})` : ""}, not sent`;
 }
 
 async function resumeOne(workspace: TaskWorkspace, taskId: string, dryRun: boolean): Promise<JsonRecord> {

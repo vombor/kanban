@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { RuntimeTaskSessionSummary } from "../../../src/core/api-contract";
 import { buildShellCommandLine } from "../../../src/core/shell";
-import { TerminalSessionManager, VIEWER_TYPING_QUIET_MS } from "../../../src/terminal/session-manager";
+import {
+	DRAFT_MAX_AGE_MS,
+	TerminalSessionManager,
+	VIEWER_TYPING_QUIET_MS,
+} from "../../../src/terminal/session-manager";
 
 function createSummary(overrides: Partial<RuntimeTaskSessionSummary> = {}): RuntimeTaskSessionSummary {
 	return {
@@ -350,7 +354,7 @@ describe("TerminalSessionManager hasTypedInputSinceEnter (sidebar wakes and noti
 		}
 		entry.active = {
 			session: { write: vi.fn() },
-			typedSinceEnter: false,
+			draft: null,
 			viewerSubmittedAt: null,
 			viewerTypedAt: null,
 			awaitingCodexPromptAfterEnter: false,
@@ -380,6 +384,58 @@ describe("TerminalSessionManager hasTypedInputSinceEnter (sidebar wakes and noti
 			manager.writeInput(taskId, Buffer.from("notice\r"));
 			manager.writeInput(taskId, Buffer.from("\u001b[I"), { fromViewer: true });
 			expect(manager.hasTypedInputSinceEnter(taskId)).toBe(false);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("marks no draft for a viewer terminal's replies and mouse reports (issue #39)", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(100_000);
+		try {
+			const manager = new TerminalSessionManager();
+			withActiveSession(manager);
+			// xterm.js answering the agent's color query and an SGR mouse click, as a viewer attaches.
+			manager.writeInput(taskId, Buffer.from("\u001b]11;rgb:1f1f/2424/2828\u001b\\"), { fromViewer: true });
+			manager.writeInput(taskId, Buffer.from("\u001b[<0;10;20M\u001b[<0;10;20m"), { fromViewer: true });
+			expect(manager.hasTypedInputSinceEnter(taskId)).toBe(false);
+			expect(manager.getViewerTypedAt(taskId)).toBeNull();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("says why it holds, ends a draft on Ctrl-C and ages a draft out after DRAFT_MAX_AGE_MS (issue #39)", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(100_000);
+		try {
+			const manager = new TerminalSessionManager();
+			withActiveSession(manager);
+			expect(manager.describeTypedInput(taskId)).toBeNull();
+
+			manager.writeInput(taskId, Buffer.from("half a"), { fromViewer: true });
+			vi.setSystemTime(105_000);
+			manager.writeInput(taskId, Buffer.from(" thought"), { fromViewer: true });
+			expect(manager.describeTypedInput(taskId)).toEqual({
+				draftSince: 100_000,
+				draftTypedAt: 105_000,
+				viewerTypedAt: 105_000,
+			});
+			manager.writeInput(taskId, Buffer.from("\u0003"), { fromViewer: true });
+			expect(manager.describeTypedInput(taskId)).toEqual({
+				draftSince: null,
+				draftTypedAt: null,
+				viewerTypedAt: 105_000,
+			});
+			vi.setSystemTime(105_000 + VIEWER_TYPING_QUIET_MS);
+			expect(manager.hasTypedInputSinceEnter(taskId)).toBe(false);
+
+			manager.writeInput(taskId, Buffer.from("left behind"), { fromViewer: true });
+			vi.setSystemTime(105_000 + VIEWER_TYPING_QUIET_MS + DRAFT_MAX_AGE_MS - 1);
+			expect(manager.hasTypedInputSinceEnter(taskId)).toBe(true);
+			vi.advanceTimersByTime(1);
+			expect(manager.hasTypedInputSinceEnter(taskId)).toBe(false);
+			expect(manager.describeTypedInput(taskId)).toBeNull();
 		} finally {
 			vi.useRealTimers();
 		}

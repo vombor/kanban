@@ -26,6 +26,7 @@ import type {
 	RuntimeTaskInputDeliveryEvidence,
 	RuntimeTaskInputDeliveryResponse,
 	RuntimeTaskSessionSummary,
+	RuntimeTaskTypedInput,
 } from "../core/api-contract";
 import { getAgentInputDeliveryProfile } from "./agent-session-adapters";
 
@@ -41,11 +42,31 @@ const MAX_ENTER_ATTEMPTS = 2;
 
 export const USER_TYPING_ERROR = "The user is typing in this terminal; nothing was typed.";
 
+function formatAgo(ms: number): string {
+	const seconds = Math.max(0, Math.round(ms / 1000));
+	if (seconds < 120) {
+		return `${seconds} s ago`;
+	}
+	const minutes = Math.round(seconds / 60);
+	return minutes < 60 ? `${minutes} min ago` : `${Math.floor(minutes / 60)} h ${minutes % 60} min ago`;
+}
+
+/** Why the user counts as typing, for a person or the orchestrator: "a draft since <time>" or "a keystroke <n> s ago". */
+export function describeTypedInputState(typing: RuntimeTaskTypedInput, now: number = Date.now()): string {
+	if (typing.draftSince !== null) {
+		const lastText = typing.draftTypedAt ?? typing.draftSince;
+		return `a draft in the input box since ${new Date(typing.draftSince).toISOString()} (text last typed ${formatAgo(now - lastText)})`;
+	}
+	return typing.viewerTypedAt === null ? "a recent keystroke" : `a keystroke ${formatAgo(now - typing.viewerTypedAt)}`;
+}
+
 /** The slice of the terminal session manager delivery needs. */
 export interface TaskInputTerminal {
 	getSummary(taskId: string): RuntimeTaskSessionSummary | null;
 	writeInput(taskId: string, data: Buffer): RuntimeTaskSessionSummary | null;
 	hasTypedInputSinceEnter(taskId: string): boolean;
+	/** Why hasTypedInputSinceEnter holds, for the `user_typing` answer (absent: no reason given). */
+	describeTypedInput?(taskId: string): RuntimeTaskTypedInput | null;
 }
 
 export interface DeliverTaskInputOptions {
@@ -134,6 +155,7 @@ function result(
 		enterAttempts: fields.enterAttempts ?? 0,
 		summary: fields.summary ?? null,
 		...(fields.error ? { error: fields.error } : {}),
+		...(fields.typing ? { typing: fields.typing } : {}),
 	};
 }
 
@@ -163,7 +185,14 @@ export async function deliverTaskInput(
 		return result("no_session", { error: "Task session is not running." });
 	}
 	if (terminal.hasTypedInputSinceEnter(taskId)) {
-		return result("user_typing", { summary: initial, error: USER_TYPING_ERROR });
+		const typing = terminal.describeTypedInput?.(taskId) ?? null;
+		return result("user_typing", {
+			summary: initial,
+			error: typing
+				? `The user is typing in this terminal (${describeTypedInputState(typing)}); nothing was typed.`
+				: USER_TYPING_ERROR,
+			...(typing ? { typing } : {}),
+		});
 	}
 
 	// Text and focus-in are written before the first await, so a caller that

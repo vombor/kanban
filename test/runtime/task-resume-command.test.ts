@@ -135,4 +135,21 @@ describe("kanban task send", () => {
 		expect(String(result.result)).toMatch(/^NOT SENT: the user is typing in this card's terminal/);
 		expect(JSON.stringify(result)).not.toContain("delivered");
 	});
+
+	it("says since when a draft holds the card's terminal (issue #39)", async () => {
+		const typing = { draftSince: Date.parse("2026-10-12T03:54:02Z"), draftTypedAt: null, viewerTypedAt: null };
+		mocks.deliverTaskInput.mockResolvedValueOnce({
+			ok: false,
+			status: "user_typing",
+			evidence: null,
+			enterAttempts: 0,
+			summary: null,
+			error: "The user is typing in this terminal; nothing was typed.",
+			typing,
+		});
+		const result = await sendTaskMessage({ cwd: "/repos/foo", taskId: "d1111", text: "commit", enter: true });
+		expect(result).toMatchObject({ status: "user_typing", typing });
+		expect(String(result.result)).toContain("(a draft in the input box since 2026-10-12T03:54:02.000Z");
+		expect(String(result.error)).toContain("a draft in the input box since 2026-10-12T03:54:02.000Z");
+	});
 });
