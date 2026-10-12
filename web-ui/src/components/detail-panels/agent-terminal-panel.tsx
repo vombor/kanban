@@ -6,7 +6,7 @@ import { useMemo } from "react";
 
 import { TerminalConnectionStatusIndicator } from "@/components/detail-panels/terminal-connection-status";
 import { TerminalLoadingOverlay } from "@/components/detail-panels/terminal-loading-overlay";
-import { TerminalTouchBar } from "@/components/detail-panels/terminal-touch-bar";
+import { TerminalTouchBar, VoiceTerminalTouchBar } from "@/components/detail-panels/terminal-touch-bar";
 import { VoiceChatBar } from "@/components/detail-panels/voice-chat-bar";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
@@ -366,9 +366,21 @@ function AgentTerminalPanelLayout({
 				<TerminalLoadingOverlay readiness={readiness} />
 			</div>
 			{isTouchDevice ? (
-				<TerminalTouchBar showJumpToBottom={showJumpToBottom} onJumpToBottom={scrollToBottom} onKey={sendKey} />
+				voiceChat ? (
+					<VoiceTerminalTouchBar
+						taskId={taskId}
+						workspaceId={workspaceId}
+						summary={summary}
+						showJumpToBottom={showJumpToBottom}
+						onJumpToBottom={scrollToBottom}
+						onKey={sendKey}
+					/>
+				) : (
+					<TerminalTouchBar showJumpToBottom={showJumpToBottom} onJumpToBottom={scrollToBottom} onKey={sendKey} />
+				)
+			) : voiceChat ? (
+				<VoiceChatBar taskId={taskId} workspaceId={workspaceId} summary={summary} />
 			) : null}
-			{voiceChat ? <VoiceChatBar taskId={taskId} workspaceId={workspaceId} summary={summary} /> : null}
 			{lastError ? (
 				<div className="flex gap-2 rounded-none border-t border-status-red/30 bg-status-red/10 p-3 text-[13px] text-status-red">
 					{lastError}

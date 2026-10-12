@@ -2,41 +2,58 @@ import {
 	ArrowDown,
 	ArrowLeftToLine,
 	ArrowRightToLine,
+	AudioLines,
 	ChevronDown,
 	ChevronLeft,
 	ChevronRight,
 	ChevronUp,
+	CornerDownLeft,
 	Keyboard,
 	Space,
+	Volume2,
+	VolumeX,
 } from "lucide-react";
 import type { ReactElement, ReactNode, SyntheticEvent } from "react";
 
+import { VoiceError, VoiceMicButton, VoicePreview, VoiceStatus } from "@/components/detail-panels/voice-chat-controls";
 import { cn } from "@/components/ui/cn";
+import { Spinner } from "@/components/ui/spinner";
+import { Tooltip } from "@/components/ui/tooltip";
 import { usePressRepeat } from "@/hooks/use-press-repeat";
+import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import { LocalStorageKey } from "@/storage/local-storage-store";
 import { isTerminalArrowKey, type TerminalTouchKey } from "@/terminal/terminal-touch-keys";
 import { useBooleanLocalStorageValue } from "@/utils/react-use";
+import { useVoiceChat, type VoiceChatControls } from "@/voice/use-voice-chat";
 
 // The bar under a terminal on a phone, in the panel's flow so it never covers
-// the TUI: the key pad toggle and jump to bottom, and while the pad is open a
-// second row with the keys a phone keyboard lacks to answer a TUI's pickers
-// (arrows, Tab, Shift+Tab, Esc) plus Space. Enter is the keyboard's own, or the
-// voice bar's Send.
+// the TUI. One row: on an agent session the mic and the speaker (replies read
+// aloud; tapped while a reply is read, it stops the reading), then the key pad
+// toggle and Enter, and jump to bottom at the far end. Enter sends the voice
+// message while the voice preview (above the row, with its X) holds one, and
+// is the terminal's Enter otherwise. While the pad is open a second row holds
+// the keys a phone keyboard lacks to answer a TUI's pickers (arrows, Tab,
+// Shift+Tab, Esc) plus Space.
 //
-// The bar keeps one height while jump to bottom comes and goes (scrolling must
-// not refit the terminal); only the pad toggle changes it, and the terminal's
-// resize observer fits once after that.
+// The row keeps one height while jump to bottom comes and goes (scrolling must
+// not refit the terminal); only the pad toggle and the voice preview change the
+// bar's height, and the terminal's resize observer fits once after that.
 //
 // No button may take focus from the terminal's textarea: the on-screen keyboard
 // would close, and its dictation would end (terminal-ime-input.ts).
 
 const BUTTON_CLASS =
-	"inline-flex h-9 cursor-pointer touch-manipulation select-none items-center justify-center rounded-md border active:bg-surface-4";
-const PAD_KEY_CLASS = cn(BUTTON_CLASS, "w-full min-w-0 border-border-bright bg-surface-2 text-text-primary");
+	"inline-flex cursor-pointer touch-manipulation select-none items-center justify-center border active:bg-surface-4";
+const NEUTRAL_CLASS = "border-border-bright bg-surface-2 text-text-primary";
+const ROUND_BUTTON_CLASS = cn(BUTTON_CLASS, "size-11 shrink-0 rounded-full shadow-lg");
+const SQUARE_BUTTON_CLASS = cn(BUTTON_CLASS, "size-11 shrink-0 rounded-md");
+const PAD_KEY_CLASS = cn(BUTTON_CLASS, NEUTRAL_CLASS, "h-10 w-full min-w-0 rounded-md");
 
 function keepTerminalFocus(event: SyntheticEvent): void {
 	event.preventDefault();
 }
+
+const KEEP_FOCUS_PROPS = { onMouseDown: keepTerminalFocus, onPointerDown: keepTerminalFocus };
 
 interface PadKey {
 	key: TerminalTouchKey;
@@ -88,8 +105,7 @@ function TerminalTouchKeyPad({ onKey }: { onKey: (key: TerminalTouchKey) => void
 						type="button"
 						aria-label={padKey.label}
 						className={PAD_KEY_CLASS}
-						onMouseDown={keepTerminalFocus}
-						onPointerDown={keepTerminalFocus}
+						{...KEEP_FOCUS_PROPS}
 						onContextMenu={keepTerminalFocus}
 						onClick={() => onKey(padKey.key)}
 					>
@@ -101,54 +117,147 @@ function TerminalTouchKeyPad({ onKey }: { onKey: (key: TerminalTouchKey) => void
 	);
 }
 
+// Replies read aloud on or off; while one is being read (the icon moves), a tap stops the reading instead.
+function ReplySpeechButton({ voice }: { voice: VoiceChatControls }): ReactElement {
+	const { replySpeech } = voice;
+	const { speaking, enabled } = replySpeech;
+	const label = speaking ? "Stop reading the reply" : "Read replies aloud";
+	return (
+		<Tooltip
+			side="top"
+			content={speaking ? "Stop reading the reply" : enabled ? "Stop reading replies aloud" : "Read replies aloud"}
+		>
+			<button
+				type="button"
+				aria-label={label}
+				aria-pressed={enabled}
+				{...KEEP_FOCUS_PROPS}
+				onClick={() => (speaking ? replySpeech.stop() : replySpeech.setEnabled(!enabled))}
+				className={cn(
+					ROUND_BUTTON_CLASS,
+					speaking
+						? "animate-pulse border-accent bg-accent/20 text-accent"
+						: enabled
+							? "border-accent/60 bg-surface-2 text-accent"
+							: cn(NEUTRAL_CLASS, "text-text-secondary"),
+				)}
+			>
+				{speaking ? <AudioLines size={18} /> : enabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
+			</button>
+		</Tooltip>
+	);
+}
+
+// The voice message while the preview holds one (with the send button's disabled state and spinner), else the terminal's Enter.
+function EnterButton({
+	voice,
+	onKey,
+}: {
+	voice: VoiceChatControls | null;
+	onKey: (key: TerminalTouchKey) => void;
+}): ReactElement {
+	const sendsVoice = voice?.hasPreview ?? false;
+	const disabled = sendsVoice && !voice?.canSend;
+	return (
+		<button
+			type="button"
+			aria-label={sendsVoice ? "Send voice message" : "Send Enter"}
+			// Not `disabled`: a tap on a disabled button would not reach the handlers that keep the keyboard's focus.
+			aria-disabled={disabled}
+			{...KEEP_FOCUS_PROPS}
+			onClick={() => {
+				if (!voice || !sendsVoice) {
+					onKey("enter");
+				} else if (voice.canSend) {
+					voice.send();
+				}
+			}}
+			className={cn(
+				ROUND_BUTTON_CLASS,
+				sendsVoice && voice?.canSend ? "border-accent bg-surface-2 text-accent" : NEUTRAL_CLASS,
+				disabled && "cursor-default opacity-50",
+			)}
+		>
+			{sendsVoice && voice?.voiceInput.isSending ? <Spinner size={16} /> : <CornerDownLeft size={20} />}
+		</button>
+	);
+}
+
 export interface TerminalTouchBarProps {
 	showJumpToBottom: boolean;
 	onJumpToBottom: () => void;
 	// The terminal refuses a key while it takes no input (terminal-ime-input.ts).
 	onKey: (key: TerminalTouchKey) => void;
+	// An agent session's voice chat, where the browser has a speech API.
+	voice?: VoiceChatControls | null;
 }
 
-export function TerminalTouchBar({ showJumpToBottom, onJumpToBottom, onKey }: TerminalTouchBarProps): ReactElement {
+export function TerminalTouchBar({
+	showJumpToBottom,
+	onJumpToBottom,
+	onKey,
+	voice = null,
+}: TerminalTouchBarProps): ReactElement {
 	const [isPadOpen, setIsPadOpen] = useBooleanLocalStorageValue(LocalStorageKey.TerminalTouchKeysExpanded, false);
 	return (
-		<div
-			role="toolbar"
-			aria-label="Terminal controls"
-			className="flex shrink-0 flex-col gap-1 border-t border-border px-1.5 py-1"
-		>
-			<div className="flex items-center justify-between gap-2">
+		<div className="flex shrink-0 flex-col gap-1 border-t border-border px-1.5 py-1">
+			{voice ? (
+				<>
+					<VoicePreview voice={voice} showSend={false} />
+					<VoiceError voice={voice} />
+				</>
+			) : null}
+			<div role="toolbar" aria-label="Terminal controls" className="flex items-center gap-1.5">
+				{voice?.voiceInput.supported ? <VoiceMicButton voice={voice} /> : null}
+				{voice?.replySpeech.supported ? <ReplySpeechButton voice={voice} /> : null}
 				<button
 					type="button"
 					onClick={() => setIsPadOpen((open) => !open)}
-					onMouseDown={keepTerminalFocus}
-					onPointerDown={keepTerminalFocus}
+					{...KEEP_FOCUS_PROPS}
 					aria-label={isPadOpen ? "Hide terminal keys" : "Show terminal keys"}
 					aria-expanded={isPadOpen}
 					className={cn(
-						BUTTON_CLASS,
-						"px-3",
+						SQUARE_BUTTON_CLASS,
 						isPadOpen
 							? "border-accent bg-accent/20 text-text-primary"
 							: "border-border-bright bg-surface-2 text-text-secondary",
 					)}
 				>
-					<Keyboard size={16} />
+					<Keyboard size={18} />
 				</button>
+				<EnterButton voice={voice} onKey={onKey} />
+				{voice ? <VoiceStatus voice={voice} showReading /> : <span className="flex-1" />}
 				{showJumpToBottom ? (
 					<button
 						type="button"
 						onClick={onJumpToBottom}
 						// Keeps the terminal focused, so an open on-screen keyboard stays open.
-						onMouseDown={keepTerminalFocus}
-						onPointerDown={keepTerminalFocus}
+						{...KEEP_FOCUS_PROPS}
 						aria-label="Jump to bottom"
-						className={cn(BUTTON_CLASS, "px-3 border-border-bright bg-surface-2 text-text-primary")}
+						className={cn(SQUARE_BUTTON_CLASS, NEUTRAL_CLASS)}
 					>
-						<ArrowDown size={16} />
+						<ArrowDown size={18} />
 					</button>
 				) : null}
 			</div>
 			{isPadOpen ? <TerminalTouchKeyPad onKey={onKey} /> : null}
 		</div>
 	);
+}
+
+export interface VoiceTerminalTouchBarProps extends Omit<TerminalTouchBarProps, "voice"> {
+	taskId: string;
+	workspaceId: string | null;
+	summary: RuntimeTaskSessionSummary | null;
+}
+
+// An agent session's touch bar: the voice chat bar's controls join the row (desktop keeps VoiceChatBar).
+export function VoiceTerminalTouchBar({
+	taskId,
+	workspaceId,
+	summary,
+	...props
+}: VoiceTerminalTouchBarProps): ReactElement {
+	const voice = useVoiceChat(workspaceId, taskId, summary);
+	return <TerminalTouchBar {...props} voice={voice.supported ? voice : null} />;
 }

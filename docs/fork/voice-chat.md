@@ -48,7 +48,8 @@ card keep their own setting.
   after about 1200 characters with "The rest is in the terminal." (`web-ui/src/voice/speakable-text.ts`).
 - Only turns that end while the panel is open are read, each once (keyed by when the turn ended, so the same text in
   a later turn is read again), and a turn end has to hold for 1.5 s first (some agents flip to Review for a moment
-  mid-turn). The stop button, turning the toggle off, talking, or closing the panel ends the reading.
+  mid-turn). The stop button (on a phone, a tap on the speaker while it reads), turning the toggle off, talking, or
+  closing the panel ends the reading.
 - Turning the speaker on speaks a silent, empty utterance from that click: some browsers (Safari, some Android
   Chrome builds) speak only after a `speak()` from a user gesture. A speaker left on from an earlier visit has no
   such click; on those browsers turn it off and on once. Each reply also calls `speechSynthesis.resume()` first,
@@ -75,12 +76,22 @@ anything you wouldn't send to that service.
 
 ## On a phone
 
-On a touch screen every terminal panel (card agent, sidebar orchestrator, shell terminals) has a touch bar between the
-terminal and the voice bar, in the panel, so it never covers the TUI and moves above the on-screen keyboard with the
-panel. It holds the key pad toggle and, while you are scrolled up, Jump to bottom. The toggle opens a second row
-with the keys a phone keyboard lacks for an agent's pickers: Esc, Shift+Tab, Tab, Space and the arrows (held arrows
-repeat, arrows follow the TUI's cursor-key mode). There is no Enter button: use the voice bar's Send or the
-keyboard's Enter (user request, 2026-10-12). No button takes the keyboard's focus, so dictation keeps going.
+On a touch screen every terminal panel (card agent, sidebar orchestrator, shell terminals) has a touch bar under the
+terminal, in the panel, so it never covers the TUI and moves above the on-screen keyboard with the panel. Its one row
+holds, in this order, the mic and the speaker (agent sessions only), the key pad toggle and the round Enter, and,
+while you are scrolled up, Jump to bottom at the far end (the row keeps its height when it comes and goes). The
+voice bar's controls live in this row on a phone, so there is no separate voice bar (user request, 2026-10-12):
+
+- Enter sends the dictated text while the preview above the row holds some, exactly as the desktop's Send button
+  (same delivery, the same spinner, and it does nothing while listening, so stop the mic first); otherwise it is the
+  terminal's Enter, the keyboard's own submit, so text dictated into the terminal goes out first and stays sent.
+- The X that clears the dictated text sits next to the preview, not in the row.
+- The speaker turns reading replies aloud on and off. While a reply is being read its icon moves, the row says
+  "Reading the reply…", and a tap stops that reading without turning the toggle off.
+
+The toggle opens a second row with the keys a phone keyboard lacks for an agent's pickers: Esc, Shift+Tab, Tab,
+Space and the arrows (held arrows repeat, arrows follow the TUI's cursor-key mode). No button takes the keyboard's
+focus, so dictation keeps going. The desktop keeps the voice bar with its Send and stop buttons.
 
 ## Code
 
@@ -88,7 +99,8 @@ keyboard's Enter (user request, 2026-10-12). No button takes the keyboard's focu
 - `web-ui/src/voice/use-speech-recognition.ts`, `live-recognition.ts`, `use-voice-input.ts`, `send-voice-input.ts`:
   speech in.
 - `web-ui/src/voice/use-reply-speech.ts`, `speakable-text.ts`: speech out.
-- `web-ui/src/components/detail-panels/voice-chat-bar.tsx`: the bar, shown by `AgentTerminalPanel`'s `voiceChat`
-  prop.
-- `web-ui/src/components/detail-panels/terminal-touch-bar.tsx`: the touch bar; its keys go through
-  `web-ui/src/terminal/terminal-ime-input.ts` like the keyboard's.
+- `web-ui/src/voice/use-voice-chat.ts`: the voice chat state both layouts share (when Send/Enter may send, the preview).
+- `web-ui/src/components/detail-panels/voice-chat-bar.tsx`: the desktop bar, shown by `AgentTerminalPanel`'s
+  `voiceChat` prop; its mic, preview and status are `voice-chat-controls.tsx`.
+- `web-ui/src/components/detail-panels/terminal-touch-bar.tsx`: the touch bar (`VoiceTerminalTouchBar` on an agent
+  session); its keys and Enter go through `web-ui/src/terminal/terminal-ime-input.ts` like the keyboard's.

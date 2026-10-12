@@ -70,6 +70,11 @@ test("a swipe scrolls the scrollback, a fling keeps going, and Jump to bottom re
 	// Finger down: older output.
 	await swipe(cdp, { x: center.x, y: center.y - 120 }, { x: center.x, y: center.y + 120 });
 	await expect(jumpToBottom).toBeVisible();
+	// On the bar's one row, past Enter at its far end.
+	const enterBox = await page.getByRole("button", { name: "Send Enter" }).boundingBox();
+	const jumpBox = await jumpToBottom.boundingBox();
+	expect(Math.round(jumpBox?.y ?? -1)).toBe(Math.round(enterBox?.y ?? -2));
+	expect(jumpBox?.x ?? 0).toBeGreaterThan((enterBox?.x ?? 0) + (enterBox?.width ?? 0));
 	// The button sits in the bar under the terminal: the terminal keeps its size.
 	expect(await boxOf(terminal)).toEqual(terminalBox);
 	const afterSwipe = await sliderTop(terminal);

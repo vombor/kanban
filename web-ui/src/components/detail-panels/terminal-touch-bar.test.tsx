@@ -85,12 +85,24 @@ describe("TerminalTouchBar", () => {
 		return { pointerDown, mouseDown };
 	}
 
-	it("shows the key pad toggle with the pad closed, and no Enter", () => {
-		render();
+	it("shows the key pad toggle and Enter in one row with the pad closed", () => {
+		render(true);
 		expect(button("Show terminal keys").getAttribute("aria-expanded")).toBe("false");
 		expect(container.querySelector('[role="toolbar"][aria-label="Terminal keys"]')).toBeNull();
-		expect(container.querySelector('button[aria-label="Send Enter"]')).toBeNull();
+		const row = container.querySelector('[role="toolbar"][aria-label="Terminal controls"]');
+		const labels = Array.from(row?.querySelectorAll("button") ?? []).map((found) => found.getAttribute("aria-label"));
+		expect(labels).toEqual(["Show terminal keys", "Send Enter", "Jump to bottom"]);
+	});
+
+	it("sends Enter to the terminal without taking focus from the textarea", () => {
+		render();
 		expect(container.querySelector('button[aria-label="Jump to bottom"]')).toBeNull();
+		const { pointerDown, mouseDown } = tap(button("Send Enter"));
+		expect(pointerDown.defaultPrevented).toBe(true);
+		expect(mouseDown.defaultPrevented).toBe(true);
+		expect(document.activeElement).toBe(textarea);
+		expect(textarea.value).toBe("dictated");
+		expect(keys).toEqual(["enter"]);
 	});
 
 	it("jumps to bottom without taking focus from the textarea", () => {

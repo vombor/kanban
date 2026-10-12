@@ -49,15 +49,13 @@ async function openKeyPad(page: Page, cdp: CDPSession): Promise<void> {
 	await expect(page.getByRole("toolbar", { name: "Terminal keys" })).toBeVisible();
 }
 
-test("Down then the keyboard's Enter answers a picker, and the keyboard keeps its focus", async ({ page }) => {
+test("Down then the bar's Enter answers a picker, and the keyboard keeps its focus", async ({ page }) => {
 	const { cdp, readProbe } = await startInputProbe(page, instance);
 	const before = await readTextarea(page);
 	await openKeyPad(page, cdp);
 
 	await tapButton(cdp, page.getByRole("button", { name: "Send Down" }));
-	// No Enter in the bar: the keyboard's own (or the voice bar's Send).
-	await expect(page.getByRole("button", { name: "Send Enter" })).toHaveCount(0);
-	await page.keyboard.press("Enter");
+	await tapButton(cdp, page.getByRole("button", { name: "Send Enter" }));
 	await expect.poll(readProbe).toBe(`\x1b[B${ENTER}`);
 	expect(await isTerminalFocused(page)).toBe(true);
 
@@ -69,6 +67,25 @@ test("Down then the keyboard's Enter answers a picker, and the keyboard keeps it
 	const after = await readTextarea(page);
 	expect(after.focused).toBe(true);
 	expect(after.value).toBe(before.value);
+	await stopInputProbe(page);
+});
+
+test("the bar's Enter sends the dictation so far, and the keyboard keeps dictating after it", async ({ page }) => {
+	const { cdp, readProbe } = await startInputProbe(page, instance);
+	const before = await readTextarea(page);
+
+	await dictate(page, cdp, ["l", "let", "let me", "let me know"]);
+	await tapButton(cdp, page.getByRole("button", { name: "Send Enter" }));
+	await expect.poll(readProbe).toBe(`let me know${ENTER}`);
+	// The keyboard's own submit: the textarea keeps its text and focus, so its voice input isn't reset.
+	expect(await isTerminalFocused(page)).toBe(true);
+	expect((await readTextarea(page)).value).toBe(`${before.value}let me know`);
+
+	// What was sent is final: only the new words go out, never a Backspace into the sent line.
+	await dictate(page, cdp, [" when", " when it is done"]);
+	await tapButton(cdp, page.getByRole("button", { name: "Send Enter" }));
+	await expect.poll(readProbe).toBe(`let me know${ENTER} when it is done${ENTER}`);
+	expect(await isTerminalFocused(page)).toBe(true);
 	await stopInputProbe(page);
 });
 
@@ -125,6 +142,18 @@ test("the bar sits under the terminal, and its key pad refits the terminal once 
 	const fullRows = resizes.at(-1) ?? 0;
 	// Below the TUI, never over it.
 	expect((await boxOf(bar)).top).toBeGreaterThanOrEqual((await boxOf(terminal)).bottom - 0.5);
+	// One row: the key pad toggle and the round Enter (a shell has no voice), thumb-sized.
+	const rowButtons = await bar.getByRole("button").evaluateAll((buttons) =>
+		buttons.map((button) => {
+			const rect = button.getBoundingClientRect();
+			return { label: button.getAttribute("aria-label"), top: rect.top, width: rect.width, height: rect.height };
+		}),
+	);
+	expect(rowButtons.map((button) => button.label)).toEqual(["Show terminal keys", "Send Enter"]);
+	expect(new Set(rowButtons.map((button) => Math.round(button.top))).size).toBe(1);
+	for (const button of rowButtons) {
+		expect(Math.min(button.width, button.height), button.label ?? "").toBeGreaterThanOrEqual(40);
+	}
 
 	await openKeyPad(page, cdp);
 	const keys = page.getByRole("toolbar", { name: "Terminal keys" });

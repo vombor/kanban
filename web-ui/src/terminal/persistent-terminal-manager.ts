@@ -892,17 +892,20 @@ class PersistentTerminal {
 		return true;
 	}
 
-	// A key of the panel's touch key bar (arrows, Tab, Esc, Space). On a
+	// A key of the panel's touch bar (Enter, arrows, Tab, Esc, Space). On a
 	// phone it sends what has been dictated so far first and leaves the textarea
-	// alone, so the keyboard keeps listening (terminal-ime-input.ts).
+	// alone, so the keyboard keeps listening (terminal-ime-input.ts); Enter is
+	// the keyboard's own submit, so the submitted text is final.
 	sendKey(key: TerminalTouchKey): boolean {
 		if (!this.isIoOpen()) {
 			return false;
 		}
-		const data = encodeTerminalTouchKey(key, this.terminal.modes.applicationCursorKeysMode);
 		if (this.imeInput && isTouchInput()) {
-			return this.imeInput.sendKey(data);
+			return key === "enter"
+				? this.imeInput.submit()
+				: this.imeInput.sendKey(encodeTerminalTouchKey(key, this.terminal.modes.applicationCursorKeysMode));
 		}
+		const data = encodeTerminalTouchKey(key, this.terminal.modes.applicationCursorKeysMode);
 		if (!this.isAcceptingUserInput()) {
 			return false;
 		}

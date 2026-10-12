@@ -18,7 +18,7 @@
 // Compositions (xterm shows them at the cursor and sends them at
 // compositionend) and real keys stay xterm's, as on desktop.
 //
-// The keyboard's Enter (submit()) is ours too: xterm's Enter empties the
+// Enter (the keyboard's, or the touch bar's through submit()) is ours too: xterm's Enter empties the
 // textarea, and a keyboard whose text is changed under it ends its input
 // session, voice typing included. Here the textarea keeps its text and what
 // has been submitted is final: the diff only covers the PTY's current line (the
@@ -78,7 +78,7 @@ export interface TerminalImeInputOptions {
 }
 
 export interface TerminalImeInput {
-	// The keyboard's Enter: sends what has been dictated so far, then Enter, and
+	// Enter (the keyboard's or the touch bar's): sends what has been dictated so far, then Enter, and
 	// leaves the textarea and its focus as they are, so the keyboard keeps
 	// listening. False when the terminal blocks input.
 	submit: () => boolean;

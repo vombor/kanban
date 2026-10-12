@@ -491,11 +491,12 @@ describe("persistent terminal reconnect", () => {
 		persistentTerminal.sendKey("down");
 		persistentTerminal.sendKey("shiftTab");
 		persistentTerminal.sendKey("space");
-		expect(stream.sent).toEqual(["\x1b[B", "\x1bOB", "\x1b[Z", " "]);
+		persistentTerminal.sendKey("enter");
+		expect(stream.sent).toEqual(["\x1b[B", "\x1bOB", "\x1b[Z", " ", "\r"]);
 
 		stream.serverClose(1006);
 		expect(persistentTerminal.sendKey("up")).toBe(false);
-		expect(stream.sent).toHaveLength(4);
+		expect(stream.sent).toHaveLength(5);
 	});
 
 	it("gives up after the attempt limit and reconnects from the retry button", async () => {

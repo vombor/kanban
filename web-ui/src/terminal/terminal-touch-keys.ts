@@ -1,9 +1,19 @@
-// The keys of the touch key bar (terminal-touch-bar.tsx): what a phone
-// keyboard lacks to answer an agent TUI's pickers (arrows, Tab, Shift+Tab,
-// Esc), plus Space, which a dictating keyboard may swallow. Enter is the
-// keyboard's own (terminal-ime-input.ts) or the voice bar's Send.
+// The keys of the touch bar (terminal-touch-bar.tsx): what a phone keyboard
+// lacks to answer an agent TUI's pickers (arrows, Tab, Shift+Tab, Esc), plus
+// Space and Enter, which a dictating keyboard may swallow or end its voice
+// input on.
 
-export const TERMINAL_TOUCH_KEYS = ["up", "down", "left", "right", "tab", "shiftTab", "escape", "space"] as const;
+export const TERMINAL_TOUCH_KEYS = [
+	"up",
+	"down",
+	"left",
+	"right",
+	"tab",
+	"shiftTab",
+	"escape",
+	"space",
+	"enter",
+] as const;
 
 export type TerminalTouchKey = (typeof TERMINAL_TOUCH_KEYS)[number];
 
@@ -33,5 +43,7 @@ export function encodeTerminalTouchKey(key: TerminalTouchKey, applicationCursorK
 			return "\x1b";
 		case "space":
 			return " ";
+		case "enter":
+			return "\r";
 	}
 }
