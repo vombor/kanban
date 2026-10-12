@@ -25,6 +25,13 @@ const entrySchema = z.object({
 });
 export type OrchestratorInboxEntry = z.infer<typeof entrySchema>;
 
+/** The inbox's read side, all the tRPC route needs (src/trpc/orchestrator-inbox-api.ts, typechecked by the web-ui). */
+export interface OrchestratorInboxReader {
+	/** Takes every entry of the workspace (the sidebar's prompt hook). */
+	take: (workspaceId: string) => Promise<OrchestratorInboxEntry[]>;
+	status: (workspaceId: string) => Promise<{ pending: number; oldestAt: string | null }>;
+}
+
 export function getOrchestratorInboxPath(workspaceId: string, homePath?: string): string {
 	return getWatchdogWorkspacePaths(workspaceId, homePath).orchestratorInbox;
 }

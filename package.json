@@ -62,7 +62,7 @@
 		"typecheck": "tsc -p tsconfig.json --noEmit",
 		"lint": "npx @biomejs/biome check src test scripts/pipeline-shadow-diff.ts web-ui/src web-ui/tests vitest.config.ts web-ui/vite.config.ts web-ui/vitest.config.ts web-ui/playwright.config.ts web-ui/playwright.mobile.config.ts",
 		"format": "npx @biomejs/biome check --write .",
-		"check": "npx @biomejs/biome check . && npm run typecheck && npm run test",
+		"check": "npx @biomejs/biome check . && npm run typecheck && npm run web:typecheck && npm run test",
 		"test": "vitest run",
 		"test:fast": "vitest run test/runtime test/utilities",
 		"test:integration": "vitest run test/integration",

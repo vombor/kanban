@@ -14,6 +14,7 @@ import { isHomeAgentSessionIdForWorkspace } from "../core/home-agent-session";
 import {
 	getOrchestratorInboxPath,
 	type OrchestratorInboxEntry,
+	type OrchestratorInboxReader,
 	readOrchestratorInbox,
 	updateOrchestratorInbox,
 } from "../state/orchestrator-inbox";
@@ -43,11 +44,8 @@ export interface OrchestratorInboxQueueInput {
 	typeAfter: number;
 }
 
-export interface OrchestratorInbox {
+export interface OrchestratorInbox extends OrchestratorInboxReader {
 	queue: (input: OrchestratorInboxQueueInput) => Promise<{ ok: boolean; pending: number; error?: string }>;
-	/** Takes every entry of the workspace (the sidebar's prompt hook). */
-	take: (workspaceId: string) => Promise<OrchestratorInboxEntry[]>;
-	status: (workspaceId: string) => Promise<{ pending: number; oldestAt: string | null }>;
 	/** Types the entries whose `typeAfter` has passed; returns how many wakes were handed to the sidebar. */
 	flushOverdue: () => Promise<number>;
 	start: (intervalMs?: number) => void;

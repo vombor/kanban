@@ -30,7 +30,7 @@ import {
 	requestRestartRecovery,
 } from "../pipeline/restart-recovery";
 import { listWorkspaceIndexEntries } from "../state/workspace-state";
-import type { RestartUpdateResponse } from "../trpc/restart-update-api";
+import type { RestartUpdateResponse } from "../trpc/restart-update-contract";
 import { createRuntimeTrpcClient } from "./runtime-trpc-client";
 import { resolveWorkspaceTarget, type WorkspaceTarget } from "./workspace-target";
 

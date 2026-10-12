@@ -6,8 +6,7 @@
 import { z } from "zod";
 
 import { describeCaller, type RuntimeCaller } from "../isolation/session-identity";
-import type { OrchestratorInbox } from "../server/orchestrator-inbox";
-import { formatOrchestratorNotices } from "../state/orchestrator-inbox";
+import { formatOrchestratorNotices, type OrchestratorInboxReader } from "../state/orchestrator-inbox";
 
 export const orchestratorInboxTakeResponseSchema = z.object({
 	ok: z.boolean(),
@@ -45,7 +44,7 @@ export function refuseOrchestratorInboxCaller(caller: RuntimeCaller, workspaceId
 }
 
 export function createOrchestratorInboxApi(deps: {
-	inbox: Pick<OrchestratorInbox, "take" | "status">;
+	inbox: OrchestratorInboxReader;
 	log: (message: string) => void;
 }): RuntimeOrchestratorInboxApi {
 	return {

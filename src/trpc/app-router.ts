@@ -215,7 +215,7 @@ import {
 	type RuntimeRestartUpdateApi,
 	restartUpdateRequestSchema,
 	restartUpdateResponseSchema,
-} from "./restart-update-api";
+} from "./restart-update-contract";
 import {
 	type RuntimeShortcutsApi,
 	shortcutAddRequestSchema,

@@ -12,13 +12,12 @@
 // request, refused or not, goes to the server log and `<home>/logs/restart-update.jsonl`.
 import { appendFile, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { z } from "zod";
 
 import { getWorkspacePipelineSettings, readPipelineConfig } from "../config/pipeline-config";
 import type { RuntimeWorkspaceStateResponse } from "../core/api-contract";
 import { decideKanbanOrchestratorCaller } from "../isolation/cli-scope";
 import type { IsolationService } from "../isolation/isolation-service";
-import { describeCaller, type RuntimeCaller } from "../isolation/session-identity";
+import { describeCaller } from "../isolation/session-identity";
 import { getRecoveryScope } from "../pipeline/engine";
 import {
 	isProcessAlive,
@@ -41,27 +40,13 @@ import {
 	KANBAN_IMAGE_REVISION_ENV,
 	readRunningImageBuild,
 } from "../update/container-image";
+import type { RestartUpdateResponse, RuntimeRestartUpdateApi } from "./restart-update-contract";
 
 /** EX_TEMPFAIL: "restart me". The entrypoint logs it as an update restart and exits with it. */
 export const KANBAN_UPDATE_RESTART_EXIT_CODE = 75;
 
 const RESTART_UPDATE_COMMAND = "restart update";
 const IMAGE_REF = `${KANBAN_CONTAINER_IMAGE_REGISTRY}/${KANBAN_CONTAINER_IMAGE_REPOSITORY}:${KANBAN_CONTAINER_IMAGE_TAG}`;
-
-export const restartUpdateRequestSchema = z.object({
-	/** Skip the newer-image check and the In Progress refusal. */
-	force: z.boolean().default(false),
-	/** Check and print what would happen; nothing is tagged, written or stopped. */
-	dryRun: z.boolean().default(false),
-});
-export type RestartUpdateRequest = z.infer<typeof restartUpdateRequestSchema>;
-
-export const restartUpdateResponseSchema = z.object({
-	status: z.enum(["refused", "dry_run", "restarting"]),
-	message: z.string(),
-	lines: z.array(z.string()),
-});
-export type RestartUpdateResponse = z.infer<typeof restartUpdateResponseSchema>;
 
 export interface RestartUpdateLogEntry {
 	at: string;
@@ -73,10 +58,6 @@ export interface RestartUpdateLogEntry {
 	from: ContainerImageBuild | null;
 	to: ContainerImageBuild | null;
 	inProgress: string[];
-}
-
-export interface RuntimeRestartUpdateApi {
-	update: (caller: RuntimeCaller, request: RestartUpdateRequest) => Promise<RestartUpdateResponse>;
 }
 
 export interface CreateRestartUpdateApiDependencies {

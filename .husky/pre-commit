@@ -22,10 +22,10 @@ unset_git_environment() {
 	done
 }
 
-echo "Running type checking and fast tests..."
+echo "Running type checking (runtime and web-ui) and fast tests..."
 (
 	unset_git_environment
-	npm run typecheck && npm run test:precommit
+	npm run typecheck && npm run web:typecheck && npm run test:precommit
 )
 if [ $? -ne 0 ]; then
 	echo "Checks failed."
