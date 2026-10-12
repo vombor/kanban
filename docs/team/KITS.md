@@ -174,7 +174,7 @@ user kit file), never a silent no-op. A missing key means "no answer", so the `d
 | `qa.enabled` | boolean | `qaPolicy`: does a dev card get QA at all | `false` | `true` |
 | `qa.skip.roles` | roles | `qaPolicy`: roles that never get QA | `qa`, `triage`, `calibration`, `plan` | same |
 | `qa.skip.effectiveAgents` | agent ids | `qaPolicy`: effective agents whose cards never get QA | `[]` | `[]` |
-| `qa.routes[]` | `{ devModel, agent, model?, provider?, rules?, why? }` | `qaPolicy`: `devModel` is a regex on the dev card's effective model; first match wins | `[]` | OpenAI-built → `cline` + Haiku 4.5, rules `["drive"]` |
+| `qa.routes[]` | `{ devModel, agent, model?, provider?, rules?, why? }` | `qaPolicy`: `devModel` is a regex on the dev card's effective model; first match wins | `[]` | OpenAI-built → `cline` + Haiku 5.5, rules `["drive"]` |
 | `qa.requireDifferentVendor` | boolean | `qaPolicy`: refuse (answer `none`) a route whose QA model has the dev model's vendor | `false` | `true` |
 | `qa.rules.<name>` | text | QA prompt steps a route names in `rules`; `{outbox}` is filled in | `{}` | `drive` |
 | `qa.blurb` | text | the "Project: …" line of the QA prompt | `""` | `""` (foo overrides it) |
@@ -528,7 +528,7 @@ names `team` runs on `team-cloud`, `kanban doctor` warns and `--fix` (and `kanba
 - **Plan:** plan cards on Claude with the Claude CLI's default model (no pin), starting in plan mode (user
   2026-10-07). `plan.candidates` lists only Claude for now; benchmarking other models and auditioning Copilot and
   Codex come later and need no schema change.
-- **QA:** every dev card. OpenAI-built cards (`(^|\.)openai\.|^gpt-`) get Cline on Haiku 4.5 plus the `drive` rule
+- **QA:** every dev card. OpenAI-built cards (`(^|\.)openai\.|^gpt-`) get Cline on Haiku 5.5 plus the `drive` rule
   ("log in and drive the changed path, screenshot it"). Everything else gets Codex with its own model. The QA
   vendor must differ from the dev vendor.
 - **FAIL:** same-model rework for 3 rounds (conflicts too, with rebase notes), then the **fallback**.

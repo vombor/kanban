@@ -70,7 +70,7 @@ describe("tiers feature", () => {
 		]);
 		const qa = report.tiers.find((tier) => tier.name === "qa");
 		expect(qa?.entries.map((entry) => [entry.model, entry.dropped, entry.picked])).toEqual([
-			["us.anthropic.claude-haiku-4-5-20251001-v1:0", false, true],
+			["us.anthropic.claude-haiku-5-5", false, true],
 			["us.amazon.nova-2-lite-v1:0", false, false],
 		]);
 		expect(report.dropped.map((entry) => entry.model)).not.toContain("us.amazon.nova-2-lite-v1:0");

@@ -38,11 +38,11 @@
 				"devModel": "(^|\\.)openai\\.|^gpt-",
 				"agent": "cline",
 				"provider": "bedrock",
-				"model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+				"model": "us.anthropic.claude-haiku-5-5",
 				"rules": [
 					"drive"
 				],
-				"why": "OpenAI-built cards: Haiku 4.5 on Cline (user 10/06 19:5xZ, calibration qa-models-v5..v7)"
+				"why": "OpenAI-built cards: Haiku 5.5 on Cline (user 10/06 19:5xZ, calibration qa-models-v5..v7 on Haiku 4.5; Haiku 5.5 since user 2026-10-12)"
 			}
 		],
 		"rules": {
@@ -116,8 +116,8 @@
 		"qa": [
 			{
 				"provider": "bedrock",
-				"model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-				"note": "candidate, calibration qa-models-v5"
+				"model": "us.anthropic.claude-haiku-5-5",
+				"note": "candidate, calibration qa-models-v5 (on Haiku 4.5; Haiku 5.5 since user 2026-10-12)"
 			},
 			{
 				"provider": "bedrock",

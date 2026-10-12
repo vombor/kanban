@@ -104,7 +104,7 @@ describe("QA gate", () => {
 			reviewsTaskId: "d1111",
 			// team routes OpenAI-built cards to Haiku on Cline.
 			agentId: "cline",
-			agentSettings: { providerId: "bedrock", modelId: "us.anthropic.claude-haiku-4-5-20251001-v1:0" },
+			agentSettings: { providerId: "bedrock", modelId: "us.anthropic.claude-haiku-5-5" },
 			baseRef: "main",
 		});
 		expect(tasks[0]?.prompt).toContain("You are the QA reviewer (round 1) for Kanban dev card d1111");
@@ -730,7 +730,7 @@ describe("QA gate", () => {
 		expect(kinds(harness.actions)).toEqual(["finishTask:qa001"]);
 		const log = readFileSync(harness.qaLogPath("foo"), "utf8");
 		expect(log).toContain("## Claude QA d1111: FAIL (2026-10-07 10:00 UTC)\n- cart broken");
-		expect(log).toContain("- Reviewer: cline on bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0, QA card qa001");
+		expect(log).toContain("- Reviewer: cline on bedrock/us.anthropic.claude-haiku-5-5, QA card qa001");
 		const state = await harness.store.load("foo");
 		expect(readQaVerdictRecords(state.cards.d1111)).toMatchObject([
 			{
@@ -963,7 +963,7 @@ describe("QA gate", () => {
 				role: "qa",
 				reviewsTaskId: "d1111",
 				agentId: "cline",
-				agentSettings: { modelId: "us.anthropic.claude-haiku-4-5-20251001-v1:0" },
+				agentSettings: { modelId: "us.anthropic.claude-haiku-5-5" },
 			},
 		]);
 		expect(harness.actions.some((action) => action.kind === "blockTask")).toBe(false);

@@ -251,7 +251,7 @@ describe("runoff create", () => {
 		]);
 		const novaDropped = { ...team, dropped: [...(team.dropped ?? []), { model: "us.amazon.nova-2-lite-v1:0" }] };
 		expect(getTierContenders(novaDropped, "qa", "cline").map((contender) => contender.model)).toEqual([
-			"us.anthropic.claude-haiku-4-5-20251001-v1:0",
+			"us.anthropic.claude-haiku-5-5",
 		]);
 		expect(() => getTierContenders(team, "tier9", "cline")).toThrow('tier "tier9" is not in kit "team-cloud"');
 	});

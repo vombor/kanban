@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import type { QaPolicyAnswer } from "../../../src/kits/policy";
+import { getModelVendor, type QaPolicyAnswer } from "../../../src/kits/policy";
+import { getBuiltInKits, getDefaultKit, resolveKitLayers } from "../../../src/kits/resolve-kit";
 import { createCardHistory, createEffectiveCard } from "../../utilities/effective-card";
 import { createTeamPolicy, toFooEffectiveCard } from "../../utilities/legacy-team-fixtures";
 
 // Ported from archive/devteam-kit:test/qa-route.test.cjs@9828540 (user rule 10/06: the QA vendor differs from the dev
-// vendor). OpenAI-built cards get Haiku 4.5 on Cline plus the "drive" rule; every other card gets the default QA
+// vendor). OpenAI-built cards get Haiku 5.5 on Cline (4.5 until 2026-10-12) plus the "drive" rule; every other card gets the default QA
 // agent (Codex, with its own model config). Here the answers come from the built-in `team-cloud` kit alone.
-const HAIKU = "us.anthropic.claude-haiku-4-5-20251001-v1:0";
+const HAIKU = "us.anthropic.claude-haiku-5-5";
 const haiku = { kind: "qa", agentId: "cline", model: { provider: "bedrock", model: HAIKU }, route: "qa.routes[0]" };
 const codex = { kind: "qa", agentId: "codex", model: null, route: null };
 
@@ -24,6 +25,27 @@ function ruleNames(answer: QaPolicyAnswer): string[] {
 }
 
 describe("team kit QA routing", () => {
+	it("names Haiku 5.5 wherever it named Haiku 4.5, and no route QAs a card from its own vendor", () => {
+		const team = getBuiltInKits().get("team-cloud");
+		const resolved = team ? resolveKitLayers(getDefaultKit(), team, {}) : null;
+		if (!resolved?.ok) {
+			throw new Error("team-cloud does not resolve");
+		}
+		const { kit } = resolved;
+		expect(JSON.stringify(kit)).not.toMatch(/haiku-4-5/u);
+		expect(kit.qa?.routes?.map((route) => route.model)).toEqual([HAIKU]);
+		expect(kit.tiers?.qa?.map((entry) => entry.model)).toContain(HAIKU);
+		expect(kit.qa?.requireDifferentVendor).toBe(true);
+		expect(getModelVendor(HAIKU)).toBe("anthropic");
+		for (const route of kit.qa?.routes ?? []) {
+			// The route's own devModel pattern must not match a model of the QA model's vendor.
+			const devModel = new RegExp(route.devModel, "u");
+			for (const model of ["us.anthropic.claude-opus-5-5", HAIKU, "claude-sonnet-5-5"]) {
+				expect(devModel.test(model), `${route.devModel} vs ${model}`).toBe(false);
+			}
+		}
+	});
+
 	it("sends OpenAI-built cards to Haiku on Cline with the drive rule", () => {
 		for (const model of [
 			"us.openai.gpt-6.1-sol",

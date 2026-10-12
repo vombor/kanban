@@ -49,6 +49,11 @@ describe("team kit parity with foo's legacy kit.config.json", () => {
 		});
 	});
 
+	// The legacy dry runs QA'd OpenAI-built cards on Haiku 4.5; kits/team-cloud.json names Haiku 5.5 there since
+	// 2026-10-12 (user), so only that model differs from the legacy answer.
+	const kitQaModel = (legacyModel: string | null) =>
+		legacyModel === "us.anthropic.claude-haiku-4-5-20251001-v1:0" ? "us.anthropic.claude-haiku-5-5" : legacyModel;
+
 	describe("QA routing matches qa/qa-card.cjs --dry-run", () => {
 		for (const fixture of readLegacyQaRoutes()) {
 			it(fixture.name, () => {
@@ -67,7 +72,7 @@ describe("team kit parity with foo's legacy kit.config.json", () => {
 				}).toEqual({
 					agent: fixture.qaAgent,
 					provider: fixture.qaProvider,
-					model: fixture.qaModel,
+					model: kitQaModel(fixture.qaModel),
 					route: fixture.route === null ? null : `qa.routes[${fixture.route}]`,
 					rules: fixture.rules.length,
 				});

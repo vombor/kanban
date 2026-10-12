@@ -56,14 +56,15 @@ export interface ImportKitMapping {
 
 const TEAM_KIT_NAME = "team-cloud";
 
-// The legacy kit's built-in qaRoutes, used when the file sets none (legacy kit lib/config.cjs DEFAULTS.qaRoutes).
+// The legacy kit's built-in qaRoutes, used when the file sets none (legacy kit lib/config.cjs DEFAULTS.qaRoutes), with
+// its Haiku 4.5 replaced by Haiku 5.5 as in kits/team-cloud.json (user 2026-10-12), so an import never pins 4.5.
 const LEGACY_DEFAULT_QA_ROUTES: unknown[] = [
 	{
 		devModel: "(^|\\.)openai\\.|^gpt-",
 		agent: "cline",
-		model: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+		model: "us.anthropic.claude-haiku-5-5",
 		rules: ["drive"],
-		why: "OpenAI-built cards: Haiku 4.5 on Cline (user 10/06 19:5xZ, calibration qa-models-v5..v7)",
+		why: "OpenAI-built cards: Haiku 5.5 on Cline (user 10/06 19:5xZ, calibration qa-models-v5..v7 on Haiku 4.5; Haiku 5.5 since user 2026-10-12)",
 	},
 ];
 

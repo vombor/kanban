@@ -36,7 +36,7 @@ describe("routing policy evaluator", () => {
 		expect(openai).toMatchObject({
 			kind: "qa",
 			agentId: "cline",
-			model: { model: "us.anthropic.claude-haiku-4-5-20251001-v1:0" },
+			model: { model: "us.anthropic.claude-haiku-5-5" },
 			route: "qa.routes[0]",
 		});
 		expect(openai.kind === "qa" && openai.promptParts.rules[0]).toContain("DRIVE THE CHANGED PATH");
