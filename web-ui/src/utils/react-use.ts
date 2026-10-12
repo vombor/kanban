@@ -38,6 +38,13 @@ export function useWindowEvent<K extends keyof WindowEventMap>(
 	useReactUseEvent(name, handler as ((event?: Event) => void) | null, getWindowTarget(), options);
 }
 
+export function useVisualViewportEvent(
+	name: keyof VisualViewportEventMap,
+	handler: ((event: Event) => void) | null,
+): void {
+	useReactUseEvent(name, handler as ((event?: Event) => void) | null, getWindowTarget()?.visualViewport ?? null);
+}
+
 export function useDocumentEvent<K extends keyof DocumentEventMap>(
 	name: K,
 	handler: ((event: DocumentEventMap[K]) => void) | null,

@@ -249,7 +249,10 @@ export function ProjectNavigationPanel({
 		<aside
 			className={cn(
 				"flex flex-col min-h-0 overflow-hidden bg-surface-1 shrink-0",
-				isMobile ? "fixed inset-y-0 left-0 z-50 shadow-2xl" : "relative",
+				// Above an open on-screen keyboard (on-screen-keyboard-viewport.ts), for the sidebar agent's terminal.
+				isMobile
+					? "fixed top-[var(--kb-visible-top,0px)] bottom-[var(--kb-keyboard-inset,0px)] left-0 z-50 shadow-2xl"
+					: "relative",
 			)}
 			onAnimationEnd={isMobileClosing ? handleMobileCloseAnimationEnd : undefined}
 			style={

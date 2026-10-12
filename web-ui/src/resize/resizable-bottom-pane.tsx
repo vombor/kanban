@@ -2,6 +2,7 @@ import type { ReactElement, MouseEvent as ReactMouseEvent, ReactNode } from "rea
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useIsMobile } from "@/hooks/use-is-mobile";
+import { KEYBOARD_BOTTOM_INSET_VAR, KEYBOARD_VISIBLE_HEIGHT_VAR } from "@/resize/on-screen-keyboard-viewport";
 import { useUnmount, useWindowEvent } from "@/utils/react-use";
 
 const NAVBAR_HEIGHT_PX = 40;
@@ -159,10 +160,14 @@ export function ResizableBottomPane({
 			<div
 				style={{
 					position: "fixed",
-					bottom: 0,
+					// Above an open on-screen keyboard and no taller than what it leaves
+					// visible; without one the variables are unset (on-screen-keyboard-viewport.ts).
+					bottom: `var(${KEYBOARD_BOTTOM_INSET_VAR}, 0px)`,
 					left: 0,
 					right: 0,
-					height: isExpanded ? "100svh" : "65svh",
+					height: isExpanded
+						? `var(${KEYBOARD_VISIBLE_HEIGHT_VAR}, 100svh)`
+						: `min(65svh, var(${KEYBOARD_VISIBLE_HEIGHT_VAR}, 100svh))`,
 					zIndex: 40,
 					display: "flex",
 					flexDirection: "column",

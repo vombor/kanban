@@ -929,6 +929,22 @@ body.kb-dependency-link-mode {
 	}
 }
 
+/* -- On-screen keyboard on a phone --
+   While a keyboard is open the app fills only the part of the screen it
+   leaves visible (on-screen-keyboard-viewport.ts sets the variables and the
+   attribute, and removes them when it closes), so a terminal's input line and
+   its key bar stay above the keyboard. Fixed, because iOS scrolls the visual
+   viewport down the layout one to show the focused field. */
+@media (pointer: coarse) {
+	html[data-kb-keyboard-open] .kb-app-shell {
+		position: fixed;
+		left: 0;
+		right: 0;
+		top: var(--kb-visible-top, 0px);
+		height: var(--kb-visible-height, 100svh);
+	}
+}
+
 /* -- Terminal light-mode inversion --
    Terminal renders dark internally so CLI agents output correct ANSI colors.
    CSS filter inverts the xterm canvas, then a multiply-blend overlay tints

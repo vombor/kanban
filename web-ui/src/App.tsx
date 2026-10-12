@@ -46,6 +46,8 @@ import { useDocumentVisibility } from "@/hooks/use-document-visibility";
 import { useFaviconBadge } from "@/hooks/use-favicon-badge";
 import { useGitActions } from "@/hooks/use-git-actions";
 import { useHomeSidebarAgentPanel } from "@/hooks/use-home-sidebar-agent-panel";
+import { useIsTouchDevice } from "@/hooks/use-is-touch-device";
+import { useOnScreenKeyboardViewport } from "@/hooks/use-on-screen-keyboard-viewport";
 import { useOrchestratorWaitAlerts } from "@/hooks/use-orchestrator-wait-alerts";
 import { parseRemovedProjectPathFromStreamError, useProjectNavigation } from "@/hooks/use-project-navigation";
 import { useProjectUiState } from "@/hooks/use-project-ui-state";
@@ -622,6 +624,10 @@ export default function App(): ReactElement {
 		setSelectedTaskId,
 	});
 
+	// Phones only: the app stays above an open on-screen keyboard.
+	const isTouchDevice = useIsTouchDevice();
+	useOnScreenKeyboardViewport(isTouchDevice);
+
 	useAppHotkeys({
 		selectedCard,
 		isDetailTerminalOpen,
@@ -782,7 +788,7 @@ export default function App(): ReactElement {
 
 	return (
 		<LayoutCustomizationsProvider onResetBottomTerminalLayoutCustomizations={resetBottomTerminalLayoutCustomizations}>
-			<div className="flex h-[100svh] min-w-0 flex-col overflow-hidden">
+			<div className="kb-app-shell flex h-[100svh] min-w-0 flex-col overflow-hidden">
 				<div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
 					{!selectedCard ? (
 						<ProjectNavigationPanel
