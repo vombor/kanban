@@ -62,8 +62,14 @@ describe("the vetted model registry (models/vetted.json)", () => {
 		expect(status("cline", "lemonade", "Laguna-S-2.1-GGUF-UD-Q4_K_XL", "plan")).toBe("vetted");
 		expect(status("cline", "lemonade", "gemma-4-31B-it-GGUF-Q4_K_M", "qa")).toBe("vetted");
 		expect(status("cline", "lemonade", "gemma-4-31B-it-GGUF-Q4_K_M", "dev")).toBe("provisional");
+		// Vetted by kanban models vet on 2026-10-12 for dev and qa, never for plan.
+		expect(status("cline", "lemonade", "Laguna-XS-2.1-GGUF-Q4_K_M", "dev")).toBe("vetted");
+		expect(status("cline", "lemonade", "Laguna-XS-2.1-GGUF-Q4_K_M", "plan")).toBe("unknown");
+		expect(status("cline", "cline-pass", "cline-pass/kimi-k3", "qa")).toBe("vetted");
+		expect(status("cline", "cline-pass", "cline-pass/kimi-k3", "plan")).toBe("unknown");
 		// Another provider is another combination.
 		expect(status("cline", "lemonade", "us.anthropic.claude-haiku-5-5", "qa")).toBe("unknown");
+		expect(status("cline", "lemonade", "cline-pass/glm-5.3", "dev")).toBe("unknown");
 	});
 
 	it("holds the kits' old dropped lists: rejected on every agent and provider, never picked by a tier", () => {

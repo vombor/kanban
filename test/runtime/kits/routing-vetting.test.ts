@@ -72,6 +72,27 @@ describe("checkRouting", () => {
 		expect(getWorkspaceRoutingVetting(config, "other").allowProvisional).toBe(false);
 	});
 
+	it("allows the combinations kanban models vet passed on 2026-10-12 for dev and qa, and none of them for plan", () => {
+		const combinations = [
+			{ agentId: "cline" as const, provider: "lemonade", model: "Laguna-XS-2.1-GGUF-Q4_K_M" },
+			...[
+				"mimo-v2.6-flash",
+				"mimo-v2.6-pro",
+				"deepseek-v4.1-flash",
+				"glm-5.3",
+				"qwen3.8-max",
+				"muse-spark-1.3-contributor",
+				"kimi-k3",
+				"minimax-m3",
+			].map((model) => ({ agentId: "cline" as const, provider: "cline-pass", model: `cline-pass/${model}` })),
+		];
+		for (const combination of combinations) {
+			expect(checkRouting(strict, "dev", combination).ok, combination.model).toBe(true);
+			expect(checkRouting(strict, "qa", combination).ok, combination.model).toBe(true);
+			expect(checkRouting(PROVISIONAL_ALLOWED, "plan", combination).ok, combination.model).toBe(false);
+		}
+	});
+
 	it("lists every route of foo's kit as allowed, and the plain team kit's provisional defaults as refused", () => {
 		const foo = checkKitRoutes(resolveTeam(FOO), strict);
 		expect(foo.map((route) => [route.label, route.role, route.check.ok])).toEqual([

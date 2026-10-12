@@ -171,9 +171,25 @@ For Kanban it is a cloud provider: a QA card on it takes a cloud QA slot. Its tu
 (`SUBSCRIPTION_PROVIDER_IDS`, as Cline itself prices them), `getModelVendor()` reads the model after the
 `cline-pass/` prefix, and its account answers ("No access to ClinePass subscription models yet", "Organization
 accounts cannot use ClinePass subscriptions") escalate to the orchestrator at once as provider errors, while its usage
-limit gets the provider retries first. It has no outage probe. No ClinePass combination is vetted yet:
-`kanban models vet --agent cline --provider cline-pass --model cline-pass/<model> --role <role>` proposes one, and ends
-inconclusive (`sign_in`) at once while no key is stored.
+limit gets the provider retries first. It has no outage probe.
+`kanban models vet --agent cline --provider cline-pass --model cline-pass/<model> --role <role>` proposes a
+combination, and ends inconclusive (`sign_in`) at once while no key is stored.
+
+Vetted by `kanban models vet` on cline 3.0.70 (2026-10-12, run ids in each entry; $0 per run on the subscription), all
+`cline + cline-pass` for dev and qa, none for plan:
+
+| Model | dev | qa | plan |
+| --- | --- | --- | --- |
+| cline-pass/mimo-v2.6-flash | vetted | vetted | |
+| cline-pass/mimo-v2.6-pro | vetted | vetted | |
+| cline-pass/deepseek-v4.1-flash | vetted | vetted | |
+| cline-pass/glm-5.3 | vetted | vetted | |
+| cline-pass/qwen3.8-max | vetted | vetted | |
+| cline-pass/muse-spark-1.3-contributor | vetted | vetted | |
+| cline-pass/kimi-k3 | vetted (ClinePass: "will consume usage faster than others") | vetted | |
+| cline-pass/minimax-m3 | vetted | vetted | |
+
+The same day `cline + lemonade + Laguna-XS-2.1-GGUF-Q4_K_M` was vetted for dev and qa (not plan).
 
 ## Local provider: Lemonade
 
