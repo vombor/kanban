@@ -3,7 +3,15 @@ import { join } from "node:path";
 import { type CDPSession, expect, type Locator, test } from "@playwright/test";
 
 import { type DevInstance, startDevInstance } from "./dev-instance";
-import { isTerminalFocused, openShellTerminal, type Point, tapToFocus } from "./terminal-page";
+import {
+	boxOf,
+	isTerminalFocused,
+	openShellTerminal,
+	type Point,
+	recordShellResizes,
+	settledCount,
+	tapToFocus,
+} from "./terminal-page";
 
 // Swipe scrolling in the shared agent terminal panel on a phone (Pixel 7
 // profile: touch, coarse pointer). The home shell terminal uses the same panel
@@ -42,6 +50,7 @@ async function sliderTop(terminal: Locator): Promise<number> {
 }
 
 test("a swipe scrolls the scrollback, a fling keeps going, and Jump to bottom returns", async ({ page }) => {
+	const resizes = recordShellResizes(page);
 	const { cdp, terminal } = await openShellTerminal(page, instance);
 
 	// A tap still focuses the terminal (which opens the on-screen keyboard).
@@ -55,10 +64,14 @@ test("a swipe scrolls the scrollback, a fling keeps going, and Jump to bottom re
 	await expect(jumpToBottom).toHaveCount(0);
 	await page.waitForTimeout(1_000);
 	const bottomTop = await sliderTop(terminal);
+	const terminalBox = await boxOf(terminal);
+	const resizeCount = await settledCount(resizes);
 
 	// Finger down: older output.
 	await swipe(cdp, { x: center.x, y: center.y - 120 }, { x: center.x, y: center.y + 120 });
 	await expect(jumpToBottom).toBeVisible();
+	// The button sits in the bar under the terminal: the terminal keeps its size.
+	expect(await boxOf(terminal)).toEqual(terminalBox);
 	const afterSwipe = await sliderTop(terminal);
 	expect(afterSwipe).toBeLessThan(bottomTop);
 	// The swipe didn't type anything or blur the terminal.
@@ -84,6 +97,7 @@ test("a swipe scrolls the scrollback, a fling keeps going, and Jump to bottom re
 	expect(await sliderTop(terminal)).toBeCloseTo(bottomTop, 0);
 	// Tapping the button kept the terminal focused (the keyboard stays open).
 	expect(await isTerminalFocused(page)).toBe(true);
+	expect(await settledCount(resizes)).toBe(resizeCount);
 
 	// Finger up from the bottom stays at the bottom.
 	await swipe(cdp, { x: center.x, y: center.y + 100 }, { x: center.x, y: center.y - 100 });

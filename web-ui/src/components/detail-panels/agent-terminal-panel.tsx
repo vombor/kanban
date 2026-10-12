@@ -6,7 +6,7 @@ import { useMemo } from "react";
 
 import { TerminalConnectionStatusIndicator } from "@/components/detail-panels/terminal-connection-status";
 import { TerminalLoadingOverlay } from "@/components/detail-panels/terminal-loading-overlay";
-import { TerminalTouchControls } from "@/components/detail-panels/terminal-touch-controls";
+import { TerminalTouchBar } from "@/components/detail-panels/terminal-touch-bar";
 import { VoiceChatBar } from "@/components/detail-panels/voice-chat-bar";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
@@ -211,10 +211,7 @@ function AgentTerminalPanelLayout({
 	} = sessionControls;
 	// Phones only: desktop has the scrollbar and the wheel, and stays unchanged.
 	const isTouchDevice = useIsTouchDevice();
-	const showJumpToBottom = isTouchDevice && isScrolledUp && readiness?.state !== "loading";
-	// Enter and the keys a phone keyboard lacks (arrows, Tab, Esc) for a TUI's pickers;
-	// a key on the keyboard would end its voice input.
-	const showKeys = isTouchDevice && readiness?.state === "ready";
+	const showJumpToBottom = isScrolledUp && readiness?.state !== "loading";
 	const hasHeader = showSessionToolbar || Boolean(onClose);
 	const canStop = summary?.state === "running" || summary?.state === "awaiting_review";
 	const statusLabel = useMemo(() => describeState(summary), [summary]);
@@ -366,14 +363,11 @@ function AgentTerminalPanelLayout({
 					className="kb-terminal-container touch-pan-x touch-pinch-zoom"
 					style={{ height: "100%", width: "100%", background: terminalBackgroundColor }}
 				/>
-				<TerminalTouchControls
-					showJumpToBottom={showJumpToBottom}
-					showKeys={showKeys}
-					onJumpToBottom={scrollToBottom}
-					onKey={sendKey}
-				/>
 				<TerminalLoadingOverlay readiness={readiness} />
 			</div>
+			{isTouchDevice ? (
+				<TerminalTouchBar showJumpToBottom={showJumpToBottom} onJumpToBottom={scrollToBottom} onKey={sendKey} />
+			) : null}
 			{voiceChat ? <VoiceChatBar taskId={taskId} workspaceId={workspaceId} summary={summary} /> : null}
 			{lastError ? (
 				<div className="flex gap-2 rounded-none border-t border-status-red/30 bg-status-red/10 p-3 text-[13px] text-status-red">

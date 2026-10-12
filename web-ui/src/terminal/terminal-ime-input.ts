@@ -18,13 +18,13 @@
 // Compositions (xterm shows them at the cursor and sends them at
 // compositionend) and real keys stay xterm's, as on desktop.
 //
-// Enter (the keyboard's, or the panel's Enter button through submit()) is ours
-// too: xterm's Enter empties the textarea, and a keyboard whose text is changed
-// under it ends its input session, voice typing included. Here the textarea
-// keeps its text and what has been submitted is final: the diff only covers the
-// PTY's current line (the text after the submitted part), so Backspaces never
-// reach a prompt that has already been sent, and a later rewrite of a submitted
-// hypothesis sends only what follows it.
+// The keyboard's Enter (submit()) is ours too: xterm's Enter empties the
+// textarea, and a keyboard whose text is changed under it ends its input
+// session, voice typing included. Here the textarea keeps its text and what
+// has been submitted is final: the diff only covers the PTY's current line (the
+// text after the submitted part), so Backspaces never reach a prompt that has
+// already been sent, and a later rewrite of a submitted hypothesis sends only
+// what follows it.
 //
 // The panel's key bar (arrows, Tab, Esc, Space) goes through sendKey() the same
 // way: the TUI acts on the key (moves its cursor, picks an option), so what has
@@ -78,9 +78,9 @@ export interface TerminalImeInputOptions {
 }
 
 export interface TerminalImeInput {
-	// Sends what has been dictated so far, then Enter, and leaves the textarea
-	// and its focus as they are, so the keyboard keeps listening. False when the
-	// terminal blocks input.
+	// The keyboard's Enter: sends what has been dictated so far, then Enter, and
+	// leaves the textarea and its focus as they are, so the keyboard keeps
+	// listening. False when the terminal blocks input.
 	submit: () => boolean;
 	// The same for any key's sequence (the key bar's arrows, Tab, Esc, Space).
 	sendKey: (data: string) => boolean;

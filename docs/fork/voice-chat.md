@@ -63,6 +63,15 @@ Microsoft's) speech service and gets the text back. Safari may use Apple's serve
 Kanban never sees the audio, only the text you send. Speech out uses the system's voices. Don't use the mic for
 anything you wouldn't send to that service.
 
+## On a phone
+
+On a touch screen every terminal panel (card agent, sidebar orchestrator, shell terminals) has a touch bar between the
+terminal and the voice bar, in the panel, so it never covers the TUI and moves above the on-screen keyboard with the
+panel. It holds the key pad toggle and, while you are scrolled up, Jump to bottom. The toggle opens a second row
+with the keys a phone keyboard lacks for an agent's pickers: Esc, Shift+Tab, Tab, Space and the arrows (held arrows
+repeat, arrows follow the TUI's cursor-key mode). There is no Enter button: use the voice bar's Send or the
+keyboard's Enter (user request, 2026-10-12). No button takes the keyboard's focus, so dictation keeps going.
+
 ## Code
 
 - `web-ui/src/voice/speech-apis.ts`: feature detection and the final/interim split of a result list.
@@ -71,3 +80,5 @@ anything you wouldn't send to that service.
 - `web-ui/src/voice/use-reply-speech.ts`, `speakable-text.ts`: speech out.
 - `web-ui/src/components/detail-panels/voice-chat-bar.tsx`: the bar, shown by `AgentTerminalPanel`'s `voiceChat`
   prop.
+- `web-ui/src/components/detail-panels/terminal-touch-bar.tsx`: the touch bar; its keys go through
+  `web-ui/src/terminal/terminal-ime-input.ts` like the keyboard's.

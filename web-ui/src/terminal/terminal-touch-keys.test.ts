@@ -25,7 +25,6 @@ describe("encodeTerminalTouchKey", () => {
 			expect(encodeTerminalTouchKey("shiftTab", applicationCursorKeys)).toBe("\x1b[Z");
 			expect(encodeTerminalTouchKey("escape", applicationCursorKeys)).toBe("\x1b");
 			expect(encodeTerminalTouchKey("space", applicationCursorKeys)).toBe(" ");
-			expect(encodeTerminalTouchKey("enter", applicationCursorKeys)).toBe("\r");
 		}
 	});
 });

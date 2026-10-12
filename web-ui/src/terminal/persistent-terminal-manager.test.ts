@@ -490,8 +490,8 @@ describe("persistent terminal reconnect", () => {
 		terminal.modes.applicationCursorKeysMode = true;
 		persistentTerminal.sendKey("down");
 		persistentTerminal.sendKey("shiftTab");
-		persistentTerminal.sendKey("enter");
-		expect(stream.sent).toEqual(["\x1b[B", "\x1bOB", "\x1b[Z", "\r"]);
+		persistentTerminal.sendKey("space");
+		expect(stream.sent).toEqual(["\x1b[B", "\x1bOB", "\x1b[Z", " "]);
 
 		stream.serverClose(1006);
 		expect(persistentTerminal.sendKey("up")).toBe(false);

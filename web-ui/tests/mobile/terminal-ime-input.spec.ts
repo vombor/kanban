@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import { type DevInstance, startDevInstance } from "./dev-instance";
 import { DEL, dictate, ENTER, readTextarea, startInputProbe, stopInputProbe } from "./input-probe";
-import { isTerminalFocused, tap } from "./terminal-page";
+import { isTerminalFocused } from "./terminal-page";
 
 // Phone keyboard and dictation input into the shared agent terminal panel
 // (Pixel 7 profile), through Chrome's real IME pipeline (CDP Input.ime*):
@@ -34,8 +34,6 @@ test("dictation that takes back its interim results reaches the PTY once", async
 
 test("dictation keeps going across sends while the TUI repaints", async ({ page }) => {
 	const { cdp, readProbe } = await startInputProbe(page, instance, "busy");
-	const enterButton = page.getByRole("button", { name: "Send Enter" });
-	await expect(enterButton).toBeVisible();
 
 	// xterm moves its textarea to the cursor on every cursor move; on a phone it stays put.
 	// (It still holds the probe command's Shift+letters: real keys are xterm's.)
@@ -43,13 +41,9 @@ test("dictation keeps going across sends while the TUI repaints", async ({ page 
 	await dictate(page, cdp, ["l", "let", "let me", "let me know"]);
 	await expect.poll(readProbe).toBe("let me know");
 
-	// The panel's Enter: the dictation so far and Enter go out, the textarea
+	// The keyboard's Enter: the dictation so far and Enter go out, the textarea
 	// keeps its text and its focus, so the keyboard's voice input isn't reset.
-	const box = await enterButton.boundingBox();
-	if (!box) {
-		throw new Error("The Enter button has no box.");
-	}
-	await tap(cdp, { x: box.x + box.width / 2, y: box.y + box.height / 2 });
+	await page.keyboard.press("Enter");
 	await expect.poll(readProbe).toBe(`let me know${ENTER}`);
 	expect(await isTerminalFocused(page)).toBe(true);
 	expect((await readTextarea(page)).value).toBe(`${before.value}let me know`);
@@ -66,7 +60,7 @@ test("dictation keeps going across sends while the TUI repaints", async ({ page 
 	}
 	await cdp.send("Input.insertText", { text: " and then" });
 	await page.waitForTimeout(100);
-	// The keyboard's own Enter doesn't empty the textarea either.
+	// Again after more dictation and a composition: the textarea keeps its text.
 	await page.keyboard.press("Enter");
 	await expect.poll(readProbe).toBe(`let me know${ENTER} when it is done and then${ENTER}`);
 	const after = await readTextarea(page);

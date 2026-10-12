@@ -1,7 +1,14 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
 
 import { type DevInstance, startDevInstance } from "./dev-instance";
-import { isTerminalFocused, openShellTerminal, tapToFocus } from "./terminal-page";
+import {
+	boxOf,
+	isTerminalFocused,
+	openShellTerminal,
+	recordShellResizes,
+	settledCount,
+	tapToFocus,
+} from "./terminal-page";
 
 // The terminal panel stays above the on-screen keyboard (Pixel 7 profile).
 //
@@ -81,36 +88,6 @@ async function animateKeyboard(page: Page, from: number, to: number): Promise<vo
 	);
 }
 
-// The rows of every resize the home shell's terminal sent to its PTY.
-function recordShellResizes(page: Page): number[] {
-	const rows: number[] = [];
-	page.on("websocket", (socket) => {
-		const url = new URL(socket.url());
-		if (!url.pathname.endsWith("/api/terminal/control") || url.searchParams.get("taskId") !== "__home_terminal__") {
-			return;
-		}
-		socket.on("framesent", (frame) => {
-			if (typeof frame.payload !== "string") {
-				return;
-			}
-			const message = JSON.parse(frame.payload) as { type?: string; rows?: number };
-			if (message.type === "resize" && typeof message.rows === "number") {
-				rows.push(message.rows);
-			}
-		});
-	});
-	return rows;
-}
-
-async function boxOf(locator: Locator): Promise<{ top: number; bottom: number }> {
-	await expect(locator).toBeVisible();
-	const box = await locator.boundingBox();
-	if (!box) {
-		throw new Error("No box.");
-	}
-	return { top: box.y, bottom: box.y + box.height };
-}
-
 async function expectInside(locator: Locator, top: number, bottom: number): Promise<void> {
 	await expect(async () => {
 		const box = await boxOf(locator);
@@ -119,27 +96,16 @@ async function expectInside(locator: Locator, top: number, bottom: number): Prom
 	}).toPass({ timeout: 5_000 });
 }
 
-// Waits until no resize came for a while, then returns how many there were.
-async function settledCount(rows: number[]): Promise<number> {
-	let count = -1;
-	await expect(async () => {
-		const before = rows.length;
-		await new Promise((resolve) => setTimeout(resolve, 800));
-		count = rows.length;
-		expect(count).toBe(before);
-	}).toPass({ timeout: 15_000 });
-	return count;
-}
-
-test("the shell terminal and its keys stay above the keyboard, with one PTY resize per open and close", async ({
+test("the shell terminal and its touch bar stay above the keyboard, with one PTY resize per open and close", async ({
 	page,
 }) => {
 	await installKeyboardViewport(page);
 	const resizes = recordShellResizes(page);
 	const { cdp, terminal } = await openShellTerminal(page, instance);
 	await tapToFocus(page, cdp, terminal);
-	const enter = page.getByRole("button", { name: "Send Enter" });
-	await expect(enter).toBeVisible();
+	// The touch bar under the terminal (key pad toggle, jump to bottom).
+	const bar = page.getByRole("toolbar", { name: "Terminal controls" });
+	await expect(bar).toBeVisible();
 
 	const layoutHeight = await page.evaluate(() => window.innerHeight);
 	const visibleBottom = layoutHeight - KEYBOARD_PX;
@@ -151,7 +117,7 @@ test("the shell terminal and its keys stay above the keyboard, with one PTY resi
 
 	await animateKeyboard(page, 0, KEYBOARD_PX);
 	await expectInside(terminal, 0, visibleBottom);
-	await expectInside(enter, 0, visibleBottom);
+	await expectInside(bar, 0, visibleBottom);
 	const opened = await settledCount(resizes);
 	expect(opened - before).toBe(1);
 	const openRows = resizes.at(-1) ?? 0;
@@ -162,7 +128,7 @@ test("the shell terminal and its keys stay above the keyboard, with one PTY resi
 	// The browser scrolls the visible part down (iOS): the pane follows, same size.
 	await page.evaluate(() => (window as unknown as KeyboardWindow).kbTestKeyboard(340, 120));
 	await expectInside(terminal, 120, visibleBottom + 120);
-	await expectInside(enter, 120, visibleBottom + 120);
+	await expectInside(bar, 120, visibleBottom + 120);
 	await page.evaluate(() => (window as unknown as KeyboardWindow).kbTestKeyboard(340, 0));
 	expect(await settledCount(resizes)).toBe(opened);
 

@@ -2,7 +2,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { TerminalTouchControls } from "@/components/detail-panels/terminal-touch-controls";
+import { TerminalTouchBar } from "@/components/detail-panels/terminal-touch-bar";
 import { PRESS_REPEAT_DELAY_MS, PRESS_REPEAT_INTERVAL_MS } from "@/hooks/use-press-repeat";
 import type { TerminalTouchKey } from "@/terminal/terminal-touch-keys";
 
@@ -13,11 +13,12 @@ function pointer(type: "pointerdown" | "pointerup", target: Element): MouseEvent
 	return event;
 }
 
-describe("TerminalTouchControls", () => {
+describe("TerminalTouchBar", () => {
 	let container: HTMLDivElement;
 	let root: Root;
 	let textarea: HTMLTextAreaElement;
 	let keys: TerminalTouchKey[];
+	let jumps: number;
 	let previousActEnvironment: boolean | undefined;
 
 	beforeEach(() => {
@@ -34,6 +35,7 @@ describe("TerminalTouchControls", () => {
 		textarea.focus();
 		root = createRoot(container);
 		keys = [];
+		jumps = 0;
 	});
 
 	afterEach(() => {
@@ -47,13 +49,14 @@ describe("TerminalTouchControls", () => {
 			previousActEnvironment;
 	});
 
-	function render(showKeys = true) {
+	function render(showJumpToBottom = false) {
 		act(() => {
 			root.render(
-				<TerminalTouchControls
-					showJumpToBottom={false}
-					showKeys={showKeys}
-					onJumpToBottom={() => {}}
+				<TerminalTouchBar
+					showJumpToBottom={showJumpToBottom}
+					onJumpToBottom={() => {
+						jumps += 1;
+					}}
 					onKey={(key) => keys.push(key)}
 				/>,
 			);
@@ -82,16 +85,21 @@ describe("TerminalTouchControls", () => {
 		return { pointerDown, mouseDown };
 	}
 
-	it("shows Enter and a closed key pad by default", () => {
+	it("shows the key pad toggle with the pad closed, and no Enter", () => {
 		render();
-		expect(button("Send Enter")).toBeTruthy();
 		expect(button("Show terminal keys").getAttribute("aria-expanded")).toBe("false");
-		expect(container.querySelector('[role="toolbar"]')).toBeNull();
+		expect(container.querySelector('[role="toolbar"][aria-label="Terminal keys"]')).toBeNull();
+		expect(container.querySelector('button[aria-label="Send Enter"]')).toBeNull();
+		expect(container.querySelector('button[aria-label="Jump to bottom"]')).toBeNull();
 	});
 
-	it("shows nothing while the terminal takes no input", () => {
-		render(false);
-		expect(container.innerHTML).toBe("");
+	it("jumps to bottom without taking focus from the textarea", () => {
+		render(true);
+		const { pointerDown, mouseDown } = tap(button("Jump to bottom"));
+		expect(pointerDown.defaultPrevented).toBe(true);
+		expect(mouseDown.defaultPrevented).toBe(true);
+		expect(document.activeElement).toBe(textarea);
+		expect(jumps).toBe(1);
 	});
 
 	it("sends each key once per tap and never takes focus from the textarea", () => {
@@ -106,7 +114,6 @@ describe("TerminalTouchControls", () => {
 			["Send Shift+Tab", "shiftTab"],
 			["Send Esc", "escape"],
 			["Send Space", "space"],
-			["Send Enter", "enter"],
 		];
 		for (const label of [...labels.map(([buttonLabel]) => buttonLabel), "Hide terminal keys"]) {
 			const { pointerDown, mouseDown } = tap(button(label));
@@ -118,7 +125,7 @@ describe("TerminalTouchControls", () => {
 		expect(keys).toEqual(labels.map(([, key]) => key));
 		expect(textarea.value).toBe("dictated");
 		// The last tap closed the pad.
-		expect(container.querySelector('[role="toolbar"]')).toBeNull();
+		expect(container.querySelector('[role="toolbar"][aria-label="Terminal keys"]')).toBeNull();
 	});
 
 	it("remembers that the pad is open", () => {

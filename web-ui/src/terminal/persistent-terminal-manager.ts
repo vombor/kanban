@@ -892,7 +892,7 @@ class PersistentTerminal {
 		return true;
 	}
 
-	// A key of the panel's touch key bar (Enter, arrows, Tab, Esc, Space). On a
+	// A key of the panel's touch key bar (arrows, Tab, Esc, Space). On a
 	// phone it sends what has been dictated so far first and leaves the textarea
 	// alone, so the keyboard keeps listening (terminal-ime-input.ts).
 	sendKey(key: TerminalTouchKey): boolean {

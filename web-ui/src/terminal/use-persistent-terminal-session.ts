@@ -35,7 +35,7 @@ export interface UsePersistentTerminalSessionResult {
 	isScrolledUp: boolean;
 	clearTerminal: () => void;
 	scrollToBottom: () => void;
-	// A touch key bar key (Enter, arrows, Tab, Esc, Space) that keeps a phone
+	// A touch key bar key (arrows, Tab, Esc, Space) that keeps a phone
 	// keyboard and its dictation going (terminal-ime-input.ts).
 	sendKey: (key: TerminalTouchKey) => void;
 	stopTerminal: () => Promise<void>;

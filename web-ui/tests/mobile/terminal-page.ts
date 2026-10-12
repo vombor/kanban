@@ -63,3 +63,45 @@ export async function terminalCenter(terminal: Locator): Promise<Point> {
 export async function isTerminalFocused(page: Page): Promise<boolean> {
 	return await page.evaluate(() => document.activeElement?.classList.contains("xterm-helper-textarea") ?? false);
 }
+
+// The rows of every resize the home shell's terminal sent to its PTY.
+export function recordShellResizes(page: Page): number[] {
+	const rows: number[] = [];
+	page.on("websocket", (socket) => {
+		const url = new URL(socket.url());
+		if (!url.pathname.endsWith("/api/terminal/control") || url.searchParams.get("taskId") !== "__home_terminal__") {
+			return;
+		}
+		socket.on("framesent", (frame) => {
+			if (typeof frame.payload !== "string") {
+				return;
+			}
+			const message = JSON.parse(frame.payload) as { type?: string; rows?: number };
+			if (message.type === "resize" && typeof message.rows === "number") {
+				rows.push(message.rows);
+			}
+		});
+	});
+	return rows;
+}
+
+export async function boxOf(locator: Locator): Promise<{ top: number; bottom: number }> {
+	await expect(locator).toBeVisible();
+	const box = await locator.boundingBox();
+	if (!box) {
+		throw new Error("No box.");
+	}
+	return { top: box.y, bottom: box.y + box.height };
+}
+
+// Waits until no resize came for a while, then returns how many there were.
+export async function settledCount(rows: number[]): Promise<number> {
+	let count = -1;
+	await expect(async () => {
+		const before = rows.length;
+		await new Promise((resolve) => setTimeout(resolve, 800));
+		count = rows.length;
+		expect(count).toBe(before);
+	}).toPass({ timeout: 15_000 });
+	return count;
+}
