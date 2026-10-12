@@ -1,11 +1,13 @@
-// `kanban cline apply-lemonade-models` and `kanban cline store-bedrock-key`: the user's commands that write Cline's
-// files (src/setup/cline-lemonade-apply.ts, src/setup/cline-bedrock-key.ts). `kanban setup` and doctor only print
+// `kanban cline apply-lemonade-models`, `apply-localai-provider` and `store-bedrock-key`: the user's commands that
+// write Cline's files (src/setup/cline-lemonade-apply.ts, src/setup/cline-localai-provider.ts,
+// src/setup/cline-bedrock-key.ts). `kanban setup` and doctor only print
 // them; an agent session can't run them (USER_ONLY_COMMANDS in src/isolation/cli-scope.ts). `remove-bedrock-key`
 // only refuses: Cline's TUI needs the stored key (issue #9).
 import type { Command } from "commander";
 
-import { readLemonadeModelListSettings } from "../config/model-lists-config";
+import { readLemonadeModelListSettings, readLocalAiModelListSettings } from "../config/model-lists-config";
 import { readPipelineConfig } from "../config/pipeline-config";
+import { resolveConfiguredLocalAiUrl } from "../models/localai-endpoint";
 import {
 	type ClineBedrockKeyCommandResult,
 	refuseRemoveClineBedrockKey,
@@ -13,6 +15,7 @@ import {
 } from "../setup/cline-bedrock-key";
 import { getClineBackupDir } from "../setup/cline-file-write";
 import { applyClineLemonadeEntry, getClineModelsBackupDir } from "../setup/cline-lemonade-apply";
+import { applyClineLocalAiProvider } from "../setup/cline-localai-provider";
 import { getClineModelsSettingsPath, getClineProvidersSettingsPath, getKanbanHomePath } from "../state/kanban-home";
 import { resolveSetupOrigin } from "./setup";
 
@@ -20,6 +23,14 @@ type RootPortOption = { mode: "fixed"; value: number } | { mode: "auto" };
 
 interface BedrockKeyOptions {
 	dryRun?: boolean;
+	json?: boolean;
+}
+
+interface ApplyLocalAiProviderOptions {
+	baseUrl?: string;
+	name?: string;
+	dryRun?: boolean;
+	origin?: string;
 	json?: boolean;
 }
 
@@ -113,6 +124,69 @@ export function registerClineCommand(program: Command): void {
 				}
 			} catch (error) {
 				process.stderr.write(`apply-lemonade-models failed: ${toErrorMessage(error)}\n`);
+				process.exitCode = 1;
+			}
+		});
+	cline
+		.command("apply-localai-provider")
+		.description(
+			"Add or update Cline's \"localai\" custom provider in models.json and providers.json for a LocalAI server (OpenAI-compatible): in models.json its baseUrl (<base-url>/v1), modelsSourceUrl (Kanban's /api/model-lists/localai route), protocol openai-chat, and each chat model's context window, maxTokens, vision and reasoning as LocalAI reports them now (/v1/models/capabilities); in providers.json the stored provider, baseUrl and model Cline's TUI needs (without them every card opens Cline's sign-in screen). Only the localai entries change; keys you added to them are kept. Kanban never writes it on its own: `kanban doctor` just prints this command. Backs up each file into the Kanban home (backups/cline/) first and writes atomically.",
+		)
+		.option(
+			"--base-url <url>",
+			"LocalAI's URL, e.g. http://localai.example.ts.net (default: models.lists.localai.url, else the entry's own).",
+		)
+		.option("--name <name>", 'Display name of the provider in Cline (default: the entry\'s own, else "LocalAI").')
+		.option("--origin <url>", "Kanban server origin for the model-lists route (default: the running server).")
+		.option("--dry-run", "Print what would change; write nothing.")
+		.option("--json", "Print the result as JSON.")
+		.action(async (options: ApplyLocalAiProviderOptions, command: Command) => {
+			try {
+				const { port } = command.optsWithGlobals<{ port?: RootPortOption }>();
+				const homePath = getKanbanHomePath();
+				const { origin } = resolveSetupOrigin({ originFlag: options.origin, portFlag: port, homePath });
+				const [{ config }, { settings }] = await Promise.all([
+					readPipelineConfig(),
+					readLocalAiModelListSettings(),
+				]);
+				const baseUrl = options.baseUrl?.trim() || (await resolveConfiguredLocalAiUrl(config));
+				if (!baseUrl) {
+					throw new Error(
+						"pass --base-url <LocalAI URL> (no models.lists.localai.url and no localai provider yet)",
+					);
+				}
+				const modelsPath = getClineModelsSettingsPath(config.agents.cline.dataDir);
+				const result = await applyClineLocalAiProvider({
+					modelsPath,
+					providersPath: getClineProvidersSettingsPath(config.agents.cline.dataDir),
+					baseUrl,
+					origin,
+					name: options.name?.trim() || undefined,
+					requireCapabilities: settings.requireCapabilities,
+					backupDir: getClineBackupDir(homePath),
+					dryRun: options.dryRun === true,
+				});
+				if (options.json) {
+					process.stdout.write(`${JSON.stringify({ modelsPath, origin, baseUrl, ...result }, null, 2)}\n`);
+				} else {
+					const header: Record<typeof result.status, string> = {
+						"in-sync": "in sync, nothing written",
+						"would-write": "dry run: not written",
+						written: "written",
+						error: "not written",
+					};
+					const lines = [
+						`${modelsPath}: ${header[result.status]}`,
+						...result.lines.map((line) => `  ${line}`),
+						...result.backupPaths.map((path) => `  backup: ${path}`),
+					];
+					process.stdout.write(`${lines.join("\n")}\n`);
+				}
+				if (result.status === "error") {
+					process.exitCode = 1;
+				}
+			} catch (error) {
+				process.stderr.write(`apply-localai-provider failed: ${toErrorMessage(error)}\n`);
 				process.exitCode = 1;
 			}
 		});

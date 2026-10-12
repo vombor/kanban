@@ -113,6 +113,7 @@ describe("applyCliSessionScope", () => {
 				"isolation grant",
 				"isolation approve",
 				"cline apply-lemonade-models",
+				"cline apply-localai-provider",
 				"cline store-bedrock-key",
 				"cline remove-bedrock-key",
 				"kit migrate-overrides",

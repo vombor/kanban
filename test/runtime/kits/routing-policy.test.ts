@@ -257,4 +257,18 @@ describe("getModelVendor", () => {
 		expect(getModelVendor("gpt-oss-20b-mxfp4-GGUF")).toBe("openai");
 		expect(getModelVendor(null)).toBeNull();
 	});
+
+	it("reads LocalAI's lower-case ids (2026-10-11) to the vendor of their base model", () => {
+		expect(getModelVendor("glm-5.3-flash-q2-k")).toBe("zai");
+		expect(getModelVendor("qwen3-coder-next-q8-0-qwen")).toBe("qwen");
+		expect(getModelVendor("devstral-2-123b-instruct-2512-ud-q4-k-xl")).toBe("mistral");
+		expect(getModelVendor("gemma-4-26b-a4b-it")).toBe("google");
+		expect(getModelVendor("Laguna-S-2.1-Q4_K_M")).toBe("poolside");
+		// Ornith AI's models are post-trained Qwen 3.5 (35B-A3B, 9B, 397B) or Gemma 4 (31B).
+		expect(getModelVendor("ornith-1.5-35b-a3b-apex")).toBe("qwen");
+		expect(getModelVendor("ornith-1.0-31b")).toBe("google");
+		// So a QA route that must differ from the dev vendor tells them apart, and doesn't count a fine-tune as new.
+		expect(getModelVendor("ornith-1.5-35b-a3b-apex")).toBe(getModelVendor("qwen3-coder-next-q8-0-qwen"));
+		expect(getModelVendor("glm-5.3-flash-q2-k")).not.toBe(getModelVendor("gemma-4-26b-a4b-it"));
+	});
 });

@@ -152,11 +152,15 @@ const BEDROCK_REGION_PREFIX = /^(?:us|eu|apac|ap|jp|au|ca|us-gov|global)\./u;
 
 /**
  * Bare model family names → vendor, named like the Bedrock vendor prefixes (`qwen.`, `deepseek.`, `mistral.`,
- * `google.`, `zai.`) so a local and a Bedrock model of one family count as one vendor. `lmx-omni` is Lemonade's
- * collection whose LLM is Qwen3.6-35B-A3B (its `components` in Lemonade's /models).
+ * `google.`, `zai.`) so a local and a Bedrock model of one family count as one vendor. Ids are matched lower-cased,
+ * so LocalAI's ids ("glm-5.3-flash-q2-k", "qwen3-coder-next-q8-0-qwen") read like Lemonade's. A fine-tune counts as
+ * its base model's vendor: `lmx-omni` is Lemonade's collection whose LLM is Qwen3.6-35B-A3B (its `components` in
+ * Lemonade's /models), and Ornith AI's Ornith models are post-trained Qwen 3.5 (9B, 35B-A3B, 397B) or Gemma 4 (31B)
+ * models (LocalAI's gallery, 2026-10-11). Laguna is Poolside's own family.
  */
 const LOCAL_MODEL_FAMILIES: ReadonlyArray<{ pattern: RegExp; vendor: string }> = [
-	{ pattern: /^(?:qwen|qwq|lmx-omni)/u, vendor: "qwen" },
+	{ pattern: /^ornith-[\d.]+-31b/u, vendor: "google" },
+	{ pattern: /^(?:qwen|qwq|lmx-omni|ornith)/u, vendor: "qwen" },
 	{ pattern: /^deepseek/u, vendor: "deepseek" },
 	{ pattern: /^(?:devstral|mistral|codestral|magistral|ministral|mixtral)/u, vendor: "mistral" },
 	{ pattern: /^(?:gemma|codegemma)/u, vendor: "google" },
@@ -164,6 +168,7 @@ const LOCAL_MODEL_FAMILIES: ReadonlyArray<{ pattern: RegExp; vendor: string }> =
 	{ pattern: /^(?:llama|meta-llama)/u, vendor: "meta" },
 	{ pattern: /^(?:phi-|phi\d)/u, vendor: "microsoft" },
 	{ pattern: /^(?:gpt-oss)/u, vendor: "openai" },
+	{ pattern: /^laguna/u, vendor: "poolside" },
 ];
 
 /**
@@ -186,7 +191,7 @@ export function getModelVendor(model: string | null | undefined): string | null 
 	if (id.startsWith("gemini")) {
 		return "google";
 	}
-	// Local (Lemonade/GGUF) ids are bare family names with dots in their version ("GLM-4.7-Flash-GGUF",
+	// Local (Lemonade, LocalAI) ids are bare family names with dots in their version ("GLM-4.7-Flash-GGUF",
 	// "Qwen3.6-35B-A3B-MTP-GGUF"), so the Bedrock-style prefix rule below would read "glm-4" or "qwen3".
 	const family = LOCAL_MODEL_FAMILIES.find(({ pattern }) => pattern.test(id));
 	if (family) {

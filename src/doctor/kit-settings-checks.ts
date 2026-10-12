@@ -11,6 +11,8 @@
 //     server can't run. Lemonade being down is INFO, as in the models.json row.
 //   - whether Lemonade keeps the kit's dev, QA and fallback models loaded side by side (/api/v1/health
 //     `max_models.llm`) and Kanban's `models.providerCapacity.lemonade` matches it (src/kits/local-residency.ts).
+//   - the same two for LocalAI: every model the kit routes to on `localai` is one LocalAI lists as a chat model, and
+//     its `max_active_backends` holds the kit's working set. LocalAI down or not set up is INFO.
 import type { LemonadeModelListSettings } from "../config/model-lists-config";
 import type { PipelineConfig } from "../config/pipeline-config";
 import { describeRecommendedValue, evaluateKitRecommendedSettings } from "../kits/kit-recommendations";
@@ -26,10 +28,19 @@ import {
 	type LemonadeModel,
 	lemonadeApiBaseUrl,
 } from "../models/lemonade-models";
+import { fetchLocalProviderLimit } from "../models/local-provider-limits";
+import { resolveConfiguredLocalAiUrl } from "../models/localai-endpoint";
+import {
+	fetchLocalAiModels,
+	isListedLocalAiModel,
+	LOCALAI_PROVIDER_ID,
+	type LocalAiModel,
+} from "../models/localai-models";
 import { LEMONADE_PROVIDER_ID } from "../models/model-probe";
+import { APPLY_LOCALAI_PROVIDER_COMMAND } from "../setup/cline-localai-provider";
 import type { DoctorFinding } from "./doctor-report";
 
-const LEMONADE_TIMEOUT_MS = 1_500;
+const LOCAL_PROVIDER_TIMEOUT_MS = 1_500;
 const TOOL_CALLING_LABEL = "tool-calling";
 
 export interface KitSettingsCheckContext {
@@ -137,9 +148,14 @@ export function checkKitRecommendedSettings(context: KitSettingsCheckContext): D
 
 /** Every model a kit sends work to on the Lemonade provider (every role, QA routes, tier candidates). */
 export function listKitLemonadeModels(kit: KitDocument): string[] {
+	return listKitProviderModels(kit, LEMONADE_PROVIDER_ID);
+}
+
+/** Every model a kit sends work to on `providerId` (every role, QA routes, tier candidates). */
+export function listKitProviderModels(kit: KitDocument, providerId: string): string[] {
 	const models = new Set<string>();
 	const add = (provider: string | null | undefined, model: string | undefined) => {
-		if (provider === LEMONADE_PROVIDER_ID && model) {
+		if (provider === providerId && model) {
 			models.add(model);
 		}
 	};
@@ -182,7 +198,7 @@ export async function checkKitLemonadeModels(
 	const apiBaseUrl = lemonadeApiBaseUrl(context.lemonadeModelList.url);
 	let listed: LemonadeModel[];
 	try {
-		listed = await fetchLemonadeModels(apiBaseUrl, context.fetch ?? fetch, LEMONADE_TIMEOUT_MS);
+		listed = await fetchLemonadeModels(apiBaseUrl, context.fetch ?? fetch, LOCAL_PROVIDER_TIMEOUT_MS);
 	} catch (error) {
 		return [
 			{
@@ -193,7 +209,7 @@ export async function checkKitLemonadeModels(
 		];
 	}
 	const byId = new Map(listed.map((model) => [model.id, model]));
-	const maxLlm = await fetchLemonadeMaxLoadedLlms(apiBaseUrl, context.fetch ?? fetch, LEMONADE_TIMEOUT_MS).catch(
+	const maxLlm = await fetchLemonadeMaxLoadedLlms(apiBaseUrl, context.fetch ?? fetch, LOCAL_PROVIDER_TIMEOUT_MS).catch(
 		() => null,
 	);
 	const findings: DoctorFinding[] = [];
@@ -202,7 +218,7 @@ export async function checkKitLemonadeModels(
 			for (const finding of assessLocalResidency({
 				kitName,
 				workingSet: listKitLocalWorkingSet(kit),
-				lemonadeMaxLlm: maxLlm,
+				providerMaxLoaded: maxLlm,
 				kanbanCapacity: context.config.models.providerCapacity[LEMONADE_PROVIDER_ID]?.maxLoadedModels,
 			})) {
 				findings.push({ ...finding, area: "project", message: `${workspaceId}: ${finding.message}` });
@@ -221,6 +237,85 @@ export async function checkKitLemonadeModels(
 						level: "pass",
 						area: "project",
 						message: `${workspaceId}: Lemonade lists every model kit ${kitName} routes to (${models.length})`,
+					},
+		);
+	}
+	return findings;
+}
+
+export async function checkKitLocalAiModels(
+	context: KitSettingsCheckContext & { fetch?: typeof fetch },
+): Promise<DoctorFinding[]> {
+	const kits = listProjectKits(context)
+		.map((project) => ({ ...project, models: listKitProviderModels(project.kit, LOCALAI_PROVIDER_ID) }))
+		.filter((project) => project.models.length > 0);
+	if (kits.length === 0) {
+		return [];
+	}
+	const workspaces = kits.map(({ workspaceId }) => workspaceId).join(", ");
+	const url = await resolveConfiguredLocalAiUrl(context.config);
+	if (!url) {
+		return [
+			{
+				level: "warn",
+				area: "project",
+				message: `${workspaces}: kit models on LocalAI, but Kanban doesn't know LocalAI's URL (models.lists.localai.url, or Cline's localai provider), so Cline has no localai provider either`,
+				hint: `${APPLY_LOCALAI_PROVIDER_COMMAND} --base-url <LocalAI URL>`,
+			},
+		];
+	}
+	let listed: LocalAiModel[];
+	try {
+		listed = await fetchLocalAiModels(url, context.fetch ?? fetch, LOCAL_PROVIDER_TIMEOUT_MS);
+	} catch (error) {
+		return [
+			{
+				level: "info",
+				area: "project",
+				message: `${workspaces}: kit models on LocalAI not checked, ${url} did not answer (${error instanceof Error ? error.message : String(error)}); its cards wait in an outage hold while it is down`,
+			},
+		];
+	}
+	const byId = new Map(listed.map((model) => [model.id, model]));
+	const limit = await fetchLocalProviderLimit(LOCALAI_PROVIDER_ID, context.config, {
+		fetch: context.fetch,
+		timeoutMs: LOCAL_PROVIDER_TIMEOUT_MS,
+	});
+	const requireCapabilities = context.config.models.lists.localai.requireCapabilities;
+	const findings: DoctorFinding[] = [];
+	for (const { workspaceId, kitName, kit, models } of kits) {
+		if (limit.kind === "known") {
+			for (const finding of assessLocalResidency({
+				kitName,
+				provider: LOCALAI_PROVIDER_ID,
+				workingSet: listKitLocalWorkingSet(kit, LOCALAI_PROVIDER_ID),
+				providerMaxLoaded: limit.maxLoaded,
+				kanbanCapacity: context.config.models.providerCapacity[LOCALAI_PROVIDER_ID]?.maxLoadedModels,
+			})) {
+				findings.push({ ...finding, area: "project", message: `${workspaceId}: ${finding.message}` });
+			}
+		}
+		const problems = models.flatMap((model) => {
+			const entry = byId.get(model);
+			if (!entry) {
+				return [`${model} is not listed by LocalAI`];
+			}
+			return isListedLocalAiModel(entry, requireCapabilities)
+				? []
+				: [`${model} lacks capability ${requireCapabilities.join(", ")} (Cline's LocalAI list leaves it out)`];
+		});
+		findings.push(
+			problems.length > 0
+				? {
+						level: "warn",
+						area: "project",
+						message: `${workspaceId}: kit ${kitName} routes to LocalAI models it can't run: ${problems.join("; ")}`,
+						hint: `install the model in LocalAI, or override the kit's model (kanban kit apply ${kitName} --project ${workspaceId} --set <key>=<model>)`,
+					}
+				: {
+						level: "pass",
+						area: "project",
+						message: `${workspaceId}: LocalAI lists every model kit ${kitName} routes to (${models.length})`,
 					},
 		);
 	}

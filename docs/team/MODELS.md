@@ -141,7 +141,8 @@ written as text, a tool-call loop (one finished call filling 3 of the last 4; a 
 never counts), Cline's silent stall, hung request, context overflow or final provider error, a failed session, no
 progress for 8 min (only for agents whose session files Kanban can't read), the time cap and the cost cap. A turn
 that ends (Review, settled) is checked against the task. The card is always discarded. What the environment does is
-not the model's silence: a model Lemonade is still loading (`/api/v1/health` doesn't list it yet), a local model's
+not the model's silence: a model a local provider is still loading (Lemonade's `/api/v1/health` or LocalAI's `/system`
+doesn't list it yet), a local model's
 first reply (10 min on top, `CLINE_FIRST_REPLY_LOAD_ALLOWANCE_MS`, the same allowance recovery's silent-stall
 reader gives a slow-first-call provider), a model request in flight (the hung check's, twice as long for a local
 first call) and a shell tool whose command still runs. A timeout on a local provider is retried twice
@@ -159,3 +160,57 @@ it (nothing to commit), a role without one gets `provisional` with the reason, a
 run with no tool calls. It exits 0 when the run passed, 1 when it failed and 2 when it was inconclusive. It never edits the
 registry. One failed run may be bad luck: the orchestrator decides what to commit. The run lasts minutes, so an
 orchestrator starts it in the background of its own session (it must stay in the session's process tree).
+
+## Local providers: Lemonade and LocalAI
+
+Two providers run models on the user's own hardware and cost nothing per token (`LOCAL_PROVIDER_IDS` in
+`src/kits/team/bench/prices.ts`): **Lemonade** (`lemonade`, llama.cpp on this machine, `http://localhost:13305/api/v1`)
+and **LocalAI** (`localai`, OpenAI-compatible, in a container on another host of the tailnet,
+`http://localai.tailedf020.ts.net/v1`). For both: turns are priced at 0, a QA card takes no cloud QA slot
+(`pipeline.qa.slots`) and waits only for the provider's `models.providerCapacity`, a vet run gives the first reply the
+local load allowance, and an unreachable server is a provider outage (backoff retries, then the outage hold).
+
+| | Lemonade | LocalAI |
+|---|---|---|
+| Cline's model list (`modelsSourceUrl`) | `/api/model-lists/lemonade`: downloaded models with `requireLabels` | `/api/model-lists/localai`: `/v1/models/capabilities` models with `requireCapabilities` (default `chat`; embedding and TTS models stay out) |
+| Where Kanban asks | `models.lists.lemonade.url` | `models.lists.localai.url`, else the `baseUrl` of Cline's `localai` provider (no default) |
+| Cline's entries | the user's `kanban cline apply-lemonade-models` (models.json) | the user's `kanban cline apply-localai-provider --base-url <url>` (models.json and providers.json) |
+| Models loaded at once | `/api/v1/health` `max_models.llm` | `/api/settings` `max_active_backends` (0 = unlimited, `single_backend` = 1) |
+| Outage probe | `/api/v1/health` status `ok` | `/readyz` 200 |
+| "Is the model loaded?" (vet) | `/api/v1/health` | `/system` `loaded_models` |
+| Context windows | `recipe_options.ctx_size`, kept in sync by the server | `context_size` per model, written only by the user's command |
+
+Cline 3.0.70 (verified with real TUI runs against LocalAI in a throwaway `CLINE_DIR`, 2026-10-11) needs two entries
+for a custom provider without an API key: models.json `providers.localai.provider` (`name`, `baseUrl`, plus
+`modelsSourceUrl`, `defaultModelId`, `protocol: "openai-chat"`) and providers.json `providers.localai.settings` with
+`provider`, `baseUrl` **and** `model`. Without the stored `baseUrl` and `model` every card opens Cline's sign-in
+screen. `cline auth` can't store a provider without a key, which is why the Kanban command writes it. Cline sends no
+Authorization header without a key; LocalAI needs none. Cline fetches `modelsSourceUrl` only when its `/model`
+picker opens, and the picker then rewrites the entry (adds `client`, `discoveredModelIds`, drops `capabilities`). The
+command keeps every key it doesn't set, so a rewrite is no difference. Cline writes an unreachable LocalAI as an error
+notice: "Cannot connect to API: Unable to connect. ... (ConnectionRefused)", "... (ECONNRESET)", each after about a minute of
+Cline's own retries, or at once "getaddrinfo ENOTFOUND <host>".
+
+**LocalAI capacity.** The host has four GPUs and could hold four models, but LocalAI keeps one (`max_active_backends`
+1, `single_backend` true on 2026-10-11). Kanban follows LocalAI's API, so `models.providerCapacity.localai` is 1 by
+default. To run four at once, start LocalAI with `LOCALAI_MAX_ACTIVE_BACKENDS=4` (and without
+`LOCALAI_SINGLE_ACTIVE_BACKEND`), then set `models.providerCapacity.localai.maxLoadedModels` to 4. Doctor warns while
+Kanban's limit is above LocalAI's.
+
+**LocalAI context windows.** `/v1/models/capabilities` reports each model's configured `context_size` (262144 for most
+on 2026-10-11). The loaded backend's log confirms `n_ctx_slot = 262144` with `kv_unified` (its 8 parallel slots share one
+KV pool), but LocalAI exposes no structured "loaded context" field like Lemonade's `recipe_options.ctx_size` of a loaded
+model. So the server's context sync stays Lemonade-only, and LocalAI's windows change only with the user's command.
+
+**Vendors.** LocalAI's ids are lower-case (`glm-5.3-flash-q2-k`, `qwen3-coder-next-q8-0-qwen`). `getModelVendor()`
+reads them like Lemonade's: glm → zai, qwen → qwen, devstral → mistral, gemma → google, laguna → poolside. Ornith
+counts as its base model's vendor: Ornith AI's 9B, 35B-A3B and 397B are post-trained Qwen 3.5 (qwen) and the 31B is
+Gemma 4 (google).
+
+No LocalAI model is in the registry yet. Vet them with:
+
+```sh
+kanban models vet --agent cline --provider localai --model qwen3-coder-next-q8-0-qwen --role dev
+kanban models vet --agent cline --provider localai --model gemma-4-26b-a4b-it --role qa
+```
+

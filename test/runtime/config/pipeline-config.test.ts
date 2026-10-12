@@ -25,7 +25,11 @@ describe("pipeline config", () => {
 		expect(config.watchdog.stall.reviewMin).toBe(10);
 		expect(config.orchestrator.wake.mode).toBe("headless");
 		expect(config.models.providers.default).toBe("bedrock");
-		expect(config.models.providerCapacity).toEqual({ lemonade: { maxLoadedModels: 1 } });
+		expect(config.models.providerCapacity).toEqual({
+			lemonade: { maxLoadedModels: 1 },
+			localai: { maxLoadedModels: 1 },
+		});
+		expect(config.models.lists.localai).toEqual({ url: null, requireCapabilities: ["chat"] });
 		expect(config.workspaces).toEqual({});
 	});
 
@@ -132,10 +136,14 @@ describe("pipeline config", () => {
 		const { config } = parsePipelineConfig({ models: { providerCapacity: { ollama: { maxLoadedModels: 2 } } } });
 		expect(config.models.providerCapacity).toEqual({
 			lemonade: { maxLoadedModels: 1 },
+			localai: { maxLoadedModels: 1 },
 			ollama: { maxLoadedModels: 2 },
 		});
 		const raised = parsePipelineConfig({ models: { providerCapacity: { lemonade: { maxLoadedModels: 3 } } } });
-		expect(raised.config.models.providerCapacity).toEqual({ lemonade: { maxLoadedModels: 3 } });
+		expect(raised.config.models.providerCapacity).toEqual({
+			lemonade: { maxLoadedModels: 3 },
+			localai: { maxLoadedModels: 1 },
+		});
 	});
 
 	it("rejects unknown keys inside a section", () => {

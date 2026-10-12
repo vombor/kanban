@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-import { readLemonadeModelListSettings } from "../config/model-lists-config";
 import {
 	getWorkspacePipelineSettings,
 	type LandingMode,
@@ -11,12 +10,7 @@ import { loadGlobalRuntimeConfig } from "../config/runtime-config";
 import { type ApplyKitResult, applyWorkspaceKit } from "../kits/apply-kit";
 import { buildKitReport, formatKitReport, formatRecommendedSettings, NO_WORKSPACE_ID } from "../kits/kit-report";
 import type { KitDocument } from "../kits/kit-schema";
-import {
-	assessLocalResidency,
-	LEMONADE_PROVIDER,
-	type LocalResidencyFinding,
-	listKitLocalWorkingSet,
-} from "../kits/local-residency";
+import { assessLocalResidency, type LocalResidencyFinding, listKitLocalWorkingSet } from "../kits/local-residency";
 import { migrateWorkspaceOverrides, type OverrideMigrationPlan } from "../kits/migrate-overrides";
 import { describeProjectSettings, readKitSettingsHistory } from "../kits/project-settings";
 import { loadKitCatalog, resolveKitByName, resolveWorkspaceKit } from "../kits/resolve-kit";
@@ -28,7 +22,7 @@ import {
 	type UserKitCreatePlan,
 	type UserKitEditPlan,
 } from "../kits/user-kit-edit";
-import { fetchLemonadeMaxLoadedLlms, lemonadeApiBaseUrl } from "../models/lemonade-models";
+import { fetchLocalProviderLimit, RESIDENCY_PROVIDER_IDS } from "../models/local-provider-limits";
 import { getKanbanKitsPath, getKitSettingsHistoryPath } from "../state/kanban-home";
 import type { KitSettingChangeResponse } from "../trpc/kit-settings-api";
 import { createRuntimeTrpcClient } from "./runtime-trpc-client";
@@ -120,35 +114,38 @@ function formatApplyResult(result: ApplyKitResult, dryRun: boolean): string[] {
 	return lines;
 }
 
-const LEMONADE_HEALTH_TIMEOUT_MS = 1_500;
+const LOCAL_PROVIDER_TIMEOUT_MS = 1_500;
 
-/** For a kit that runs several local models at once: does Lemonade keep them loaded? Null: nothing to check. */
+/** For a kit that runs several models at once on a local provider: does the server keep them loaded? Null: nothing to check. */
 async function readLocalResidency(
 	kitName: string,
 	kit: KitDocument,
 	config: PipelineConfig,
 ): Promise<LocalResidencyFinding[] | null> {
-	const workingSet = listKitLocalWorkingSet(kit);
-	if (workingSet.length < 2) {
-		return null;
-	}
-	const apiBaseUrl = lemonadeApiBaseUrl((await readLemonadeModelListSettings()).settings.url);
-	try {
-		const maxLlm = await fetchLemonadeMaxLoadedLlms(apiBaseUrl, fetch, LEMONADE_HEALTH_TIMEOUT_MS);
-		if (maxLlm === null) {
-			return null;
+	const findings: LocalResidencyFinding[] = [];
+	for (const provider of RESIDENCY_PROVIDER_IDS) {
+		const workingSet = listKitLocalWorkingSet(kit, provider);
+		if (workingSet.length < 2) {
+			continue;
 		}
-		return assessLocalResidency({
-			kitName,
-			workingSet,
-			lemonadeMaxLlm: maxLlm,
-			kanbanCapacity: config.models.providerCapacity[LEMONADE_PROVIDER]?.maxLoadedModels,
-		});
-	} catch (error) {
-		return [
-			{ level: "warn", message: `not checked: ${apiBaseUrl}/health did not answer (${toErrorMessage(error)})` },
-		];
+		const limit = await fetchLocalProviderLimit(provider, config, { timeoutMs: LOCAL_PROVIDER_TIMEOUT_MS });
+		if (limit.kind === "unreachable") {
+			findings.push({ level: "warn", message: `not checked: ${limit.endpoint} did not answer (${limit.error})` });
+		} else if (limit.kind === "unconfigured") {
+			findings.push({ level: "warn", message: `not checked: ${limit.detail}` });
+		} else if (limit.kind === "known") {
+			findings.push(
+				...assessLocalResidency({
+					kitName,
+					provider,
+					workingSet,
+					providerMaxLoaded: limit.maxLoaded,
+					kanbanCapacity: config.models.providerCapacity[provider]?.maxLoadedModels,
+				}),
+			);
+		}
 	}
+	return findings.length > 0 ? findings : null;
 }
 
 function formatSettingChange(response: KitSettingChangeResponse, workspaceId: string): string[] {

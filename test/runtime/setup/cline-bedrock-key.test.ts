@@ -184,8 +184,25 @@ describe("Cline's TUI sign-in check", () => {
 	});
 
 	it("only judges a missing entry for other providers", () => {
-		const document = { providers: { lemonade: { settings: { provider: "lemonade" } } } };
-		expect(describeClineTuiSignInGap(document, "lemonade")).toBeNull();
+		const document = { providers: { anthropic: { settings: { provider: "anthropic" } } } };
+		expect(describeClineTuiSignInGap(document, "anthropic")).toBeNull();
 		expect(describeClineTuiSignInGap(document, "openai-native")).toBe("providers.json has no openai-native entry");
+	});
+
+	it("needs a stored baseUrl and model for a keyless custom provider (cline 3.0.70, 2026-10-11)", () => {
+		const only = { providers: { lemonade: { settings: { provider: "lemonade" } } } };
+		expect(describeClineTuiSignInGap(only, "lemonade")).toContain("no baseUrl and model");
+		const full = {
+			providers: {
+				lemonade: {
+					settings: {
+						provider: "lemonade",
+						model: "GLM-4.7-Flash-GGUF",
+						baseUrl: "http://localhost:13305/api/v1",
+					},
+				},
+			},
+		};
+		expect(describeClineTuiSignInGap(full, "lemonade")).toBeNull();
 	});
 });

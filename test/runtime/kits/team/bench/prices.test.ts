@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
 	createPriceTable,
 	getSeedPriceTableFile,
+	isLocalProvider,
 	loadPriceTable,
 	turnCost,
 } from "../../../../../src/kits/team/bench/prices";
@@ -28,6 +29,12 @@ describe("price table", () => {
 			const price = table.priceFor(model, "lemonade");
 			expect(price && turnCost(price, { input: 1000, cacheRead: 0, cacheWrite: 0, output: 100 })).toBe(0);
 		}
+		// LocalAI (on another host of the user's) is local too: its lower-case GGUF ids price at 0 by provider.
+		for (const model of ["qwen3-coder-next-q8-0-qwen", "glm-5.3-flash-q2-k", "Laguna-S-2.1-Q4_K_M"]) {
+			const price = table.priceFor(model, "localai");
+			expect(price && turnCost(price, { input: 50_000, cacheRead: 1000, cacheWrite: 0, output: 900 })).toBe(0);
+		}
+		expect(isLocalProvider("localai")).toBe(true);
 		expect(table.priceFor("glm", "bedrock")?.in).toBe(1);
 		expect(createPriceTable(getSeedPriceTableFile(), "seed").priceFor("LMX-Omni-52B-Halo")).toBeNull();
 	});

@@ -5,6 +5,7 @@
 import type { Command } from "commander";
 
 import { type PipelineConfig, readPipelineConfig } from "../config/pipeline-config";
+import { isLocalProvider } from "../kits/team/bench/prices";
 import { type BedrockProbeResult, isNeverProbedModel } from "../models/bedrock-probe";
 import { applyCardProviderMigrations, planCardProviderMigrations } from "../models/card-provider-migration";
 import {
@@ -13,7 +14,7 @@ import {
 	planDeprecatedProviderCleanup,
 	providerForModel,
 } from "../models/cline-providers";
-import { LEMONADE_PROVIDER_ID, type ModelProbeOutcome, probeModel } from "../models/model-probe";
+import { type ModelProbeOutcome, probeModel } from "../models/model-probe";
 import { getBedrockProfilesCachePath, loadModelProbeDependencies } from "../models/model-probe-setup";
 import { listWorkspaceIndexEntries, loadWorkspaceBoardById, mutateWorkspaceState } from "../state/workspace-state";
 import { registerModelPricesCommand } from "./model-prices";
@@ -76,7 +77,7 @@ function formatProbeOutcome(requested: string, outcome: ModelProbeOutcome): stri
 
 async function runProbe(modelIds: string[], options: ProbeCommandOptions): Promise<number> {
 	const config = await readModelsConfig();
-	const needsBedrock = options.list === true || options.provider !== LEMONADE_PROVIDER_ID;
+	const needsBedrock = options.list === true || !isLocalProvider(options.provider);
 	const loaded = await loadModelProbeDependencies(config, {
 		region: options.region,
 		needsBedrock,
@@ -281,7 +282,7 @@ export function registerModelsCommand(program: Command): void {
 		.option("--refresh", "Re-fetch the inference-profile list (cached in the Kanban home's data/models).")
 		.option(
 			"--provider <id>",
-			"Probe as a card on this provider: bedrock (tool call) or lemonade (/health).",
+			"Probe as a card on this provider: bedrock (tool call), lemonade (/api/v1/health) or localai (/readyz).",
 			"bedrock",
 		)
 		.option("--region <region>", "Bedrock region (default: models.bedrockRegion).")

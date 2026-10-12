@@ -54,12 +54,14 @@ export interface PriceTable {
 }
 
 /**
- * Providers that run on this machine and charge nothing per token: Lemonade (llama.cpp GGUF). Its model ids are
- * whatever the server lists ("GLM-4.7-Flash-GGUF", "LMX-Omni-52B-Halo", "DeepSeek-V4-Flash-0731-GGUF-BF16"), so no
- * id pattern in the table can tell them apart from a paid model; the provider can. A live prices.json written
+ * Providers that run on the user's own hardware and charge nothing per token: Lemonade (llama.cpp GGUF on this
+ * machine) and LocalAI (on another host of the user's tailnet). Their model ids are whatever the server lists
+ * ("GLM-4.7-Flash-GGUF", "LMX-Omni-52B-Halo", "qwen3-coder-next-q8-0-qwen"), so no id pattern in the table can tell
+ * them apart from a paid model; the provider can. Being local also frees a QA card from the cloud QA slots
+ * (qa-gate.ts): it waits only for its provider's `models.providerCapacity`. A live prices.json written
  * before this rule needs no edit.
  */
-export const LOCAL_PROVIDER_IDS: readonly string[] = ["lemonade"];
+export const LOCAL_PROVIDER_IDS: readonly string[] = ["lemonade", "localai"];
 
 export function isLocalProvider(provider: string | null | undefined): boolean {
 	return Boolean(provider && LOCAL_PROVIDER_IDS.includes(provider));

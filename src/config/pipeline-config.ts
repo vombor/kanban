@@ -18,7 +18,7 @@ import {
 	DEFAULT_CLINE_LEMONADE_CONTEXT_SYNC,
 } from "./cline-lemonade-context-sync-config";
 import { clineTurnDetectorModeSchema, getDefaultClineTurnDetectorSettings } from "./cline-turn-detector-config";
-import { DEFAULT_LEMONADE_MODEL_LIST_SETTINGS } from "./model-lists-config";
+import { DEFAULT_LEMONADE_MODEL_LIST_SETTINGS, DEFAULT_LOCALAI_MODEL_LIST_SETTINGS } from "./model-lists-config";
 
 export const landingModeSchema = runtimeLandingModeSchema;
 
@@ -376,6 +376,11 @@ const orchestratorSectionSchema = z
 const providerCapacitySchema = z.object({ maxLoadedModels: z.number().int().positive() }).strict();
 const DEFAULT_PROVIDER_CAPACITY: Record<string, z.infer<typeof providerCapacitySchema>> = {
 	lemonade: { maxLoadedModels: 1 },
+	// What the user's LocalAI says it keeps loaded (/api/settings `max_active_backends` 1, `single_backend` true on
+	// 2026-10-11), though its host has four GPUs and could hold four models: a limit above what LocalAI holds makes
+	// cards on different models reload on every request, so Kanban follows LocalAI's API. Raising both to 4
+	// (LOCALAI_MAX_ACTIVE_BACKENDS=4, then this limit) is the user's; doctor compares the two.
+	localai: { maxLoadedModels: 1 },
 };
 
 const modelsSectionSchema = z
@@ -393,7 +398,7 @@ const modelsSectionSchema = z
 		// `kanban bench calibrate`'s waves wait (or are refused) while other cards hold a different model on a
 		// provider at its limit (Lemonade loads one model at a time). The rework stage's sibling and resume starts
 		// don't check it yet.
-		// Merged over the defaults: setting one provider keeps Lemonade's limit.
+		// Merged over the defaults: setting one provider keeps the other's limit.
 		providerCapacity: z
 			.record(z.string(), providerCapacitySchema)
 			.default({})
@@ -410,9 +415,22 @@ const modelsSectionSchema = z
 					})
 					.strict()
 					.default(() => structuredClone(DEFAULT_LEMONADE_MODEL_LIST_SETTINGS)),
+				// No default URL: null = the baseUrl of Cline's localai provider (src/setup/cline-localai-provider.ts).
+				localai: z
+					.object({
+						url: z.string().nullable().default(DEFAULT_LOCALAI_MODEL_LIST_SETTINGS.url),
+						requireCapabilities: z
+							.array(z.string())
+							.default(() => [...DEFAULT_LOCALAI_MODEL_LIST_SETTINGS.requireCapabilities]),
+					})
+					.strict()
+					.default(() => structuredClone(DEFAULT_LOCALAI_MODEL_LIST_SETTINGS)),
 			})
 			.strict()
-			.default(() => ({ lemonade: structuredClone(DEFAULT_LEMONADE_MODEL_LIST_SETTINGS) })),
+			.default(() => ({
+				lemonade: structuredClone(DEFAULT_LEMONADE_MODEL_LIST_SETTINGS),
+				localai: structuredClone(DEFAULT_LOCALAI_MODEL_LIST_SETTINGS),
+			})),
 	})
 	.strict();
 

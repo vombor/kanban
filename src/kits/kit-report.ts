@@ -155,7 +155,7 @@ export function buildKitReport(input: {
 	outageMaxMin: number;
 	/** The parsed config.json, to compare the kit's recommended settings with. */
 	config: PipelineConfig;
-	/** `assessLocalResidency()` against Lemonade's /api/v1/health, from the caller (this module does no I/O). */
+	/** `assessLocalResidency()` against each local provider's limit, from the caller (this module does no I/O). */
 	localResidency?: LocalResidencyFinding[] | null;
 	/** The workspace's project settings and their history, read by the caller. */
 	projectSettings?: KitProjectSettingsReport | null;
@@ -409,7 +409,7 @@ export function formatKitReport(report: KitReport): string[] {
 		lines.push(...formatRecommendedSettings(report.recommendedSettings));
 	}
 	if (report.localResidency && report.localResidency.length > 0) {
-		lines.push("", "Local models loaded side by side (Lemonade /api/v1/health):");
+		lines.push("", "Local models loaded side by side (the local provider's own limit):");
 		for (const finding of report.localResidency) {
 			lines.push(
 				`  ${finding.level === "pass" ? "ok  " : "WARN"} ${finding.message}${finding.hint ? ` → ${finding.hint}` : ""}`,

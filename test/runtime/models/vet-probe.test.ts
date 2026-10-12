@@ -54,16 +54,14 @@ function input(overrides: Partial<VetProbeInput> = {}): VetProbeInput {
 describe("kanban models vet: the probe", () => {
 	it("doesn't take a first reply that waits on a model Lemonade is still loading for a silent stall (GLM dev, 10/09)", async () => {
 		const loading = createFakeLemonadeFetch({ health: LEMONADE_HEALTH_IDLE_PAYLOAD });
-		const isLemonadeModelLoaded = async (model: string) =>
+		const isModelLoaded = async (_provider: string, model: string) =>
 			await fetchLemonadeModelLoaded("http://lemonade.test/api/v1", model, loading);
 		// The live case: the session file still "running", no reply 8 min after the prompt.
-		const running = await probeWith(session("running", [prompt]), { isLemonadeModelLoaded })(input());
+		const running = await probeWith(session("running", [prompt]), { isModelLoaded })(input());
 		expect(running).toEqual({ failure: null, hold: `lemonade is still loading ${GLM}` });
 		expect(loading.urls).toEqual(["http://lemonade.test/api/v1/health"]);
 		// An idle session file waiting on a model that is still loading: no stall at all, however long.
-		const idle = await probeWith(session("idle", [prompt]), { isLemonadeModelLoaded })(
-			input({ now: START + 25 * MIN }),
-		);
+		const idle = await probeWith(session("idle", [prompt]), { isModelLoaded })(input({ now: START + 25 * MIN }));
 		expect(idle).toEqual({ failure: null, hold: `lemonade is still loading ${GLM}` });
 	});
 
@@ -72,7 +70,7 @@ describe("kanban models vet: the probe", () => {
 			health: { ...LEMONADE_HEALTH_QWEN_LOADED_PAYLOAD, model_loaded: QWEN },
 		});
 		const options: VetProbeOptions = {
-			isLemonadeModelLoaded: async (model) =>
+			isModelLoaded: async (_provider, model) =>
 				await fetchLemonadeModelLoaded("http://lemonade.test/api/v1", model, loaded),
 		};
 		const detail = session("idle", [prompt]);
@@ -115,7 +113,7 @@ describe("kanban models vet: the probe", () => {
 			prompt,
 			message("assistant", [{ type: "text", text: "The operation timed out." }], START + 5 * MIN),
 		]);
-		const loading = await probeWith(timeout, { isLemonadeModelLoaded: async () => false })(
+		const loading = await probeWith(timeout, { isModelLoaded: async () => false })(
 			input({ model: "Devstral-Small-2507-GGUF" }),
 		);
 		expect(loading?.failure).toEqual({
@@ -124,7 +122,7 @@ describe("kanban models vet: the probe", () => {
 			harness: true,
 			occurrence: "1791527831210_oysap:2",
 		});
-		const loaded = await probeWith(timeout, { isLemonadeModelLoaded: async () => true })(input());
+		const loaded = await probeWith(timeout, { isModelLoaded: async () => true })(input());
 		expect(loaded?.failure).toMatchObject({
 			kind: "provider_timeout",
 			detail: expect.stringContaining("on lemonade"),

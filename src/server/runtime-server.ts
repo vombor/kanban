@@ -30,6 +30,7 @@ import { createIsolationService, type IsolationService } from "../isolation/isol
 import { createMessageNoticeQueue } from "../isolation/message-notices";
 import { applyIssueSync } from "../issues/issue-apply";
 import { readAgentDefaultModels } from "../models/cline-providers";
+import { createLocalAiModelListLoader } from "../models/localai-endpoint";
 import type { PipelineActionRequest, PipelineActionResult } from "../pipeline/actions";
 import type { PipelineEventMap } from "../pipeline/events";
 import type { WatchdogActionRequest } from "../pipeline/watchdog/actions";
@@ -633,6 +634,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 
 	const handleModelListsRequest = createModelListsRequestHandler({
 		loadLemonadeSettings: createLemonadeModelListSettingsLoader(deps.warn),
+		loadLocalAiSettings: createLocalAiModelListLoader(deps.warn),
 		warn: deps.warn,
 	});
 
