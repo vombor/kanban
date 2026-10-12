@@ -16,7 +16,8 @@ This repository uses these GitHub Actions workflows for quality gates, publishin
   - Uses the repository secret `GH_PAT` (the user's classic PAT, see `docs/fork/github-auth.md`) for both;
     the workflow fails at its first step without it.
 - `.github/workflows/image.yml`
-  - Runs on pushes to `fork/**` and daily; builds and pushes the dev-container image to GHCR. It publishes no npm
+  - Runs on pushes to `fork/**` and daily; builds and pushes the dev-container image `ghcr.io/vombor/kanban`
+    (next to the npm package of the same name; it was `ghcr.io/vombor/kanban-dev` until 2026-10-12). It publishes no npm
     package.
 
 ## Contributor workflow

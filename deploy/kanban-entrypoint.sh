@@ -1,6 +1,6 @@
 #!/bin/sh
-# Entrypoint of the kanban-dev image (deploy/Containerfile; docs/fork/container-lifecycle.md). Runs the container
-# command ("$@": the image CMD `kanban --port 3485 ...`, or a quadlet Exec= / `podman run` override) as a CHILD,
+# Entrypoint of the ghcr.io/vombor/kanban image (deploy/Containerfile; docs/fork/container-lifecycle.md). Runs the
+# container command ("$@": the image CMD `kanban --port 3485 ...`, or a quadlet Exec= / `podman run` override) as a CHILD,
 # so a container stop can do work before Kanban gets the signal:
 #  - at start, launches the start hook detached (never waited for): $KANBAN_START_HOOK, else `<kit>/bin/kit boot`
 #    when that is executable (waits for Kanban, then starts the kit services).

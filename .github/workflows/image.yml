@@ -1,5 +1,7 @@
 # Builds the fork and publishes the dev-container image to GHCR:
-#   ghcr.io/<owner>/kanban-dev:sha-<short>, :<branch> (e.g. fork-stack) and :latest (from LATEST_BRANCH only).
+#   ghcr.io/<owner>/kanban:sha-<short>, :<branch> (e.g. fork-stack) and :latest (from LATEST_BRANCH only).
+# The container sits next to the npm package @vombor/kanban (GitHub Packages keeps a container and an npm package of
+# the same name apart); until 2026-10-12 it was ghcr.io/<owner>/kanban-dev, which is no longer pushed.
 # The pod pulls the image; nothing is built from source on the host.
 # A daily scheduled run rebuilds LATEST_BRANCH so new npm releases of the agent CLIs (and npm) are picked up.
 # Schedules only fire from the repo DEFAULT branch: set the fork's default branch to LATEST_BRANCH.
@@ -16,7 +18,7 @@ on:
 
 env:
   LATEST_BRANCH: fork/stack   # the branch the pod follows via :latest
-  IMAGE: ghcr.io/${{ github.repository_owner }}/kanban-dev
+  IMAGE: ghcr.io/${{ github.repository_owner }}/kanban
 
 permissions:
   contents: read

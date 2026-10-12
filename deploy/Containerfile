@@ -1,4 +1,5 @@
-# Dev container with the vombor/kanban fork. Built by .github/workflows/image.yml and published to GHCR.
+# Dev container with the vombor/kanban fork (ghcr.io/vombor/kanban). Built by .github/workflows/image.yml and published
+# to GHCR.
 # Same toolset as the hand-built image, plus the standalone cline CLI (the fork's cline-cli agent, #643), Factory's droid
 # CLI (npm @factory/cli, the droid agent) and gh.
 # Kanban is installed from the fork's npm pack tarball (deploy/kanban.tgz, made in CI) instead of
@@ -81,6 +82,9 @@ STOPSIGNAL SIGTERM
 # podman auto-update picks up containers with this label; podman copies image labels into the container's.
 # It still needs the container to run under a systemd unit (quadlet), and a fully qualified image name.
 LABEL io.containers.autoupdate=registry
+# GHCR links the ghcr.io/vombor/kanban package to the repository through this label, so the repo's PAT can push it and
+# the package shows on the repo. CI's docker/metadata-action sets the same label from the repo it runs in.
+LABEL org.opencontainers.image.source=https://github.com/vombor/kanban
 ENTRYPOINT ["/usr/local/bin/kanban-entrypoint"]
 
 CMD ["kanban", "--port", "3485", "--no-open", "--no-passcode", "--skip-shutdown-cleanup"]

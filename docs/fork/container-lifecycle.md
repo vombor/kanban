@@ -1,6 +1,6 @@
-# Container lifecycle (kanban-dev image)
+# Container lifecycle (ghcr.io/vombor/kanban image)
 
-The dev-pod image (`ghcr.io/vombor/kanban-dev`, built from `deploy/Containerfile` by `.github/workflows/image.yml`)
+The dev-pod image (`ghcr.io/vombor/kanban`, built from `deploy/Containerfile` by `.github/workflows/image.yml`)
 starts Kanban through `deploy/kanban-entrypoint.sh` (`/usr/local/bin/kanban-entrypoint`), which ties the dev-team
 kit on the persistent volume (`/root/.kanban`) to the container's start and stop:
 
@@ -30,7 +30,7 @@ every start. An `Exec=` override still works: it replaces only the command, and 
 
 ```ini
 [Container]
-Image=ghcr.io/vombor/kanban-dev:latest
+Image=ghcr.io/vombor/kanban:latest
 AutoUpdate=registry
 # podman stop's default (10 s) would SIGKILL Kanban while the pre-stop steps run: 45 s kit + 20 s restart prepare +
 # 10 s Kanban + margin.
@@ -50,6 +50,10 @@ TimeoutStopSec=120
 
 Apply with `systemctl --user daemon-reload` and, when no cards are running, `systemctl --user restart
 <unit>.service` (no `--user` for a system unit). Without systemd: `podman run --stop-timeout 90 ...`.
+
+Until 2026-10-12 the image was `ghcr.io/vombor/kanban-dev`, which CI no longer pushes, so `podman auto-update`
+stops finding new builds there. A pod still on it: set `Image=ghcr.io/vombor/kanban:latest`, `systemctl --user
+daemon-reload`, then restart the unit; the old `kanban-dev` package on GHCR can be deleted afterwards.
 
 The image also carries `LABEL io.containers.autoupdate=registry`. Podman copies image labels into the
 container's labels, so `podman auto-update` finds the container even without `AutoUpdate=registry`; it still only
