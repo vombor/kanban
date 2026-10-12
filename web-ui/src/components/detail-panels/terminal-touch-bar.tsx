@@ -34,9 +34,12 @@ import { useVoiceChat, type VoiceChatControls } from "@/voice/use-voice-chat";
 // which stay at the row's right edge whether jump to bottom is there or not.
 // Enter sends the voice message while the mic is on or the voice preview
 // (above the row, with its X) holds one, and is the terminal's Enter
-// otherwise. While the pad is open a second row holds the keys a phone
-// keyboard lacks to answer a TUI's pickers (arrows, Tab, Shift+Tab, Esc) plus
-// Space.
+// otherwise. While the pad is open a row right above the controls holds the
+// keys a phone keyboard lacks to answer a TUI's pickers (arrows, Tab,
+// Shift+Tab, Esc) plus Space. It is in the bar's flow, not floating over the
+// terminal: a TUI's input line is its last rows and xterm can't scroll past
+// them, so an overlay would hide exactly what the keys answer; the terminal
+// refits once instead.
 //
 // The row keeps one height while jump to bottom comes and goes (scrolling must
 // not refit the terminal); only the pad toggle, the voice preview and the
@@ -213,6 +216,7 @@ export function TerminalTouchBar({
 					<VoiceError voice={voice} />
 				</>
 			) : null}
+			{isPadOpen ? <TerminalTouchKeyPad onKey={onKey} /> : null}
 			<div role="toolbar" aria-label="Terminal controls" className="flex items-center gap-1.5">
 				{voice?.voiceInput.supported ? <VoiceMicButton voice={voice} /> : null}
 				{voice?.replySpeech.supported ? <ReplySpeechButton voice={voice} /> : null}
@@ -246,7 +250,6 @@ export function TerminalTouchBar({
 				</button>
 				<EnterButton voice={voice} onKey={onKey} />
 			</div>
-			{isPadOpen ? <TerminalTouchKeyPad onKey={onKey} /> : null}
 		</div>
 	);
 }

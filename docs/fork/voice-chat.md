@@ -143,9 +143,11 @@ row on a phone, so there is no separate voice bar (user request, 2026-10-12):
 - The speaker turns reading replies aloud on and off. While a reply is being read its icon moves, the row says
   "Reading the reply…", and a tap stops that reading without turning the toggle off.
 
-The toggle opens a second row with the keys a phone keyboard lacks for an agent's pickers: Esc, Shift+Tab, Tab,
+The toggle opens a row right above the controls with the keys a phone keyboard lacks for an agent's pickers: Esc, Shift+Tab, Tab,
 Space and the arrows (held arrows repeat, arrows follow the TUI's cursor-key mode). No button takes the keyboard's
-focus, so dictation keeps going. The desktop keeps the voice bar with its Send and stop buttons.
+focus, so dictation keeps going. The row is part of the bar, not a panel over the terminal (an agent's input line is the
+terminal's last rows, which an overlay would hide), so the terminal refits once when it opens or closes. The desktop
+keeps the voice bar with its Send and stop buttons.
 
 ## Code
 

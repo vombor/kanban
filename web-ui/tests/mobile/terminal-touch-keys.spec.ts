@@ -131,7 +131,9 @@ test("a held arrow repeats", async ({ page }) => {
 	await stopInputProbe(page);
 });
 
-test("the bar sits under the terminal, and its key pad refits the terminal once each way", async ({ page }) => {
+test("the bar sits under the terminal, and its key pad opens above it and refits the terminal once each way", async ({
+	page,
+}) => {
 	// A small phone: every key still fits on one row.
 	await page.setViewportSize({ width: 360, height: 780 });
 	const resizes = recordShellResizes(page);
@@ -176,7 +178,14 @@ test("the bar sits under the terminal, and its key pad refits the terminal once 
 	expect(new Set(keyBoxes.map((box) => Math.round(box.top))).size).toBe(1);
 	const viewportWidth = await page.evaluate(() => window.innerWidth);
 	expect(Math.max(...keyBoxes.map((box) => box.right))).toBeLessThanOrEqual(viewportWidth);
-	expect((await boxOf(keys)).top).toBeGreaterThanOrEqual((await boxOf(terminal)).bottom - 0.5);
+	// Right above the control row, between it and the terminal, never over the TUI; the row stays where it was.
+	const keysBox = await boxOf(keys);
+	const barOpenBox = await boxOf(bar);
+	expect(keysBox.top).toBeGreaterThanOrEqual((await boxOf(terminal)).bottom - 0.5);
+	expect(keysBox.bottom).toBeLessThanOrEqual(barOpenBox.top + 0.5);
+	expect(barOpenBox.top - keysBox.bottom).toBeLessThan(8);
+	expect(barOpenBox.top).toBeCloseTo(barBox?.y ?? 0, 0);
+	expect(barOpenBox.bottom - barOpenBox.top).toBeCloseTo(barBox?.height ?? 0, 0);
 	const opened = await settledCount(resizes);
 	expect(opened - before).toBe(1);
 	expect(resizes.at(-1)).toBeLessThan(fullRows);

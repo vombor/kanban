@@ -7,6 +7,7 @@ import {
 	openShellTerminal,
 	recordShellResizes,
 	settledCount,
+	tap,
 	tapToFocus,
 } from "./terminal-page";
 
@@ -137,5 +138,37 @@ test("the shell terminal and its touch bar stay above the keyboard, with one PTY
 	const closed = await settledCount(resizes);
 	expect(closed - opened).toBe(1);
 	expect(resizes.at(-1)).toBe(fullRows);
+	expect(await isTerminalFocused(page)).toBe(true);
+});
+
+test("with the keyboard open, the key pad opens above the control row inside the visible part, with one PTY resize", async ({
+	page,
+}) => {
+	await installKeyboardViewport(page);
+	const resizes = recordShellResizes(page);
+	const { cdp, terminal } = await openShellTerminal(page, instance);
+	await tapToFocus(page, cdp, terminal);
+	const bar = page.getByRole("toolbar", { name: "Terminal controls" });
+	await expect(bar).toBeVisible();
+	const visibleBottom = (await page.evaluate(() => window.innerHeight)) - KEYBOARD_PX;
+	await animateKeyboard(page, 0, KEYBOARD_PX);
+	await expectInside(bar, 0, visibleBottom);
+	const before = await settledCount(resizes);
+	const barBefore = await boxOf(bar);
+
+	const show = page.getByRole("button", { name: "Show terminal keys" });
+	const showBox = await show.boundingBox();
+	if (!showBox) {
+		throw new Error("The toggle has no box.");
+	}
+	await tap(cdp, { x: showBox.x + showBox.width / 2, y: showBox.y + showBox.height / 2 });
+	const keys = page.getByRole("toolbar", { name: "Terminal keys" });
+	await expectInside(keys, 0, visibleBottom);
+	const keysBox = await boxOf(keys);
+	expect(keysBox.top).toBeGreaterThanOrEqual((await boxOf(terminal)).bottom - 0.5);
+	expect(keysBox.bottom).toBeLessThanOrEqual((await boxOf(bar)).top + 0.5);
+	// The control row stays where it was, right above the keyboard.
+	expect((await boxOf(bar)).top).toBeCloseTo(barBefore.top, 0);
+	expect((await settledCount(resizes)) - before).toBe(1);
 	expect(await isTerminalFocused(page)).toBe(true);
 });

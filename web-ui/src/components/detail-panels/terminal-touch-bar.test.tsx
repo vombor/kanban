@@ -96,6 +96,15 @@ describe("TerminalTouchBar", () => {
 		expect(row?.lastElementChild?.getAttribute("aria-label")).toBe("Send Enter");
 	});
 
+	it("opens the pad's keys right above the control row", () => {
+		render();
+		tap(button("Show terminal keys"));
+		const pad = container.querySelector('[role="toolbar"][aria-label="Terminal keys"]');
+		const row = container.querySelector('[role="toolbar"][aria-label="Terminal controls"]');
+		expect(pad?.nextElementSibling).toBe(row);
+		expect(row?.parentElement?.lastElementChild).toBe(row);
+	});
+
 	it("sends Enter to the terminal without taking focus from the textarea", () => {
 		render();
 		expect(container.querySelector('button[aria-label="Jump to bottom"]')).toBeNull();
