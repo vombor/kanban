@@ -34,6 +34,8 @@ export interface VoiceInputControls {
 	startListening: () => void;
 	stopListening: () => void;
 	discard: () => void;
+	/** Discards and stops listening (the session is aborted, nothing it heard is kept). */
+	cancel: () => void;
 	/**
 	 * Sends the draft. While listening it first stops the mic and sends once the final text is in (at most
 	 * SEND_FINAL_WAIT_MS); with nothing heard it only stops listening. False when nothing was sent.
@@ -134,6 +136,14 @@ export function useVoiceInput(workspaceId: string | null, taskId: string): Voice
 		setSendError(null);
 	}, [recognition.clear, settlePendingSend]);
 
+	// The phone's X: the text goes and the mic stops, without what it heard. On iOS a session can't go on into an empty
+	// preview: its one hypothesis grows at the same index until the utterance ends, so clear() would hide everything
+	// said after the X too.
+	const cancel = useCallback(() => {
+		recognition.reset();
+		discard();
+	}, [discard, recognition.reset]);
+
 	const send = useCallback(async () => {
 		if (isSending || pendingSendRef.current) {
 			return false;
@@ -179,6 +189,7 @@ export function useVoiceInput(workspaceId: string | null, taskId: string): Voice
 		startListening,
 		stopListening: recognition.stop,
 		discard,
+		cancel,
 		send,
 	};
 }

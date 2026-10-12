@@ -62,8 +62,8 @@ const REPLIED = {
 } as RuntimeTaskSessionSummary;
 
 // jsdom has no PointerEvent: a mouse event with the pointer fields is what React reads.
-function pointerEvent(type: string): MouseEvent {
-	return Object.assign(new MouseEvent(type, { bubbles: true, cancelable: true, button: 0 }), {
+function pointerEvent(type: string, init: MouseEventInit = {}): MouseEvent {
+	return Object.assign(new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, ...init }), {
 		pointerType: "touch",
 		pointerId: 1,
 	});
@@ -222,17 +222,91 @@ describe("VoiceTerminalTouchBar", () => {
 		expect(deliverTaskInputMock).toHaveBeenCalledTimes(1);
 	});
 
-	it("X clears the dictated text without sending, and Enter goes to the terminal again", () => {
+	it("X is the key pad toggle's size and look, next to the dictated text", () => {
+		render();
+		dictate("hello");
+		const discard = button("Discard voice message");
+		const toggle = button("Show terminal keys");
+		// Not in the row: next to the preview.
+		expect(rowLabels()).not.toContain("Discard voice message");
+		expect(discard.closest('[role="toolbar"]')).toBeNull();
+		expect(discard.className).toBe(toggle.className);
+		expect(discard.className).toContain("size-11");
+		expect(discard.className).toContain("touch-manipulation");
+		expect(discard.querySelector("svg")?.getAttribute("width")).toBe(
+			toggle.querySelector("svg")?.getAttribute("width"),
+		);
+		expect(discard.querySelector("svg")?.getAttribute("width")).toBe("18");
+	});
+
+	it("X clears the dictated text without sending, keeps the keyboard's focus, and Enter goes to the terminal again", () => {
 		render();
 		const recognition = dictate("never mind");
 		tap(button("Stop listening"));
 		act(() => recognition.emitEnd());
-		const { mouseDown } = tap(button("Discard voice message"));
+		expect(preview()?.value).toBe("never mind");
+		const { pointerDown, mouseDown } = tap(button("Discard voice message"));
+		expect(pointerDown.defaultPrevented).toBe(true);
 		expect(mouseDown.defaultPrevented).toBe(true);
+		expect(document.activeElement).toBe(textarea);
 		expect(preview()).toBeNull();
 		tap(button("Send Enter"));
 		expect(keys).toEqual(["enter"]);
 		expect(deliverTaskInputMock).not.toHaveBeenCalled();
+	});
+
+	it("X acts on the touch's own release: no click comes after it (iOS), and a release off the button does nothing", () => {
+		render();
+		const recognition = dictate("first try");
+		tap(button("Stop listening"));
+		act(() => recognition.emitEnd());
+		const discard = button("Discard voice message");
+		// Released off the button (the finger slid away): nothing.
+		act(() => {
+			discard.dispatchEvent(pointerEvent("pointerdown"));
+			discard.dispatchEvent(pointerEvent("pointerup", { clientX: 500, clientY: 500 }));
+		});
+		expect(preview()?.value).toBe("first try");
+		// A press and release on it, and no click from the browser.
+		act(() => {
+			discard.dispatchEvent(pointerEvent("pointerdown"));
+			discard.dispatchEvent(pointerEvent("pointerup"));
+		});
+		expect(preview()).toBeNull();
+	});
+
+	it("X while listening clears the text and stops the mic; a later result doesn't bring the text back", async () => {
+		render();
+		const recognition = dictate("scrap this");
+		expect(button("Stop listening").getAttribute("aria-pressed")).toBe("true");
+		tap(button("Discard voice message"));
+		expect(recognition.aborted).toBe(true);
+		expect(preview()).toBeNull();
+		expect(button("Talk to the agent").getAttribute("aria-pressed")).toBe("false");
+		// What the aborted session still sends changes nothing.
+		act(() => recognition.emitResults([{ transcript: "scrap this please", isFinal: true }]));
+		await act(async () => recognition.emitEnd());
+		expect(preview()).toBeNull();
+		expect(deliverTaskInputMock).not.toHaveBeenCalled();
+		// Enter is the terminal's again, and the mic records afresh.
+		tap(button("Send Enter"));
+		expect(keys).toEqual(["enter"]);
+		const second = dictate("new words");
+		expect(second).not.toBe(recognition);
+		expect(preview()?.value).toBe("new words");
+	});
+
+	it("X from the keyboard (a click without a pointer) clears the text too", () => {
+		render();
+		const recognition = dictate("typed away");
+		tap(button("Stop listening"));
+		act(() => recognition.emitEnd());
+		act(() => {
+			button("Discard voice message").dispatchEvent(
+				new MouseEvent("click", { bubbles: true, cancelable: true, detail: 0 }),
+			);
+		});
+		expect(preview()).toBeNull();
 	});
 
 	it("the speaker toggles reading replies aloud, and while a reply is read a tap stops the reading only", () => {

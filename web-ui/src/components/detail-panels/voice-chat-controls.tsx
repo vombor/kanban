@@ -2,10 +2,16 @@ import { Mic, MicOff, SendHorizontal, X } from "lucide-react";
 import type { KeyboardEvent, PointerEvent, ReactElement } from "react";
 import { useEffect, useRef } from "react";
 
+import {
+	keepTerminalFocus,
+	TOUCH_QUIET_CLASS,
+	TOUCH_SQUARE_BUTTON_CLASS,
+} from "@/components/detail-panels/touch-bar-buttons";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip } from "@/components/ui/tooltip";
+import { usePointerTap } from "@/hooks/use-pointer-tap";
 import type { VoiceChatControls } from "@/voice/use-voice-chat";
 
 // The voice chat controls both layouts share: the desktop voice bar
@@ -104,16 +110,33 @@ export function VoiceMicButton({ voice }: { voice: VoiceChatControls }): ReactEl
 	);
 }
 
+// The phone's X: the key pad toggle's size and look, acting on the touch itself (use-pointer-tap.ts), and it stops
+// the mic as well as clearing the text.
+function TouchDiscardButton({ voice }: { voice: VoiceChatControls }): ReactElement {
+	const tap = usePointerTap(voice.cancel);
+	return (
+		<button
+			type="button"
+			aria-label="Discard voice message"
+			{...tap}
+			onContextMenu={keepTerminalFocus}
+			className={cn(TOUCH_SQUARE_BUTTON_CLASS, TOUCH_QUIET_CLASS)}
+		>
+			<X size={18} />
+		</button>
+	);
+}
+
 /**
- * The editable preview of what was dictated, with its discard (X) and, on desktop, its send button. On a phone the
- * touch bar's Enter sends it instead.
+ * The editable preview of what was dictated, with its discard (X) and, in the desktop's bar, its send button. On a
+ * phone (`touch`) the touch bar's Enter sends it, and the X is a touch bar button that also stops the mic.
  */
 export function VoicePreview({
 	voice,
-	showSend,
+	layout,
 }: {
 	voice: VoiceChatControls;
-	showSend: boolean;
+	layout: "bar" | "touch";
 }): ReactElement | null {
 	const { voiceInput } = voice;
 	if (!voice.hasPreview) {
@@ -145,8 +168,10 @@ export function VoicePreview({
 					voiceInput.listening && "text-text-secondary",
 				)}
 			/>
-			<div className="flex flex-col gap-1">
-				{showSend ? (
+			{layout === "touch" ? (
+				<TouchDiscardButton voice={voice} />
+			) : (
+				<div className="flex flex-col gap-1">
 					<Button
 						variant="primary"
 						size="md"
@@ -155,18 +180,18 @@ export function VoicePreview({
 						disabled={!voice.canSend}
 						onClick={voice.send}
 					/>
-				) : null}
-				<Button
-					variant="ghost"
-					size="md"
-					icon={<X size={16} />}
-					aria-label="Discard voice message"
-					// Keeps the focus (on a phone the terminal's, and its keyboard open).
-					onMouseDown={(event) => event.preventDefault()}
-					onPointerDown={(event) => event.preventDefault()}
-					onClick={voice.discard}
-				/>
-			</div>
+					<Button
+						variant="ghost"
+						size="md"
+						icon={<X size={16} />}
+						aria-label="Discard voice message"
+						// Keeps the focus.
+						onMouseDown={(event) => event.preventDefault()}
+						onPointerDown={(event) => event.preventDefault()}
+						onClick={voice.discard}
+					/>
+				</div>
+			)}
 		</div>
 	);
 }

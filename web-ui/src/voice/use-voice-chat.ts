@@ -23,6 +23,8 @@ export interface VoiceChatControls {
 	stopListening: () => void;
 	send: () => void;
 	discard: () => void;
+	/** Discards and stops the mic (the phone's X). */
+	cancel: () => void;
 }
 
 /**
@@ -59,5 +61,6 @@ export function useVoiceChat(
 			void voiceInput.send();
 		},
 		discard: voiceInput.discard,
+		cancel: voiceInput.cancel,
 	};
 }

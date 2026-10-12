@@ -32,10 +32,11 @@ dependency or secret for it. Shell terminals don't get the bar.
   was heard" and "was interrupted" (those two stay quiet after your own stop). A session that doesn't start within
   15 s (room for the first permission prompts), or doesn't end within 3 s of a stop, is aborted with a message, so
   the bar never says it listens while nothing does.
-- Discarding (X, Escape) clears only the text: while listening, the mic keeps listening and what you say next fills
-  the empty preview (the recognizer's results from before the clear are skipped by index, the words being said at
-  that moment included). Closing the bar, or switching it to another session, aborts the recognition. The page keeps
-  its live session until its `end` (`web-ui/src/voice/live-recognition.ts`) so a reopened bar can abort it too.
+- On desktop, discarding (X, Escape) clears only the text: while listening, the mic keeps listening and what you say
+  next fills the empty preview (the recognizer's results from before the clear are skipped by index, the words being
+  said at that moment included). On a phone the X also stops the mic (see "On a phone"). Closing the bar, or
+  switching it to another session, aborts the recognition. The page keeps its live session until its `end`
+  (`web-ui/src/voice/live-recognition.ts`) so a reopened bar can abort it too.
 - Every start runs inside the mic's tap: a new `SpeechRecognition` instance, `start()` called at once. It never
   waits for an old session to end. Both engines end the previous session themselves when a new one starts (see
   below), and the earlier 2 s wait for that end (35818fdd) ran the start from a timer, outside the tap, whenever the
@@ -139,7 +140,20 @@ row on a phone, so there is no separate voice bar (user request, 2026-10-12):
   desktop's Send button: while listening it stops the mic and sends what you said once its final text is in (see
   "Speech in"), with nothing heard it only stops the mic. Otherwise it is the terminal's Enter, the keyboard's own
   submit, so text dictated into the terminal goes out first and stays sent.
-- The X that clears the dictated text sits next to the preview, not in the row.
+- The X that clears the dictated text sits next to the preview, not in the row, and has the key pad toggle's size
+  (44 px). A tap clears the text and, while the mic is on (or still opening), stops it without keeping what it heard;
+  the next mic tap records afresh. It doesn't keep listening as the desktop's X does, because on iOS the recognizer
+  sends one hypothesis that grows at the same index until the utterance ends (WebKit's
+  `SpeechRecognition::didReceiveResult`, `WebSpeechRecognizerTask.mm`), so a clear by index would hide everything
+  said after the X too.
+- The X acts on the touch itself (its `pointerup` over the button), not on the browser's click, like the mic, which
+  acts on `pointerdown`. iOS Safari makes a click of a tap only when the tap commits on the element its touch-down
+  found, picked by fat-finger targeting that prefers whatever covers most of the finger (WebKit's
+  `WebPage::commitPotentialTap`, `LocalFrame::qualifyingNodeAtViewportLocation`). The old 32-px X beside the large
+  preview textarea got no clicks there (user report 2026-10-12, iPhone, Safari as a home-screen web app), while the
+  44-px row buttons did. Cancelling `pointerdown` to keep the keyboard's focus is not what kept the click away: WebKit
+  sends the click anyway (310491@main briefly didn't, and was reverted by 314097@main before any shipping Safari
+  branch).
 - The speaker turns reading replies aloud on and off. While a reply is being read its icon moves, the row says
   "Reading the reply…", and a tap stops that reading without turning the toggle off.
 
@@ -161,4 +175,5 @@ keeps the voice bar with its Send and stop buttons.
 - `web-ui/src/components/detail-panels/voice-chat-bar.tsx`: the desktop bar, shown by `AgentTerminalPanel`'s
   `voiceChat` prop; its mic, preview and status are `voice-chat-controls.tsx`.
 - `web-ui/src/components/detail-panels/terminal-touch-bar.tsx`: the touch bar (`VoiceTerminalTouchBar` on an agent
-  session); its keys and Enter go through `web-ui/src/terminal/terminal-ime-input.ts` like the keyboard's.
+  session); its keys and Enter go through `web-ui/src/terminal/terminal-ime-input.ts` like the keyboard's. Its button
+  styles are `touch-bar-buttons.ts`; the preview's X taps through `web-ui/src/hooks/use-pointer-tap.ts`.

@@ -13,8 +13,16 @@ import {
 	Volume2,
 	VolumeX,
 } from "lucide-react";
-import type { ReactElement, ReactNode, SyntheticEvent } from "react";
+import type { ReactElement, ReactNode } from "react";
 
+import {
+	keepTerminalFocus,
+	TOUCH_BUTTON_CLASS,
+	TOUCH_NEUTRAL_CLASS,
+	TOUCH_QUIET_CLASS,
+	TOUCH_ROUND_BUTTON_CLASS,
+	TOUCH_SQUARE_BUTTON_CLASS,
+} from "@/components/detail-panels/touch-bar-buttons";
 import { VoiceError, VoiceMicButton, VoicePreview, VoiceStatus } from "@/components/detail-panels/voice-chat-controls";
 import { VoiceDebugPanel } from "@/components/detail-panels/voice-debug-panel";
 import { cn } from "@/components/ui/cn";
@@ -33,7 +41,7 @@ import { useVoiceChat, type VoiceChatControls } from "@/voice/use-voice-chat";
 // the right jump to bottom (while scrolled up), the key pad toggle and Enter,
 // which stay at the row's right edge whether jump to bottom is there or not.
 // Enter sends the voice message while the mic is on or the voice preview
-// (above the row, with its X) holds one, and is the terminal's Enter
+// (above the row, with its X, which also stops the mic) holds one, and is the terminal's Enter
 // otherwise. While the pad is open a row right above the controls holds the
 // keys a phone keyboard lacks to answer a TUI's pickers (arrows, Tab,
 // Shift+Tab, Esc) plus Space. It is in the bar's flow, not floating over the
@@ -49,16 +57,7 @@ import { useVoiceChat, type VoiceChatControls } from "@/voice/use-voice-chat";
 // No button may take focus from the terminal's textarea: the on-screen keyboard
 // would close, and its dictation would end (terminal-ime-input.ts).
 
-const BUTTON_CLASS =
-	"inline-flex cursor-pointer touch-manipulation select-none items-center justify-center border active:bg-surface-4";
-const NEUTRAL_CLASS = "border-border-bright bg-surface-2 text-text-primary";
-const ROUND_BUTTON_CLASS = cn(BUTTON_CLASS, "size-11 shrink-0 rounded-full shadow-lg");
-const SQUARE_BUTTON_CLASS = cn(BUTTON_CLASS, "size-11 shrink-0 rounded-md");
-const PAD_KEY_CLASS = cn(BUTTON_CLASS, NEUTRAL_CLASS, "h-10 w-full min-w-0 rounded-md");
-
-function keepTerminalFocus(event: SyntheticEvent): void {
-	event.preventDefault();
-}
+const PAD_KEY_CLASS = cn(TOUCH_BUTTON_CLASS, TOUCH_NEUTRAL_CLASS, "h-10 w-full min-w-0 rounded-md");
 
 const KEEP_FOCUS_PROPS = { onMouseDown: keepTerminalFocus, onPointerDown: keepTerminalFocus };
 
@@ -141,12 +140,12 @@ function ReplySpeechButton({ voice }: { voice: VoiceChatControls }): ReactElemen
 				{...KEEP_FOCUS_PROPS}
 				onClick={() => (speaking ? replySpeech.stop() : replySpeech.setEnabled(!enabled))}
 				className={cn(
-					ROUND_BUTTON_CLASS,
+					TOUCH_ROUND_BUTTON_CLASS,
 					speaking
 						? "animate-pulse border-accent bg-accent/20 text-accent"
 						: enabled
 							? "border-accent/60 bg-surface-2 text-accent"
-							: cn(NEUTRAL_CLASS, "text-text-secondary"),
+							: cn(TOUCH_NEUTRAL_CLASS, "text-text-secondary"),
 				)}
 			>
 				{speaking ? <AudioLines size={18} /> : enabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
@@ -181,8 +180,8 @@ function EnterButton({
 				}
 			}}
 			className={cn(
-				ROUND_BUTTON_CLASS,
-				sendsVoice && voice?.canSend ? "border-accent bg-surface-2 text-accent" : NEUTRAL_CLASS,
+				TOUCH_ROUND_BUTTON_CLASS,
+				sendsVoice && voice?.canSend ? "border-accent bg-surface-2 text-accent" : TOUCH_NEUTRAL_CLASS,
 				disabled && "cursor-default opacity-50",
 			)}
 		>
@@ -212,7 +211,7 @@ export function TerminalTouchBar({
 			{voice ? (
 				<>
 					<VoiceDebugPanel voice={voice} />
-					<VoicePreview voice={voice} showSend={false} />
+					<VoicePreview voice={voice} layout="touch" />
 					<VoiceError voice={voice} />
 				</>
 			) : null}
@@ -228,7 +227,7 @@ export function TerminalTouchBar({
 						// Keeps the terminal focused, so an open on-screen keyboard stays open.
 						{...KEEP_FOCUS_PROPS}
 						aria-label="Jump to bottom"
-						className={cn(SQUARE_BUTTON_CLASS, NEUTRAL_CLASS)}
+						className={cn(TOUCH_SQUARE_BUTTON_CLASS, TOUCH_NEUTRAL_CLASS)}
 					>
 						<ArrowDown size={18} />
 					</button>
@@ -240,10 +239,8 @@ export function TerminalTouchBar({
 					aria-label={isPadOpen ? "Hide terminal keys" : "Show terminal keys"}
 					aria-expanded={isPadOpen}
 					className={cn(
-						SQUARE_BUTTON_CLASS,
-						isPadOpen
-							? "border-accent bg-accent/20 text-text-primary"
-							: "border-border-bright bg-surface-2 text-text-secondary",
+						TOUCH_SQUARE_BUTTON_CLASS,
+						isPadOpen ? "border-accent bg-accent/20 text-text-primary" : TOUCH_QUIET_CLASS,
 					)}
 				>
 					<Keyboard size={18} />
