@@ -46,12 +46,15 @@ export interface GitHubAppManifest {
 	redirect_url: string;
 	setup_url: string;
 	setup_on_update: true;
-	hook_attributes: { url: string; active: false };
 	default_permissions: typeof GITHUB_APP_PERMISSIONS;
 	default_events: [];
 }
 
-/** The manifest: no webhook (inactive, GitHub requires its url), no events, Issues + Metadata only. */
+/**
+ * The manifest: no webhook, no events, Issues + Metadata only. `hook_attributes` is left out on purpose: it is
+ * optional, and GitHub refuses a hook url it can't reach from the Internet even when inactive, so the local origin
+ * there made every manifest invalid (issue #37). redirect_url and setup_url may be local.
+ */
 export function buildGitHubAppManifest(input: { name: string; origin: string }): GitHubAppManifest {
 	const origin = input.origin.replace(/\/+$/u, "");
 	return {
@@ -63,7 +66,6 @@ export function buildGitHubAppManifest(input: { name: string; origin: string }):
 		redirect_url: `${origin}${GITHUB_APP_CALLBACK_PATH}`,
 		setup_url: `${origin}${GITHUB_APP_SETUP_PATH}`,
 		setup_on_update: true,
-		hook_attributes: { url: `${origin}${GITHUB_APP_ROUTE_PREFIX}/webhook`, active: false },
 		default_permissions: GITHUB_APP_PERMISSIONS,
 		default_events: [],
 	};

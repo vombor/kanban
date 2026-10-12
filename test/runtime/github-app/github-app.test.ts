@@ -120,10 +120,17 @@ describe("the app manifest", () => {
 		const manifest = buildGitHubAppManifest({ name: "Kanban agents", origin: "http://localhost:3485/" });
 		expect(manifest.default_permissions).toEqual({ issues: "write", metadata: "read" });
 		expect(manifest.default_events).toEqual([]);
-		expect(manifest.hook_attributes.active).toBe(false);
+		expect(manifest).not.toHaveProperty("hook_attributes");
 		expect(manifest.public).toBe(false);
 		expect(manifest.redirect_url).toBe(`http://localhost:3485${GITHUB_APP_CALLBACK_PATH}`);
 		expect(manifest.setup_url).toBe("http://localhost:3485/api/github/app/installed");
+	});
+
+	it("puts the local origin only in redirect_url and setup_url (GitHub refuses a local hook url, issue #37)", () => {
+		const manifest = buildGitHubAppManifest({ name: "Kanban agents", origin: "http://localhost:3485" });
+		const { redirect_url: _redirect, setup_url: _setup, ...rest } = manifest;
+		expect(JSON.stringify(rest)).not.toMatch(/localhost|127\.0\.0\.1/u);
+		expect(JSON.stringify(manifest)).not.toContain("/webhook");
 	});
 
 	it("exchanges the code once, stores the key 0600 without the client or webhook secret, and spends the state", async () => {
