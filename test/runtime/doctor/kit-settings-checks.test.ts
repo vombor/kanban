@@ -19,7 +19,7 @@ async function builtInCatalog() {
 	}
 }
 
-const LEMONADE = { url: "http://localhost:13305", requireLabels: ["tool-calling"] };
+const LEMONADE = { url: "http://localhost:13305", requireLabels: ["tool-calling"], include: null };
 const LOCAL_ON = {
 	agents: { cline: { turnDetector: { mode: "on" } } },
 	pipeline: { recovery: { mode: "on" } },

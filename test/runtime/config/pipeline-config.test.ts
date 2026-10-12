@@ -200,7 +200,7 @@ describe("pipeline config", () => {
 		const { config, issues } = parsePipelineConfig(raw);
 		expect(issues).toEqual([]);
 		expect(config.models.lists).toEqual({
-			lemonade: { url: "http://localhost:13305", requireLabels: ["tool-calling"] },
+			lemonade: { url: "http://localhost:13305", requireLabels: ["tool-calling"], include: null },
 		});
 		expect(migrateLegacyConfigKeys(raw)).toEqual({
 			config: {

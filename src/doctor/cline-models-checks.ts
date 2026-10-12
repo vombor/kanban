@@ -9,10 +9,11 @@ import {
 	type ClineLemonadeContextSyncSettings,
 } from "../config/cline-lemonade-context-sync-config";
 import type { LemonadeModelListSettings } from "../config/model-lists-config";
+import { LEMONADE_MODEL_LIST_INCLUDE_KEY } from "../config/model-lists-config";
 import { formatApplyLemonadeModelsCommand } from "../setup/cline-lemonade-apply";
 import { planLemonadeContextSync } from "../setup/cline-lemonade-context-sync";
 import {
-	isLemonadeModelsDiffEmpty,
+	hasLemonadeModelsChanges,
 	type LemonadeModelsPlan,
 	planClineLemonadeModels,
 } from "../setup/cline-lemonade-models";
@@ -54,6 +55,7 @@ export async function checkClineLemonadeModels(options: {
 	const plan = await planClineLemonadeModels({
 		modelsPath: options.modelsPath,
 		requireLabels: options.lemonadeModelList.requireLabels,
+		include: options.lemonadeModelList.include,
 		lemonadeUrl: options.lemonadeModelList.url,
 		fetch: options.fetch,
 		timeoutMs: LEMONADE_TIMEOUT_MS,
@@ -63,7 +65,20 @@ export async function checkClineLemonadeModels(options: {
 		return [];
 	}
 	const prefix = `cline lemonade models (${options.modelsPath})`;
-	if (!isLemonadeModelsDiffEmpty(plan.diff)) {
+	// An include id Lemonade can't offer is the user's list to fix, even with the file in sync (with differences, the
+	// warning above lists it among them).
+	const include: DoctorFinding[] =
+		plan.unlistedIncluded.length > 0
+			? [
+					{
+						level: "warn",
+						area: "setup",
+						message: `${prefix}: ${LEMONADE_MODEL_LIST_INCLUDE_KEY} names models Lemonade can't offer: ${plan.unlistedIncluded.join("; ")}`,
+						hint: `pull the model in Lemonade, or change the list: kanban config set ${LEMONADE_MODEL_LIST_INCLUDE_KEY} <ids...>`,
+					},
+				]
+			: [];
+	if (hasLemonadeModelsChanges(plan)) {
 		const sync = options.contextSync
 			? describeContextSync(plan, options.contextSync, options.historyPath ?? getClineLemonadeSyncHistoryPath())
 			: [];
@@ -80,5 +95,5 @@ export async function checkClineLemonadeModels(options: {
 	if (plan.unreachable) {
 		return [{ level: "info", area: "setup", message }];
 	}
-	return [{ level: "pass", area: "setup", message }];
+	return include.length > 0 ? include : [{ level: "pass", area: "setup", message }];
 }

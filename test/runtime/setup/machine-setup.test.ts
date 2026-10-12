@@ -11,7 +11,9 @@ import { createTempDir } from "../../utilities/temp-dir";
 
 const ORIGIN = "http://127.0.0.1:3485";
 // Never the machine's own Lemonade or config.json.
-const LEMONADE = { lemonadeModelList: { url: "http://lemonade.test:13305", requireLabels: ["tool-calling"] } };
+const LEMONADE = {
+	lemonadeModelList: { url: "http://lemonade.test:13305", requireLabels: ["tool-calling"], include: null },
+};
 
 describe("kanban setup steps", () => {
 	let root: string;

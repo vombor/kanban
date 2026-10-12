@@ -63,7 +63,8 @@ export function planLemonadeContextSync(plan: LemonadeModelsPlan): LemonadeConte
 		(count, change) => count + change.fields.filter((field) => !isSyncKey(field.key)).length,
 		0,
 	);
-	const userDifferences = (diff.listForm ? 1 : 0) + diff.added.length + diff.removed.length + otherFields;
+	const userDifferences =
+		(diff.listForm ? 1 : 0) + diff.added.length + diff.removed.length + otherFields + (plan.defaultModel ? 1 : 0);
 	const contextChanges = diff.changed.filter((change) => change.fields.some((field) => isSyncKey(field.key)));
 	if (diff.listForm) {
 		return {

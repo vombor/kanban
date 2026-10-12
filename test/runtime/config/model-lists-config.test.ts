@@ -14,7 +14,7 @@ import { createTempDir } from "../../utilities/temp-dir";
 describe("lemonade model list settings", () => {
 	it("defaults to the local Lemonade server and tool-calling models", () => {
 		expect(parseLemonadeModelListSettings({})).toEqual({
-			settings: { url: "http://localhost:13305", requireLabels: ["tool-calling"] },
+			settings: { url: "http://localhost:13305", requireLabels: ["tool-calling"], include: null },
 			warning: null,
 		});
 		expect(parseLemonadeModelListSettings(null).settings).toEqual(DEFAULT_LEMONADE_MODEL_LIST_SETTINGS);
@@ -26,7 +26,7 @@ describe("lemonade model list settings", () => {
 				models: { lists: { lemonade: { url: "http://10.0.0.5:8000", requireLabels: ["tool-calling", "coding"] } } },
 			}),
 		).toEqual({
-			settings: { url: "http://10.0.0.5:8000", requireLabels: ["tool-calling", "coding"] },
+			settings: { url: "http://10.0.0.5:8000", requireLabels: ["tool-calling", "coding"], include: null },
 			warning: null,
 		});
 		// An empty list means every downloaded model.
@@ -34,6 +34,24 @@ describe("lemonade model list settings", () => {
 			parseLemonadeModelListSettings({ models: { lists: { lemonade: { requireLabels: [] } } } }).settings
 				.requireLabels,
 		).toEqual([]);
+	});
+
+	it("reads models.lists.lemonade.include, and refuses an empty or non-list one with a warning", () => {
+		const read = (include: unknown) =>
+			parseLemonadeModelListSettings({ models: { lists: { lemonade: { include } } } });
+		expect(read(["Muse-Glimmer-30B-GGUF-Q4_K_M", " gemma-4-31B ", "Muse-Glimmer-30B-GGUF-Q4_K_M"])).toEqual({
+			settings: {
+				...DEFAULT_LEMONADE_MODEL_LIST_SETTINGS,
+				include: ["Muse-Glimmer-30B-GGUF-Q4_K_M", "gemma-4-31B"],
+			},
+			warning: null,
+		});
+		expect(read(null)).toEqual({ settings: DEFAULT_LEMONADE_MODEL_LIST_SETTINGS, warning: null });
+		for (const bad of [[], "Muse", [""], [1]]) {
+			const parsed = read(bad);
+			expect(parsed.settings.include).toBeNull();
+			expect(parsed.warning).toContain("models.lists.lemonade.include");
+		}
 	});
 
 	it("ignores values of the wrong type with a warning", () => {

@@ -18,7 +18,7 @@ import {
 	DEFAULT_CLINE_LEMONADE_CONTEXT_SYNC,
 } from "./cline-lemonade-context-sync-config";
 import { clineTurnDetectorModeSchema, getDefaultClineTurnDetectorSettings } from "./cline-turn-detector-config";
-import { DEFAULT_LEMONADE_MODEL_LIST_SETTINGS } from "./model-lists-config";
+import { DEFAULT_LEMONADE_MODEL_LIST_SETTINGS, modelListIncludeSchema } from "./model-lists-config";
 
 export const landingModeSchema = runtimeLandingModeSchema;
 
@@ -377,6 +377,7 @@ const orchestratorSectionSchema = z
 export const REMOVED_MODEL_PROVIDER_ID = "localai";
 
 const providerCapacitySchema = z.object({ maxLoadedModels: z.number().int().positive() }).strict();
+const modelListIncludeSettingSchema = modelListIncludeSchema.default(null);
 const DEFAULT_PROVIDER_CAPACITY: Record<string, z.infer<typeof providerCapacitySchema>> = {
 	lemonade: { maxLoadedModels: 1 },
 };
@@ -410,6 +411,8 @@ const modelsSectionSchema = z
 						requireLabels: z
 							.array(z.string())
 							.default(() => [...DEFAULT_LEMONADE_MODEL_LIST_SETTINGS.requireLabels]),
+						// Only these ids are offered (the route and models.json); null = every listed model.
+						include: modelListIncludeSettingSchema,
 					})
 					.strict()
 					.default(() => structuredClone(DEFAULT_LEMONADE_MODEL_LIST_SETTINGS)),

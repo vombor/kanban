@@ -8,10 +8,15 @@
 //     or user settings, and a kit never applies mechanics.
 //   - every local (Lemonade) model the kit routes to that Lemonade doesn't list, hasn't downloaded or doesn't mark
 //     tool-calling (Cline's Lemonade list only offers tool-calling models), so a card never starts on a model the
-//     server can't run. Lemonade being down is INFO, as in the models.json row.
+//     server can't run, or that `models.lists.lemonade.include` leaves out (Cline's picker never offers it then).
+//     Lemonade being down is INFO, as in the models.json row.
 //   - whether Lemonade keeps the kit's dev, QA and fallback models loaded side by side (/api/v1/health
 //     `max_models.llm`) and Kanban's `models.providerCapacity.lemonade` matches it (src/kits/local-residency.ts).
-import type { LemonadeModelListSettings } from "../config/model-lists-config";
+import {
+	isIncludedModelId,
+	LEMONADE_MODEL_LIST_INCLUDE_KEY,
+	type LemonadeModelListSettings,
+} from "../config/model-lists-config";
 import type { PipelineConfig } from "../config/pipeline-config";
 import { describeRecommendedValue, evaluateKitRecommendedSettings } from "../kits/kit-recommendations";
 import { listKitRoles } from "../kits/kit-roles";
@@ -162,7 +167,14 @@ export function listKitProviderModels(kit: KitDocument, providerId: string): str
 	return [...models];
 }
 
-function describeUnusable(model: string, listed: LemonadeModel | undefined): string | null {
+function describeUnusable(
+	model: string,
+	listed: LemonadeModel | undefined,
+	include: readonly string[] | null,
+): string | null {
+	if (!isIncludedModelId(model, include)) {
+		return `${model} is not in ${LEMONADE_MODEL_LIST_INCLUDE_KEY} (Cline's list leaves it out)`;
+	}
 	if (!listed) {
 		return `${model} is not listed by Lemonade`;
 	}
@@ -213,14 +225,16 @@ export async function checkKitLemonadeModels(
 				findings.push({ ...finding, area: "project", message: `${workspaceId}: ${finding.message}` });
 			}
 		}
-		const problems = models.flatMap((model) => describeUnusable(model, byId.get(model)) ?? []);
+		const problems = models.flatMap(
+			(model) => describeUnusable(model, byId.get(model), context.lemonadeModelList.include) ?? [],
+		);
 		findings.push(
 			problems.length > 0
 				? {
 						level: "warn",
 						area: "project",
 						message: `${workspaceId}: kit ${kitName} routes to Lemonade models it can't run: ${problems.join("; ")}`,
-						hint: `pull the model in Lemonade, or override the kit's model (kanban kit apply ${kitName} --project ${workspaceId} --set <key>=<model>)`,
+						hint: `pull the model in Lemonade or add it to ${LEMONADE_MODEL_LIST_INCLUDE_KEY} (kanban config set ${LEMONADE_MODEL_LIST_INCLUDE_KEY} <ids...>), or override the kit's model (kanban kit apply ${kitName} --project ${workspaceId} --set <key>=<model>)`,
 					}
 				: {
 						level: "pass",

@@ -5,7 +5,7 @@
 // (cline-lemonade-context-sync.ts, issue #31): contextWindow and maxTokens of models already in the entry.
 //
 // It changes the Lemonade provider entry and nothing else: `provider.modelsSourceUrl` (cline-models-source.ts) and
-// `models` (cline-lemonade-models.ts). Before writing it copies the file as read into the Kanban home's backups
+// `models` with `provider.defaultModelId` when that model is no longer offered (cline-lemonade-models.ts). Before writing it copies the file as read into the Kanban home's backups
 // (`<home>/backups/cline/`, never next to Cline's files; the file can hold API keys, so the copy is 0600), then
 // replaces models.json atomically with its own mode (cline-file-write.ts). A file that changes while Lemonade is asked
 // is left alone.
@@ -13,7 +13,7 @@ import { readFile } from "node:fs/promises";
 
 import { backupClineFile, getClineBackupDir, replaceClineFileAtomically } from "./cline-file-write";
 import {
-	isLemonadeModelsDiffEmpty,
+	hasLemonadeModelsChanges,
 	type LemonadeModelsOptions,
 	planLemonadeModelsForEntry,
 } from "./cline-lemonade-models";
@@ -68,7 +68,7 @@ export async function applyClineLemonadeEntry(options: ApplyClineLemonadeOptions
 	const models = await planLemonadeModelsForEntry(read.entry, options);
 	const urlChanges = source.action === "update";
 	// With Lemonade down the wanted record is the file's own, so only a list form can differ.
-	const modelChanges = !isLemonadeModelsDiffEmpty(models.diff);
+	const modelChanges = hasLemonadeModelsChanges(models);
 	const lines = [
 		urlChanges
 			? `modelsSourceUrl: ${read.modelsSourceUrl ?? "(none)"} -> ${targetUrl}`
@@ -95,6 +95,10 @@ export async function applyClineLemonadeEntry(options: ApplyClineLemonadeOptions
 	if (urlChanges) {
 		const provider = (lemonade.provider as Record<string, unknown> | undefined) ?? {};
 		lemonade.provider = { ...provider, modelsSourceUrl: targetUrl };
+	}
+	if (models.defaultModel) {
+		const provider = (lemonade.provider as Record<string, unknown> | undefined) ?? {};
+		lemonade.provider = { ...provider, defaultModelId: models.defaultModel.to };
 	}
 	if (modelChanges) {
 		lemonade.models = models.models;

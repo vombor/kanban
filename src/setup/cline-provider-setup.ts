@@ -102,6 +102,7 @@ const lemonade: ClineProviderSetup = {
 			modelsPath,
 			origin: context.origin,
 			requireLabels: settings.requireLabels,
+			include: settings.include,
 			lemonadeUrl: settings.url,
 			fetch: context.fetch,
 			backupDir: getClineBackupDir(context.homePath),

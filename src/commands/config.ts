@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 
 import { type ImportKitResult, importLegacyKitConfig } from "../config/import-kit";
+import { CONFIG_SETTABLE_KEYS, setModelListInclude, unsetModelListInclude } from "../config/model-list-include-setting";
 import { getWorkspacePipelineSettings, readPipelineConfig } from "../config/pipeline-config";
 import { getLegacyKitConfigPath } from "../state/kanban-home";
 import { resolveWorkspaceTarget } from "./workspace-target";
@@ -58,7 +59,9 @@ function formatImportResult(result: ImportKitResult): string[] {
 }
 
 export function registerConfigCommand(program: Command): void {
-	const config = program.command("config").description("Show and import Kanban's pipeline settings (config.json).");
+	const config = program
+		.command("config")
+		.description("Show, import and set Kanban's pipeline settings (config.json).");
 	config
 		.command("show")
 		.description(
@@ -92,6 +95,41 @@ export function registerConfigCommand(program: Command): void {
 				process.stdout.write(`${JSON.stringify({ ok: true, configPath, ...pipelineConfig, issues }, null, 2)}\n`);
 			} catch (error) {
 				process.stderr.write(`Config show failed: ${toErrorMessage(error)}\n`);
+				process.exitCode = 1;
+			}
+		});
+
+	const keys = CONFIG_SETTABLE_KEYS.join(", ");
+	config
+		.command("set")
+		.description(
+			`Set a config.json key. Only ${keys}: the Lemonade models Cline offers (Kanban's model-lists route and, after \`kanban setup-provider lemonade\`, Cline's models.json). The models stay installed on Lemonade.`,
+		)
+		.argument("<key>", `One of ${keys}.`)
+		.argument("<values...>", "The model ids, in the order Cline's default model is picked from.")
+		.action(async (key: string, values: string[]) => {
+			try {
+				const result = await setModelListInclude(key, values);
+				process.stdout.write(
+					`${result.key}: ${JSON.stringify(result.from)} -> ${JSON.stringify(result.to)}\nWritten to ${result.configPath}. ${result.next}\n`,
+				);
+			} catch (error) {
+				process.stderr.write(`Config set failed: ${toErrorMessage(error)}\n`);
+				process.exitCode = 1;
+			}
+		});
+	config
+		.command("unset")
+		.description(`Remove a config.json key set with \`kanban config set\` (${keys}): every model is offered again.`)
+		.argument("<key>", `One of ${keys}.`)
+		.action(async (key: string) => {
+			try {
+				const result = await unsetModelListInclude(key);
+				process.stdout.write(
+					`${result.key}: ${JSON.stringify(result.from)} -> (unset)\nWritten to ${result.configPath}. ${result.next}\n`,
+				);
+			} catch (error) {
+				process.stderr.write(`Config unset failed: ${toErrorMessage(error)}\n`);
 				process.exitCode = 1;
 			}
 		});

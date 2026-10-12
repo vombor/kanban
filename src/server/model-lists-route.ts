@@ -5,15 +5,16 @@
 // `data[].id`; it can't filter. Lemonade's /api/v1/models also lists image, speech and TTS models (Flux, Whisper,
 // kokoro), and a coding card must never land on those (user, 2026-10-06). So this serves Lemonade's list
 // filtered to downloaded models with every label in `models.lists.lemonade.requireLabels` (default
-// "tool-calling"), in the same `{ object: "list", data: [...] }` shape. Upstream errors return 502 so Cline
-// keeps its static fallback list (the `models` in its models.json).
+// "tool-calling") and, when `models.lists.lemonade.include` is set, to the ids in it (the user's choice), in the
+// same `{ object: "list", data: [...] }` shape. Upstream errors return 502 so Cline keeps its static fallback list
+// (the `models` in its models.json).
 //
 // Only ids reach Cline from here: cline 3.0.69's source fetch keeps `data[].id` and nothing else
 // (@cline/core `extractModelIdsFromPayload`). Context windows, vision and reasoning go into models.json instead
 // (src/setup/cline-lemonade-models.ts; applied with `kanban setup-provider lemonade`).
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import type { LemonadeModelListSettings } from "../config/model-lists-config";
+import { isIncludedModelId, type LemonadeModelListSettings } from "../config/model-lists-config";
 import {
 	fetchLemonadeModels,
 	isListedLemonadeModel,
@@ -35,17 +36,25 @@ export interface ModelListResponse {
 	data: ModelListEntry[];
 }
 
-/** Keeps downloaded models that carry every required label. Entries that aren't models are skipped. */
-export function filterLemonadeModels(payload: unknown, requireLabels: readonly string[]): ModelListResponse {
-	return toModelListResponse(parseLemonadeModels(payload), requireLabels);
+/**
+ * Keeps downloaded models that carry every required label and, with an `include`, are in it. Entries that aren't
+ * models are skipped.
+ */
+export function filterLemonadeModels(
+	payload: unknown,
+	requireLabels: readonly string[],
+	include: readonly string[] | null = null,
+): ModelListResponse {
+	return toModelListResponse(parseLemonadeModels(payload), requireLabels, include);
 }
 
 function toModelListResponse(
 	models: ReturnType<typeof parseLemonadeModels>,
 	requireLabels: readonly string[],
+	include: readonly string[] | null,
 ): ModelListResponse {
 	const data = models
-		.filter((model) => isListedLemonadeModel(model, requireLabels))
+		.filter((model) => isListedLemonadeModel(model, requireLabels) && isIncludedModelId(model.id, include))
 		.map(
 			(model): ModelListEntry => ({ id: model.id, object: "model", owned_by: model.ownedBy, labels: model.labels }),
 		);
@@ -65,6 +74,7 @@ export async function fetchLemonadeModelList(
 	return toModelListResponse(
 		await fetchLemonadeModels(lemonadeApiBaseUrl(settings.url), fetchImpl),
 		settings.requireLabels,
+		settings.include,
 	);
 }
 

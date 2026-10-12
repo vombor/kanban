@@ -232,7 +232,7 @@ describe("Cline models.json Lemonade metadata plan", () => {
 			return checkClineLemonadeModels({
 				modelsPath,
 				origin: ORIGIN,
-				lemonadeModelList: { url: "http://lemonade.test:13305", requireLabels: LABELS },
+				lemonadeModelList: { url: "http://lemonade.test:13305", requireLabels: LABELS, include: null },
 				fetch: fetchImpl,
 			});
 		}
@@ -268,7 +268,7 @@ describe("Cline models.json Lemonade metadata plan", () => {
 				checkClineLemonadeModels({
 					modelsPath,
 					origin: ORIGIN,
-					lemonadeModelList: { url: "http://lemonade.test:13305", requireLabels: LABELS },
+					lemonadeModelList: { url: "http://lemonade.test:13305", requireLabels: LABELS, include: null },
 					contextSync: { mode, intervalSec: 30 },
 					historyPath: "/home/k/data/models/cline-lemonade-sync.jsonl",
 					fetch: createFakeLemonadeFetch(),

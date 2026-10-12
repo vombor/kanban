@@ -202,6 +202,9 @@ load allowance, and an unreachable server is a provider outage (backoff retries,
 - Cline's model list (`modelsSourceUrl`): `/api/model-lists/lemonade`, downloaded models with `requireLabels`, from
   `models.lists.lemonade.url`. Cline's entry is written by `kanban setup-provider lemonade` (models.json;
   the user or the Kanban orchestrator runs it).
+- Leaving out a model Lemonade still has (it stays installed): `kanban config set models.lists.lemonade.include <ids...>`
+  (the user's command), then `kanban setup-provider lemonade`; `kanban config unset models.lists.lemonade.include` offers
+  every model again.
 - Models loaded at once: `/api/v1/health` `max_models.llm` (doctor and `kit show` compare it with Kanban's capacity).
 - Outage probe and "is the model loaded?" (vet): `/api/v1/health`.
 - Context windows: `recipe_options.ctx_size`, kept in sync by the server.

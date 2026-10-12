@@ -29,7 +29,7 @@ import {
 	STORE_BEDROCK_KEY_COMMAND,
 } from "./cline-bedrock-key";
 import { formatApplyLemonadeModelsHint } from "./cline-lemonade-apply";
-import { isLemonadeModelsDiffEmpty, planClineLemonadeModels } from "./cline-lemonade-models";
+import { hasLemonadeModelsChanges, planClineLemonadeModels } from "./cline-lemonade-models";
 import { buildLemonadeModelListUrl, planClineModelsSource } from "./cline-models-source";
 import { readManagedSectionStatus, writeManagedSection } from "./managed-section";
 
@@ -242,6 +242,7 @@ export async function planClineLemonadeModelsStep(
 	const plan = await planClineLemonadeModels({
 		modelsPath: paths.clineModels,
 		requireLabels: options.lemonadeModelList.requireLabels,
+		include: options.lemonadeModelList.include,
 		lemonadeUrl: options.lemonadeModelList.url,
 		fetch: options.fetch,
 	});
@@ -249,7 +250,7 @@ export async function planClineLemonadeModelsStep(
 	if (plan.kind !== "found") {
 		return { ...base, status: plan.kind === "absent" ? "skipped" : "error", details: plan.details };
 	}
-	if (!isLemonadeModelsDiffEmpty(plan.diff)) {
+	if (hasLemonadeModelsChanges(plan)) {
 		return { ...base, status: "manual", details: [...plan.details, formatApplyLemonadeModelsHint(options.origin)] };
 	}
 	// Lemonade down is not a setup failure: nothing can be compared, and the next run does.

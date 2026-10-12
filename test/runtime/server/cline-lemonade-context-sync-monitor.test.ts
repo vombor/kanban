@@ -66,7 +66,11 @@ describe("Cline Lemonade context sync monitor", () => {
 	function createMonitor() {
 		return createClineLemonadeContextSyncMonitor({
 			loadSettings: async (): Promise<ClineLemonadeContextSyncSettings> => ({ mode, intervalSec: 30, dataDir }),
-			loadLemonadeModelList: async () => ({ url: "http://lemonade.test:13305", requireLabels: ["tool-calling"] }),
+			loadLemonadeModelList: async () => ({
+				url: "http://lemonade.test:13305",
+				requireLabels: ["tool-calling"],
+				include: null,
+			}),
 			log: (message) => logs.push(message),
 			historyPath,
 			backupDir: join(dir.path, "kanban-home", "backups", "cline"),

@@ -50,6 +50,14 @@ describe("filterLemonadeModels", () => {
 		]);
 	});
 
+	it("keeps only the ids in an include, and only while they pass the label rule", () => {
+		const include = ["gpt-oss-20b-mxfp4-GGUF", "Gemma-4-12B-it-GGUF", "Qwen3.6-35B-A3B-MTP-GGUF", "Absent-GGUF"];
+		expect(filterLemonadeModels(LEMONADE_MODELS, ["tool-calling"], include).data.map((model) => model.id)).toEqual([
+			"gpt-oss-20b-mxfp4-GGUF",
+		]);
+		expect(filterLemonadeModels(LEMONADE_MODELS, ["tool-calling"], null).data).toHaveLength(2);
+	});
+
 	it("treats a response without data as an empty list", () => {
 		expect(filterLemonadeModels({}, ["tool-calling"])).toEqual({ object: "list", data: [] });
 	});
@@ -83,7 +91,11 @@ describe("model-lists route", () => {
 	it("serves Lemonade's filtered list from the configured URL", async () => {
 		const fetchImpl = lemonadeFetch(() => Response.json(LEMONADE_MODELS));
 		const origin = await serve({
-			loadLemonadeSettings: async () => ({ url: "http://lemonade.test:13305/", requireLabels: ["tool-calling"] }),
+			loadLemonadeSettings: async () => ({
+				url: "http://lemonade.test:13305/",
+				requireLabels: ["tool-calling"],
+				include: null,
+			}),
 			fetch: fetchImpl,
 			warn: vi.fn(),
 		});

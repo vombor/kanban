@@ -73,6 +73,9 @@ export const USER_ONLY_COMMANDS = [
 	"isolation grant",
 	"isolation revoke",
 	"isolation approve",
+	// Only models.lists.lemonade.include: which Lemonade models Cline offers every project (src/commands/config.ts).
+	"config set",
+	"config unset",
 	"plan approve",
 	// Moves team keys into a new user kit and switches the project to it: a change of the project's team.
 	"kit migrate-overrides",
