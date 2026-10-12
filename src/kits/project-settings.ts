@@ -1,11 +1,15 @@
 // A project's settings on top of its kit (docs/team/KITS.md "Project settings"). The kit is the team definition
 // (kit-schema.ts); a project only sets
 //   - the model of any role its kit defines: `roles.<role>.agent|provider|model|tier` (an unknown role, or one the kit
-//     doesn't define, is an error), and
+//     doesn't define, is an error),
+//   - every other model its kit names (PROJECT_MODEL_KEYS): a tier's model picks (`tiers.<tier>`, or one entry's
+//     provider/model/default), a QA route's reviewer, a plan candidate, a runoff racer, each only where the kit has
+//     that tier or list entry (a project changes the kit's entries, it never adds any), and
 //   - project facts: PROJECT_FACT_KEYS (the QA blurb, QA prompt notes, the QA servers script and preview, post-land
 //     commands, plan prompt rules, the scripted checks' environment, the ignored paths task worktrees link).
-// Every other key (onFail, fallback triggers and approval, qa.enabled/routes/rules, requireDifferentVendor, tiers,
-// features, ...) is the team: a project changes it only by using another kit (`kanban kit apply`, the user's).
+// Every other key (onFail, fallback triggers and approval, qa.enabled/rules, a route's devModel, requireDifferentVendor,
+// features, which tiers exist, ...) is the team: a project changes it only by using another kit (`kanban kit apply`,
+// which the user and the project's own orchestrator may run; src/kits/apply-kit.ts).
 //
 // Stored as `workspaces.<id>.kit.overrides` in config.json: the resolver's existing input (kit < project settings),
 // outside the project repo (a card can edit and land repo files), written under the config lock, moved by
@@ -36,7 +40,7 @@ import {
 	kitDocumentObjectSchema,
 } from "./kit-schema";
 import { getRenamedKitName } from "./renamed-kits";
-import { DEFAULT_KIT_NAME, type KitCatalog, loadKitCatalog, resolveKitByName } from "./resolve-kit";
+import { DEFAULT_KIT_NAME, type KitCatalog, loadKitCatalog, readKitValue, resolveKitByName } from "./resolve-kit";
 
 /** Project facts a project sets on its kit: a key here, or anything under it. */
 export const PROJECT_FACT_KEYS = [
@@ -50,8 +54,30 @@ export const PROJECT_FACT_KEYS = [
 	"worktrees.symlinkIgnored",
 ] as const;
 
+/** The model fields of a kit's lists a project sets: `<list>.<index>.<field>` for an entry the kit has. */
+const LIST_MODEL_FIELDS: ReadonlyArray<{ list: string; fields: readonly string[] }> = [
+	{ list: "qa.routes", fields: ["agent", "provider", "model"] },
+	{ list: "plan.candidates", fields: ["agent", "model", "model.provider", "model.model", "model.tier"] },
+	{ list: "onFail.runoff.models", fields: ["agent", "provider", "model"] },
+];
+
+/** The fields of one tier entry a project sets (`tiers.<tier>.<index>.<field>`). */
+const TIER_ENTRY_MODEL_FIELDS = ["provider", "model", "default"] as const;
+
+/**
+ * Every model setting besides the roles, as the key forms `kit set` takes (for messages, the sidebar prompt and the
+ * docs). `<tier>` is a tier the kit defines and `<i>` an index of an entry the kit's list has.
+ */
+export const PROJECT_MODEL_KEYS = [
+	"tiers.<tier>",
+	`tiers.<tier>.<i>.${TIER_ENTRY_MODEL_FIELDS.join("|")}`,
+	...LIST_MODEL_FIELDS.map(({ list, fields }) => `${list}.<i>.${fields.join("|")}`),
+] as const;
+
 export type KitSettingKeyClass =
 	| { kind: "role"; role: KitRoleName; field: (typeof KIT_ROLE_MODEL_FIELDS)[number] }
+	/** A model the kit names outside its roles (PROJECT_MODEL_KEYS). */
+	| { kind: "model" }
 	| { kind: "fact" }
 	/** Part of the team definition: refused for a project. */
 	| { kind: "team"; message: string }
@@ -62,7 +88,62 @@ function isUnder(key: string, prefix: string): boolean {
 }
 
 function teamKeyMessage(key: string, kitName: string): string {
-	return `${key} is part of the team definition (kit ${kitName}), which a project can't change. A project sets only its roles' models (roles.<role>.agent|provider|model|tier) and project facts (${PROJECT_FACT_KEYS.join(", ")}). For another team, the user picks or makes a kit that has it (kanban kit apply <kit>).`;
+	return `${key} is part of the team definition (kit ${kitName}), which a project can't change. A project sets only the models its kit names (roles.<role>.agent|provider|model|tier, ${PROJECT_MODEL_KEYS.join(", ")}) and project facts (${PROJECT_FACT_KEYS.join(", ")}). For another team, use another kit that has it (kanban kit apply <kit>; kits are made and edited only by the user).`;
+}
+
+function describeListLength(length: number): string {
+	return length === 0 ? "no entries" : `entries 0-${length - 1}`;
+}
+
+/** `tiers.<tier>[.<i>[.<field>]]`: a tier's model picks, for a tier the kit defines. */
+function classifyTierKey(key: string, segments: string[], kit: KitDocument): KitSettingKeyClass {
+	const [, tier, index, ...field] = segments;
+	if (tier === undefined) {
+		return { kind: "team", message: teamKeyMessage(key, kit.name) };
+	}
+	const entries = kit.tiers?.[tier];
+	if (!entries) {
+		return {
+			kind: "invalid",
+			message: `kit ${kit.name} has no tier "${tier}"; a project sets only the tiers its kit defines (${Object.keys(kit.tiers ?? {}).join(", ") || "none"})`,
+		};
+	}
+	if (index === undefined) {
+		return { kind: "model" };
+	}
+	if (!/^\d+$/u.test(index) || Number(index) >= entries.length) {
+		return {
+			kind: "invalid",
+			message: `kit ${kit.name}'s tiers.${tier} has no entry ${index} (${describeListLength(entries.length)}); set the whole list with tiers.${tier}`,
+		};
+	}
+	if (
+		field.length === 0 ||
+		(field.length === 1 && (TIER_ENTRY_MODEL_FIELDS as readonly string[]).includes(field[0] ?? ""))
+	) {
+		return { kind: "model" };
+	}
+	return { kind: "team", message: teamKeyMessage(key, kit.name) };
+}
+
+/** `<list>.<i>.<field>` of LIST_MODEL_FIELDS; null when `key` is in none of those lists. */
+function classifyListModelKey(key: string, kit: KitDocument): KitSettingKeyClass | null {
+	for (const { list, fields } of LIST_MODEL_FIELDS) {
+		if (!key.startsWith(`${list}.`)) {
+			continue;
+		}
+		const [index = "", ...field] = key.slice(list.length + 1).split(".");
+		const entries = readKitValue(kit, list);
+		const length = Array.isArray(entries) ? entries.length : 0;
+		if (!/^\d+$/u.test(index) || Number(index) >= length) {
+			return {
+				kind: "invalid",
+				message: `kit ${kit.name}'s ${list} has no entry ${index} (${describeListLength(length)}); a project changes the models of the kit's entries, it never adds one`,
+			};
+		}
+		return fields.includes(field.join(".")) ? { kind: "model" } : null;
+	}
+	return null;
 }
 
 /**
@@ -78,7 +159,7 @@ export function classifyKitSettingKey(key: string, kit: KitDocument): KitSetting
 		return { kind: "invalid", message: `"${key}" is not a kit key` };
 	}
 	if (top === "kit" || top === "name") {
-		return { kind: "invalid", message: `${key} identifies the kit; another kit is the user's kanban kit apply` };
+		return { kind: "invalid", message: `${key} identifies the kit; another kit is kanban kit apply <kit>` };
 	}
 	if (isLegacyKitKey(key)) {
 		const renamed = translateLegacyOverrides({ [key]: null }).renamed[0]?.to ?? [];
@@ -115,15 +196,29 @@ export function classifyKitSettingKey(key: string, kit: KitDocument): KitSetting
 		}
 		return { kind: "role", role: role as KitRoleName, field: field as (typeof KIT_ROLE_MODEL_FIELDS)[number] };
 	}
+	if (top === "tiers") {
+		return classifyTierKey(key, segments, kit);
+	}
+	const listModel = classifyListModelKey(key, kit);
+	if (listModel) {
+		return listModel;
+	}
 	if (PROJECT_FACT_KEYS.some((fact) => isUnder(key, fact))) {
 		return { kind: "fact" };
 	}
 	return { kind: "team", message: teamKeyMessage(key, kit.name) };
 }
 
+/** A role model, another model the kit names, or a project fact. */
+export function isProjectSettingClass(
+	classified: KitSettingKeyClass,
+): classified is Extract<KitSettingKeyClass, { kind: "role" | "model" | "fact" }> {
+	return classified.kind === "role" || classified.kind === "model" || classified.kind === "fact";
+}
+
 /** A stored override set split by what it is, after translating its legacy keys. */
 export interface ClassifiedOverrides {
-	/** Role models and facts (translated keys). */
+	/** Models the kit names and facts (translated keys). */
 	project: Record<string, unknown>;
 	/** Team keys a project may no longer set (translated keys); they still apply until moved. */
 	team: Record<string, unknown>;
@@ -138,7 +233,7 @@ export function classifyStoredOverrides(overrides: Record<string, unknown>, kit:
 	const result: ClassifiedOverrides = { project: {}, team: {}, invalid: [], legacy: translated.renamed };
 	for (const [key, value] of Object.entries(translated.overrides)) {
 		const classified = classifyKitSettingKey(key, kit);
-		if (classified.kind === "role" || classified.kind === "fact") {
+		if (isProjectSettingClass(classified)) {
 			result.project[key] = value;
 		} else if (classified.kind === "team") {
 			result.team[key] = value;
@@ -307,7 +402,7 @@ function listLegacyKeysCoveredBy(overrides: Record<string, unknown>, key: string
 	);
 }
 
-/** `kanban kit set <key> <value>`: one role model field or project fact, validated against the project's kit. */
+/** `kanban kit set <key> <value>`: one model setting or project fact, validated against the project's kit. */
 export async function setProjectKitSetting(
 	input: KitSettingChangeInput & { value: unknown },
 ): Promise<KitSettingChangeResult> {
@@ -326,8 +421,9 @@ export async function setProjectKitSetting(
 }
 
 /**
- * `kanban kit unset <key>`: removes a project setting (a role field, a whole role `roles.<role>`, or a fact), so the
- * kit's value applies again. Team keys stored before the split are the user's (`kanban kit migrate-overrides`).
+ * `kanban kit unset <key>`: removes a project setting (a role field, a whole role `roles.<role>`, a model setting, a
+ * fact, or any key whose stored settings are all project settings, such as a whole `qa.routes.0`), so the kit's value
+ * applies again. Team keys stored before the split are the user's (`kanban kit migrate-overrides`).
  */
 export async function unsetProjectKitSetting(input: KitSettingChangeInput): Promise<KitSettingChangeResult> {
 	return await changeProjectSettings({ ...input, via: "kit unset" }, ({ kit, overrides }) => {
@@ -336,13 +432,13 @@ export async function unsetProjectKitSetting(input: KitSettingChangeInput): Prom
 		const classified = isWholeRole
 			? classifyKitSettingKey(`${input.key}.agent`, kit)
 			: classifyKitSettingKey(input.key, kit);
-		if (classified.kind === "team" || classified.kind === "invalid") {
+		const stored = Object.keys(overrides).filter((key) => !isLegacyKitKey(key) && isUnder(key, input.key));
+		const allStoredAreProjectSettings =
+			stored.length > 0 && stored.every((key) => isProjectSettingClass(classifyKitSettingKey(key, kit)));
+		if ((classified.kind === "team" || classified.kind === "invalid") && !allStoredAreProjectSettings) {
 			throw new KitSettingRefusedError(classified.message);
 		}
-		const removed = [
-			...Object.keys(overrides).filter((key) => !isLegacyKitKey(key) && isUnder(key, input.key)),
-			...listLegacyKeysCoveredBy(overrides, input.key),
-		];
+		const removed = [...stored, ...listLegacyKeysCoveredBy(overrides, input.key)];
 		if (removed.length === 0) {
 			throw new KitSettingRefusedError(`${input.workspaceId} has no project setting ${input.key}`);
 		}

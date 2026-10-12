@@ -293,16 +293,49 @@ describe("applyCliSessionScope", () => {
 		});
 	});
 
+	it("refuses kit apply from a card session in every mode, and lets the orchestrator run it under enforce", async () => {
+		await withTemporaryKanbanHome(async () => {
+			const asRole = (role: "card" | "orchestrator") => () => ({
+				isolation: {
+					whoami: {
+						query: vi.fn(async () => ({
+							caller: "session",
+							workspaceId: "a",
+							taskId: role === "card" ? "t1" : null,
+							role,
+							mode: "enforce",
+							reachable: ["a"],
+						})),
+					},
+					requestApproval: { mutate: vi.fn(down) },
+				},
+			});
+			const env = { ...SESSION_ENV, [KANBAN_SESSION_WORKSPACE_ENV]: "a" };
+			const run = async (createClient: () => unknown) =>
+				await applyCliSessionScope({
+					commandPath: "kit apply",
+					options: {},
+					createClient: createClient as never,
+					env,
+				});
+			writeConfig({});
+			expect(await run(asRole("card"))).toContain("switches the project's routing kit");
+			writeConfig({ workspaces: { a: { isolation: { mode: "enforce" } } } });
+			expect(await run(asRole("card"))).toContain("never a card session");
+			expect(await run(noServer)).toContain("never a card session");
+			expect(await run(asRole("orchestrator"))).toBeNull();
+		});
+	});
+
 	it("refuses machine-wide commands under enforce only; doctor without --fix stays allowed", async () => {
 		await withTemporaryKanbanHome(async () => {
 			const env = { ...SESSION_ENV, [KANBAN_SESSION_WORKSPACE_ENV]: "a" };
 			const run = async (commandPath: string, options: Record<string, unknown> = {}) =>
 				await applyCliSessionScope({ commandPath, options, createClient: noServer as never, env });
 			writeConfig({});
-			expect(await run("kit apply")).toBeNull();
+			expect(await run("config import-kit")).toBeNull();
 			expect(await run("doctor", { fix: true })).toBeNull();
 			writeConfig({ workspaces: { a: { isolation: { mode: "enforce" } } } });
-			expect(await run("kit apply")).toContain("machine-wide");
 			expect(await run("config import-kit")).toContain("machine-wide");
 			expect(await run("doctor", { fix: true })).toContain("doctor --fix");
 			expect(await run("doctor")).toBeNull();

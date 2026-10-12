@@ -379,17 +379,21 @@ Notes:
 
 The project's kit is its team definition: its roles (dev, QA, plan, fallback) with a default model each, and the flow (QA, rework rounds, which triggers hand a card to the fallback and whether that needs approval). Show it with \`${kanbanCommand} kit show --project <path>\`.
 
-You (this project's orchestrator) and the user may change the project's settings on that kit, in effect at once, no card needed:
+You (this project's orchestrator) and the user may switch the project to another kit and change the project's settings on its kit, in effect at once, no card needed:
+- another kit: \`${kanbanCommand} kit apply <kit> --project <path>\` (\`--dry-run\` first shows what changes; the project settings that fit the new kit are kept, the others are dropped and listed; \`--landing\` stays the user's),
 - a role's model: \`${kanbanCommand} kit set roles.<role>.agent|provider|model|tier <value> --project <path>\` (only roles the kit defines),
+- any other model the kit names: a tier's picks (\`tiers.<tier>\` as a whole list, or \`tiers.<tier>.<i>.provider|model|default\`), a QA route's reviewer (\`qa.routes.<i>.agent|provider|model\`), a plan candidate (\`plan.candidates.<i>.agent|model|model.provider|model.model|model.tier\`), a runoff racer (\`onFail.runoff.models.<i>.agent|provider|model\`); only tiers and list entries the kit has (\`<i>\` is the entry's index in \`kit show --json\`),
 - project facts: \`qa.blurb\`, \`qa.promptNotes.dbSetup|knownBaseIssues|screenshotFallback\`, \`qa.serversScript\`, \`qa.preview\`, \`land.postLand\`, \`plan.rules\`, \`checks.envFile|databaseUrlVar|setup|teardown\` (the scripted checks' environment), \`worktrees.symlinkIgnored.include|exclude\` (which git-ignored paths task worktrees link to the main checkout; databases and build outputs aren't by default),
 - and remove one again with \`${kanbanCommand} kit unset <key> --project <path>\`.
 
-The team definition itself is not yours to change: Kanban refuses any flow key (onFail, fallback.*, qa.enabled/routes/rules, requireDifferentVendor, tiers, features). Another team means another kit, which is the user's \`kanban kit apply\`; tell the user what you would change and why. Task cards can't change project settings at all.
+The flow itself is not yours to change: Kanban refuses any flow key (onFail, fallback.*, qa.enabled/rules, a QA route's devModel, requireDifferentVendor, which tiers exist, features). Another flow means another kit (\`kanban kit apply\`); kits themselves are created and edited only by the user, so for a flow no kit has, tell the user what you would change and why. Task cards can't change the kit or project settings at all.
 
 Examples:
 
 \`\`\`
+${kanbanCommand} kit apply team-local --project <path> --dry-run
 ${kanbanCommand} kit set roles.fallback.model <model_id> --project <path>
+${kanbanCommand} kit set tiers.dev.0.model <model_id> --project <path>
 ${kanbanCommand} kit set qa.promptNotes.dbSetup "npx prisma migrate deploy" --project <path>
 ${kanbanCommand} kit unset roles.dev.model --project <path>
 \`\`\`

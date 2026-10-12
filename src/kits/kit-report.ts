@@ -271,7 +271,7 @@ function formatRoleRow(row: KitRoleRow): string {
 
 function formatTeamDefinition(report: KitReport): string[] {
 	const lines = [
-		`Team definition (kit ${report.kitName}; a project changes its team only by using another kit: kanban kit apply, the user's):`,
+		`Team definition (kit ${report.kitName}; a project changes its team only by using another kit: kanban kit apply, by the user or the project's orchestrator):`,
 		"  Roles and their models  [source: project = a project setting, else the kit that set it]:",
 	];
 	lines.push(
@@ -319,7 +319,7 @@ function formatHistoryActor(entry: KitSettingsHistoryEntry): string {
 function formatProjectSettings(settings: KitProjectSettingsReport): string[] {
 	const { classified, workspaceId } = settings;
 	const lines = [
-		`Project settings of ${workspaceId} (role models and project facts; kanban kit set|unset, by the user or ${workspaceId}'s orchestrator):`,
+		`Project settings of ${workspaceId} (models the kit names and project facts; kanban kit set|unset, by the user or ${workspaceId}'s orchestrator):`,
 	];
 	const projectKeys = Object.keys(classified.project).sort();
 	lines.push(

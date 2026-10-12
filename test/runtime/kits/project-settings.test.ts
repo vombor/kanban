@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { parsePipelineConfig } from "../../../src/config/pipeline-config";
+import type { KitDocument } from "../../../src/kits/kit-schema";
 import { createRoutingPolicy } from "../../../src/kits/policy";
 import {
 	classifyKitSettingKey,
@@ -13,7 +14,7 @@ import {
 	unsetProjectKitSetting,
 } from "../../../src/kits/project-settings";
 import { getBuiltInKits, loadKitCatalog, resolveWorkspaceKit } from "../../../src/kits/resolve-kit";
-import { getKitSettingsHistoryPath } from "../../../src/state/kanban-home";
+import { getKanbanKitsPath, getKitSettingsHistoryPath } from "../../../src/state/kanban-home";
 import { createCardHistory, createEffectiveCard } from "../../utilities/effective-card";
 import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
 
@@ -64,6 +65,39 @@ describe("project settings: which keys a project may set", () => {
 		}
 	});
 
+	it("allows every other model the kit names: tier picks, QA route reviewers, plan candidates", () => {
+		for (const key of [
+			"tiers.tier3",
+			"tiers.tier3.0.model",
+			"tiers.tier3.1.provider",
+			"tiers.tier2.1.default",
+			"tiers.qa.0",
+			"qa.routes.0.agent",
+			"qa.routes.0.provider",
+			"qa.routes.0.model",
+			"plan.candidates.0.agent",
+			"plan.candidates.0.model",
+			"plan.candidates.0.model.provider",
+			"plan.candidates.0.model.model",
+			"plan.candidates.0.model.tier",
+		]) {
+			expect(classifyKitSettingKey(key, team()).kind, key).toBe("model");
+		}
+	});
+
+	it("refuses a model key for a tier or list entry the kit doesn't have", () => {
+		const message = (key: string) => {
+			const classified = classifyKitSettingKey(key, team());
+			return classified.kind === "invalid" ? classified.message : `not invalid: ${classified.kind}`;
+		};
+		expect(message("tiers.tier9")).toContain('kit team-cloud has no tier "tier9"');
+		expect(message("tiers.tier3.2.model")).toContain("tiers.tier3 has no entry 2 (entries 0-1)");
+		expect(message("tiers.tier3.x.model")).toContain("has no entry x");
+		expect(message("qa.routes.1.model")).toContain("qa.routes has no entry 1 (entries 0-0)");
+		expect(message("plan.candidates.3.agent")).toContain("plan.candidates has no entry 3");
+		expect(message("onFail.runoff.models.0.model")).toContain("onFail.runoff.models has no entry 0 (no entries)");
+	});
+
 	it("refuses the team definition: flow keys, fallback triggers and approval, routes, tiers, features", () => {
 		for (const key of [
 			"onFail.then",
@@ -74,8 +108,15 @@ describe("project settings: which keys a project may set", () => {
 			"qa.enabled",
 			"qa.requireDifferentVendor",
 			"qa.routes",
+			"qa.routes.0.devModel",
+			"qa.routes.0.rules",
+			"qa.routes.0",
 			"qa.rules.drive",
-			"tiers.tier2",
+			"tiers",
+			"tiers.tier2.0.note",
+			"tierNotes.qa",
+			"plan.candidates.0.note",
+			"dropped",
 			"features",
 			"description",
 			"roles.dev.note",
@@ -123,6 +164,9 @@ describe("project settings: which keys a project may set", () => {
 			"roles.qa.agent",
 			"roles.qa.model",
 			"roles.qa.provider",
+			"tiers.qa",
+			"tiers.tier2",
+			"tiers.tier3",
 		]);
 		expect(Object.keys(classified.team).sort()).toEqual([
 			"description",
@@ -134,9 +178,6 @@ describe("project settings: which keys a project may set", () => {
 			"fallback.requireApproval",
 			"qa.routes",
 			"tierNotes.qa",
-			"tiers.qa",
-			"tiers.tier2",
-			"tiers.tier3",
 		]);
 		expect(classified.invalid).toEqual([]);
 		expect(classified.legacy.map((entry) => entry.from).sort()).toEqual([
@@ -154,6 +195,105 @@ describe("project settings: which keys a project may set", () => {
 });
 
 describe("project settings: set and unset", () => {
+	it("sets and unsets each model the kit names outside its roles, in effect at once", async () => {
+		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
+			// A user kit with a runoff, since no built-in kit races.
+			const kitsDir = getKanbanKitsPath();
+			mkdirSync(kitsDir, { recursive: true });
+			const race = {
+				...team(),
+				name: "race",
+				onFail: {
+					...team().onFail,
+					runoff: { models: [{ agent: "cline", provider: "bedrock", model: "us.openai.gpt-6.1-sol" }] },
+				},
+			};
+			writeFileSync(join(kitsDir, "race.json"), JSON.stringify(race));
+			writeConfig(globalConfigPath, { workspaces: { foo: { kit: { name: "race" } } } });
+			const by = { kind: "orchestrator", taskId: "__home_agent__:foo:claude" } as const;
+			const resolve = async () =>
+				resolveWorkspaceKit(
+					parsePipelineConfig(JSON.parse(readFileSync(globalConfigPath, "utf8"))).config,
+					"foo",
+					await loadKitCatalog(),
+				);
+			const settings: Array<[string, unknown, (kit: KitDocument) => unknown]> = [
+				["tiers.tier3.0.model", "m-tier", (kit) => kit.tiers?.tier3?.[0]?.model],
+				["tiers.tier3.0.provider", "lemonade", (kit) => kit.tiers?.tier3?.[0]?.provider],
+				["tiers.tier3.1.default", false, (kit) => kit.tiers?.tier3?.[1]?.default],
+				["qa.routes.0.agent", "codex", (kit) => kit.qa?.routes?.[0]?.agent],
+				["qa.routes.0.provider", null, (kit) => kit.qa?.routes?.[0]?.provider],
+				["qa.routes.0.model", "m-route", (kit) => kit.qa?.routes?.[0]?.model],
+				["plan.candidates.0.agent", "codex", (kit) => kit.plan?.candidates?.[0]?.agent],
+				["plan.candidates.0.model.model", "m-plan", (kit) => kit.plan?.candidates?.[0]?.model],
+				["onFail.runoff.models.0.agent", "codex", (kit) => kit.onFail?.runoff?.models[0]?.agent],
+				["onFail.runoff.models.0.provider", null, (kit) => kit.onFail?.runoff?.models[0]?.provider],
+				["onFail.runoff.models.0.model", "m-race", (kit) => kit.onFail?.runoff?.models[0]?.model],
+			];
+			for (const [key, value] of settings) {
+				const result = await setProjectKitSetting({ workspaceId: "foo", key, value, by });
+				expect(result.changes, key).toEqual([expect.objectContaining({ key, to: value, via: "kit set" })]);
+			}
+			const resolved = await resolve();
+			expect(resolved.issues).toEqual([]);
+			for (const [key, value, read] of settings) {
+				expect(read(resolved.kit), key).toEqual(key === "plan.candidates.0.model.model" ? { model: value } : value);
+			}
+			// The entries' other fields stay the kit's; a list holding a project setting reads as the project's.
+			expect(resolved.kit.qa?.routes?.[0]?.devModel).toBe(team().qa?.routes?.[0]?.devModel);
+			expect(resolved.kit.tiers?.tier3?.[1]?.model).toBe(team().tiers?.tier3?.[1]?.model);
+			expect(resolved.sources["qa.routes"]).toBe("project");
+			expect(resolved.sources["tiers.tier2"]).toBe("race");
+
+			// A whole tier's picks, and a candidate's tier instead of its model.
+			await setProjectKitSetting({ workspaceId: "foo", key: "tiers.qa", value: [{ model: "m-qa" }], by });
+			await setProjectKitSetting({ workspaceId: "foo", key: "plan.candidates.0.model.tier", value: "qa", by });
+			expect((await resolve()).kit.tiers?.qa).toEqual([{ model: "m-qa" }]);
+			expect((await resolve()).kit.plan?.candidates?.[0]?.model).toEqual({ tier: "qa" });
+
+			for (const key of ["tiers.tier3", "qa.routes.0", "plan.candidates", "onFail.runoff.models.0.agent"]) {
+				await unsetProjectKitSetting({ workspaceId: "foo", key, by });
+			}
+			await unsetProjectKitSetting({ workspaceId: "foo", key: "onFail.runoff", by });
+			await unsetProjectKitSetting({ workspaceId: "foo", key: "tiers.qa", by });
+			expect(readWorkspace(globalConfigPath, "foo").kit).toEqual({ name: "race", overrides: {} });
+			const { name: _resolvedName, ...back } = (await resolve()).kit;
+			const { name: _raceName, ...kitValues } = (
+				await loadKitCatalog().then((catalog) =>
+					resolveWorkspaceKit(
+						parsePipelineConfig({ workspaces: { foo: { kit: { name: "race" } } } }).config,
+						"foo",
+						catalog,
+					),
+				)
+			).kit;
+			expect(back).toEqual(kitValues);
+		});
+	});
+
+	it("still refuses the flow around the models: a route's devModel, a tier note, the runoff list", async () => {
+		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
+			writeConfig(globalConfigPath, { workspaces: { foo: { kit: { name: "team-cloud" } } } });
+			const by = { kind: "orchestrator", taskId: "__home_agent__:foo:claude" } as const;
+			for (const [key, value] of [
+				["qa.routes.0.devModel", ".*"],
+				["qa.routes", []],
+				["tiers.tier3.0.note", "x"],
+				["tiers", {}],
+				["onFail.runoff", null],
+				["qa.requireDifferentVendor", false],
+			] as const) {
+				await expect(setProjectKitSetting({ workspaceId: "foo", key, value, by }), key).rejects.toThrow(
+					/part of the team definition/u,
+				);
+			}
+			await expect(
+				setProjectKitSetting({ workspaceId: "foo", key: "tiers.tier3.5.model", value: "m", by }),
+			).rejects.toThrow(/has no entry 5/u);
+			expect(readWorkspace(globalConfigPath, "foo").kit).toEqual({ name: "team-cloud" });
+		});
+	});
+
 	it("sets the scripted checks' environment and refuses an env file outside the project", async () => {
 		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
 			writeConfig(globalConfigPath, {

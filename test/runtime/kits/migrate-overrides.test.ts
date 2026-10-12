@@ -69,9 +69,10 @@ describe("kanban kit migrate-overrides (foo-like fixture)", () => {
 				],
 				"escalate.requireApproval": ["dropped"],
 				"onOutage.then": ["dropped"],
-				"tiers.tier3": ["kit foo-team"],
-				"tiers.tier2": ["kit foo-team"],
-				"tiers.qa": ["kit foo-team"],
+				// A tier's model picks are the project's (2026-10-12); its notes stay the team's.
+				"tiers.tier3": ["project tiers.tier3"],
+				"tiers.tier2": ["project tiers.tier2"],
+				"tiers.qa": ["project tiers.qa"],
 				"tierNotes.qa": ["kit foo-team"],
 				"qa.routes": ["kit foo-team"],
 				description: ["kit foo-team"],

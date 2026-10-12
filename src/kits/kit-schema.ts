@@ -10,8 +10,10 @@
 // A kit is the TEAM DEFINITION: its roles with a default model each (`roles.<role>`), and the flow (QA on/off and
 // routes, rework rounds, which triggers hand a card to the fallback role and whether that needs approval, features,
 // the landing recommendation). A project changes only its PROJECT SETTINGS on top (`workspaces.<id>.kit.overrides`,
-// src/kits/project-settings.ts): any role's model, and project facts (QA blurb and prompt notes, post-land commands,
-// ...). Everything else is the team: a project gets another team by using another kit (`kanban kit apply`).
+// src/kits/project-settings.ts): every model the kit names (any role's; tier picks, QA route reviewers, plan
+// candidates, runoff racers), and project facts (QA blurb and prompt notes, post-land commands, ...). Everything else
+// is the team: a project gets another team by using another kit (`kanban kit apply`, by the user or the project's
+// orchestrator); kits themselves are made and edited only by the user.
 //
 // Legacy keys (`dev.agent`/`dev.model`, `qa.default`, `plan.agent`/`plan.model`, `escalate.*`, `onOutage.*`) still
 // parse in kit files and overrides; the resolver translates each layer into `roles`/`fallback` before merging

@@ -1,8 +1,15 @@
 // `kanban kit apply`: points a workspace at a kit (`workspaces.<id>.kit.name`), keeps its existing project settings,
-// edits them with `--set` (role models and project facts only, src/kits/project-settings.ts) / `--unset` (any stored
-// key, so a team key from before the split can be removed), logs those edits to the settings history, and with `--landing` also sets the core landing mode. Applying a kit never
-// changes the landing mode on its own (§4.2). The new resolution is validated before anything is written, so an
-// unknown override key or a tier without a usable model is refused here, not discovered by the pipeline.
+// edits them with `--set` (model settings and project facts only, src/kits/project-settings.ts) / `--unset` (any stored
+// key, so a team key from before the split can be removed), logs those edits to the settings history, and with
+// `--landing` also sets the core landing mode. Applying a kit never changes the landing mode on its own (§4.2). On a
+// switch to another kit, a stored setting that doesn't fit the new kit (a role, tier or list entry it lacks, a tier it
+// doesn't have) is dropped and reported (`dropped`); team keys stored before the split stay, as before. The new
+// resolution is validated before anything is written, so an unknown override key or a tier without a usable model is
+// refused here, not discovered by the pipeline.
+//
+// Who may run it is decided by the runtime route (src/trpc/kit-settings-api.ts: the user and the project's own
+// orchestrator). The orchestrator switches its project's kit and edits its project settings; the landing mode and
+// removing a stored team key stay the user's, so its `--landing` and such an `--unset` are refused here.
 import {
 	getWorkspacePipelineSettings,
 	type LandingMode,
@@ -10,9 +17,23 @@ import {
 	updateWorkspacePipelineEntry,
 } from "../config/pipeline-config";
 import { getKitSettingsHistoryPath } from "../state/kanban-home";
+import { isLegacyKitKey, translateLegacyOverrides } from "./kit-legacy-keys";
 import { evaluateKitRecommendedSettings, type KitRecommendedSettingStatus } from "./kit-recommendations";
-import { appendKitSettingsHistory, classifyKitSettingKey, diffOverridesForHistory } from "./project-settings";
-import { DEFAULT_KIT_NAME, loadKitCatalog, readKitValue, resolveKitByName, resolveWorkspaceKit } from "./resolve-kit";
+import {
+	appendKitSettingsHistory,
+	classifyKitSettingKey,
+	diffOverridesForHistory,
+	isProjectSettingClass,
+	type KitSettingsActor,
+} from "./project-settings";
+import {
+	DEFAULT_KIT_NAME,
+	type KitCatalog,
+	loadKitCatalog,
+	readKitValue,
+	resolveKitByName,
+	resolveWorkspaceKit,
+} from "./resolve-kit";
 
 export interface ApplyKitInput {
 	workspaceId: string;
@@ -24,6 +45,8 @@ export interface ApplyKitInput {
 	configPath?: string;
 	kitsDir?: string;
 	historyPath?: string;
+	/** Who applies it (the history's `by`); default a user-run command in-process. */
+	by?: KitSettingsActor;
 }
 
 export interface KitValueChange {
@@ -40,12 +63,36 @@ export interface ApplyKitResult {
 	landing: { from: LandingMode; to: LandingMode };
 	overrides: Record<string, unknown>;
 	changes: KitValueChange[];
+	/** Stored settings the switch removed because they don't fit the new kit. */
+	dropped: DroppedKitSetting[];
 	recommendedLandingMode: LandingMode | null;
 	/** The kit's `recommends.settings` the config doesn't meet yet (never applied here). */
 	unmetSettings: KitRecommendedSettingStatus[];
 	/** Issues with the workspace's current kit (it fell back to `default`). */
 	previousIssues: string[];
 	written: boolean;
+}
+
+export interface DroppedKitSetting {
+	key: string;
+	value: unknown;
+	why: string;
+}
+
+/** Why a stored setting doesn't fit `kitName` (null: it does). Team keys from before the split fit wherever they resolve. */
+function findMisfit(catalog: KitCatalog, kitName: string, key: string, value: unknown): string | null {
+	const team = resolveKitByName(catalog, kitName);
+	if (!team.ok) {
+		return team.error;
+	}
+	for (const translated of Object.keys(translateLegacyOverrides({ [key]: value }).overrides)) {
+		const classified = classifyKitSettingKey(translated, team.kit);
+		if (classified.kind === "invalid") {
+			return classified.message;
+		}
+	}
+	const alone = resolveKitByName(catalog, kitName, { [key]: value });
+	return alone.ok ? null : alone.error;
 }
 
 function isObject(value: unknown): boolean {
@@ -59,20 +106,42 @@ export async function applyWorkspaceKit(input: ApplyKitInput): Promise<ApplyKitR
 	]);
 	const settings = getWorkspacePipelineSettings(config, input.workspaceId);
 	const before = resolveWorkspaceKit(config, input.workspaceId, catalog);
-	const overrides: Record<string, unknown> = { ...(settings.kit?.overrides ?? {}) };
-	for (const key of input.unset ?? []) {
-		if (!Object.hasOwn(overrides, key)) {
-			throw new Error(`--unset ${key}: the workspace has no override for ${key}.`);
-		}
-		delete overrides[key];
+	const byOrchestrator = input.by?.kind === "orchestrator";
+	if (byOrchestrator && input.landing) {
+		throw new Error(
+			`--landing ${input.landing}: the landing mode is the user's (kanban kit apply ${input.kitName} --project ${input.workspaceId} --landing ${input.landing}); the orchestrator switches the kit and its project settings only.`,
+		);
 	}
 	const team = resolveKitByName(catalog, input.kitName);
 	if (!team.ok) {
 		throw new Error(`Kit ${input.kitName} does not resolve: ${team.error}`);
 	}
+	const overrides: Record<string, unknown> = { ...(settings.kit?.overrides ?? {}) };
+	for (const key of input.unset ?? []) {
+		if (!Object.hasOwn(overrides, key)) {
+			throw new Error(`--unset ${key}: the workspace has no override for ${key}.`);
+		}
+		// A team key stored before the split (or a legacy key) changes the team when removed: the user's.
+		if (byOrchestrator && (isLegacyKitKey(key) || !isProjectSettingClass(classifyKitSettingKey(key, team.kit)))) {
+			throw new Error(
+				`--unset ${key}: not a project setting of kit ${input.kitName}; removing a stored team key is the user's (kanban kit migrate-overrides).`,
+			);
+		}
+		delete overrides[key];
+	}
+	const dropped: DroppedKitSetting[] = [];
+	if ((settings.kit?.name ?? DEFAULT_KIT_NAME) !== input.kitName) {
+		for (const [key, value] of Object.entries(overrides)) {
+			const why = findMisfit(catalog, input.kitName, key, value);
+			if (why !== null) {
+				dropped.push({ key, value, why });
+				delete overrides[key];
+			}
+		}
+	}
 	for (const key of Object.keys(input.set ?? {})) {
 		const classified = classifyKitSettingKey(key, team.kit);
-		if (classified.kind === "team" || classified.kind === "invalid") {
+		if (!isProjectSettingClass(classified)) {
 			throw new Error(`--set ${key}: ${classified.message}`);
 		}
 	}
@@ -101,6 +170,7 @@ export async function applyWorkspaceKit(input: ApplyKitInput): Promise<ApplyKitR
 		landing,
 		overrides,
 		changes,
+		dropped,
 		recommendedLandingMode: after.kit.recommends?.landingMode ?? null,
 		unmetSettings: evaluateKitRecommendedSettings(after.kit, config, input.workspaceId).filter(
 			(status) => status.status !== "met",
@@ -136,7 +206,7 @@ export async function applyWorkspaceKit(input: ApplyKitInput): Promise<ApplyKitR
 		at: new Date().toISOString(),
 		workspaceId: input.workspaceId,
 		kitName: input.kitName,
-		by: { kind: "user-command" as const },
+		by: input.by ?? { kind: "user-command" as const },
 		via: "kit apply" as const,
 	};
 	const history = diffOverridesForHistory(settings.kit?.overrides ?? {}, overrides, base);

@@ -61,7 +61,7 @@ Nothing is inherited from another workspace.
 | `checks.enabled` | null | scripted checks on each submitted snapshot. null = on only with landing `qa` on a kit other than `default` |
 | `checks.scripts` | `typecheck`, `lint`, `test`, `build` | the project's npm scripts to run (missing ones are skipped) |
 | `recovery.enabled` | `true` | recovery (nudges, outage holds, restart resumes) for this workspace, once `pipeline.recovery.mode` is `on` |
-| `kit` | null (= `default`) | `{ name, overrides }`; overrides are dotted kit keys ([KITS.md](KITS.md)) |
+| `kit` | null (= `default`) | `{ name, overrides }`; overrides are dotted kit keys ([KITS.md](KITS.md)). The project's settings: every model the kit names and project facts, set by the user or the project's orchestrator (`kanban kit set`); the name changes with `kanban kit apply`, by the user or the project's orchestrator; flow changes need another kit, and kits are made and edited only by the user |
 | `guardrails.enabled` | null (= `guardrails.enabled`) | task-card guardrails for this workspace |
 | `guardrails.extraDenyCommands`, `.extraWritableDirs` | `[]` | added to the machine-wide lists; a workspace can only tighten them |
 | `isolation.mode` | null (= `isolation.mode`) | project isolation for this workspace: `off`, `report`, `enforce` ([project-isolation.md](../fork/project-isolation.md)) |

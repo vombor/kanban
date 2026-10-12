@@ -8,7 +8,9 @@
 //
 // Each layer's legacy keys (`dev.*`, `qa.default`, `escalate.*`, ...) are translated into `roles`/`fallback` before it
 // is merged (kit-legacy-keys.ts). A role names a `model` or a `tier`: a layer that sets one drops the other's value from
-// the layers below, so a project's `roles.dev.model` replaces the kit's `roles.dev.tier`.
+// the layers below, so a project's `roles.dev.model` replaces the kit's `roles.dev.tier` (a plan candidate's model
+// reference the same way). An override key can name a list entry by its index (`tiers.dev.0.model`,
+// `qa.routes.1.agent`): it changes that entry of the merged list and never adds one.
 //
 // Built-in kits (`default`, `team-cloud`, `team-local`, `team-cline`) ship in the package (`kits/*.json`). User kits are data
 // files in `$KANBAN_HOME/kits/<name>.json`; a user kit with a built-in name, or the old name of a renamed one
@@ -226,26 +228,62 @@ function splitOverrideKey(key: string): string[] | string {
 	return segments;
 }
 
+/**
+ * A key whose leaf picks a model or a tier in a model choice: a role (`roles.<role>.<field>`) or a plan candidate's
+ * model reference (`plan.candidates.<i>.model.<field>`). Setting one drops the other (`dropReplacedRoleChoice`).
+ */
+function isModelChoiceKey(segments: string[]): boolean {
+	return (
+		(segments.length === 3 && segments[0] === "roles") ||
+		(segments.length === 5 && segments[0] === "plan" && segments[1] === "candidates" && segments[3] === "model")
+	);
+}
+
+/** The list entry `segment` names, or an error: a list is never grown by an override, only its entries changed. */
+function readListIndex(list: unknown[], segment: string, key: string, at: string[]): number | string {
+	const index = /^\d+$/u.test(segment) ? Number(segment) : Number.NaN;
+	if (!Number.isInteger(index) || index >= list.length) {
+		return `override key "${key}" names entry ${segment} of ${at.join(".")}, which has ${list.length} entr${list.length === 1 ? "y" : "ies"}`;
+	}
+	return index;
+}
+
 function applyOverride(target: PlainObject, key: string, value: unknown): string | null {
 	const segments = splitOverrideKey(key);
 	if (typeof segments === "string") {
 		return segments;
 	}
-	let node: PlainObject = target;
-	for (const segment of segments.slice(0, -1)) {
-		const next = node[segment];
-		if (next === undefined || next === null) {
-			const created: PlainObject = {};
-			node[segment] = created;
-			node = created;
-		} else if (isPlainObject(next)) {
-			node = next;
+	let node: PlainObject | unknown[] = target;
+	for (const [position, segment] of segments.slice(0, -1).entries()) {
+		let next: unknown;
+		if (Array.isArray(node)) {
+			const index = readListIndex(node, segment, key, segments.slice(0, position));
+			if (typeof index === "string") {
+				return index;
+			}
+			next = node[index];
 		} else {
+			next = node[segment];
+			if (next === undefined || next === null) {
+				next = {};
+				node[segment] = next;
+			}
+		}
+		if (!isPlainObject(next) && !Array.isArray(next)) {
 			return `override key "${key}" goes through ${segment}, which is not an object`;
 		}
+		node = next;
 	}
 	const leaf = segments[segments.length - 1] as string;
-	if (segments.length === 3 && segments[0] === "roles") {
+	if (Array.isArray(node)) {
+		const index = readListIndex(node, leaf, key, segments.slice(0, -1));
+		if (typeof index === "string") {
+			return index;
+		}
+		node[index] = structuredClone(value);
+		return null;
+	}
+	if (isModelChoiceKey(segments)) {
 		dropReplacedRoleChoice(node, leaf);
 	}
 	node[leaf] = structuredClone(value);
@@ -263,14 +301,17 @@ function hasPath(value: unknown, segments: string[]): boolean {
 	return true;
 }
 
-/** The value at a dotted key of a kit document, or undefined. */
+/** The value at a dotted key of a kit document (a list entry by its index: `tiers.dev.0.model`), or undefined. */
 export function readKitValue(kit: unknown, key: string): unknown {
 	let node = kit;
 	for (const segment of key.split(".")) {
-		if (!isPlainObject(node)) {
+		if (Array.isArray(node)) {
+			node = /^\d+$/u.test(segment) ? node[Number(segment)] : undefined;
+		} else if (isPlainObject(node)) {
+			node = node[segment];
+		} else {
 			return undefined;
 		}
-		node = node[segment];
 	}
 	return node;
 }
@@ -311,7 +352,13 @@ export function resolveKitLayers(
 		if (NON_OVERRIDABLE_KEYS.has(key)) {
 			continue;
 		}
-		if (overrideKeys.some((overrideKey) => key === overrideKey || key.startsWith(`${overrideKey}.`))) {
+		// A list is a leaf here, so a setting of one of its entries (`tiers.dev.0.model`) makes the list the project's.
+		if (
+			overrideKeys.some(
+				(overrideKey) =>
+					key === overrideKey || key.startsWith(`${overrideKey}.`) || overrideKey.startsWith(`${key}.`),
+			)
+		) {
 			sources[key] = PROJECT_SETTING_SOURCE;
 		} else if (kit.name !== defaultKit.name && hasPath(kitLayer, segments)) {
 			sources[key] = kit.name;

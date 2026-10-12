@@ -146,9 +146,11 @@ Kanban's `config.json`, kits and workspace index, and the agents' user-level con
 `CLAUDE.md`, agents/commands/skills/hooks, `~/.claude.json`, `~/.codex/config.toml`, `AGENTS.md`, rules,
 `~/.copilot/config.json`, `mcp-config.json`, Cline's settings, rules and hooks) are changed by the user, or by
 `kanban` commands the user runs. Under `enforce` a session can't edit them where its CLI can express it, and these
-commands are refused from a session: `config import-kit`, `kit apply`, `setup`, `home migrate`, `doctor --fix`,
+commands are refused from a session: `config import-kit`, `setup`, `home migrate`, `doctor --fix`,
 `models providers`, `models prices sync`, `restart`, `pipeline import-legacy`, `board restore`. Read-only commands
-(`doctor`, `kit show`, `config show`) keep working, scoped to the session's project.
+(`doctor`, `kit show`, `config show`) keep working, scoped to the session's project. `kit apply|set|unset` are
+not machine-wide: the server lets the user and the project's own orchestrator run them for that project, in every mode
+(docs/team/KITS.md "Switching a project's kit").
 
 Kanban has no command that changes an isolation mode, so a change is an edit of config.json. The server notices every
 change it reads (config is re-read at most every 2 s) and logs it, old → new, as `mode_changed` in every affected

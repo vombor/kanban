@@ -68,7 +68,7 @@ export function checkKitProjectSettings(context: KitSettingsCheckContext): Docto
 			findings.push({
 				level: "warn",
 				area: "project",
-				message: `${workspaceId}: ${teamKeys.length} override(s) change kit ${resolution.kitName}'s team definition (${teamKeys.join(", ")}): they still apply, but a project only sets role models and project facts; pick or make a kit that has them`,
+				message: `${workspaceId}: ${teamKeys.length} override(s) change kit ${resolution.kitName}'s team definition (${teamKeys.join(", ")}): they still apply, but a project only sets the models its kit names and project facts; pick or make a kit that has them`,
 				hint,
 			});
 		}

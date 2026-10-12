@@ -9,8 +9,8 @@ something is done, and the core never decides who does it.
 - Every project is on the built-in **`default`** kit unless its config entry names another one. `default` answers
   "no" to every question, so a project on it behaves like upstream Kanban.
 - A new project **picks its kit when it is created or first added** ([Picking a kit for a new project](#picking-a-kit-for-a-new-project)),
-  `default` preselected. Afterwards the project's kit is the one chosen then; it changes only when the user asks
-  (`kanban kit apply`).
+  `default` preselected. Afterwards the project's kit is the one chosen then; it changes with `kanban kit apply`,
+  run by the user or the project's own orchestrator ([Switching a project's kit](#switching-a-projects-kit)).
 - **`team-cloud`** is the built-in preset for the dev-team workflow (Cline juniors on tier-3 models, cross-vendor QA,
   same-model rework, then a fallback model, then the orchestrator).
 - **`team-local`** is the same workflow on local Lemonade models only (Cline + provider `lemonade`, nothing paid
@@ -21,8 +21,8 @@ something is done, and the core never decides who does it.
 - **User kits** live in `<home>/kits/<name>.json`.
 
 A kit is the **team definition**: its roles with a default model each, and the flow. A project changes only its
-**project settings** on top (role models and project facts, [Project settings](#project-settings)); a different
-team is a different kit.
+**project settings** on top (every model the kit names and project facts, [Project settings](#project-settings)); a
+different flow is a different kit. Kits themselves are created and edited only by the user.
 
 Any model may be on any role ([MODELS.md](MODELS.md)): the kit gives each role a default, the project overrides it
 (`kanban kit set roles.<role>.*`), and Kanban doesn't refuse or warn about the choice. For Cline roles, Cline's
@@ -240,17 +240,33 @@ is merged (`src/kits/kit-legacy-keys.ts`), so they keep working with their layer
 A project's settings are what it sets on its kit: `workspaces.<id>.kit.overrides` in config.json, now limited to
 
 - **role models**: `roles.<role>.agent|provider|model|tier`, for a role the project's kit defines (`dev`, `qa`,
-  `plan`, `fallback`; an unknown role, or one the kit doesn't define, is an error);
+  `plan`, `fallback`; an unknown role, or one the kit doesn't define, is an error). The fallback role is also the
+  escalation and outage takeover target, so `roles.fallback.*` sets those;
+- **every other model the kit names** (since 2026-10-12, `PROJECT_MODEL_KEYS` in `src/kits/project-settings.ts`),
+  only for a tier or list entry the kit has (a project changes the kit's entries, it never adds a tier or an entry;
+  `<i>` is the entry's index, as `kanban kit show --json` lists them):
+
+  | Key | What |
+  |---|---|
+  | `tiers.<tier>` | the tier's whole list of model picks (`[{ provider?, model, default?, note? }]`) |
+  | `tiers.<tier>.<i>.provider\|model\|default` | one pick of the tier, or which one is the default |
+  | `qa.routes.<i>.agent\|provider\|model` | a QA route's reviewer (its `devModel`, `rules` and `why` stay the kit's) |
+  | `plan.candidates.<i>.agent\|model\|model.provider\|model.model\|model.tier` | a plan candidate |
+  | `onFail.runoff.models.<i>.agent\|provider\|model` | a runoff racer (which racers there are stays the kit's) |
+
+  As in a role, a candidate's `model.model` drops the kit's `model.tier` and the other way round;
 - **project facts**: `qa.blurb`, `qa.promptNotes.{dbSetup,knownBaseIssues,screenshotFallback}`, `qa.serversScript`,
   `qa.preview`, `land.postLand`, `plan.rules`, `checks.{envFile,databaseUrlVar,setup,teardown}` (the scripted
   checks' environment, [below](#the-scripted-checks-environment-checks)), `worktrees.symlinkIgnored.{include,exclude}`
   ([task worktrees' ignored paths](#task-worktrees-ignored-paths-worktreessymlinkignored)) (`PROJECT_FACT_KEYS` in
   `src/kits/project-settings.ts`).
 
-Everything else is the team definition and is refused with a message: `onFail.*`, `fallback.*` (the triggers and
-the approval rule), `qa.enabled`, `qa.requireDifferentVendor`, `qa.skip`, `qa.routes`, `qa.rules`, `tiers`,
-`dropped`, `features`, `plan.enabled`, `recommends`, `description`, `roles.<role>.note`. A project changes its
-team by using another kit, and that is the user's `kanban kit apply`.
+Everything else is the flow and is refused with a message: `onFail.*` (but the runoff racers' models), `fallback.*`
+(the triggers and the approval rule), `qa.enabled`, `qa.requireDifferentVendor`, `qa.skip`, `qa.routes` as a list
+and a route's `devModel`/`rules`, `qa.rules`, `tiers` as a whole (which tiers exist), a tier entry's `note`,
+`tierRules`, `tierNotes`, `dropped`, `features`, `plan.enabled`, `recommends`, `description`,
+`roles.<role>.note`. A project gets another flow by using another kit (`kanban kit apply`, [Switching a project's
+kit](#switching-a-projects-kit)); kits themselves are made and edited only by the user.
 
 ```sh
 kanban kit set roles.fallback.model us.moonshotai.kimi-k3 --project /projects/foo
@@ -259,6 +275,9 @@ kanban kit set qa.promptNotes.dbSetup "npx prisma migrate deploy" --project /pro
 kanban kit set land.postLand '[{"paths":"^prisma/","run":"npx prisma generate"}]' --project /projects/foo
 kanban kit unset roles.dev.model --project /projects/foo       # the kit's dev model again
 kanban kit unset roles.fallback --project /projects/foo        # every field of the role
+kanban kit set tiers.tier3.0.model us.openai.gpt-6.1-sol --project /projects/foo   # one tier pick
+kanban kit set qa.routes.0.model us.amazon.nova-2-lite-v1:0 --project /projects/foo # a QA route's reviewer
+kanban kit unset qa.routes.0 --project /projects/foo           # every setting of that route entry
 kanban kit set onFail.reworkRounds 5 --project /projects/foo   # refused: part of the team definition (kit team-cloud)
 kanban kit set roles.dev.model gpt-9 --project /projects/foo          # any model; for Cline, doctor warns if models.json doesn't list it
 ```
@@ -278,8 +297,29 @@ is traced to its process tree), in every isolation mode, off included:
 | any card session, of this project or another | refused |
 | an unidentified caller (a credential outside its process tree) | refused |
 
-The CLI also refuses `kit set|unset` in a card session before it asks the server (`ORCHESTRATOR_OR_USER_COMMANDS`),
+The CLI also refuses `kit set|unset|apply` in a card session before it asks the server (`ORCHESTRATOR_OR_USER_COMMANDS`),
 and every refusal is logged to `data/<ws>/isolation.jsonl`.
+
+### Switching a project's kit
+
+`kanban kit apply <kit> --project <path>` points the project at another kit (since 2026-10-12 the project's own
+orchestrator may run it too, not only the user). It goes through the running server (tRPC `kit.applyKit`), with the
+same caller rule as `kit set` (the table above): the user and the project's own orchestrator, never another
+project's orchestrator or a card. Without a running server only a process without a session credential applies it
+in-process (that is the user). Every change is logged to `kit-settings-history.jsonl` (`via: "kit apply"`, a
+`(kit)` line for the switch itself).
+
+A switch keeps the project's settings that still fit the new kit and drops the others, listed in the output
+(`dropped`, with why): a role, tier or list entry the new kit doesn't have, or a value that doesn't resolve on it
+(`roles.dev.tier tier3` on a kit without `tier3`). Team keys stored before the split stay, as before. The checks a
+switch did before stay: an unknown kit, `--set` takes only project settings, the whole resolution must validate.
+`--landing` (the core landing mode) and `--unset` of a stored team key stay the user's: the orchestrator is
+refused them.
+
+```sh
+kanban kit apply team-local --project /projects/foo --dry-run   # what changes, what is dropped
+kanban kit apply team-local --project /projects/foo
+```
 
 **Where.** Project settings stay in config.json (`workspaces.<id>.kit.overrides`), not in the project repo: a card
 can edit and land repo files, which is the problem this avoids. They are the resolver's existing input, written

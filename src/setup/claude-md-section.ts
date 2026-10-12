@@ -31,14 +31,18 @@ export function renderClaudeMdSection(): string {
   and the flow (QA, rework rounds, which triggers hand a card to the fallback, approval):
   \`kanban kit show --project <path>\`. A new project picks its kit when it is created or first added (the browser's
   add-project dialog, \`kanban project create|add --kit <name>\`; \`default\` when none is picked). A project's kit is
-  the one chosen at creation; change it only when the user asks, and only with \`kanban kit apply\`. A project on
+  the one chosen at creation; you may switch your own project to another kit (\`kanban kit apply <kit> --project
+  <path>\`, \`--dry-run\` first; settings that don't fit the new kit are dropped and listed; \`--landing\` is the
+  user's), never another project's. A project on
   \`default\` (no kit entry): every card runs on the agent selected in Kanban settings, and nothing is QA'd, reworked
   or landed automatically.
-- The project's settings on its kit are yours to change, at once and without a card: a role's model
-  (\`kanban kit set roles.<role>.agent|provider|model|tier <value> --project <path>\`) and project facts (\`qa.blurb\`,
-  \`qa.promptNotes.*\`, \`qa.serversScript\`, \`qa.preview\`, \`land.postLand\`, \`plan.rules\`, \`checks.*\`,
-  \`worktrees.symlinkIgnored.*\`);
-  \`kanban kit unset <key>\` removes one. Flow keys are refused: another team is another kit, the user's \`kanban kit apply\`.
+- The project's settings on its kit are yours to change, at once and without a card: any model the kit names
+  (\`kanban kit set roles.<role>.agent|provider|model|tier <value> --project <path>\`, and \`tiers.<tier>[.<i>.model]\`,
+  \`qa.routes.<i>.model\`, \`plan.candidates.<i>.model\`, \`onFail.runoff.models.<i>.model\` with their agent/provider)
+  and project facts (\`qa.blurb\`, \`qa.promptNotes.*\`, \`qa.serversScript\`, \`qa.preview\`, \`land.postLand\`,
+  \`plan.rules\`, \`checks.*\`, \`worktrees.symlinkIgnored.*\`); \`kanban kit unset <key>\` removes one. Flow keys
+  (onFail, fallback triggers and approval, QA rules, requireDifferentVendor, features) are refused: another flow is
+  another kit.
 - Kits are created and changed only by the user (\`kanban kit create <name> --from <kit>\`, \`kanban kit edit <name>\`);
   for a team change (another trigger, flow or QA rule), ask the user and give them the command.
 - You may add, change and remove the project's top-bar shortcuts (any label, command, icon) for the user:
@@ -58,8 +62,8 @@ export function renderClaudeMdSection(): string {
   --body-file <file>\`, else \`kanban github issue create --repo vombor/kanban --title "<short summary>" --body-file <file>\`.
 
 **If you are a task agent on a Kanban card:** follow your card prompt. Don't run \`kanban doctor --fix\`,
-\`kanban setup\`, \`kanban kit apply\` or \`kanban config import-kit\` unless the prompt says so; \`kanban kit set\` is
-the orchestrator's (Kanban refuses it from a card). For GitHub issues and comments use \`kanban github issue ...\`,
+\`kanban setup\` or \`kanban config import-kit\` unless the prompt says so; \`kanban kit apply|set\`
+are the orchestrator's (Kanban refuses them from a card). For GitHub issues and comments use \`kanban github issue ...\`,
 never \`gh issue\` writes.
 `;
 }

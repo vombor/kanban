@@ -172,6 +172,8 @@ import {
 	type RuntimeIsolationApi,
 } from "./isolation-api";
 import {
+	kitApplyRequestSchema,
+	kitApplyResponseSchema,
 	kitSettingChangeResponseSchema,
 	kitSettingSetRequestSchema,
 	kitSettingUnsetRequestSchema,
@@ -889,7 +891,7 @@ export const runtimeAppRouter = t.router({
 				});
 			}),
 	}),
-	// A project's settings on its kit (role models, project facts): the user's and that project's orchestrator's.
+	// A project's kit and its settings on it (models, project facts): the user's and that project's orchestrator's.
 	kit: t.router({
 		set: workspaceProcedure
 			.input(kitSettingSetRequestSchema)
@@ -925,6 +927,19 @@ export const runtimeAppRouter = t.router({
 					};
 				}
 				return await ctx.kitSettingsApi.unset({
+					caller: await readStrictCaller(ctx),
+					workspaceId: ctx.workspaceScope.workspaceId,
+					request: input,
+				});
+			}),
+		applyKit: workspaceProcedure
+			.input(kitApplyRequestSchema)
+			.output(kitApplyResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.kitSettingsApi) {
+					return { ok: false, result: null, error: "Kit settings are not available here." };
+				}
+				return await ctx.kitSettingsApi.apply({
 					caller: await readStrictCaller(ctx),
 					workspaceId: ctx.workspaceScope.workspaceId,
 					request: input,

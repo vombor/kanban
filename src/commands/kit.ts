@@ -7,7 +7,8 @@ import {
 	readPipelineConfig,
 } from "../config/pipeline-config";
 import { loadGlobalRuntimeConfig } from "../config/runtime-config";
-import { type ApplyKitResult, applyWorkspaceKit } from "../kits/apply-kit";
+import { readSessionCredential } from "../isolation/cli-scope";
+import { applyWorkspaceKit } from "../kits/apply-kit";
 import { buildKitReport, formatKitReport, formatRecommendedSettings, NO_WORKSPACE_ID } from "../kits/kit-report";
 import type { KitDocument } from "../kits/kit-schema";
 import { assessLocalResidency, type LocalResidencyFinding, listKitLocalWorkingSet } from "../kits/local-residency";
@@ -23,8 +24,9 @@ import {
 	type UserKitEditPlan,
 } from "../kits/user-kit-edit";
 import { fetchLocalProviderLimit, RESIDENCY_PROVIDER_IDS } from "../models/local-provider-limits";
-import { getKanbanKitsPath, getKitSettingsHistoryPath } from "../state/kanban-home";
-import type { KitSettingChangeResponse } from "../trpc/kit-settings-api";
+import { getKanbanHomePath, getKanbanKitsPath, getKitSettingsHistoryPath } from "../state/kanban-home";
+import { readLiveKanbanServerLock } from "../state/kanban-server-lock";
+import type { KitApplyRequest, KitApplyResponse, KitSettingChangeResponse } from "../trpc/kit-settings-api";
 import { createRuntimeTrpcClient } from "./runtime-trpc-client";
 import { resolveWorkspaceTarget } from "./workspace-target";
 
@@ -81,7 +83,23 @@ export function parseLandingMode(value: string | undefined): LandingMode | undef
 	return parsed.data;
 }
 
-function formatApplyResult(result: ApplyKitResult, dryRun: boolean): string[] {
+type KitApplyResult = NonNullable<KitApplyResponse["result"]>;
+/** The same over the wire, where a key holding `unknown` reads as optional. */
+type WireKitApplyResponse = Awaited<
+	ReturnType<ReturnType<typeof createRuntimeTrpcClient>["kit"]["applyKit"]["mutate"]>
+>;
+type WireKitApplyResult = NonNullable<WireKitApplyResponse["result"]>;
+
+function fromWire(result: WireKitApplyResult): KitApplyResult {
+	return {
+		...result,
+		changes: result.changes.map((change) => ({ ...change, from: change.from, to: change.to })),
+		dropped: result.dropped.map((dropped) => ({ ...dropped, value: dropped.value })),
+		unmetSettings: result.unmetSettings.map((status) => ({ ...status, current: status.current })),
+	};
+}
+
+function formatApplyResult(result: KitApplyResult, dryRun: boolean): string[] {
 	const lines = [`Workspace ${result.workspaceId}: kit ${result.kitName.from} -> ${result.kitName.to}`];
 	lines.push(
 		result.landing.from === result.landing.to
@@ -101,6 +119,12 @@ function formatApplyResult(result: ApplyKitResult, dryRun: boolean): string[] {
 			);
 		}
 	}
+	if (result.dropped.length > 0) {
+		lines.push(`Dropped project settings that don't fit kit ${result.kitName.to}:`);
+		for (const dropped of result.dropped) {
+			lines.push(`  ${dropped.key}: ${JSON.stringify(dropped.value)} (${dropped.why})`);
+		}
+	}
 	if (result.recommendedLandingMode && result.recommendedLandingMode !== result.landing.to) {
 		lines.push(
 			`Kit ${result.kitName.to} recommends landing mode "${result.recommendedLandingMode}"; it is not applied without --landing ${result.recommendedLandingMode}.`,
@@ -110,8 +134,34 @@ function formatApplyResult(result: ApplyKitResult, dryRun: boolean): string[] {
 		lines.push(`Kit ${result.kitName.to} needs these config.json settings; it never applies them:`);
 		lines.push(...formatRecommendedSettings(result.unmetSettings));
 	}
-	lines.push(dryRun ? "Dry run: nothing written." : "Written.");
+	lines.push(
+		dryRun ? "Dry run: nothing written." : `Written.${result.historyPath ? ` History: ${result.historyPath}` : ""}`,
+	);
 	return lines;
+}
+
+/**
+ * `kit apply` goes through the running server, which decides who is asking (the user, the project's orchestrator;
+ * src/trpc/kit-settings-api.ts). Without a server only a process with no session credential applies in-process: no
+ * agent session outlives its server, so that is the user.
+ */
+async function applyKitThroughServer(workspaceId: string, request: KitApplyRequest): Promise<KitApplyResult> {
+	let response: WireKitApplyResponse;
+	try {
+		response = await createRuntimeTrpcClient(workspaceId).kit.applyKit.mutate(request);
+	} catch (error) {
+		if (readSessionCredential() || readLiveKanbanServerLock(getKanbanHomePath()) !== null) {
+			throw new Error(
+				`the running Kanban server didn't answer (${toErrorMessage(error)}); a kit is applied only through it, because it checks who is asking`,
+			);
+		}
+		const result = await applyWorkspaceKit({ workspaceId, ...request });
+		return { ...result, historyPath: result.written ? getKitSettingsHistoryPath(workspaceId) : null };
+	}
+	if (!response.ok || !response.result) {
+		throw new Error(response.error ?? "refused");
+	}
+	return fromWire(response.result);
 }
 
 const LOCAL_PROVIDER_TIMEOUT_MS = 1_500;
@@ -395,21 +445,21 @@ export function registerKitCommand(program: Command): void {
 
 	kit.command("apply")
 		.description(
-			"Use a kit for a workspace (the user's: it changes the project's team). Keeps its project settings; --set/--unset edit them (--set takes only role models and project facts). The landing mode changes only with --landing.",
+			"Use a kit for a workspace (another team for the project). Only the user and the project's own orchestrator; never a card. Keeps the project settings that fit the new kit and reports the ones it drops; --set/--unset edit them (--set takes only model settings and project facts). The landing mode changes only with --landing (the user's).",
 		)
 		.argument("<name>", "Kit name.")
 		.option(
 			"--project <workspace>",
 			"Workspace id or project path. Defaults to the project containing the current directory.",
 		)
-		.option("--landing <mode>", "Also set the landing mode: off, commit, pr or qa.")
+		.option("--landing <mode>", "Also set the landing mode: off, commit, pr or qa (the user's).")
 		.option(
 			"--set <key=value>",
-			"Set a project setting (roles.<role>.agent|provider|model|tier or a project fact; the value is JSON or text). Repeatable.",
+			"Set a project setting (a model the kit names, e.g. roles.<role>.model or tiers.<tier>.<i>.model, or a project fact; the value is JSON or text). Repeatable.",
 			collect,
 			[],
 		)
-		.option("--unset <key>", "Remove a stored override (a team key too). Repeatable.", collect, [])
+		.option("--unset <key>", "Remove a stored override (a team key too, by the user only). Repeatable.", collect, [])
 		.option("--dry-run", "Print what would change; write nothing.")
 
 		.option("--json", "Print as JSON.")
@@ -427,8 +477,7 @@ export function registerKitCommand(program: Command): void {
 			) => {
 				try {
 					const target = await resolveWorkspaceTarget(options.project, { allowUnregistered: false });
-					const result = await applyWorkspaceKit({
-						workspaceId: target.workspaceId,
+					const result = await applyKitThroughServer(target.workspaceId, {
 						kitName: name,
 						landing: parseLandingMode(options.landing),
 						set: parseSetAssignments(options.set),
@@ -449,7 +498,7 @@ export function registerKitCommand(program: Command): void {
 
 	kit.command("set")
 		.description(
-			"Set a project setting on the project's kit, in effect at once: a role's model (roles.<role>.agent|provider|model|tier, for a role the kit defines) or a project fact (qa.blurb, qa.promptNotes.*, qa.serversScript, qa.preview, land.postLand, plan.rules, checks.envFile|databaseUrlVar|setup|teardown, worktrees.symlinkIgnored.include|exclude). Only the user and the project's own orchestrator; never a card. The team definition (flow, triggers, QA routes, tiers, ...) is the kit's: pick another kit with kanban kit apply.",
+			"Set a project setting on the project's kit, in effect at once: any model the kit names (roles.<role>.agent|provider|model|tier for a role the kit defines; tiers.<tier> or tiers.<tier>.<i>.provider|model|default; qa.routes.<i>.agent|provider|model; plan.candidates.<i>.agent|model|model.provider|model.model|model.tier; onFail.runoff.models.<i>.agent|provider|model; only tiers and entries the kit has) or a project fact (qa.blurb, qa.promptNotes.*, qa.serversScript, qa.preview, land.postLand, plan.rules, checks.envFile|databaseUrlVar|setup|teardown, worktrees.symlinkIgnored.include|exclude). Only the user and the project's own orchestrator; never a card. The flow (onFail, fallback triggers and approval, qa.enabled/rules, a route's devModel, requireDifferentVendor, features) is the kit's: use another kit with kanban kit apply.",
 		)
 		.argument("<key>", "Dotted kit key, e.g. roles.fallback.model.")
 		.argument("<value>", 'JSON (true, 3, null, [..], {..}, "text") or plain text.')
@@ -468,7 +517,7 @@ export function registerKitCommand(program: Command): void {
 
 	kit.command("unset")
 		.description(
-			"Remove a project setting (a role field, a whole role roles.<role>, or a project fact), so the kit's value applies again. Only the user and the project's own orchestrator.",
+			"Remove a project setting (a model setting, a whole role roles.<role> or list entry, or a project fact), so the kit's value applies again. Only the user and the project's own orchestrator.",
 		)
 		.argument("<key>", "Dotted kit key, e.g. roles.dev.model or roles.dev.")
 		.option(

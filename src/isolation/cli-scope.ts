@@ -43,11 +43,10 @@ export interface CliSessionScope {
 
 /**
  * The CLI commands that change machine-wide state (config.json, kits, the home, the agents' config, the server):
- * the user's, refused from an agent session under `enforce`. Matched against the command path (`kit apply`).
+ * the user's, refused from an agent session under `enforce`. Matched against the command path (`home migrate`).
  */
 export const MACHINE_WIDE_COMMANDS = [
 	"config import-kit",
-	"kit apply",
 	"setup",
 	"home migrate",
 	"models providers",
@@ -93,13 +92,15 @@ function planApprovalRefusal(taskId: string | undefined): string {
 
 /**
  * Commands only the user and a project's orchestrator may run, whatever the isolation mode: a card session is
- * refused. `issues sync` calls GitHub with the user's own token (the `gh` login or `GH_TOKEN`); `kit set|unset`
- * change the project's settings on its kit (the server checks the caller again, src/trpc/kit-settings-api.ts), and
+ * refused. `issues sync` calls GitHub with the user's own token (the `gh` login or `GH_TOKEN`); `kit apply` switches
+ * the project's kit and `kit set|unset` change its settings on it (the server checks the caller again, also for
+ * another project's orchestrator, src/trpc/kit-settings-api.ts), and
  * `shortcut add|remove` its top-bar shortcuts (src/trpc/shortcuts-api.ts checks again), and `pipeline pause|resume`
  * its QA pipeline (src/trpc/pipeline-pause-api.ts checks again).
  */
 export const ORCHESTRATOR_OR_USER_COMMANDS = [
 	"issues sync",
+	"kit apply",
 	"kit set",
 	"kit unset",
 	"models vet",
@@ -119,7 +120,9 @@ function orchestratorOrUserRefusal(commandPath: string): string {
 					? "changes the project's shortcuts"
 					: commandPath.startsWith("pipeline ")
 						? "pauses or resumes the project's QA pipeline"
-						: "changes the project's settings on its kit (role models, project facts)";
+						: commandPath === "kit apply"
+							? "switches the project's routing kit"
+							: "changes the project's settings on its kit (models, project facts)";
 	return `\`kanban ${commandPath}\` ${why}, so only the user or the project's orchestrator runs it, never a card session. Tell your orchestrator what you need.`;
 }
 
