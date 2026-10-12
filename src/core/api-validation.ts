@@ -192,6 +192,7 @@ export function parseProjectCreateRequest(value: unknown): RuntimeProjectCreateR
 		name: parsed.name?.trim() || undefined,
 		initialBranch: parsed.initialBranch?.trim() || undefined,
 		initialCommit: parsed.initialCommit,
+		kit: parsed.kit?.trim() || undefined,
 	};
 }
 
@@ -211,6 +212,7 @@ export function parseProjectAddRequest(value: unknown): RuntimeProjectAddRequest
 		path,
 		gitUrl,
 		initializeGit: parsed.initializeGit,
+		kit: parsed.kit?.trim() || undefined,
 	};
 }
 

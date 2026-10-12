@@ -20,6 +20,7 @@ export default defineConfig({
 			"@runtime-terminal-ws-close": resolve(__dirname, "../src/core/terminal-ws-close.ts"),
 			"@runtime-shortcuts": resolve(__dirname, "../src/config/shortcut-utils.ts"),
 			"@runtime-task-id": resolve(__dirname, "../src/core/task-id.ts"),
+			"@runtime-kit-choice-display": resolve(__dirname, "../src/core/kit-choice-display.ts"),
 			"@runtime-task-title": resolve(__dirname, "../src/core/task-title.ts"),
 			"@runtime-turn-final-message": resolve(__dirname, "../src/core/turn-final-message.ts"),
 			"@runtime-project-paths": resolve(__dirname, "../src/core/project-paths.ts"),

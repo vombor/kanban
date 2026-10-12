@@ -11,6 +11,7 @@ import { formatUnlinkIgnoredResults, runProjectUnlinkIgnored } from "../projects
 import { createProcProcessTableReader, isProcessTableSupported } from "../server/process-table";
 import { loadWorktreeLinkRule } from "../workspace/worktree-link-rule";
 import { parseLandingMode } from "./kit";
+import { createTerminalKitPrompt } from "./project-kit-prompt";
 import { resolveWorkspaceTarget } from "./workspace-target";
 
 function toErrorMessage(error: unknown): string {
@@ -114,13 +115,16 @@ export function registerProjectCommand(program: Command): void {
 	project
 		.command("add")
 		.description(
-			"Add a git repo as a Kanban project. Without --kit it is on the default kit with landing off: every card runs on the selected agent and nothing is QA'd or landed automatically.",
+			"Add a git repo as a Kanban project. A new project picks its routing kit: --kit, else a prompt on a terminal, else default (landing off: every card runs on the selected agent and nothing is QA'd or landed automatically).",
 		)
 		.argument(
 			"<path>",
 			"The repo's top directory (its main checkout, not a task worktree), inside a projects root (setting projects.roots).",
 		)
-		.option("--kit <name>", "Routing kit for the project (kanban kit list).")
+		.option(
+			"--kit <name>",
+			"Routing kit for a new project (kanban kit list; default: default, asked on a terminal). An unknown kit is refused before the project is added.",
+		)
 		.option("--landing <mode>", "Landing mode: off, commit, pr or qa (default off).")
 		.option("--base <branch>", "The branch cards land on (default: detected).")
 		.option("--name <name>", "Display name (default: the repo directory name).")
@@ -145,6 +149,7 @@ export function registerProjectCommand(program: Command): void {
 					const result = await addProject({
 						repoPath: resolveProjectInputPath(path, process.cwd()),
 						kit: options.kit,
+						chooseKit: createTerminalKitPrompt(),
 						landing: parseLandingMode(options.landing),
 						base: options.base,
 						name: options.name,
@@ -166,19 +171,28 @@ export function registerProjectCommand(program: Command): void {
 	project
 		.command("create")
 		.description(
-			"Create a new project: make the directory (inside a projects root, setting projects.roots), git init it, commit a README.md, and add it like project add (default kit, landing off).",
+			"Create a new project: make the directory (inside a projects root, setting projects.roots), git init it, commit a README.md, and add it like project add on its routing kit (--kit, else a prompt on a terminal, else default; landing off).",
 		)
 		.argument("<path>", "The new project directory: new, or an empty directory, and not inside another git repo.")
 		.option("--name <name>", "Display name and README title (default: the directory name).")
 		.option("--branch <branch>", "Initial branch name.", DEFAULT_INITIAL_BRANCH)
 		.option("--no-initial-commit", "Only git init: no README.md and no commit (task worktrees need a first commit).")
+		.option(
+			"--kit <name>",
+			"Routing kit (kanban kit list; default: default, asked on a terminal). An unknown kit is refused before anything is created.",
+		)
 		.option("--json", "Print the result as JSON.")
 		.action(
-			async (path: string, options: { name?: string; branch: string; initialCommit: boolean; json?: boolean }) => {
+			async (
+				path: string,
+				options: { name?: string; branch: string; initialCommit: boolean; kit?: string; json?: boolean },
+			) => {
 				try {
 					const result = await createProject({
 						path: resolveProjectInputPath(path, process.cwd()),
 						name: options.name,
+						kit: options.kit,
+						chooseKit: createTerminalKitPrompt(),
 						initialBranch: options.branch,
 						initialCommit: options.initialCommit,
 					});

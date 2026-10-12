@@ -5,11 +5,13 @@ import { CloneMode } from "@/components/add-project/clone-mode";
 import { FormError } from "@/components/add-project/form-error";
 import { NewProjectMode } from "@/components/add-project/new-project-mode";
 import { OpenFolderMode } from "@/components/add-project/open-folder-mode";
+import { ProjectKitPicker } from "@/components/add-project/project-kit-picker";
 import { type AddProjectModeProps, MODE_BODY_CLASS } from "@/components/add-project/types";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
 import { Dialog, DialogFooter, DialogHeader } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
+import { useProjectKitChoices } from "@/hooks/use-project-kit-choices";
 import { useProjectRoots } from "@/hooks/use-project-roots";
 
 type AddProjectMode = "open" | "clone" | "new";
@@ -29,7 +31,8 @@ export interface AddProjectDialogProps {
 
 /**
  * Add a project: open an existing folder, clone a repo, or create a new one. Every path starts with a projects
- * root (`projects.roots`, read-only prefix); the server checks the full path again on every add.
+ * root (`projects.roots`, read-only prefix); the server checks the full path again on every add. A new project picks
+ * its routing kit here (`default` preselected).
  */
 export function AddProjectDialog({
 	open,
@@ -40,7 +43,13 @@ export function AddProjectDialog({
 	const [mode, setMode] = useState<AddProjectMode>("open");
 	const [selectedRoot, setSelectedRoot] = useState<string | null>(null);
 	const [isBusy, setIsBusy] = useState(false);
+	const [selectedKitName, setSelectedKitName] = useState<string | null>(null);
 	const projectRoots = useProjectRoots(open, currentProjectId);
+	const kitChoices = useProjectKitChoices(open, currentProjectId);
+	const kitName =
+		selectedKitName && kitChoices.kits.some((kit) => kit.name === selectedKitName)
+			? selectedKitName
+			: kitChoices.defaultKitName;
 	const root =
 		selectedRoot && projectRoots.roots.includes(selectedRoot) ? selectedRoot : (projectRoots.roots[0] ?? null);
 
@@ -50,6 +59,7 @@ export function AddProjectDialog({
 		}
 		setMode("open");
 		setSelectedRoot(null);
+		setSelectedKitName(null);
 		setIsBusy(false);
 	}, [open]);
 
@@ -79,6 +89,17 @@ export function AddProjectDialog({
 				onBusyChange: setIsBusy,
 				onCancel: () => onOpenChange(false),
 				onAdded: handleAdded,
+				kitName,
+				kitPicker: (
+					<ProjectKitPicker
+						kits={kitChoices.kits}
+						value={kitName}
+						onChange={setSelectedKitName}
+						error={kitChoices.error}
+						hint={mode === "open" ? "A project that is already added keeps its kit." : undefined}
+						disabled={isBusy}
+					/>
+				),
 			}
 		: null;
 

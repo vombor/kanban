@@ -14,6 +14,34 @@ import { listWorkspaceIndexEntries } from "../../../src/state/workspace-state";
 import { createGitTestEnv } from "../../utilities/git-env";
 import { type TemporaryKanbanHome, withTemporaryKanbanHome } from "../../utilities/kanban-home";
 
+// The kit prompt's terminal (only used where a test makes stdin a TTY).
+const terminal = vi.hoisted(() => ({ answers: [] as string[], questions: [] as string[] }));
+vi.mock("node:readline/promises", () => ({
+	createInterface: () => ({
+		question: async (question: string) => {
+			terminal.questions.push(question);
+			return terminal.answers.shift() ?? "";
+		},
+		once: () => {},
+		close: () => {},
+	}),
+}));
+
+/** Runs with process.stdin.isTTY set as given (vitest's own stdin is no terminal). */
+async function withStdinTty<T>(isTTY: boolean, run: () => Promise<T>): Promise<T> {
+	const descriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+	Object.defineProperty(process.stdin, "isTTY", { value: isTTY, configurable: true });
+	try {
+		return await run();
+	} finally {
+		if (descriptor) {
+			Object.defineProperty(process.stdin, "isTTY", descriptor);
+		} else {
+			delete (process.stdin as { isTTY?: boolean }).isTTY;
+		}
+	}
+}
+
 const IDENTITY_ENV = ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "EMAIL"];
 const GIT_ENV = [...IDENTITY_ENV, "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL", "XDG_CONFIG_HOME"];
 let savedEnv: Map<string, string | undefined>;
@@ -262,6 +290,59 @@ describe("kanban project create", () => {
 		});
 	});
 
+	it("--kit puts the new project on that kit", async () => {
+		await withProjectsRoot(async ({ root, globalConfigPath }) => {
+			const result = await runCli(["create", join(root, "kit-app"), "--kit", "team-cloud", "--json"]);
+			const payload = JSON.parse(result.stdout) as { project: { workspaceId: string; kitName: string } };
+			expect(payload.project.kitName).toBe("team-cloud");
+			const { config } = await readPipelineConfig(globalConfigPath);
+			expect(config.workspaces[payload.project.workspaceId]?.kit?.name).toBe("team-cloud");
+		});
+	});
+
+	it("without --kit and without a terminal takes default and asks nothing", async () => {
+		await withProjectsRoot(async ({ root, globalConfigPath }) => {
+			terminal.questions.length = 0;
+			const result = await withStdinTty(false, () => runCli(["create", join(root, "quiet")]));
+			expect(result.exitCode).toBeUndefined();
+			expect(result.stdout).toContain("Kit default, landing off.");
+			expect(result.stderr).not.toContain("Routing kit");
+			expect(terminal.questions).toEqual([]);
+			expect((await readPipelineConfig(globalConfigPath)).config.workspaces).toEqual({});
+		});
+	});
+
+	it("without --kit on a terminal asks for the kit, default preselected", async () => {
+		await withProjectsRoot(async ({ root }) => {
+			terminal.questions.length = 0;
+			terminal.answers.splice(0, terminal.answers.length, "team-local");
+			const asked = await withStdinTty(true, () => runCli(["create", join(root, "asked")]));
+			expect(asked.stderr).toContain("Routing kit for the new project");
+			expect(asked.stderr).toContain("  1) default (built-in) [default]");
+			expect(terminal.questions).toEqual(["Kit [1, default]: "]);
+			expect(asked.stdout).toContain("Kit team-local, landing off.");
+
+			terminal.answers.splice(0, terminal.answers.length, "");
+			const enter = await withStdinTty(true, () => runCli(["create", join(root, "enter")]));
+			expect(enter.stdout).toContain("Kit default, landing off.");
+
+			// --kit given: nothing is asked.
+			terminal.questions.length = 0;
+			await withStdinTty(true, () => runCli(["create", join(root, "flag"), "--kit", "default"]));
+			expect(terminal.questions).toEqual([]);
+		});
+	});
+
+	it("refuses an unknown kit before the directory is made", async () => {
+		await withProjectsRoot(async ({ root }) => {
+			const result = await runCli(["create", join(root, "nope-app"), "--kit", "nope"]);
+			expect(result.exitCode).toBe(1);
+			expect(result.stderr).toContain('Project create failed: Kit nope can\'t be used: unknown kit "nope"');
+			expect(existsSync(join(root, "nope-app"))).toBe(false);
+			expect(await listWorkspaceIndexEntries()).toEqual([]);
+		});
+	});
+
 	it("fails with the reason for a path outside the root", async () => {
 		await withProjectsRoot(async ({ userHomePath }) => {
 			const result = await runCli(["create", join(userHomePath, "nope")]);
@@ -269,6 +350,44 @@ describe("kanban project create", () => {
 			expect(result.stderr).toContain("Project create failed:");
 			expect(result.stderr).toContain("outside the projects root");
 			expect(existsSync(join(userHomePath, "nope"))).toBe(false);
+		});
+	});
+});
+
+describe("kanban project add --kit", () => {
+	function createRepo(path: string): void {
+		mkdirSync(path, { recursive: true });
+		git(path, ["init", "-q", "-b", "main"]);
+		git(path, ["commit", "-q", "--allow-empty", "-m", "init"]);
+	}
+
+	it("puts a new project on the named kit, takes default without one, and refuses an unknown one", async () => {
+		await withProjectsRoot(async ({ root, globalConfigPath }) => {
+			createRepo(join(root, "a"));
+			createRepo(join(root, "b"));
+			createRepo(join(root, "c"));
+			const refused = await runCli(["add", join(root, "a"), "--kit", "nope"]);
+			expect(refused.exitCode).toBe(1);
+			expect(refused.stderr).toContain('unknown kit "nope"');
+			expect(await listWorkspaceIndexEntries()).toEqual([]);
+
+			expect((await runCli(["add", join(root, "a"), "--kit", "team-cline"])).stdout).toContain(
+				"Kit team-cline, landing off.",
+			);
+			const quiet = await withStdinTty(false, () => runCli(["add", join(root, "b")]));
+			expect(quiet.stdout).toContain("Kit default, landing off.");
+			expect(quiet.stderr).not.toContain("Routing kit");
+
+			terminal.answers.splice(0, terminal.answers.length, "2");
+			const asked = await withStdinTty(true, () => runCli(["add", join(root, "c")]));
+			expect(asked.stdout).toContain("Kit team-cloud, landing off.");
+			// An added project is never asked again.
+			terminal.questions.length = 0;
+			await withStdinTty(true, () => runCli(["add", join(root, "c")]));
+			expect(terminal.questions).toEqual([]);
+
+			const { config } = await readPipelineConfig(globalConfigPath);
+			expect(Object.values(config.workspaces).map((entry) => entry.kit?.name)).toEqual(["team-cline", "team-cloud"]);
 		});
 	});
 });

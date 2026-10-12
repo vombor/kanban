@@ -27,6 +27,8 @@ export function NewProjectMode({
 	onBusyChange,
 	onCancel,
 	onAdded,
+	kitName,
+	kitPicker,
 }: AddProjectModeProps): ReactElement {
 	const [projectName, setProjectName] = useState("");
 	const [directoryName, setDirectoryName] = useState("");
@@ -61,6 +63,7 @@ export function NewProjectMode({
 				name: projectName.trim(),
 				initialBranch: initialBranch.trim(),
 				initialCommit,
+				kit: kitName,
 			});
 			if (!created.ok || !created.project) {
 				setError(created.error ?? "Could not create the project.");
@@ -170,6 +173,7 @@ export function NewProjectMode({
 					Kanban runs git init{initialCommit ? " and commits a README.md, so task worktrees have a base" : ""}.
 					{initialCommit ? "" : " Tasks can't start until the repo has a first commit."}
 				</p>
+				{kitPicker}
 				<FormError message={error} />
 			</form>
 			<DialogFooter>

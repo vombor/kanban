@@ -1,7 +1,9 @@
-// `kanban project add <path>`: register a repo as a Kanban project and set it up in one step. Without `--kit` the
-// project is on the `default` kit with landing `off`: every card runs on the agent selected in Kanban settings and
-// nothing is QA'd or landed automatically. Nothing is copied from another project (plan §3.4). An already
-// configured project keeps its kit and landing mode (`kanban kit apply` changes them); only missing keys are added.
+// `kanban project add <path>`: register a repo as a Kanban project and set it up in one step. A new project picks its
+// routing kit here (`--kit`, or the CLI's prompt through `chooseKit`; src/kits/kit-choices.ts), checked before
+// anything is registered. Without one it is on the `default` kit with landing `off`: every card runs on the agent
+// selected in Kanban settings and nothing is QA'd or landed automatically. Nothing is copied from another project
+// (plan §3.4). An already configured project keeps its kit and landing mode (`kanban kit apply` changes them); only
+// missing keys are added.
 // Ported from archive/devteam-kit:bin/kit@d2fb30f `kit init` (and its trust step from @0782636), with K-1's rule
 // that a new project starts with everything off (legacy kit bin/kit@92101ca). A new registration must be strictly
 // inside a projects root (src/projects/project-roots.ts).
@@ -15,7 +17,8 @@ import {
 	updateWorkspacePipelineEntry,
 } from "../config/pipeline-config";
 import { applyWorkspaceKit } from "../kits/apply-kit";
-import { DEFAULT_KIT_NAME } from "../kits/resolve-kit";
+import { type KitChoiceList, listKitChoices, resolveNewProjectKitName } from "../kits/kit-choices";
+import { DEFAULT_KIT_NAME, loadKitCatalog } from "../kits/resolve-kit";
 import { fixWorkspaceTrust, readWorkspaceTrust } from "../setup/workspace-trust-report";
 import { listWorkspaceIndexEntries, loadWorkspaceContext } from "../state/workspace-state";
 import { runGit } from "../workspace/git-utils";
@@ -26,6 +29,8 @@ export interface AddProjectInput {
 	/** The repo's top directory. */
 	repoPath: string;
 	kit?: string;
+	/** Asks for the kit of a new registration given no `kit` (the CLI's terminal prompt); absent: `default`. */
+	chooseKit?: (choices: KitChoiceList) => Promise<string>;
 	landing?: LandingMode;
 	base?: string;
 	name?: string;
@@ -88,6 +93,43 @@ export async function resolveProjectRepoPath(
 	return directory;
 }
 
+/** A new registration's kit: the named one, else the asked one, else `default`; refused if it doesn't resolve. */
+export async function chooseNewProjectKit(
+	input: Pick<AddProjectInput, "kit" | "chooseKit">,
+): Promise<string | undefined> {
+	if (input.kit === undefined && !input.chooseKit) {
+		return undefined;
+	}
+	const catalog = await loadKitCatalog();
+	const kitName = input.kit ?? (await input.chooseKit?.(listKitChoices(catalog)));
+	return resolveNewProjectKitName(catalog, kitName);
+}
+
+function describeKeptKit(workspaceId: string, kitName: string, currentKitName: string): string {
+	return `kit ${kitName} not applied: ${workspaceId} already uses kit ${currentKitName} (change it with kanban kit apply ${kitName} --project ${workspaceId})`;
+}
+
+/**
+ * The kit picked for a project the browser just registered (Open folder, Clone), through `kanban kit apply`'s code:
+ * `default` writes nothing, and a project that already has a config entry keeps its kit. Returns notes for the user.
+ */
+export async function applyNewProjectKit(workspaceId: string, kitName: string): Promise<string[]> {
+	const { config } = await readPipelineConfig();
+	if (Object.hasOwn(config.workspaces, workspaceId)) {
+		const currentKitName = getWorkspacePipelineSettings(config, workspaceId).kit?.name ?? DEFAULT_KIT_NAME;
+		return kitName === currentKitName ? [] : [describeKeptKit(workspaceId, kitName, currentKitName)];
+	}
+	if (kitName === DEFAULT_KIT_NAME) {
+		return [];
+	}
+	const applied = await applyWorkspaceKit({ workspaceId, kitName });
+	return applied.recommendedLandingMode && applied.recommendedLandingMode !== applied.landing.to
+		? [
+				`Kit ${kitName} recommends landing "${applied.recommendedLandingMode}" (kanban kit apply ${kitName} --project ${workspaceId} --landing ${applied.recommendedLandingMode}).`,
+			]
+		: [];
+}
+
 export async function addProject(input: AddProjectInput): Promise<AddProjectResult> {
 	const repoPath = await resolveProjectRepoPath(input.repoPath, { allowUnbornHead: input.allowUnbornHead });
 	const before = (await listWorkspaceIndexEntries()).find((entry) => entry.repoPath === repoPath) ?? null;
@@ -95,6 +137,7 @@ export async function addProject(input: AddProjectInput): Promise<AddProjectResu
 	if (before === null) {
 		await assertPathInsideProjectRoots(repoPath, input.projectRoots ?? (await readProjectRoots()));
 	}
+	const kit = before === null ? await chooseNewProjectKit(input) : input.kit;
 	const context = await loadWorkspaceContext(repoPath);
 	const workspaceId = context.workspaceId;
 	const warnings: string[] = [];
@@ -106,18 +149,21 @@ export async function addProject(input: AddProjectInput): Promise<AddProjectResu
 	const currentKitName = current.kit?.name ?? DEFAULT_KIT_NAME;
 
 	if (configured) {
-		if (input.kit !== undefined && input.kit !== currentKitName) {
-			warnings.push(
-				`kit ${input.kit} not applied: ${workspaceId} already uses kit ${currentKitName} (change it with kanban kit apply ${input.kit} --project ${workspaceId})`,
-			);
+		if (kit !== undefined && kit !== currentKitName) {
+			warnings.push(describeKeptKit(workspaceId, kit, currentKitName));
 		}
 		if (input.landing !== undefined && input.landing !== current.landing.mode) {
 			warnings.push(
 				`landing ${input.landing} not applied: ${workspaceId} is on landing ${current.landing.mode} (kanban kit apply ${currentKitName} --project ${workspaceId} --landing ${input.landing})`,
 			);
 		}
-	} else if (input.kit !== undefined || input.landing !== undefined || input.blurb !== undefined) {
-		const kitName = input.kit ?? DEFAULT_KIT_NAME;
+	} else if (
+		(kit !== undefined && kit !== DEFAULT_KIT_NAME) ||
+		input.landing !== undefined ||
+		input.blurb !== undefined
+	) {
+		// `default` alone writes no entry (no entry is default), as without a kit.
+		const kitName = kit ?? DEFAULT_KIT_NAME;
 		const applied = await applyWorkspaceKit({
 			workspaceId,
 			kitName,

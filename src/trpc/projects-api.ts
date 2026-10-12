@@ -5,6 +5,7 @@ import type {
 	RuntimeDirectoryListResponse,
 	RuntimeProjectAddResponse,
 	RuntimeProjectCreateResponse,
+	RuntimeProjectKitChoicesResponse,
 	RuntimeProjectNameCheckResponse,
 	RuntimeProjectRootsResponse,
 	RuntimeProjectSummary,
@@ -17,6 +18,9 @@ import {
 	parseProjectNameCheckRequest,
 	parseProjectRemoveRequest,
 } from "../core/api-validation";
+import { listKitChoices, resolveNewProjectKitName } from "../kits/kit-choices";
+import { loadKitCatalog } from "../kits/resolve-kit";
+import { applyNewProjectKit } from "../projects/project-add";
 import { createProject } from "../projects/project-create";
 import {
 	checkProjectDirectoryName,
@@ -96,9 +100,14 @@ export function createProjectsApi(deps: CreateProjectsApiDependencies): RuntimeT
 		);
 	};
 
-	// Registers a project the way "Open folder" always has, and makes it active when nothing is.
-	const registerProject = async (projectPath: string): Promise<RuntimeProjectSummary> => {
+	// Registers a project the way "Open folder" always has, puts it on the kit picked for it (none: the caller already
+	// did, as createProject does) and makes it active when nothing is.
+	const registerProject = async (
+		projectPath: string,
+		kitName?: string,
+	): Promise<{ summary: RuntimeProjectSummary; notes: string[] }> => {
 		const context = await loadWorkspaceContext(projectPath);
+		const notes = kitName === undefined ? [] : await applyNewProjectKit(context.workspaceId, kitName);
 		deps.rememberWorkspace(context.workspaceId, context.repoPath);
 		const projectsAfterAdd = await listWorkspaceIndexEntries();
 		const activeWorkspaceId = deps.getActiveWorkspaceId();
@@ -110,12 +119,19 @@ export function createProjectsApi(deps: CreateProjectsApiDependencies): RuntimeT
 		}
 		const taskCounts = await deps.summarizeProjectTaskCounts(context.workspaceId, context.repoPath);
 		void deps.broadcastRuntimeProjectsUpdated(context.workspaceId);
-		return deps.createProjectSummary({
-			workspaceId: context.workspaceId,
-			repoPath: context.repoPath,
-			taskCounts,
-		});
+		return {
+			summary: deps.createProjectSummary({
+				workspaceId: context.workspaceId,
+				repoPath: context.repoPath,
+				taskCounts,
+			}),
+			notes,
+		};
 	};
+
+	// A new project's kit, checked before anything is cloned, initialized or registered.
+	const resolveKit = async (name: string | undefined): Promise<string> =>
+		resolveNewProjectKitName(await loadKitCatalog(), name);
 
 	return {
 		listProjects: async (preferredWorkspaceId) => {
@@ -134,7 +150,9 @@ export function createProjectsApi(deps: CreateProjectsApiDependencies): RuntimeT
 			try {
 				const projectRoots = await readRoots();
 				let projectPath: string;
+				let kitName: string;
 				if (body.gitUrl) {
+					kitName = await resolveKit(body.kit);
 					// Clone from Git URL into a new (or empty) directory inside a projects root. A custom path is the
 					// clone destination; otherwise it goes to <first root>/<repo name>.
 					const customDest = body.path
@@ -165,6 +183,7 @@ export function createProjectsApi(deps: CreateProjectsApiDependencies): RuntimeT
 							}),
 						} satisfies RuntimeProjectAddResponse;
 					}
+					kitName = await resolveKit(body.kit);
 					// Open folder: a new registration must be inside a projects root.
 					const check = await resolvePathInsideProjectRoots(projectPath, projectRoots);
 					if (!check.ok) {
@@ -200,9 +219,11 @@ export function createProjectsApi(deps: CreateProjectsApiDependencies): RuntimeT
 						} satisfies RuntimeProjectAddResponse;
 					}
 				}
+				const registered = await registerProject(projectPath, kitName);
 				return {
 					ok: true,
-					project: await registerProject(projectPath),
+					project: registered.summary,
+					...(registered.notes.length > 0 ? { notes: registered.notes } : {}),
 				} satisfies RuntimeProjectAddResponse;
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
@@ -221,11 +242,12 @@ export function createProjectsApi(deps: CreateProjectsApiDependencies): RuntimeT
 					name: body.name,
 					initialBranch: body.initialBranch,
 					initialCommit: body.initialCommit,
+					kit: body.kit,
 					projectRoots: await readRoots(),
 				});
 				return {
 					ok: true,
-					project: await registerProject(created.repoPath),
+					project: (await registerProject(created.repoPath)).summary,
 					notes: created.notes,
 				} satisfies RuntimeProjectCreateResponse;
 			} catch (error) {
@@ -235,6 +257,21 @@ export function createProjectsApi(deps: CreateProjectsApiDependencies): RuntimeT
 					notes: [],
 					error: error instanceof Error ? error.message : String(error),
 				} satisfies RuntimeProjectCreateResponse;
+			}
+		},
+		listKitChoices: async () => {
+			try {
+				const choices = listKitChoices(await loadKitCatalog());
+				return {
+					defaultKitName: choices.defaultKitName,
+					kits: choices.kits,
+				} satisfies RuntimeProjectKitChoicesResponse;
+			} catch (error) {
+				return {
+					defaultKitName: "default",
+					kits: [],
+					error: error instanceof Error ? error.message : String(error),
+				};
 			}
 		},
 		getProjectRoots: async () => {

@@ -604,6 +604,8 @@ export const runtimeProjectAddRequestSchema = z
 		path: z.string().optional(),
 		gitUrl: z.string().optional(),
 		initializeGit: z.boolean().optional(),
+		/** The routing kit of a new registration (default `default`); a registered project keeps its own. */
+		kit: z.string().optional(),
 	})
 	.refine((data) => data.path || data.gitUrl, { message: "Either path or gitUrl is required" });
 export type RuntimeProjectAddRequest = z.infer<typeof runtimeProjectAddRequestSchema>;
@@ -612,6 +614,8 @@ export const runtimeProjectAddResponseSchema = z.object({
 	ok: z.boolean(),
 	project: runtimeProjectSummarySchema.nullable(),
 	requiresGitInitialization: z.boolean().optional(),
+	/** Things the user should know about the kit (a recommended landing mode, a kit kept). */
+	notes: z.array(z.string()).optional(),
 	error: z.string().optional(),
 });
 export type RuntimeProjectAddResponse = z.infer<typeof runtimeProjectAddResponseSchema>;
@@ -644,6 +648,8 @@ export const runtimeProjectCreateRequestSchema = z.object({
 	name: z.string().optional(),
 	initialBranch: z.string().optional(),
 	initialCommit: z.boolean().optional(),
+	/** The routing kit (default `default`). */
+	kit: z.string().optional(),
 });
 export type RuntimeProjectCreateRequest = z.infer<typeof runtimeProjectCreateRequestSchema>;
 
@@ -654,6 +660,32 @@ export const runtimeProjectCreateResponseSchema = z.object({
 	error: z.string().optional(),
 });
 export type RuntimeProjectCreateResponse = z.infer<typeof runtimeProjectCreateResponseSchema>;
+
+// The kits a new project may start on (src/kits/kit-choices.ts), for the add-project dialog's picker.
+export const runtimeProjectKitChoiceRoleSchema = z.object({
+	role: z.enum(["dev", "qa", "plan", "fallback"]),
+	defined: z.boolean(),
+	agentId: runtimeAgentIdSchema.nullable(),
+	provider: z.string().nullable(),
+	model: z.string().nullable(),
+	tier: z.string().nullable(),
+});
+export type RuntimeProjectKitChoiceRole = z.infer<typeof runtimeProjectKitChoiceRoleSchema>;
+
+export const runtimeProjectKitChoiceSchema = z.object({
+	name: z.string(),
+	description: z.string().nullable(),
+	origin: z.enum(["built-in", "user"]),
+	roles: z.array(runtimeProjectKitChoiceRoleSchema),
+});
+export type RuntimeProjectKitChoice = z.infer<typeof runtimeProjectKitChoiceSchema>;
+
+export const runtimeProjectKitChoicesResponseSchema = z.object({
+	defaultKitName: z.string(),
+	kits: z.array(runtimeProjectKitChoiceSchema),
+	error: z.string().optional(),
+});
+export type RuntimeProjectKitChoicesResponse = z.infer<typeof runtimeProjectKitChoicesResponseSchema>;
 
 export const runtimeProjectDirectoryPickerResponseSchema = z.object({
 	ok: z.boolean(),

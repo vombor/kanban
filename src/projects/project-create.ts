@@ -1,11 +1,12 @@
 // New project: make a directory inside a projects root, `git init -b <branch>` it, optionally commit a README, and
-// add it like "Open folder" / `kanban project add` (default kit, landing off). One implementation for the browser
+// add it like "Open folder" / `kanban project add` on the kit picked for it (default `default`, landing off). One implementation for the browser
 // (tRPC `projects.create`) and `kanban project create`. Refuses anything that isn't a new or empty directory outside
 // any git repo, so it never takes over existing work: those go through Open folder.
 import { lstat, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+import type { KitChoiceList } from "../kits/kit-choices";
 import { runGit } from "../workspace/git-utils";
-import { type AddProjectResult, addProject } from "./project-add";
+import { type AddProjectResult, addProject, chooseNewProjectKit } from "./project-add";
 import {
 	findEnclosingGitDirectory,
 	type ProjectRoots,
@@ -28,6 +29,10 @@ export interface CreateProjectInput {
 	initialBranch?: string;
 	/** Commit a README.md so task worktrees have a base ref (default true). */
 	initialCommit?: boolean;
+	/** The routing kit (default `default`); refused before anything is made when it doesn't resolve. */
+	kit?: string;
+	/** Asks for the kit when none is given (the CLI's terminal prompt), after the directory checks. */
+	chooseKit?: (choices: KitChoiceList) => Promise<string>;
 	/** Resolved roots (default: config.json's `projects.roots`). */
 	projectRoots?: ProjectRoots;
 }
@@ -200,6 +205,12 @@ export async function createProject(input: CreateProjectInput): Promise<CreatePr
 	const existed = await assertNewProjectDirectory(repoPath, root);
 	await assertGitAvailable(root);
 	await assertValidBranchName(root, initialBranch);
+	let kit: string | undefined;
+	try {
+		kit = await chooseNewProjectKit(input);
+	} catch (error) {
+		throw new ProjectCreateError(error instanceof Error ? error.message : String(error));
+	}
 
 	const firstCreated = existed ? null : await findFirstMissingDirectory(repoPath);
 	try {
@@ -224,6 +235,7 @@ export async function createProject(input: CreateProjectInput): Promise<CreatePr
 	const project = await addProject({
 		repoPath,
 		name: name !== basename(repoPath) ? name : undefined,
+		kit,
 		allowUnbornHead: !initialCommit,
 		projectRoots,
 	});

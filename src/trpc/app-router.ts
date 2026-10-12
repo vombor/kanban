@@ -36,6 +36,7 @@ import type {
 	RuntimeProjectCreateRequest,
 	RuntimeProjectCreateResponse,
 	RuntimeProjectDirectoryPickerResponse,
+	RuntimeProjectKitChoicesResponse,
 	RuntimeProjectNameCheckRequest,
 	RuntimeProjectNameCheckResponse,
 	RuntimeProjectRemoveRequest,
@@ -103,6 +104,7 @@ import {
 	runtimeProjectCreateRequestSchema,
 	runtimeProjectCreateResponseSchema,
 	runtimeProjectDirectoryPickerResponseSchema,
+	runtimeProjectKitChoicesResponseSchema,
 	runtimeProjectNameCheckRequestSchema,
 	runtimeProjectNameCheckResponseSchema,
 	runtimeProjectRemoveRequestSchema,
@@ -375,6 +377,7 @@ export interface RuntimeTrpcContext {
 			input: RuntimeProjectCreateRequest,
 		) => Promise<RuntimeProjectCreateResponse>;
 		getProjectRoots: () => Promise<RuntimeProjectRootsResponse>;
+		listKitChoices: () => Promise<RuntimeProjectKitChoicesResponse>;
 		checkProjectName: (input: RuntimeProjectNameCheckRequest) => Promise<RuntimeProjectNameCheckResponse>;
 		pickProjectDirectory: (preferredWorkspaceId: string | null) => Promise<RuntimeProjectDirectoryPickerResponse>;
 		listDirectoryContents: (
@@ -726,6 +729,10 @@ export const runtimeAppRouter = t.router({
 			}),
 		roots: t.procedure.output(runtimeProjectRootsResponseSchema).query(async ({ ctx }) => {
 			return await ctx.projectsApi.getProjectRoots();
+		}),
+		// The add-project dialog's kit picker (src/kits/kit-choices.ts): kit names, descriptions and role models only.
+		kits: t.procedure.output(runtimeProjectKitChoicesResponseSchema).query(async ({ ctx }) => {
+			return await ctx.projectsApi.listKitChoices();
 		}),
 		checkName: t.procedure
 			.input(runtimeProjectNameCheckRequestSchema)

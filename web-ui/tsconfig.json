@@ -22,6 +22,7 @@
       "@runtime-trpc": ["../src/trpc/app-router.ts"],
       "@runtime-shortcuts": ["../src/config/shortcut-utils.ts"],
       "@runtime-task-id": ["../src/core/task-id.ts"],
+      "@runtime-kit-choice-display": ["../src/core/kit-choice-display.ts"],
       "@runtime-task-title": ["../src/core/task-title.ts"],
       "@runtime-turn-final-message": ["../src/core/turn-final-message.ts"],
       "@runtime-project-paths": ["../src/core/project-paths.ts"],

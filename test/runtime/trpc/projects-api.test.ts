@@ -3,9 +3,10 @@ import { mkdirSync, readdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-import type { RuntimeProjectTaskCounts } from "../../../src/core/api-contract";
+import { readPipelineConfig } from "../../../src/config/pipeline-config";
+import { type RuntimeProjectTaskCounts, runtimeProjectKitChoicesResponseSchema } from "../../../src/core/api-contract";
 import { resolveProjectRoots } from "../../../src/projects/project-roots";
+import { getKanbanKitsPath } from "../../../src/state/kanban-home";
 import { loadWorkspaceContext } from "../../../src/state/workspace-state";
 import type { TerminalSessionManager } from "../../../src/terminal/session-manager";
 import { type CreateProjectsApiDependencies, createProjectsApi } from "../../../src/trpc/projects-api";
@@ -344,9 +345,10 @@ describe("projects roots over tRPC: create, checkName, roots, open folder", () =
 			outside: string;
 			api: ReturnType<typeof createProjectsApi>;
 			deps: CreateProjectsApiDependencies;
+			globalConfigPath: string;
 		}) => Promise<void>,
 	): Promise<void> {
-		await withTemporaryKanbanHome(async ({ userHomePath }) => {
+		await withTemporaryKanbanHome(async ({ userHomePath, globalConfigPath }) => {
 			const home = realpathSync(userHomePath);
 			const root = join(home, "projects");
 			const outside = join(home, "outside");
@@ -356,7 +358,7 @@ describe("projects roots over tRPC: create, checkName, roots, open folder", () =
 			const deps = createDefaultDeps(home);
 			deps.readProjectRoots = async () => projectRoots;
 			deps.resolveProjectInputPath = vi.fn((inputPath: string, cwd: string) => resolve(cwd, inputPath));
-			await run({ root, outside, api: createProjectsApi(deps), deps });
+			await run({ root, outside, api: createProjectsApi(deps), deps, globalConfigPath });
 		});
 	}
 
@@ -454,6 +456,78 @@ describe("projects roots over tRPC: create, checkName, roots, open folder", () =
 			execFileSync("git", ["init", "-q", "-b", "main"], { cwd: inside, env: createGitTestEnv() });
 			execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "init"], { cwd: inside, env: createGitTestEnv() });
 			expect(await api.addProject(null, { path: inside })).toMatchObject({ ok: true });
+		});
+	});
+
+	function initRepo(path: string): void {
+		mkdirSync(path, { recursive: true });
+		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: path, env: createGitTestEnv() });
+		execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "init"], { cwd: path, env: createGitTestEnv() });
+	}
+
+	it("lists the kit choices, default first, user kits included", async () => {
+		await withRoot(async ({ api }) => {
+			mkdirSync(getKanbanKitsPath(), { recursive: true });
+			writeFileSync(
+				join(getKanbanKitsPath(), "team-foo.json"),
+				JSON.stringify({ kit: 1, name: "team-foo", description: "Foo", roles: { dev: { agent: "claude" } } }),
+			);
+			const response = await api.listKitChoices();
+			expect(runtimeProjectKitChoicesResponseSchema.parse(response)).toEqual(response);
+			expect(response.defaultKitName).toBe("default");
+			expect(response.kits.map((kit) => kit.name)).toEqual([
+				"default",
+				"team-cloud",
+				"team-local",
+				"team-cline",
+				"team-foo",
+			]);
+			expect(response.kits[4]).toMatchObject({ origin: "user", description: "Foo" });
+		});
+	});
+
+	it("create puts the project on the picked kit; an unknown kit is refused before anything is made", async () => {
+		await withRoot(async ({ api, root, globalConfigPath }) => {
+			const refused = await api.createProject(null, { path: join(root, "nope"), kit: "nope" });
+			expect(refused).toMatchObject({ ok: false, project: null });
+			expect(refused.error).toContain('unknown kit "nope"');
+			expect(readdirSync(root)).toEqual([]);
+
+			expect(await api.createProject(null, { path: join(root, "local"), kit: "team-local" })).toMatchObject({
+				ok: true,
+			});
+			const { workspaceId } = await loadWorkspaceContext(join(root, "local"));
+			const { config } = await readPipelineConfig(globalConfigPath);
+			expect(config.workspaces[workspaceId]?.kit?.name).toBe("team-local");
+		});
+	});
+
+	it("open folder applies the picked kit to a new registration only, and default writes no entry", async () => {
+		await withRoot(async ({ api, deps, root, globalConfigPath }) => {
+			(deps.hasGitRepository as ReturnType<typeof vi.fn>).mockReturnValue(true);
+			const picked = join(root, "picked");
+			const plain = join(root, "plain");
+			initRepo(picked);
+			initRepo(plain);
+
+			const unknown = await api.addProject(null, { path: picked, kit: "nope" });
+			expect(unknown).toMatchObject({ ok: false, project: null });
+			expect(unknown.error).toContain('unknown kit "nope"');
+			expect(deps.rememberWorkspace).not.toHaveBeenCalled();
+
+			const added = await api.addProject(null, { path: picked, kit: "team-cloud" });
+			expect(added).toMatchObject({ ok: true });
+			expect(added.notes?.join(" ")).toContain('recommends landing "qa"');
+			expect(await api.addProject(null, { path: plain, kit: "default" })).toMatchObject({ ok: true });
+			// A registered project keeps its kit, whatever is picked (even an unknown name).
+			expect(await api.addProject(null, { path: picked, kit: "nope" })).toMatchObject({ ok: true });
+			expect(await api.addProject(null, { path: picked, kit: "team-local" })).toMatchObject({ ok: true });
+
+			const { config } = await readPipelineConfig(globalConfigPath);
+			const pickedId = (await loadWorkspaceContext(picked)).workspaceId;
+			const plainId = (await loadWorkspaceContext(plain)).workspaceId;
+			expect(config.workspaces[pickedId]?.kit?.name).toBe("team-cloud");
+			expect(Object.hasOwn(config.workspaces, plainId)).toBe(false);
 		});
 	});
 });

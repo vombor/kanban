@@ -39,12 +39,14 @@ Fix it before anything else.
 
 - **Add an existing repo:** `kanban project add <path> [--kit <name>] [--landing off|commit|pr|qa] [--base B]
   [--name N] [--blurb "Project: …"] [--agents-md]`. It registers the repo with Kanban, pre-trusts it for Claude Code
-  and Codex, and creates `data/<ws>/`. Without `--kit` the project is on `default` with landing `off`: plain
-  Kanban, landed by hand. The browser's "Open folder" does the same registration.
-- **Brand-new project:** `kanban project create <path> [--name N] [--branch main] [--no-initial-commit]`, or "New
-  project" in the browser's Add Project dialog. It makes the directory (new or empty, not inside another git repo),
+  and Codex, and creates `data/<ws>/`. A new project picks its routing kit: `--kit <name>`, else a numbered prompt
+  when stdin is a terminal, else `default` with landing `off` (plain Kanban, landed by hand), so scripts and agents
+  never block. An unknown kit is refused before anything is registered. The browser's "Open folder" and "Clone from
+  URL" do the same registration, with a kit picker; a project that is already added keeps its kit.
+- **Brand-new project:** `kanban project create <path> [--name N] [--branch main] [--no-initial-commit] [--kit <name>]`,
+  or "New project" in the browser's Add Project dialog (with the same kit picker, `default` preselected). It makes the directory (new or empty, not inside another git repo),
   runs `git init -b <branch>`, commits a `README.md` (`# <name>`) unless told not to, and then adds it like
-  `project add`. Without a git identity the commit is made as "Kanban (no git identity configured)" for that commit
+  `project add` on the kit picked (asked the same way; an unknown kit is refused before the directory is made). Without a git identity the commit is made as "Kanban (no git identity configured)" for that commit
   only (git config is never changed) and the result says so.
 - **Where projects live:** new, cloned and opened projects must be strictly inside a projects root
   (`projects.roots`, see CONFIG.md; `/projects` in the container, the projects volume). Projects registered

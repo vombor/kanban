@@ -29,9 +29,11 @@ export function renderClaudeMdSection(): string {
   managed sections). Tell the user what it changed.
 - A project's routing is its kit, the team definition: its roles (dev, QA, plan, fallback) with a default model each,
   and the flow (QA, rework rounds, which triggers hand a card to the fallback, approval):
-  \`kanban kit show --project <path>\`. Change the kit only with \`kanban kit apply\`, and only when the user asks. A
-  project without a kit uses \`default\`: every card runs on the agent selected in Kanban settings, and nothing is
-  QA'd, reworked or landed automatically.
+  \`kanban kit show --project <path>\`. A new project picks its kit when it is created or first added (the browser's
+  add-project dialog, \`kanban project create|add --kit <name>\`; \`default\` when none is picked). A project's kit is
+  the one chosen at creation; change it only when the user asks, and only with \`kanban kit apply\`. A project on
+  \`default\` (no kit entry): every card runs on the agent selected in Kanban settings, and nothing is QA'd, reworked
+  or landed automatically.
 - The project's settings on its kit are yours to change, at once and without a card: a role's model
   (\`kanban kit set roles.<role>.agent|provider|model|tier <value> --project <path>\`) and project facts (\`qa.blurb\`,
   \`qa.promptNotes.*\`, \`qa.serversScript\`, \`qa.preview\`, \`land.postLand\`, \`plan.rules\`, \`checks.*\`,

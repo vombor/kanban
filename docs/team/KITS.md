@@ -8,6 +8,9 @@ something is done, and the core never decides who does it.
 
 - Every project is on the built-in **`default`** kit unless its config entry names another one. `default` answers
   "no" to every question, so a project on it behaves like upstream Kanban.
+- A new project **picks its kit when it is created or first added** ([Picking a kit for a new project](#picking-a-kit-for-a-new-project)),
+  `default` preselected. Afterwards the project's kit is the one chosen then; it changes only when the user asks
+  (`kanban kit apply`).
 - **`team-cloud`** is the built-in preset for the dev-team workflow (Cline juniors on tier-3 models, cross-vendor QA,
   same-model rework, then a fallback model, then the orchestrator).
 - **`team-local`** is the same workflow on local Lemonade models only (Cline + provider `lemonade`, nothing paid
@@ -73,6 +76,25 @@ The core keeps these guarantees whatever the kit says:
   it. Either way the original card goes to Backlog as `BLOCKED: …`.
 - **Only a hold stops a PASS from landing.** The hold is answered by the team kit's `runoffs` feature;
   `kanban task release-hold` is the human way out.
+
+## Picking a kit for a new project
+
+Every path that creates or first adds a project asks which kit it uses, with `default` preselected:
+
+- the browser's Add Project dialog (Open folder, Clone from URL, New project): a "Routing kit" picker, each option with
+  the kit's description and its four role models (dev, qa, plan, fallback, from the resolved kit, so user kits show
+  the same way; tRPC `projects.kits`, `src/kits/kit-choices.ts`);
+- `kanban project create|add <path> --kit <name>` (default `default`). Without `--kit` the CLI shows the same list as a
+  numbered prompt, but only when stdin is a terminal; anything else (a script, a pipe, an agent) gets `default` without
+  being asked, so nothing blocks.
+
+The name is checked before anything is created, cloned or registered: an unknown, renamed or invalid kit is refused
+with the resolver's reason. The choice is applied through `kanban kit apply`'s code (`src/kits/apply-kit.ts`: its key
+checks and the settings history), never a second writer of `workspaces.<id>.kit`; `default` writes no kit entry, as
+before. A project that is already added (or already has a config entry) keeps its kit: the dialog's Open folder and
+`project add` leave it alone, and `project add --kit` says how to change it. The landing mode stays `off` unless
+`project add --landing` sets it; a kit that recommends another landing mode says so in the result. Only the user adds
+projects: project create/add is refused to every agent session, so agents never pick a kit this way.
 
 ## Resolution
 
@@ -599,8 +621,8 @@ The other local gotchas:
 ### Applying it to a new project
 
 ```sh
-kanban project create /projects/<name>                    # or: kanban project add /projects/<name>
-kanban kit apply team-local --project /projects/<name> --landing qa --dry-run
+kanban project create /projects/<name> --kit team-local   # or: kanban project add /projects/<name> --kit team-local --landing qa
+kanban kit apply team-local --project /projects/<name> --landing qa --dry-run   # landing qa, which the kit recommends
 kanban kit apply team-local --project /projects/<name> --landing qa
 kanban task reassign --column backlog --project-path /projects/<name>   # existing Backlog cards onto the kit
 kanban kit show --project /projects/<name>                # routing + "Settings this kit needs"

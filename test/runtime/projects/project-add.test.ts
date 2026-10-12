@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { readPipelineConfig } from "../../../src/config/pipeline-config";
 import { addProject, resolveProjectRepoPath } from "../../../src/projects/project-add";
 import { syncProjectSections } from "../../../src/projects/project-sections";
+import { getKitSettingsHistoryPath } from "../../../src/state/kanban-home";
 import { listWorkspaceIndexEntries } from "../../../src/state/workspace-state";
 import { createGitTestEnv } from "../../utilities/git-env";
 import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
@@ -72,6 +73,54 @@ describe("kanban project add", () => {
 			const plainResult = await addProject({ repoPath: plain });
 			expect(plainResult).toMatchObject({ kitName: "default", landingMode: "off" });
 			expect(Object.hasOwn(config.workspaces, plainResult.workspaceId)).toBe(false);
+		});
+	});
+
+	it("refuses an unknown or renamed kit before anything is registered", async () => {
+		await withTemporaryKanbanHome(async ({ userHomePath, globalConfigPath }) => {
+			const repo = createRepo(join(userHomePath, "app"));
+			await expect(addProject({ repoPath: repo, kit: "nope" })).rejects.toThrow('unknown kit "nope"');
+			await expect(addProject({ repoPath: repo, chooseKit: async () => "team" })).rejects.toThrow(
+				"renamed to team-cloud",
+			);
+			expect(await listWorkspaceIndexEntries()).toEqual([]);
+			expect((await readPipelineConfig(globalConfigPath)).config.workspaces).toEqual({});
+		});
+	});
+
+	it("asks for a new project's kit only, applies it through kit apply's history, and default writes no entry", async () => {
+		await withTemporaryKanbanHome(async ({ userHomePath, globalConfigPath }) => {
+			const repo = createRepo(join(userHomePath, "app"));
+			const asked: string[][] = [];
+			const result = await addProject({
+				repoPath: repo,
+				chooseKit: async (choices) => {
+					asked.push(choices.kits.map((kit) => kit.name));
+					return "team-local";
+				},
+			});
+			expect(asked).toEqual([["default", "team-cloud", "team-local", "team-cline"]]);
+			expect(result).toMatchObject({ kitName: "team-local", landingMode: "off" });
+			const { config } = await readPipelineConfig(globalConfigPath);
+			expect(config.workspaces[result.workspaceId]?.kit).toEqual({ name: "team-local", overrides: {} });
+			const history = readFileSync(getKitSettingsHistoryPath(result.workspaceId), "utf8")
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line) as Record<string, unknown>);
+			expect(history).toEqual([
+				expect.objectContaining({ key: "(kit)", from: "default", to: "team-local", via: "kit apply" }),
+			]);
+			// Adding it again asks nothing.
+			await addProject({ repoPath: repo, chooseKit: async () => Promise.reject(new Error("asked again")) });
+
+			const plain = createRepo(join(userHomePath, "plain"));
+			const plainResult = await addProject({ repoPath: plain, chooseKit: async () => "default" });
+			expect(plainResult).toMatchObject({ kitName: "default", config: ["no entry: kit default, landing off"] });
+			const explicit = createRepo(join(userHomePath, "explicit"));
+			const explicitResult = await addProject({ repoPath: explicit, kit: "default" });
+			const { config: after } = await readPipelineConfig(globalConfigPath);
+			expect(Object.hasOwn(after.workspaces, plainResult.workspaceId)).toBe(false);
+			expect(Object.hasOwn(after.workspaces, explicitResult.workspaceId)).toBe(false);
 		});
 	});
 

@@ -4,6 +4,7 @@ import { type ReactElement, useEffect, useState } from "react";
 import { FormError } from "@/components/add-project/form-error";
 import { ProjectRootPrefix } from "@/components/add-project/project-root-prefix";
 import { type AddProjectModeProps, MODE_BODY_CLASS } from "@/components/add-project/types";
+import { showAppToast } from "@/components/app-toaster";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
 import { DialogFooter } from "@/components/ui/dialog";
@@ -25,6 +26,8 @@ export function OpenFolderMode({
 	onBusyChange,
 	onCancel,
 	onAdded,
+	kitName,
+	kitPicker,
 }: AddProjectModeProps): ReactElement {
 	const [entries, setEntries] = useState<RuntimeDirectoryListEntry[] | null>(null);
 	const [listError, setListError] = useState<string | null>(null);
@@ -70,7 +73,11 @@ export function OpenFolderMode({
 		onBusyChange(true);
 		setError(null);
 		try {
-			const added = await getRuntimeTrpcClient(workspaceId).projects.add.mutate({ path, initializeGit });
+			const added = await getRuntimeTrpcClient(workspaceId).projects.add.mutate({
+				path,
+				initializeGit,
+				kit: kitName,
+			});
 			if (!added.ok || !added.project) {
 				if (added.requiresGitInitialization) {
 					setPendingGitInitPath(path);
@@ -80,6 +87,9 @@ export function OpenFolderMode({
 				return;
 			}
 			setPendingGitInitPath(null);
+			if (added.notes && added.notes.length > 0) {
+				showAppToast({ intent: "success", message: added.notes.join(" "), timeout: 12000 });
+			}
 			onAdded(added.project.id);
 		} catch (caught) {
 			setError(caught instanceof Error ? caught.message : String(caught));
@@ -199,6 +209,7 @@ export function OpenFolderMode({
 						<p className="m-0 font-mono text-[11px] text-text-secondary break-all">{pendingGitInitPath}</p>
 					</div>
 				) : null}
+				{kitPicker}
 				<FormError message={error} />
 				<p id="add-project-dialog-description" className="sr-only">
 					Add a project by opening a folder in the projects root, cloning a git repository, or creating a new one.

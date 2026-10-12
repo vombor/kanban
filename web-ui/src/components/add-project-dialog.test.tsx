@@ -12,6 +12,7 @@ const trpc = vi.hoisted(() => ({
 	add: vi.fn(),
 	listDirectoryContents: vi.fn(),
 	pickDirectory: vi.fn(),
+	kits: vi.fn(),
 }));
 
 vi.mock("@/runtime/trpc-client", () => ({
@@ -23,11 +24,50 @@ vi.mock("@/runtime/trpc-client", () => ({
 			add: { mutate: trpc.add },
 			listDirectoryContents: { query: trpc.listDirectoryContents },
 			pickDirectory: { mutate: trpc.pickDirectory },
+			kits: { query: trpc.kits },
 		},
 	}),
 }));
 
 vi.mock("@/components/app-toaster", () => ({ showAppToast: vi.fn() }));
+
+function kitRole(role: "dev" | "qa" | "plan" | "fallback", fields: Record<string, unknown> = {}) {
+	return { role, defined: false, agentId: null, provider: null, model: null, tier: null, ...fields };
+}
+
+const KITS = {
+	defaultKitName: "default",
+	kits: [
+		{
+			name: "default",
+			description: "Kanban's selected agent for every card",
+			origin: "built-in",
+			roles: [kitRole("dev"), kitRole("qa"), kitRole("plan"), kitRole("fallback")],
+		},
+		{
+			name: "team-local",
+			description: "The team workflow on local models",
+			origin: "built-in",
+			roles: [
+				kitRole("dev", { defined: true, agentId: "cline", provider: "lemonade", model: "Muse-GGUF", tier: "dev" }),
+				kitRole("qa", { defined: true, agentId: "cline", provider: "lemonade", model: "gemma-GGUF" }),
+				kitRole("plan", { defined: true, agentId: "cline", provider: "lemonade", model: "Muse-GGUF" }),
+				kitRole("fallback", { defined: true, provider: "lemonade", model: "Laguna-GGUF" }),
+			],
+		},
+		{
+			name: "team-foo",
+			description: "Foo's own team",
+			origin: "user",
+			roles: [
+				kitRole("dev", { defined: true, agentId: "claude" }),
+				kitRole("qa"),
+				kitRole("plan"),
+				kitRole("fallback"),
+			],
+		},
+	],
+};
 
 const PROJECT = { id: "p1", path: "/projects/my-app", name: "my-app", taskCounts: {} };
 
@@ -53,6 +93,7 @@ describe("AddProjectDialog", () => {
 		onProjectAdded.mockReset();
 		onOpenChange.mockReset();
 		trpc.roots.mockResolvedValue({ roots: ["/projects"] });
+		trpc.kits.mockResolvedValue(KITS);
 		trpc.checkName.mockResolvedValue(nameCheck({}));
 		trpc.listDirectoryContents.mockResolvedValue({
 			ok: true,
@@ -186,7 +227,7 @@ describe("AddProjectDialog", () => {
 			await click(body().querySelector('[role="option"]') as HTMLElement);
 			expect(body().querySelector('[data-testid="open-folder-selection"]')?.textContent).toBe("app-a");
 			await click(button("Add Project"));
-			expect(trpc.add).toHaveBeenCalledWith({ path: "/projects/app-a", initializeGit: false });
+			expect(trpc.add).toHaveBeenCalledWith({ path: "/projects/app-a", initializeGit: false, kit: "default" });
 			expect(onProjectAdded).toHaveBeenCalledWith("p1");
 		});
 
@@ -293,6 +334,7 @@ describe("AddProjectDialog", () => {
 				name: "My App",
 				initialBranch: "trunk",
 				initialCommit: false,
+				kit: "default",
 			});
 			expect(onProjectAdded).toHaveBeenCalledWith("p1");
 			expect(onOpenChange).toHaveBeenCalledWith(false);
@@ -330,6 +372,7 @@ describe("AddProjectDialog", () => {
 			expect(trpc.add).toHaveBeenCalledWith({
 				gitUrl: "https://github.com/user/My-Repo.git",
 				path: "/projects/My-Repo",
+				kit: "default",
 			});
 			expect(onProjectAdded).toHaveBeenCalledWith("p1");
 		});
@@ -342,6 +385,104 @@ describe("AddProjectDialog", () => {
 			await flush(PROJECT_NAME_CHECK_DEBOUNCE_MS);
 			expect(status()?.dataset.status).toBe("exists");
 			expect(button("Clone & Add").disabled).toBe(true);
+		});
+	});
+
+	describe("Routing kit", () => {
+		function kitTrigger(): HTMLElement {
+			return byLabel("Routing kit");
+		}
+
+		async function pickKit(name: string): Promise<void> {
+			await act(async () => {
+				kitTrigger().focus();
+				kitTrigger().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+			});
+			await flush();
+			const option = body().querySelector<HTMLElement>(`[data-testid="add-project-kit-option-${name}"]`);
+			if (!option) {
+				throw new Error(`No kit option ${name}`);
+			}
+			await act(async () => {
+				option.focus();
+				option.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+			});
+			await flush();
+		}
+
+		beforeEach(() => {
+			Element.prototype.scrollIntoView ??= vi.fn();
+		});
+
+		it("preselects default and shows the picked kit's description and four role models", async () => {
+			await renderDialog();
+			expect(trpc.kits).toHaveBeenCalledOnce();
+			expect(kitTrigger().textContent).toContain("default");
+			const summary = body().querySelector('[data-testid="add-project-kit-summary"]');
+			expect(summary?.textContent).toContain("Kanban's selected agent for every card");
+			expect(Array.from(summary?.querySelectorAll("dt") ?? []).map((term) => term.textContent)).toEqual([
+				"dev",
+				"qa",
+				"plan",
+				"fallback",
+			]);
+			expect(summary?.textContent).toContain("none (no QA)");
+			expect(body().textContent).toContain("A project that is already added keeps its kit.");
+		});
+
+		it("lists every kit with its description and roles, user kits marked", async () => {
+			await renderDialog();
+			await act(async () => {
+				kitTrigger().focus();
+				kitTrigger().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+			});
+			await flush();
+			const local = body().querySelector('[data-testid="add-project-kit-option-team-local"]');
+			expect(local?.textContent).toContain("The team workflow on local models");
+			expect(local?.textContent).toContain("cline, Muse-GGUF (lemonade)");
+			expect(local?.textContent).toContain("the dev agent, Laguna-GGUF (lemonade)");
+			expect(body().querySelector('[data-testid="add-project-kit-option-team-foo"]')?.textContent).toContain(
+				"user kit",
+			);
+		});
+
+		it("sends the picked kit with New project, Open folder and Clone", async () => {
+			trpc.create.mockResolvedValue({ ok: true, project: PROJECT, notes: [] });
+			trpc.add.mockResolvedValue({ ok: true, project: PROJECT });
+			await openNewProject();
+			await pickKit("team-local");
+			expect(kitTrigger().textContent).toContain("team-local");
+			expect(body().querySelector('[data-testid="add-project-kit-summary"]')?.textContent).toContain(
+				"cline, gemma-GGUF (lemonade)",
+			);
+			await type(byLabel("Project name"), "My App");
+			await flush(PROJECT_NAME_CHECK_DEBOUNCE_MS);
+			await click(button("Create Project"));
+			expect(trpc.create).toHaveBeenCalledWith(expect.objectContaining({ kit: "team-local" }));
+
+			// The pick stays when switching modes.
+			await click(button("Open folder"));
+			await pickKit("team-foo");
+			await click(body().querySelector('[role="option"]') as HTMLElement);
+			await click(button("Add Project"));
+			expect(trpc.add).toHaveBeenLastCalledWith({ path: "/projects/app-a", initializeGit: false, kit: "team-foo" });
+
+			await click(button("Clone from URL"));
+			expect(kitTrigger().textContent).toContain("team-foo");
+			await type(byLabel("Git URL input"), "https://github.com/user/repo.git");
+			await flush(PROJECT_NAME_CHECK_DEBOUNCE_MS);
+			await click(button("Clone & Add"));
+			expect(trpc.add).toHaveBeenLastCalledWith(expect.objectContaining({ kit: "team-foo" }));
+		});
+
+		it("falls back to default and says so when the kits can't be loaded", async () => {
+			trpc.kits.mockRejectedValue(new Error("server gone"));
+			trpc.add.mockResolvedValue({ ok: true, project: PROJECT });
+			await renderDialog();
+			expect(body().textContent).toContain("Kits unavailable (server gone); the project starts on default.");
+			await click(body().querySelector('[role="option"]') as HTMLElement);
+			await click(button("Add Project"));
+			expect(trpc.add).toHaveBeenCalledWith({ path: "/projects/app-a", initializeGit: false, kit: "default" });
 		});
 	});
 });

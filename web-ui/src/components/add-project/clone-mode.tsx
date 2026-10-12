@@ -35,6 +35,8 @@ export function CloneMode({
 	onBusyChange,
 	onCancel,
 	onAdded,
+	kitName,
+	kitPicker,
 }: AddProjectModeProps): ReactElement {
 	const [gitUrl, setGitUrl] = useState("");
 	const [directoryName, setDirectoryName] = useState("");
@@ -65,12 +67,17 @@ export function CloneMode({
 			const added = await getRuntimeTrpcClient(workspaceId).projects.add.mutate({
 				gitUrl: gitUrl.trim(),
 				path: targetPath,
+				kit: kitName,
 			});
 			if (!added.ok || !added.project) {
 				setError(added.error ?? "Clone failed.");
 				return;
 			}
-			showAppToast({ intent: "success", message: "Repository cloned and added successfully.", timeout: 4000 });
+			showAppToast({
+				intent: "success",
+				message: ["Repository cloned and added successfully.", ...(added.notes ?? [])].join(" "),
+				timeout: added.notes && added.notes.length > 0 ? 12000 : 4000,
+			});
 			onAdded(added.project.id);
 		} catch (caught) {
 			setError(caught instanceof Error ? caught.message : String(caught));
@@ -134,6 +141,7 @@ export function CloneMode({
 						Cloning repository... This may take a moment.
 					</div>
 				) : null}
+				{kitPicker}
 				<FormError message={error} />
 			</form>
 			<DialogFooter>
