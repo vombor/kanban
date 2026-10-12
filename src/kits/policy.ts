@@ -152,12 +152,14 @@ const GATEWAY_MODEL_PREFIX = /^cline-pass\//u;
  * Bare model family names → vendor, named like the Bedrock vendor prefixes (`qwen.`, `deepseek.`, `mistral.`,
  * `google.`, `zai.`) so a local and a Bedrock model of one family count as one vendor. Ids are matched lower-cased.
  * A fine-tune counts as its base model's vendor: `lmx-omni` is Lemonade's collection whose LLM is Qwen3.6-35B-A3B (its
- * `components` in Lemonade's /models). Laguna is Poolside's own family. ClinePass's ids (after GATEWAY_MODEL_PREFIX)
+ * `components` in Lemonade's /models), and Ornith AI's Ornith models are post-trained Qwen 3.5 (9B, 35B-A3B, 397B) or
+ * Gemma 4 (31B) models (the user's Triton serves `ornith-1.5-35b-a3b`, 2026-10-12). Laguna is Poolside's own family. ClinePass's ids (after GATEWAY_MODEL_PREFIX)
  * are bare names too, with families of their own (cline 3.0.70's catalog, 2026-10-12): MiMo is Xiaomi's, Kimi
  * Moonshot AI's (Bedrock's `moonshotai.`), MiniMax MiniMax's and Muse Spark Meta's.
  */
 const BARE_MODEL_FAMILIES: ReadonlyArray<{ pattern: RegExp; vendor: string }> = [
-	{ pattern: /^(?:qwen|qwq|lmx-omni)/u, vendor: "qwen" },
+	{ pattern: /^ornith-[\d.]+-31b/u, vendor: "google" },
+	{ pattern: /^(?:qwen|qwq|lmx-omni|ornith)/u, vendor: "qwen" },
 	{ pattern: /^deepseek/u, vendor: "deepseek" },
 	{ pattern: /^(?:devstral|mistral|codestral|magistral|ministral|mixtral)/u, vendor: "mistral" },
 	{ pattern: /^(?:gemma|codegemma)/u, vendor: "google" },

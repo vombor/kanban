@@ -8,6 +8,7 @@ import { readFile } from "node:fs/promises";
 import { z } from "zod";
 
 import seedPricesJson from "../../../../assets/prices.default.json" with { type: "json" };
+import { isConfiguredLocalProvider } from "../../../models/openai-compatible-providers";
 import { getPriceTableCandidatePaths } from "../../../state/kanban-home";
 
 const priceRatesSchema = z.object({
@@ -61,12 +62,13 @@ export interface PriceTable {
  * machine). Its model ids are whatever the server lists ("GLM-4.7-Flash-GGUF", "LMX-Omni-52B-Halo",
  * "DeepSeek-V4-Flash-0731-GGUF-BF16"), so no id pattern in the table can tell them apart from a paid model; the provider can. Being local also frees a QA card from the cloud QA slots
  * (qa-gate.ts): it waits only for its provider's `models.providerCapacity`. A live prices.json written
- * before this rule needs no edit.
+ * before this rule needs no edit. Besides these, every OpenAI-compatible provider of config.json with `local: true`
+ * (`providers.openaiCompatible.<id>`, src/models/openai-compatible-providers.ts) is local.
  */
 export const LOCAL_PROVIDER_IDS: readonly string[] = ["lemonade"];
 
 export function isLocalProvider(provider: string | null | undefined): boolean {
-	return Boolean(provider && LOCAL_PROVIDER_IDS.includes(provider));
+	return Boolean(provider && (LOCAL_PROVIDER_IDS.includes(provider) || isConfiguredLocalProvider(provider)));
 }
 
 /**

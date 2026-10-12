@@ -12,6 +12,7 @@ import { z } from "zod";
 
 import { type RuntimeLandingMode, runtimeLandingModeSchema } from "../core/api-contract";
 import { lockedFileSystem } from "../fs/locked-file-system";
+import { setConfiguredOpenAiCompatibleProviders } from "../models/openai-compatible-providers";
 import { getKanbanGlobalConfigPath, KANBAN_HOME_MARKER_VERSION } from "../state/kanban-home";
 import {
 	clineLemonadeContextSyncModeSchema,
@@ -19,6 +20,7 @@ import {
 } from "./cline-lemonade-context-sync-config";
 import { clineTurnDetectorModeSchema, getDefaultClineTurnDetectorSettings } from "./cline-turn-detector-config";
 import { DEFAULT_LEMONADE_MODEL_LIST_SETTINGS, modelListIncludeSchema } from "./model-lists-config";
+import { openAiCompatibleProvidersSchema } from "./openai-compatible-providers-config";
 
 export const landingModeSchema = runtimeLandingModeSchema;
 
@@ -695,9 +697,11 @@ export const DEFAULT_PROVIDER_SETUP_WORKSPACE_ID = "kanban-2uge";
 
 // Model providers' Cline settings (`kanban setup-provider`, src/setup/cline-provider-setup.ts). Besides the user, only
 // the orchestrator of `setupWorkspaceId` (the Kanban project's own) may run the command (src/isolation/cli-scope.ts).
+// `openaiCompatible`: the OpenAI-compatible servers the command also sets up (openai-compatible-providers-config.ts).
 const providersSectionSchema = z
 	.object({
 		setupWorkspaceId: z.string().min(1).default(DEFAULT_PROVIDER_SETUP_WORKSPACE_ID),
+		openaiCompatible: openAiCompatibleProvidersSchema,
 	})
 	.strict();
 export type ProvidersSettings = z.infer<typeof providersSectionSchema>;
@@ -834,10 +838,17 @@ export async function readRawGlobalConfig(
 	return await readConfigJson(configPath);
 }
 
+/**
+ * config.json parsed. Every process reads it here before it decides anything per provider (the server, the pipeline
+ * worker on each evaluation, every CLI command), so this is where the configured OpenAI-compatible providers become
+ * known to the provider-id rules that take no config (`isLocalProvider`, the outage probe, the TUI sign-in rule).
+ */
 export async function readPipelineConfig(
 	configPath: string = getKanbanGlobalConfigPath(),
 ): Promise<ParsedPipelineConfig & { configPath: string }> {
-	return { ...parsePipelineConfig(await readConfigJson(configPath)), configPath };
+	const parsed = parsePipelineConfig(await readConfigJson(configPath));
+	setConfiguredOpenAiCompatibleProviders(parsed.config.providers.openaiCompatible);
+	return { ...parsed, configPath };
 }
 
 /**

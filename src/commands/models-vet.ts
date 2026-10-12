@@ -23,6 +23,10 @@ import {
 	vettingRoleSchema,
 } from "../models/model-combination";
 import { LEMONADE_PROVIDER_ID } from "../models/model-probe";
+import {
+	fetchOpenAiCompatibleModelLoaded,
+	getConfiguredOpenAiCompatibleProvider,
+} from "../models/openai-compatible-providers";
 import { createVetProbe } from "../models/vetting/vet-probe";
 import { describeVetSummary, formatVetReport } from "../models/vetting/vet-report";
 import { DEFAULT_VET_LIMITS, runVet, type VetLimits } from "../models/vetting/vet-runner";
@@ -289,7 +293,9 @@ async function runVetCommand(options: VetOptions): Promise<number> {
 					if (provider === LEMONADE_PROVIDER_ID) {
 						return await fetchLemonadeModelLoaded(lemonadeApiBaseUrl(lemonade.settings.url), model);
 					}
-					return null;
+					// A router that loads on demand (Triton) says `loaded` per model in its list.
+					const openAiCompatible = getConfiguredOpenAiCompatibleProvider(provider);
+					return openAiCompatible ? await fetchOpenAiCompatibleModelLoaded(openAiCompatible, model) : null;
 				},
 				findRunningTool: createAgentToolProcessFinder(),
 			}),

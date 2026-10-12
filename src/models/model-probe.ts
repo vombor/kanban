@@ -4,6 +4,8 @@
 //   - bedrock: a real tool-call request through Converse (bedrock-probe.ts);
 //   - lemonade (the local llama.cpp server) has no tool-call probe: its /health says status "ok" once the server
 //     is up. Without it a lemonade card on outage hold only ended at the 6 h give-up (3b84abe);
+//   - an OpenAI-compatible provider of config.json (providers.openaiCompatible, openai-compatible-providers.ts): its
+//     model list answers once the server is up, and an unreachable host (refused, reset, DNS) is down;
 //   - any other provider: no probe, so the caller can't hold the card for an outage (it escalates instead).
 // The deprecated openai-native probe (`--openai`, Bedrock /openai/v1) is not ported.
 import {
@@ -15,6 +17,7 @@ import {
 	probeBedrockModel,
 	resolveBedrockInferenceProfile,
 } from "./bedrock-probe";
+import { getConfiguredOpenAiCompatibleProvider, probeOpenAiCompatibleHealth } from "./openai-compatible-providers";
 
 export const LEMONADE_PROVIDER_ID = "lemonade";
 
@@ -44,7 +47,11 @@ export function buildLemonadeHealthUrl(baseUrl: string): string {
 
 /** True when the card's provider has a probe, so an outage on it can be held and probed. */
 export function canProbeProvider(provider: string | null): boolean {
-	return provider === BEDROCK_PROVIDER_ID || provider === LEMONADE_PROVIDER_ID;
+	return (
+		provider === BEDROCK_PROVIDER_ID ||
+		provider === LEMONADE_PROVIDER_ID ||
+		getConfiguredOpenAiCompatibleProvider(provider) !== null
+	);
 }
 
 export async function probeLemonadeHealth(
@@ -77,6 +84,10 @@ export async function probeLemonadeHealth(
 export async function probeModel(target: ProbeTarget, deps: ModelProbeDependencies): Promise<ModelProbeOutcome> {
 	if (target.provider === LEMONADE_PROVIDER_ID) {
 		return await probeLemonadeHealth(deps.lemonadeBaseUrl, deps.fetch);
+	}
+	const openAiCompatible = getConfiguredOpenAiCompatibleProvider(target.provider);
+	if (openAiCompatible) {
+		return { kind: "health", ...(await probeOpenAiCompatibleHealth(openAiCompatible, { fetch: deps.fetch })) };
 	}
 	if (target.provider !== BEDROCK_PROVIDER_ID) {
 		return { kind: "unsupported", up: false, reason: `no probe for provider ${target.provider ?? "(none)"}` };

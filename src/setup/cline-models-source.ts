@@ -66,9 +66,9 @@ function isMissingFileError(error: unknown): boolean {
 	return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
 }
 
-/** Cline's models.json as read, down to the Lemonade provider entry. Every non-`found` kind says why in `detail`. */
-export type ClineLemonadeEntryRead =
-	/** No models.json, or no Lemonade provider in it. */
+/** Cline's models.json as read, down to one custom provider's entry. Every non-`found` kind says why in `detail`. */
+export type ClineProviderEntryRead =
+	/** No models.json, or no such provider in it. */
 	| { kind: "absent"; detail: string }
 	| { kind: "error"; detail: string }
 	| {
@@ -76,12 +76,15 @@ export type ClineLemonadeEntryRead =
 			/** The file as read, kept for the backup. */
 			raw: string;
 			document: Record<string, unknown>;
-			/** `document.providers.lemonade`, the same object. */
+			/** `document.providers.<id>`, the same object. */
 			entry: Record<string, unknown>;
 			modelsSourceUrl: string | null;
 	  };
 
-export async function readClineLemonadeEntry(modelsPath: string): Promise<ClineLemonadeEntryRead> {
+export type ClineLemonadeEntryRead = ClineProviderEntryRead;
+
+/** The custom provider `providerId` of Cline's models.json (`absent` with no file or no such provider). */
+export async function readClineProviderEntry(modelsPath: string, providerId: string): Promise<ClineProviderEntryRead> {
 	let raw: string;
 	try {
 		raw = await readFile(modelsPath, "utf8");
@@ -102,18 +105,22 @@ export async function readClineLemonadeEntry(modelsPath: string): Promise<ClineL
 	if (!parsed.success) {
 		return { kind: "error", detail: "Not a Cline models file (no providers object); left alone." };
 	}
-	const entry = parsed.data.providers[CLINE_LEMONADE_PROVIDER_ID];
+	const entry = parsed.data.providers[providerId];
 	if (!entry) {
-		return { kind: "absent", detail: `No "${CLINE_LEMONADE_PROVIDER_ID}" provider in it.` };
+		return { kind: "absent", detail: `No "${providerId}" provider in it.` };
 	}
 	const records = document as Record<string, Record<string, Record<string, unknown>>>;
 	return {
 		kind: "found",
 		raw,
 		document: records,
-		entry: records.providers[CLINE_LEMONADE_PROVIDER_ID] as Record<string, unknown>,
+		entry: records.providers[providerId] as Record<string, unknown>,
 		modelsSourceUrl: entry.provider?.modelsSourceUrl?.trim() || null,
 	};
+}
+
+export async function readClineLemonadeEntry(modelsPath: string): Promise<ClineLemonadeEntryRead> {
+	return await readClineProviderEntry(modelsPath, CLINE_LEMONADE_PROVIDER_ID);
 }
 
 /** Whether the Lemonade provider's `modelsSourceUrl` must go, given what it is now. */

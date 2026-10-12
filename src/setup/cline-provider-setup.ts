@@ -9,12 +9,16 @@
 // allow list, docs/team/MODELS.md): a provider's write keeps the records it finds and only fills in or refreshes their
 // metadata (context window, maxTokens, vision, reasoning), never adds or removes a model, and drops a
 // `modelsSourceUrl` (Cline offers every id it returns). A new provider type here follows the same rule.
+// After the built-in rows come the OpenAI-compatible providers of config.json (`providers.openaiCompatible.<id>`), one
+// row each, all through the one generic module (cline-openai-compatible-provider.ts).
 import { readLemonadeModelListSettings } from "../config/model-lists-config";
+import type { OpenAiCompatibleProviderSettings } from "../config/openai-compatible-providers-config";
 import type { PipelineConfig } from "../config/pipeline-config";
 import { checkClineBedrockKey } from "../doctor/cline-bedrock-key-checks";
 import { checkClineLemonadeModels } from "../doctor/cline-models-checks";
 import { checkClinePassKey } from "../doctor/cline-pass-key-checks";
 import type { DoctorFinding } from "../doctor/doctor-report";
+import { checkOpenAiCompatibleProvider } from "../doctor/openai-compatible-provider-checks";
 import {
 	getClineLemonadeSyncHistoryPath,
 	getClineModelsSettingsPath,
@@ -24,6 +28,7 @@ import { CLINE_PASS_PROVIDER_ID } from "../terminal/cline-tui-sign-in";
 import { type ClineBedrockKeyCommandResult, storeClineBedrockKey } from "./cline-bedrock-key";
 import { getClineBackupDir } from "./cline-file-write";
 import { applyClineLemonadeEntry } from "./cline-lemonade-apply";
+import { applyClineOpenAiCompatibleProvider } from "./cline-openai-compatible-provider";
 import { type ClinePassKeyCommandResult, storeClinePassKey } from "./cline-pass-key";
 import type { SetupProviderId } from "./setup-provider-command";
 
@@ -164,11 +169,63 @@ const clinePass: ClineProviderSetup = {
 	},
 };
 
-/** Every provider `kanban setup-provider` knows, in the order it lists them. */
+/** The providers with their own code, in the order the command lists them. */
 export const CLINE_PROVIDER_SETUPS: readonly ClineProviderSetup[] = [lemonade, bedrock, clinePass];
 
-export function findClineProviderSetup(id: string): ClineProviderSetup | null {
-	return CLINE_PROVIDER_SETUPS.find((setup) => setup.id === id) ?? null;
+function createOpenAiCompatibleSetup(id: string, provider: OpenAiCompatibleProviderSettings): ClineProviderSetup {
+	const paths = (context: ProviderSetupContext) => ({
+		modelsPath: getClineModelsSettingsPath(context.config.agents.cline.dataDir),
+		providersPath: getClineProvidersSettingsPath(context.config.agents.cline.dataDir),
+	});
+	return {
+		id,
+		label: `${provider.name} (OpenAI-compatible${provider.local ? ", local" : ""})`,
+		writes: `models.json: the ${id} entry's provider (name, baseUrl) and the context window and maxTokens of the models it already has; providers.json: the ${id} entry's provider, baseUrl and model${provider.apiKeyEnv ? ` and apiKey from ${provider.apiKeyEnv}` : ""}`,
+		check: async (context) =>
+			await checkOpenAiCompatibleProvider({
+				providerId: id,
+				provider,
+				...paths(context),
+				env: context.env,
+				fetch: context.fetch,
+			}),
+		apply: async (context, { dryRun }) => {
+			const { modelsPath, providersPath } = paths(context);
+			const result = await applyClineOpenAiCompatibleProvider({
+				providerId: id,
+				provider,
+				modelsPath,
+				providersPath,
+				env: context.env,
+				fetch: context.fetch,
+				backupDir: getClineBackupDir(context.homePath),
+				dryRun,
+				now: context.now,
+			});
+			return {
+				provider: id,
+				path: `${modelsPath}, ${providersPath}`,
+				status: result.status,
+				lines: result.lines,
+				backupPaths: result.backupPaths,
+				rollback: result.rollback,
+			};
+		},
+	};
+}
+
+/** Every provider `kanban setup-provider` knows for this config.json: the built-in ones, then the configured ones. */
+export function listClineProviderSetups(config: PipelineConfig): ClineProviderSetup[] {
+	return [
+		...CLINE_PROVIDER_SETUPS,
+		...Object.entries(config.providers.openaiCompatible).map(([id, provider]) =>
+			createOpenAiCompatibleSetup(id, provider),
+		),
+	];
+}
+
+export function findClineProviderSetup(id: string, config: PipelineConfig): ClineProviderSetup | null {
+	return listClineProviderSetups(config).find((setup) => setup.id === id) ?? null;
 }
 
 /** The doctor row's findings as one state: any warning or failure is out of sync, an INFO alone is unknown. */
@@ -184,7 +241,7 @@ export function summarizeProviderFindings(findings: readonly DoctorFinding[]): P
 
 export async function describeProviderSyncStatuses(context: ProviderSetupContext): Promise<ProviderSyncStatus[]> {
 	return await Promise.all(
-		CLINE_PROVIDER_SETUPS.map(async (setup) => {
+		listClineProviderSetups(context.config).map(async (setup) => {
 			const findings = await setup.check(context);
 			return { provider: setup.id, state: summarizeProviderFindings(findings), findings };
 		}),

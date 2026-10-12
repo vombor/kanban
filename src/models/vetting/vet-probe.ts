@@ -96,7 +96,8 @@ export interface VetProbeOptions {
 	hungMin?: number;
 	reader?: ClineSessionDetailReader;
 	/**
-	 * Whether a local provider has the model loaded (Lemonade's /api/v1/health), null when it
+	 * Whether a local provider has the model loaded (Lemonade's /api/v1/health, an OpenAI-compatible server's `loaded`
+	 * flag in its model list), null when it
 	 * can't be told or the provider has no such answer.
 	 */
 	isModelLoaded?: (provider: string, model: string) => Promise<boolean | null>;

@@ -8,6 +8,7 @@ import { readPipelineConfig } from "../config/pipeline-config";
 import {
 	describeProviderSyncStatuses,
 	findClineProviderSetup,
+	listClineProviderSetups,
 	type ProviderSetupContext,
 	type ProviderSetupResult,
 	type ProviderSyncStatus,
@@ -49,10 +50,10 @@ function formatResult(result: ProviderSetupResult): string {
 	].join("\n");
 }
 
-function formatStatuses(statuses: readonly ProviderSyncStatus[]): string {
-	const width = Math.max(...SETUP_PROVIDER_IDS.map((id) => id.length));
+function formatStatuses(statuses: readonly ProviderSyncStatus[], context: ProviderSetupContext): string {
+	const width = Math.max(...statuses.map((status) => status.provider.length));
 	const lines = statuses.flatMap((status) => {
-		const setup = findClineProviderSetup(status.provider);
+		const setup = findClineProviderSetup(status.provider, context.config);
 		const head = `${status.provider.padEnd(width)}  ${STATE_LABELS[status.state]}${setup ? ` (${setup.label})` : ""}`;
 		const details = status.findings
 			.filter((finding) => status.state !== "in-sync" || finding.level !== "pass")
@@ -85,13 +86,16 @@ export async function runSetupProviderCommand(input: SetupProviderCommandInput):
 			findings: findings.map(({ level, message, hint }) => ({ level, message, hint })),
 		}));
 		return {
-			stdout: options.json ? `${JSON.stringify(listed, null, 2)}\n` : `${formatStatuses(statuses)}\n`,
+			stdout: options.json ? `${JSON.stringify(listed, null, 2)}\n` : `${formatStatuses(statuses, context)}\n`,
 			exitCode: 0,
 		};
 	}
-	const setup = findClineProviderSetup(provider);
+	const setups = listClineProviderSetups(context.config);
+	const setup = setups.find((entry) => entry.id === provider);
 	if (!setup) {
-		throw new Error(`unknown provider "${provider}"; one of ${SETUP_PROVIDER_IDS.join(", ")}`);
+		throw new Error(
+			`unknown provider "${provider}"; one of ${setups.map((entry) => entry.id).join(", ")} (an OpenAI-compatible server goes into config.json's providers.openaiCompatible first)`,
+		);
 	}
 	const result = await setup.apply(context, { dryRun: options.dryRun === true });
 	return {
@@ -103,7 +107,10 @@ export async function runSetupProviderCommand(input: SetupProviderCommandInput):
 export function registerSetupProviderCommand(program: Command): void {
 	program
 		.command("setup-provider")
-		.argument("[provider]", `The provider to set up: ${SETUP_PROVIDER_IDS.join(", ")}. Without one, lists them.`)
+		.argument(
+			"[provider]",
+			`The provider to set up: ${SETUP_PROVIDER_IDS.join(", ")}, or an OpenAI-compatible provider of config.json (providers.openaiCompatible.<id>). Without one, lists them.`,
+		)
 		.description(
 			"Write a model provider's settings into Cline's files (models.json, providers.json) as Kanban needs them for Cline cards, or with no provider list the providers and whether each is in sync. Each provider changes only its own entry, backs the file up into the Kanban home (backups/cline/) first, writes atomically and never prints a key; keys come from Kanban's environment, never the command line. Only the user and the Kanban project's orchestrator may run it; `kanban setup` and `kanban doctor` just print it. The server's Lemonade context sync (agents.cline.lemonadeContextSync) is separate.",
 		)

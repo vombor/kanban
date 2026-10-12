@@ -8,8 +8,8 @@
 // and, for bedrock, hold a key (`apiKey`, `auth.apiKey` or `auth.accessToken`) or AWS credentials (`aws.authentication`
 // iam/profile, `aws.profile`, or `aws.accessKey` + `aws.secretKey`), plus a region (`aws.region` or `region`). The
 // environment never counts there: with only AWS_BEARER_TOKEN_BEDROCK and AWS_REGION set, the TUI opens the sign-in
-// screen, although Cline's Bedrock client (headless runs) would use them. A custom provider from models.json (Lemonade)
-// needs no key, but without one its stored settings must hold both `baseUrl` and `model` (cline 3.0.70, `jp` in the
+// screen, although Cline's Bedrock client (headless runs) would use them. A custom provider from models.json (Lemonade,
+// and every OpenAI-compatible provider of config.json; for Triton re-verified with a real TUI run, 2026-10-12) needs no key, but without one its stored settings must hold both `baseUrl` and `model` (cline 3.0.70, `jp` in the
 // bundle, real TUI runs against a keyless custom provider 2026-10-11: `{provider, model}` alone opened the sign-in
 // screen, and models.json's baseUrl doesn't count). ClinePass (`cline-pass`; cline 3.0.70, real TUI runs against a fake
 // OpenAI-compatible server, 2026-10-12) is an OAuth provider whose credentials Cline stores under `cline`
@@ -20,12 +20,17 @@
 // Read by doctor and setup (src/setup/cline-bedrock-key.ts) and by the silent-stall reason (cline-turn-check.ts).
 import { readFile } from "node:fs/promises";
 
+import { getConfiguredOpenAiCompatibleProvider } from "../models/openai-compatible-providers";
 import { getClineProvidersSettingsPath } from "../state/kanban-home";
 
 type JsonObject = Record<string, unknown>;
 
-/** The custom (models.json) providers Kanban sets up for Cline cards: Lemonade. */
+/** The custom (models.json) providers Kanban sets up for Cline cards: Lemonade and config.json's OpenAI-compatible ones. */
 const CLINE_CUSTOM_PROVIDER_IDS: readonly string[] = ["lemonade"];
+
+function isClineCustomProvider(providerId: string): boolean {
+	return CLINE_CUSTOM_PROVIDER_IDS.includes(providerId) || getConfiguredOpenAiCompatibleProvider(providerId) !== null;
+}
 
 export const CLINE_PASS_PROVIDER_ID = "cline-pass";
 /** Providers whose credentials Cline keeps under another provider's entry (`storageProviderId` in the bundle). */
@@ -122,7 +127,7 @@ export function describeClineTuiSignInGap(document: unknown, providerId: string)
 	if (settings.provider !== providerId) {
 		return `providers.json's ${providerId} entry doesn't name its provider (settings.provider)`;
 	}
-	if (CLINE_CUSTOM_PROVIDER_IDS.includes(providerId)) {
+	if (isClineCustomProvider(providerId)) {
 		if (hasClineStoredKey(settings) || (hasText(settings.baseUrl) && hasText(settings.model))) {
 			return null;
 		}

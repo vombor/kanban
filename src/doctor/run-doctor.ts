@@ -49,6 +49,7 @@ import { checkIsolation } from "./isolation-checks";
 import { checkIssueImport, createIssueCheckDeps, type IssueCheckDeps } from "./issue-checks";
 import { checkKitLemonadeModels, checkKitProjectSettings, checkKitRecommendedSettings } from "./kit-settings-checks";
 import { checkOneOwner } from "./one-owner-checks";
+import { checkOpenAiCompatibleProvider } from "./openai-compatible-provider-checks";
 import { checkProjectShortcuts, type ProjectShortcutCheckDeps } from "./project-shortcut-checks";
 
 import { checkUncleanStopDamage } from "./unclean-stop-checks";
@@ -156,6 +157,18 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
 			env: process.env,
 		})),
 	);
+	for (const [providerId, provider] of Object.entries(config.providers.openaiCompatible)) {
+		findings.push(
+			...(await checkOpenAiCompatibleProvider({
+				providerId,
+				provider,
+				modelsPath: getClineModelsSettingsPath(config.agents.cline.dataDir),
+				providersPath: getClineProvidersSettingsPath(config.agents.cline.dataDir),
+				env: process.env,
+				fetch: options.fetch,
+			})),
+		);
+	}
 	findings.push(...(await checkGitHubAuth(options.githubAuthDeps)));
 	findings.push(...(await checkGitHubApp(config.github, liveEntries, options.githubAppDeps)));
 	const clineModelsPath = getClineModelsSettingsPath(config.agents.cline.dataDir);

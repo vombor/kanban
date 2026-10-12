@@ -33,6 +33,7 @@ import { createGitProcessEnv } from "../core/git-process-env";
 import { removeTreeWithoutFollowingLinks } from "../fs/remove-tree";
 import type { KitChecks } from "../kits/kit-schema";
 import { DEFAULT_KIT_NAME } from "../kits/resolve-kit";
+import { listConfiguredProviderKeyEnvNames } from "../models/openai-compatible-providers";
 import { runGit } from "../workspace/git-utils";
 import { type ChecksProjectEnv, prepareChecksProjectEnv } from "./checks-project-env";
 
@@ -196,7 +197,8 @@ const HARNESS_INSTALL = /\b(ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ENOSPC)\b|i
 const ANSI = /\x1b\[[0-9;]*m/g;
 
 // The user's secrets the container passes in (docs/fork/github-auth.md): the GitHub PAT, Copilot's token, the
-// Bedrock key and the ClinePass key (docs/fork/cline-pass-auth.md).
+// Bedrock key and the ClinePass key (docs/fork/cline-pass-auth.md). An OpenAI-compatible provider's `apiKeyEnv`
+// (config.json) is one too: listSecretEnvNames() adds those.
 const SECRET_ENV_NAMES = [
 	"GH_TOKEN",
 	"GITHUB_TOKEN",
@@ -204,6 +206,10 @@ const SECRET_ENV_NAMES = [
 	"AWS_BEARER_TOKEN_BEDROCK",
 	"CLINE_API_KEY",
 ];
+
+function listSecretEnvNames(): string[] {
+	return [...SECRET_ENV_NAMES, ...listConfiguredProviderKeyEnvNames()];
+}
 
 /**
  * Environment for every check step: no Kanban, git repository or secret token variables leak into the project's
@@ -224,7 +230,7 @@ export function createCheckStepEnv(
 		}
 	}
 	// Nor the user's GitHub PAT, Copilot token or Bedrock key.
-	for (const key of SECRET_ENV_NAMES) {
+	for (const key of listSecretEnvNames()) {
 		delete env[key];
 	}
 	// NODE_ENV=production makes npm skip devDependencies.
@@ -500,7 +506,7 @@ export function createChecksRunner(options: CreateChecksRunnerOptions): ChecksRu
 				exportDir: dir,
 				workspaceId: request.workspaceId,
 				taskId: request.taskId,
-				excludedNames: SECRET_ENV_NAMES,
+				excludedNames: listSecretEnvNames(),
 			});
 			const { redact } = projectEnv;
 			const env = createCheckStepEnv(settings, npmrcPath, projectEnv.env);

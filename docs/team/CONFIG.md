@@ -280,6 +280,7 @@ Model providers' Cline settings, written by `kanban setup-provider <provider>`
 | Key | Default | What |
 |---|---|---|
 | `providers.setupWorkspaceId` | `kanban-2uge` | the Kanban project's workspace: besides the user, only its orchestrator (sidebar session or headless wake) may run `kanban setup-provider`. `kanban project rename-id` keeps it on the renamed project |
+| `providers.openaiCompatible.<id>` | `{}` | an OpenAI-compatible model server for Cline cards: `{ name, baseUrl, apiKeyEnv?, local, models? }`, set up by `kanban setup-provider <id>` ([openai-compatible-providers.md](../fork/openai-compatible-providers.md); the user's Triton is the example there). `local: true` prices its turns at 0 and frees its QA cards from the cloud QA slots; `models.<model>.contextWindow`/`maxTokens` override the window written for a model (default 32768 when the server reports none) |
 
 ## From kit.config.json
 

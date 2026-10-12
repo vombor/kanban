@@ -8,11 +8,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runSetupProviderCommand, type SetupProviderOptions } from "../../../src/commands/setup-provider";
 import { parsePipelineConfig } from "../../../src/config/pipeline-config";
+import { setConfiguredOpenAiCompatibleProviders } from "../../../src/models/openai-compatible-providers";
 import { CLINE_PROVIDER_SETUPS } from "../../../src/setup/cline-provider-setup";
 import { SETUP_PROVIDER_IDS } from "../../../src/setup/setup-provider-command";
 import { getClineModelsSettingsPath, getClineProvidersSettingsPath } from "../../../src/state/kanban-home";
 import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
 import { createFakeLemonadeFetch } from "../../utilities/lemonade-fixtures";
+import { createFakeOpenAiCompatibleFetch } from "../../utilities/openai-compatible-fixtures";
 import { createTempDir } from "../../utilities/temp-dir";
 
 const NOW = new Date("2026-10-12T12:00:00.000Z");
@@ -185,9 +187,53 @@ describe("kanban setup-provider", () => {
 		]);
 	});
 
+	it("sets up an OpenAI-compatible provider of config.json and lists it after the built-in ones", async () => {
+		const config = parsePipelineConfig({
+			agents: { cline: { dataDir } },
+			providers: {
+				openaiCompatible: { triton: { name: "Triton", baseUrl: "http://triton.test/v1", local: true } },
+			},
+		}).config;
+		setConfiguredOpenAiCompatibleProviders(config.providers.openaiCompatible);
+		const runTriton = async (provider: string | undefined, options: SetupProviderOptions = {}) =>
+			await runSetupProviderCommand({
+				provider,
+				options,
+				context: {
+					config,
+					homePath,
+					env: {},
+					fetch: createFakeOpenAiCompatibleFetch().fetch,
+					now: NOW,
+				},
+			});
+		try {
+			const before = await runTriton(undefined, { json: true });
+			expect(JSON.parse(before.stdout).map(({ provider }: { provider: string }) => provider)).toEqual([
+				"lemonade",
+				"bedrock",
+				"cline-pass",
+				"triton",
+			]);
+			expect((await runTriton(undefined)).stdout).toMatch(
+				/^triton\s+out of sync \(Triton \(OpenAI-compatible, local\)\)/mu,
+			);
+
+			const written = await runTriton("triton");
+			expect(written.exitCode).toBe(0);
+			expect(written.stdout).toContain(`triton (${modelsPath()}, ${providersPath()}): written`);
+			expect(JSON.parse(readFileSync(providersPath(), "utf8")).providers.triton.settings).toEqual({
+				provider: "triton",
+				baseUrl: "http://triton.test/v1",
+			});
+		} finally {
+			setConfiguredOpenAiCompatibleProviders({});
+		}
+	});
+
 	it("refuses an unknown provider (localai included)", async () => {
 		await expect(run("localai", {})).rejects.toThrow(
-			'unknown provider "localai"; one of lemonade, bedrock, cline-pass',
+			'unknown provider "localai"; one of lemonade, bedrock, cline-pass (an OpenAI-compatible server goes into',
 		);
 	});
 });

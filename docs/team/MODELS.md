@@ -114,10 +114,24 @@ for dev and qa (none was run for plan):
 
 The same day `cline + lemonade + Laguna-XS-2.1-GGUF-Q4_K_M` passed for dev and qa (not plan).
 
+## OpenAI-compatible servers (`providers.openaiCompatible`)
+
+A server that speaks the OpenAI chat API is a provider by config alone: `providers.openaiCompatible.<id>` in
+config.json, then `kanban setup-provider <id>` ([openai-compatible-providers.md](../fork/openai-compatible-providers.md)).
+With `local: true` it is a local provider like Lemonade below (price 0, no cloud QA slot, the load allowance). Its
+outage probe is its model list, and its `loaded` flag (where the server sends one) tells the vet probe a model is still
+loading. The user's Triton/TensorRT-LLM router (`triton`, `http://triton.tailedf020.ts.net/v1`) is the first one. It
+reports no context windows (Kanban writes 32768 unless config.json says otherwise) and no limit on loaded models
+(no `models.providerCapacity.triton`), and on 2026-10-12 its `qwen3.6-35b-a3b` sent tool calls as text, not
+`tool_calls`, so Cline couldn't use its tools: fix that on the server before vetting. No Triton model is in Cline's models.json yet.
+Once its tool calls work: `kanban models vet --agent cline --provider triton --model <id> --role dev` (and
+`--role qa`).
+
 ## Local provider: Lemonade
 
 A provider that runs models on the user's own hardware costs nothing per token (`LOCAL_PROVIDER_IDS` in
-`src/kits/team/bench/prices.ts`, read through `isLocalProvider()`). Today that is **Lemonade** (`lemonade`, llama.cpp
+`src/kits/team/bench/prices.ts`, read through `isLocalProvider()`, plus every `local: true` OpenAI-compatible
+provider of config.json). Built in, that is **Lemonade** (`lemonade`, llama.cpp
 on this machine, `http://localhost:13305/api/v1`): its turns are priced at 0, a QA card on it takes no cloud QA slot
 (`pipeline.qa.slots`) and waits only for `models.providerCapacity.lemonade`, a vet run gives the first reply the local
 load allowance, and an unreachable server is a provider outage (backoff retries, then the outage hold).
