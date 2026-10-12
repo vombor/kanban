@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.1.70-fork.7]
+
+- New routing kits: `team-cline` (ClinePass: glm-5.3 dev, kimi-k3 fallback, qwen3.8-max QA, minimax-m3 plans), and `team-local` now defaults to Muse-Glimmer 30B for dev and plans, Gemma 4 31B for QA and Laguna-XS 2.1 as the fallback; the `team` kit is renamed `team-cloud` (old configs keep working)
+- New projects pick their routing kit when they're created or added (`default` preselected), in the add-project dialog and with `kanban project create|add --kit`
+- A project's orchestrator can switch its own project's kit and override any model the kit names, not only the four roles
+- Any model can go on any role: the vetted model registry and its refusals are gone; for Cline cards the allow list is Cline's own models.json, curated by the Kanban orchestrator with `kanban models vet`
+- ClinePass (Cline's subscription provider) works for Cline cards, with its key from `CLINE_API_KEY`; limit and account errors are handled as provider errors
+- Any OpenAI-compatible model server can be added as a Cline provider by config alone (`providers.openaiCompatible.<id>`)
+- `kanban setup-provider <provider>` replaces the separate per-provider Cline setup commands; only the user and the Kanban project's orchestrator may run it
+- `kanban restart update`: the Kanban orchestrator can move the pod onto the newest image by restarting its own container (needs `Pull=newer` and `Restart=always` in the Quadlet)
+- After a restart, every project's orchestrator gets one "Kanban restarted" wake that says what restart recovery did, so nobody has to type "pod restarted"
+- Watchdog wakes reach the orchestrator silently with your next message while you're working in its sidebar; urgent ones are still typed at once
+- Kanban never types into a terminal while you're typing there: wakes, recovery nudges, rework and `kanban task send` wait or refuse instead of mixing into your draft
+- The orchestrator sidebar shows its agent again on the first load after a restart, without reloading the page
+- Voice chat on phones: dictate into an agent terminal and have replies read aloud; dictation is sent once as final text, keeps working after clearing with X or closing the bar, and replies from Claude Code, Copilot and Codex are read when a turn ends
+- Phone layout: the terminal stays above the on-screen keyboard, one control row under it (mic, speaker, key pad, round Enter), arrow keys, Tab, Shift+Tab, Esc and Space for agent menus, and one-finger scrolling
+- Review and In Progress cards show their pipeline stage ("Checks running", "Waiting for QA slot", "QA r2 running"), and Approve & land or a Done move asks first while checks or QA are in flight
+- A crash no longer leaves a project's pipeline stuck on an empty state file or a card on an unreadable git index; restart recovery resumes orphaned cards right after the server starts
+- Recovery handles Cline's own error notices ("No model loaded", device lost, context overflow) and provider capacity waits instead of misreading them as unchanged work
+- QA is more robust: silent, dead or overflowing QA cards are replaced instead of stalled, local-model QA no longer takes cloud QA slots, and a stalled round can be QA'd again
+- Linked Backlog cards start only once all of their prerequisites are Done
+- Done never silently discards a card's unlanded work
+- GitHub issues and comments can go out as one Kanban GitHub App for the machine (`kanban github bot create`)
+- Project shortcuts live in Kanban's own store instead of the repo, and a project's orchestrator can add them with `kanban shortcut add`
+- Task worktrees no longer share databases, build outputs or installed packages with the main checkout
+- Scripted checks get the project's own environment (`checks.envFile`, a per-run database, setup and teardown)
+- One project's QA pipeline can be paused without stopping the others (`kanban pipeline pause|resume`)
+- LocalAI support is removed
+- The pod's image is now `ghcr.io/vombor/kanban` (was `ghcr.io/vombor/kanban-dev`)
+
 ## [0.1.70-fork.6]
 
 0.1.70-fork.5 was tagged but never published.
