@@ -272,6 +272,63 @@ describe("applyWorkspaceKit: switching kits", () => {
 		});
 	});
 
+	it("keeps a role's provider beside the project's own model for that role (issue #40)", async () => {
+		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
+			writeLegacyTeamKit();
+			writeConfig(globalConfigPath, {
+				workspaces: {
+					foo: {
+						kit: {
+							name: "legacy-team",
+							overrides: {
+								"roles.dev.agent": "codex",
+								"roles.qa.provider": "bedrock",
+								"roles.qa.model": "us.anthropic.claude-haiku-5-5",
+								"roles.qa.agent": "cline",
+								"roles.plan.provider": "bedrock",
+							},
+						},
+					},
+				},
+			});
+			const dryRun = await applyWorkspaceKit({
+				workspaceId: "foo",
+				kitName: "team",
+				preset: null,
+				dryRun: true,
+			});
+			expect(dryRun.dropped).toEqual([
+				{ key: "roles.plan.provider", value: "bedrock", why: expect.stringContaining("needs roles.plan.model") },
+			]);
+			expect(dryRun.overrides).toMatchObject({
+				"roles.qa.provider": "bedrock",
+				"roles.qa.model": "us.anthropic.claude-haiku-5-5",
+				"roles.qa.agent": "cline",
+			});
+
+			const withSet = await applyWorkspaceKit({
+				workspaceId: "foo",
+				kitName: "team",
+				preset: null,
+				set: { "roles.plan.agent": "cline", "roles.plan.model": "us.anthropic.claude-opus-5-5" },
+			});
+			expect(withSet.dropped).toEqual([]);
+			expect((readConfig(globalConfigPath).workspaces as Record<string, { kit: unknown }>).foo.kit).toEqual({
+				name: "team",
+				preset: null,
+				overrides: {
+					"roles.dev.agent": "codex",
+					"roles.qa.provider": "bedrock",
+					"roles.qa.model": "us.anthropic.claude-haiku-5-5",
+					"roles.qa.agent": "cline",
+					"roles.plan.provider": "bedrock",
+					"roles.plan.agent": "cline",
+					"roles.plan.model": "us.anthropic.claude-opus-5-5",
+				},
+			});
+		});
+	});
+
 	it("refuses the orchestrator a landing change and the removal of a stored team key", async () => {
 		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
 			const original = {

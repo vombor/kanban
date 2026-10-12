@@ -91,8 +91,8 @@ export interface DroppedKitSetting {
 }
 
 /**
- * Why a stored setting doesn't fit `kitName` with `preset` (null: it does). Team keys from before the split fit wherever
- * they resolve.
+ * Why a stored setting doesn't fit `kitName` with `preset` beside the settings in `context` (null: it does). Team keys
+ * from before the split fit wherever they resolve.
  */
 function findMisfit(
 	catalog: KitCatalog,
@@ -100,6 +100,7 @@ function findMisfit(
 	preset: string | null,
 	key: string,
 	value: unknown,
+	context: Record<string, unknown>,
 ): string | null {
 	const team = resolveKitByName(catalog, kitName, {}, preset);
 	if (!team.ok) {
@@ -111,8 +112,49 @@ function findMisfit(
 			return classified.message;
 		}
 	}
-	const alone = resolveKitByName(catalog, kitName, { [key]: value }, preset);
-	return alone.ok ? null : alone.error;
+	const resolved = resolveKitByName(catalog, kitName, { ...context, [key]: value }, preset);
+	return resolved.ok ? null : resolved.error;
+}
+
+/**
+ * The stored settings that don't fit `kitName` with `preset`. A setting fits when it resolves on its own or beside the
+ * settings that fit plus the `--set` ones, so a role's provider stays with the project's own model for that role
+ * (issue #40: `roles.qa.provider` was checked without `roles.qa.model` and dropped). A stored key that `set` replaces
+ * is never checked.
+ */
+function findMisfits(
+	catalog: KitCatalog,
+	kitName: string,
+	preset: string | null,
+	stored: Record<string, unknown>,
+	set: Record<string, unknown>,
+): DroppedKitSetting[] {
+	const fitting: Record<string, unknown> = {};
+	const misfits = new Map<string, string>();
+	for (const [key, value] of Object.entries(stored)) {
+		if (Object.hasOwn(set, key)) {
+			continue;
+		}
+		const why = findMisfit(catalog, kitName, preset, key, value, {});
+		if (why === null) {
+			fitting[key] = value;
+		} else {
+			misfits.set(key, why);
+		}
+	}
+	// A setting that needs another one (a provider its model, a model its agent) fits once that one does.
+	let grew = misfits.size > 0;
+	while (grew) {
+		grew = false;
+		for (const key of [...misfits.keys()]) {
+			if (findMisfit(catalog, kitName, preset, key, stored[key], { ...fitting, ...set }) === null) {
+				fitting[key] = stored[key];
+				misfits.delete(key);
+				grew = true;
+			}
+		}
+	}
+	return [...misfits].map(([key, why]) => ({ key, value: stored[key], why }));
 }
 
 /** The preset `kit apply` uses: the given one, else the workspace's own when it stays on the kit. */
@@ -185,12 +227,9 @@ export async function applyWorkspaceKit(input: ApplyKitInput): Promise<ApplyKitR
 	}
 	const dropped: DroppedKitSetting[] = [];
 	if ((settings.kit?.name ?? DEFAULT_KIT_NAME) !== input.kitName || (settings.kit?.preset ?? null) !== preset) {
-		for (const [key, value] of Object.entries(overrides)) {
-			const why = findMisfit(catalog, input.kitName, preset, key, value);
-			if (why !== null) {
-				dropped.push({ key, value, why });
-				delete overrides[key];
-			}
+		for (const misfit of findMisfits(catalog, input.kitName, preset, overrides, input.set ?? {})) {
+			dropped.push(misfit);
+			delete overrides[misfit.key];
 		}
 	}
 	for (const key of Object.keys(input.set ?? {})) {
