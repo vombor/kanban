@@ -44,8 +44,11 @@ export function VoiceChatBar({ taskId, workspaceId, summary }: VoiceChatBarProps
 		voiceInput.startListening();
 	};
 
+	// Listening, or the browser still starting the session: the mic stops either.
+	const micActive = voiceInput.listening || voiceInput.starting;
+
 	const toggleListening = () => {
-		if (voiceInput.listening) {
+		if (micActive) {
 			voiceInput.stopListening();
 		} else {
 			startListening();
@@ -58,7 +61,7 @@ export function VoiceChatBar({ taskId, workspaceId, summary }: VoiceChatBarProps
 			return;
 		}
 		event.preventDefault();
-		if (voiceInput.listening) {
+		if (micActive) {
 			micPressRef.current = null;
 			voiceInput.stopListening();
 			return;
@@ -88,7 +91,7 @@ export function VoiceChatBar({ taskId, workspaceId, summary }: VoiceChatBarProps
 	};
 
 	const hasPreview = voiceInput.listening || voiceInput.previewText.length > 0;
-	const micLabel = voiceInput.listening ? "Stop listening" : "Talk to the agent";
+	const micLabel = micActive ? "Stop listening" : "Talk to the agent";
 
 	return (
 		<div className="flex flex-col gap-2 border-t border-border px-2 py-2">
@@ -113,7 +116,7 @@ export function VoiceChatBar({ taskId, workspaceId, summary }: VoiceChatBarProps
 							size="md"
 							icon={voiceInput.isSending ? <Spinner size={14} /> : <SendHorizontal size={16} />}
 							aria-label="Send voice message"
-							disabled={voiceInput.listening || voiceInput.isSending || voiceInput.draft.trim().length === 0}
+							disabled={micActive || voiceInput.isSending || voiceInput.draft.trim().length === 0}
 							onClick={() => {
 								replySpeech.stop();
 								void voiceInput.send();
@@ -136,7 +139,7 @@ export function VoiceChatBar({ taskId, workspaceId, summary }: VoiceChatBarProps
 						<button
 							type="button"
 							aria-label={micLabel}
-							aria-pressed={voiceInput.listening}
+							aria-pressed={micActive}
 							onPointerDown={handleMicPointerDown}
 							onPointerUp={handleMicPointerUp}
 							onPointerCancel={handleMicPointerUp}
@@ -148,17 +151,17 @@ export function VoiceChatBar({ taskId, workspaceId, summary }: VoiceChatBarProps
 							}}
 							className={cn(
 								"inline-flex size-11 shrink-0 cursor-pointer touch-none select-none items-center justify-center rounded-full border",
-								voiceInput.listening
+								micActive
 									? "animate-pulse border-status-red/50 bg-status-red/15 text-status-red"
 									: "border-border-bright bg-surface-2 text-text-primary hover:bg-surface-3 active:bg-surface-4",
 							)}
 						>
-							{voiceInput.listening ? <MicOff size={18} /> : <Mic size={18} />}
+							{micActive ? <MicOff size={18} /> : <Mic size={18} />}
 						</button>
 					</Tooltip>
 				) : null}
 				<span className="min-w-0 flex-1 truncate text-xs text-text-tertiary">
-					{voiceInput.listening ? "Listening…" : null}
+					{voiceInput.listening ? "Listening…" : voiceInput.starting ? "Starting…" : null}
 				</span>
 				{replySpeech.supported && replySpeech.speaking ? (
 					<Button

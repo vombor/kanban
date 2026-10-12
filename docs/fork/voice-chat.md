@@ -18,6 +18,15 @@ dependency or secret for it. Shell terminals don't get the bar.
   is a line break, Escape or the X discards. Interim results never reach the PTY, and nothing is sent until you press
   Send.
 - Starting to talk stops a reply that is being read out.
+- "Listening…" is shown only between the recognizer's own `start` and `end` events ("Starting…" before the browser
+  has started it). An error ends listening with its message, including "No speech was heard" and "was interrupted"
+  (those two stay quiet after your own stop). A session that doesn't start within 15 s, or doesn't end within 3 s of
+  a stop, is aborted with a message, so the bar never says it listens while nothing does.
+- Discarding (X, Escape) or closing the bar aborts the recognition, but the browser ends a session (and lets go of
+  the mic) a moment later, and a phone's recognizer serves one session at a time. So the page keeps one live
+  session until its `end` (`web-ui/src/voice/live-recognition.ts`), and the next start waits for that (at most 2 s,
+  then it aborts the old one again and starts anyway). Before this, recording again after a discard and reopening
+  showed "Listening…" with no speech recognised until the page was reloaded (phone report, 2026-10-12).
 
 ## Speech out
 
@@ -57,7 +66,8 @@ anything you wouldn't send to that service.
 ## Code
 
 - `web-ui/src/voice/speech-apis.ts`: feature detection and the final/interim split of a result list.
-- `web-ui/src/voice/use-speech-recognition.ts`, `use-voice-input.ts`, `send-voice-input.ts`: speech in.
+- `web-ui/src/voice/use-speech-recognition.ts`, `live-recognition.ts`, `use-voice-input.ts`, `send-voice-input.ts`:
+  speech in.
 - `web-ui/src/voice/use-reply-speech.ts`, `speakable-text.ts`: speech out.
 - `web-ui/src/components/detail-panels/voice-chat-bar.tsx`: the bar, shown by `AgentTerminalPanel`'s `voiceChat`
   prop.

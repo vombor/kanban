@@ -13,6 +13,8 @@ function joinText(...parts: string[]): string {
 export interface VoiceInputControls {
 	supported: boolean;
 	listening: boolean;
+	/** The browser is starting the session (the mic button stops that too). */
+	starting: boolean;
 	/** What the preview shows: the draft, and while listening what is being heard. */
 	previewText: string;
 	/** The editable draft (final text only), set once listening stops. */
@@ -38,7 +40,7 @@ export function useVoiceInput(workspaceId: string | null, taskId: string): Voice
 	// The draft as it was when listening started; what is heard is appended to it.
 	const baseDraftRef = useRef("");
 	const wasListeningRef = useRef(false);
-	const { listening, transcript } = recognition;
+	const { listening, starting, transcript } = recognition;
 
 	useEffect(() => {
 		if (wasListeningRef.current && !listening) {
@@ -63,7 +65,7 @@ export function useVoiceInput(workspaceId: string | null, taskId: string): Voice
 
 	const send = useCallback(async () => {
 		const text = draft.trim();
-		if (!text || listening || isSending) {
+		if (!text || listening || starting || isSending) {
 			return false;
 		}
 		setIsSending(true);
@@ -76,7 +78,7 @@ export function useVoiceInput(workspaceId: string | null, taskId: string): Voice
 		}
 		setDraft("");
 		return true;
-	}, [draft, isSending, listening, taskId, workspaceId]);
+	}, [draft, isSending, listening, starting, taskId, workspaceId]);
 
 	useEffect(() => {
 		discard();
@@ -85,6 +87,7 @@ export function useVoiceInput(workspaceId: string | null, taskId: string): Voice
 	return {
 		supported: recognition.supported,
 		listening,
+		starting,
 		previewText: listening ? joinText(baseDraftRef.current, transcript.finalText, transcript.interimText) : draft,
 		draft,
 		setDraft,

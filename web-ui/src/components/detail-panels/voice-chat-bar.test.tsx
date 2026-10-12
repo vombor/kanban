@@ -63,7 +63,7 @@ describe("VoiceChatBar", () => {
 
 	beforeEach(() => {
 		(globalThis as ActGlobal).IS_REACT_ACT_ENVIRONMENT = true;
-		FakeSpeechRecognition.instances = [];
+		FakeSpeechRecognition.reset();
 		deliverTaskInputMock.mockReset();
 		deliverTaskInputMock.mockResolvedValue({
 			ok: true,
@@ -80,6 +80,7 @@ describe("VoiceChatBar", () => {
 
 	afterEach(() => {
 		act(() => root.unmount());
+		act(() => FakeSpeechRecognition.endAll());
 		container.remove();
 		vi.unstubAllGlobals();
 		delete (globalThis as ActGlobal).IS_REACT_ACT_ENVIRONMENT;
@@ -106,6 +107,9 @@ describe("VoiceChatBar", () => {
 		expect(recognition.started).toBe(true);
 		expect(recognition.continuous).toBe(true);
 		expect(recognition.interimResults).toBe(true);
+		expect(container.textContent).toContain("Starting…");
+		act(() => recognition.emitStart());
+		expect(container.textContent).toContain("Listening…");
 
 		act(() =>
 			recognition.emitResults([
@@ -148,11 +152,13 @@ describe("VoiceChatBar", () => {
 		});
 		render();
 		tapMic("Talk to the agent");
+		act(() => FakeSpeechRecognition.latest().emitStart());
 		act(() => FakeSpeechRecognition.latest().emitResults([{ transcript: "first part", isFinal: true }]));
 		tapMic("Stop listening");
 		act(() => FakeSpeechRecognition.latest().emitEnd());
 
 		tapMic("Talk to the agent");
+		act(() => FakeSpeechRecognition.latest().emitStart());
 		act(() => FakeSpeechRecognition.latest().emitResults([{ transcript: "second part", isFinal: true }]));
 		act(() => FakeSpeechRecognition.latest().emitEnd());
 		expect(preview()?.value).toBe("first part second part");
@@ -222,6 +228,49 @@ describe("VoiceChatBar", () => {
 		expect(FakeSpeechRecognition.latest().started).toBe(true);
 		expect(container.querySelector('button[aria-label="Stop reading the reply"]')).toBeNull();
 		vi.useRealTimers();
+	});
+
+	it("records again after clearing the text and closing the bar while listening (phone report, 2026-10-12)", async () => {
+		vi.stubGlobal("webkitSpeechRecognition", FakeSpeechRecognition);
+		render();
+		tapMic("Talk to the agent");
+		const first = FakeSpeechRecognition.latest();
+		act(() => first.emitStart());
+		act(() => first.emitResults([{ transcript: "fix the bug", isFinal: false }]));
+		expect(preview()?.value).toBe("fix the bug");
+
+		act(() => button("Discard voice message").click());
+		expect(first.aborted).toBe(true);
+		expect(preview()).toBeNull();
+		expect(container.textContent).not.toContain("Listening…");
+
+		// Close the bar before the browser has ended the aborted session, then open it again.
+		act(() => root.render(<TooltipProvider>{null}</TooltipProvider>));
+		render();
+		tapMic("Talk to the agent");
+		expect(container.textContent).toContain("Starting…");
+		expect(container.textContent).not.toContain("Listening…");
+
+		act(() => first.emitEnd());
+		await act(async () => {});
+		const second = FakeSpeechRecognition.latest();
+		expect(second).not.toBe(first);
+		expect(second.blocked).toBe(false);
+		act(() => second.emitStart());
+		act(() => second.emitResults([{ transcript: "heard this time", isFinal: true }]));
+		expect(container.textContent).toContain("Listening…");
+		expect(preview()?.value).toBe("heard this time");
+	});
+
+	it("shows why listening ended when the recognizer stops on its own", () => {
+		vi.stubGlobal("webkitSpeechRecognition", FakeSpeechRecognition);
+		render();
+		tapMic("Talk to the agent");
+		act(() => FakeSpeechRecognition.latest().emitStart());
+		act(() => FakeSpeechRecognition.latest().emitError("no-speech"));
+		expect(container.textContent).not.toContain("Listening…");
+		expect(container.textContent).toContain("No speech was heard. Tap the mic to try again.");
+		expect(button("Talk to the agent").getAttribute("aria-pressed")).toBe("false");
 	});
 
 	it("reports a denied microphone", () => {
