@@ -5,9 +5,9 @@
 // Ported from archive/devteam-kit:bin/kit@d2fb30f `cmdMachineSetup` (npmrc, Cline rules, providers.json) and
 // @c8552ae (Cline TUI notices). Kanban writes nothing under ~/.cline (user rule, 2026-10-07): the Cline rules and the
 // notice opt-out now come with every Cline launch (agent-session-adapters.ts), and the providers and the two
-// models.json (Lemonade) steps only check: the Lemonade ones print the `kanban cline apply-lemonade-models` line the
+// models.json (Lemonade) steps only check: the Lemonade ones print the `kanban setup-provider lemonade` line the
 // user runs (user's choice, 2026-10-07), the providers one checks that providers.json stores the Bedrock key and
-// region Cline's TUI needs and prints `kanban cline store-bedrock-key` (issue #9, 2026-10-08).
+// region Cline's TUI needs and prints `kanban setup-provider bedrock` (issue #9, 2026-10-08).
 import { chmod, mkdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -168,7 +168,7 @@ export async function planNpmrc(paths: MachineSetupPaths): Promise<SetupStepPlan
  * Cards pass `-P bedrock -m <model>` to Cline's TUI, which only counts a key (or AWS credentials) and a region stored
  * in providers.json, never AWS_BEARER_TOKEN_BEDROCK or AWS_REGION; without them it opens Cline's sign-in screen
  * (src/terminal/cline-tui-sign-in.ts, issue #9). When something is missing the step is `manual` with
- * `kanban cline store-bedrock-key`, which stores the environment's key.
+ * `kanban setup-provider bedrock`, which stores the environment's key.
  */
 export async function planClineProviders(
 	paths: MachineSetupPaths,

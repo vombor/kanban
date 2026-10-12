@@ -85,7 +85,7 @@ describe("kanban setup steps", () => {
 		);
 		expect(envOnly.status).toBe("manual");
 		expect(envOnly.details.join("\n")).toContain("open on Cline's sign-in screen");
-		expect(envOnly.details.at(-1)).toBe("run `kanban cline store-bedrock-key`");
+		expect(envOnly.details.at(-1)).toBe("run `kanban setup-provider bedrock`");
 		expect(envOnly.details.join("\n")).not.toContain("secret-value-123");
 
 		writeFileSync(
@@ -136,7 +136,7 @@ describe("kanban setup steps", () => {
 		expect(step.apply).toBeUndefined();
 		expect(step.details).toEqual([
 			`lemonade modelsSourceUrl: http://127.0.0.1:13306/lemonade/models -> ${ORIGIN}/api/model-lists/lemonade`,
-			`to apply, run \`kanban cline apply-lemonade-models --origin ${ORIGIN}\` (Kanban itself only syncs the context windows of models already listed)`,
+			`to apply, run \`kanban setup-provider lemonade --origin ${ORIGIN}\` (Kanban itself only syncs the context windows of models already listed)`,
 		]);
 		expect(readFileSync(paths.clineModels, "utf8")).toBe(raw);
 	});
@@ -171,7 +171,7 @@ describe("kanban setup steps", () => {
 		expect(step?.plan.details).toContain(
 			"GLM-4.7-Flash-GGUF: contextWindow (unset) -> 202752 (recipe ctx_size), maxTokens (unset) -> 32768, supportsVision (unset) -> false, supportsReasoning (unset) -> false, inputPrice (unset) -> 0, outputPrice (unset) -> 0",
 		);
-		expect(step?.plan.details.at(-1)).toContain("kanban cline apply-lemonade-models --origin");
+		expect(step?.plan.details.at(-1)).toContain("kanban setup-provider lemonade --origin");
 		expect(readFileSync(paths.clineModels, "utf8")).toBe(raw);
 		expect(readdirSync(settingsDir)).toEqual(["models.json"]);
 	});

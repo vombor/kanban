@@ -49,7 +49,7 @@ describe("doctor: Cline's ClinePass key", () => {
 				level: "warn",
 				area: "setup",
 				message: `${providersPath} stores no ClinePass key: Cline's cline-pass cards open on Cline's sign-in screen and never start (its TUI doesn't read CLINE_API_KEY, though Kanban's environment has it)`,
-				hint: "kanban cline store-cline-pass-key",
+				hint: "kanban setup-provider cline-pass",
 			},
 		]);
 		expect(JSON.stringify(findings)).not.toContain(KEY);
@@ -75,7 +75,7 @@ describe("doctor: Cline's ClinePass key", () => {
 		expect(await check({})).toMatchObject([{ level: "pass" }]);
 		const differs = await check({ CLINE_API_KEY: "rotated-key" });
 		expect(differs).toMatchObject([
-			{ level: "warn", hint: "kanban cline store-cline-pass-key", message: expect.stringContaining("different") },
+			{ level: "warn", hint: "kanban setup-provider cline-pass", message: expect.stringContaining("different") },
 		]);
 		expect(JSON.stringify(differs)).not.toContain(KEY);
 		expect(JSON.stringify(differs)).not.toContain("rotated-key");

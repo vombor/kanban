@@ -39,7 +39,7 @@ describe("doctor: Cline's Bedrock key", () => {
 				level: "warn",
 				area: "setup",
 				message: `${providersPath} stores no Bedrock key: Cline's Bedrock cards open on Cline's sign-in screen and never start (its TUI doesn't read AWS_BEARER_TOKEN_BEDROCK, though Kanban's environment has it)`,
-				hint: "kanban cline store-bedrock-key",
+				hint: "kanban setup-provider bedrock",
 			},
 		]);
 		expect(JSON.stringify(findings)).not.toContain(KEY);
@@ -64,7 +64,7 @@ describe("doctor: Cline's Bedrock key", () => {
 		writeProviders({ apiKey: KEY, aws: { region: "us-west-2" } });
 		const different = await check({ AWS_BEARER_TOKEN_BEDROCK: "another-key" });
 		expect(different).toHaveLength(1);
-		expect(different[0]).toMatchObject({ level: "warn", hint: "kanban cline store-bedrock-key" });
+		expect(different[0]).toMatchObject({ level: "warn", hint: "kanban setup-provider bedrock" });
 		expect(different[0]?.message).toContain("Cline uses the stored one");
 		expect(JSON.stringify(different)).not.toContain(KEY);
 		expect(JSON.stringify(different)).not.toContain("another-key");

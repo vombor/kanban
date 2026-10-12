@@ -561,7 +561,7 @@ before the next Cline launch. Models to add or remove are still the user's comma
 
 ```sh
 lemonade load Qwen3.8-27B-GGUF-UD-Q4_K_XL --ctx-size 65536 --llamacpp vulkan --save-options
-kanban cline apply-lemonade-models --origin <kanban origin>    # only for models added or removed; doctor prints it
+kanban setup-provider lemonade --origin <kanban origin>    # only for models added or removed; doctor prints it
 ```
 
 ### Settings team-local needs
@@ -583,7 +583,7 @@ The other local gotchas:
 - **Context overflow.** Cline compacts at 0.9 × the `contextWindow` in its models.json, so that window must be the
   one Lemonade really loads. The server's Lemonade context sync keeps it so after a reload (`report`/`off` in
   `agents.cline.lemonadeContextSync` stop it), `kanban doctor`'s "cline lemonade models" row compares them, and
-  `kanban cline apply-lemonade-models --origin <origin>` (the user's command) fixes the rest of models.json. Beyond that,
+  `kanban setup-provider lemonade --origin <origin>` (the user or the Kanban orchestrator runs it) fixes the rest of models.json. Beyond that,
   recovery (mode `on`) clears an overflowed history.
 - **Models.** `kanban doctor` also warns when Lemonade doesn't list a model the kit routes to, hasn't downloaded it,
   or doesn't mark it tool-calling. It reports INFO when Lemonade is down.

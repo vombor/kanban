@@ -21,6 +21,7 @@
 import type { RuntimeAgentId, RuntimeTaskAgentSettings, RuntimeTaskSessionSummary } from "../../core/api-contract";
 import type { ProviderCapacityHold } from "../../pipeline/provider-capacity";
 import { buildProviderRetryPrompt } from "../../pipeline/recovery-prompts";
+import { formatSetupProviderCommand, isSetupProviderId } from "../../setup/setup-provider-command";
 import { isReviewSettled } from "../../terminal/review-settle";
 import type { ModelCombination, VettingRole } from "../vetted-registry";
 import type { VetFailure, VetProbeInput, VetProbeVerdict } from "./vet-probe";
@@ -220,7 +221,11 @@ export async function runVet(input: VetRunInput, deps: VetRunnerDeps): Promise<V
 	if (signInGap) {
 		return finish({
 			kind: "sign_in",
-			detail: `${agentId} would open its sign-in screen for ${combination.provider ?? "its provider"}: ${signInGap}`,
+			detail: `${agentId} would open its sign-in screen for ${combination.provider ?? "its provider"}: ${signInGap}${
+				combination.provider && isSetupProviderId(combination.provider)
+					? `; fix with ${formatSetupProviderCommand(combination.provider)}`
+					: ""
+			}`,
 			harness: true,
 		});
 	}

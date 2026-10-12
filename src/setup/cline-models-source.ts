@@ -5,8 +5,8 @@
 // src/server/model-lists-route.ts replaces. That URL (or a missing one) should be the route; a URL the user chose
 // for something else is left alone. Read-only: Kanban writes nothing under ~/.cline (user rule, 2026-10-07; the Lemonade context windows are the one
 // exception, issue #31), so
-// `kanban setup` and doctor only report the drift, and the user's `kanban cline apply-lemonade-models`
-// (src/setup/cline-lemonade-apply.ts) is the one thing that changes the file. The provider entry is never created.
+// `kanban setup` and doctor only report the drift, and `kanban setup-provider lemonade` (run by the user or the Kanban
+// orchestrator, src/setup/cline-lemonade-apply.ts) is the one thing that changes the file. The provider entry is never created.
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
 

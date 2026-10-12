@@ -2,9 +2,9 @@
 // and Cline's providers.json must store it too, because Cline's interactive TUI only counts stored credentials
 // (src/terminal/cline-tui-sign-in.ts): every card runs in that TUI, and without a stored key it opens Cline's
 // sign-in screen and never takes the prompt (issue #9, 2026-10-08: after `remove-bedrock-key` every Cline card did).
-// Read by `kanban setup`'s cline-providers step and doctor's row; `kanban cline store-bedrock-key` (the user's command,
-// the only path that changes providers.json) copies the env's key and region in. `remove-bedrock-key` is kept only
-// to refuse. Never prints or returns a key value: only whether one is there and whether it equals the env's.
+// Read by `kanban setup`'s cline-providers step and doctor's row; `kanban setup-provider bedrock` (run by the user or
+// the Kanban project's orchestrator, the only path that changes providers.json for it) copies the env's key and region
+// in. Never prints or returns a key value: only whether one is there and whether it equals the env's.
 //
 // What cline 3.0.69 does (checked in the bundled CLI, with real TUI runs in a throwaway CLINE_DIR/CLINE_DATA_DIR,
 // 2026-10-08): the TUI's sign-in check needs a stored key (or stored AWS credentials) and a stored region; the env
@@ -14,9 +14,10 @@ import { readFile } from "node:fs/promises";
 
 import { quoteShellArg } from "../core/shell";
 import { backupClineFile, getClineBackupDir, replaceClineFileAtomically } from "./cline-file-write";
+import { formatSetupProviderCommand } from "./setup-provider-command";
 
 export const CLINE_BEDROCK_KEY_ENV = "AWS_BEARER_TOKEN_BEDROCK";
-export const STORE_BEDROCK_KEY_COMMAND = "kanban cline store-bedrock-key";
+export const STORE_BEDROCK_KEY_COMMAND = formatSetupProviderCommand("bedrock");
 export const CLINE_BEDROCK_AUTH_DOC = "docs/fork/cline-bedrock-auth.md";
 /** The podman quadlet line that hands Kanban the key (docs/fork/cline-bedrock-auth.md). */
 export const BEDROCK_PODMAN_SECRET_LINE = `Secret=<secret name>,type=env,target=${CLINE_BEDROCK_KEY_ENV}`;
@@ -189,7 +190,7 @@ function newBedrockEntry(settings: JsonObject, now: Date): JsonObject {
 }
 
 /**
- * `kanban cline store-bedrock-key`: stores this environment's AWS_BEARER_TOKEN_BEDROCK as
+ * `kanban setup-provider bedrock`: stores this environment's AWS_BEARER_TOKEN_BEDROCK as
  * `providers.bedrock.settings.apiKey` in Cline's providers.json, and a region (`aws.region`) when none is stored,
  * leaving the model and every other provider alone. Backs the file up into the Kanban home first and writes
  * atomically. The key comes from the env, never the command line (argv is readable in /proc and lands in history).
@@ -276,15 +277,4 @@ export async function storeClineBedrockKey(
 		backupPath,
 		rollback: `cp ${quoteShellArg(backupPath)} ${quoteShellArg(options.providersPath)}`,
 	});
-}
-
-/**
- * `kanban cline remove-bedrock-key` always refuses now: without a stored key Cline's TUI opens its sign-in screen and
- * no Cline card on Bedrock starts (issue #9). Kept so the old command, printed by earlier doctors, explains itself.
- */
-export function refuseRemoveClineBedrockKey(): ClineBedrockKeyCommandResult {
-	return result("refused", [
-		`Cline's TUI (cline 3.0.69) needs the Bedrock key stored in providers.json: with only ${CLINE_BEDROCK_KEY_ENV} it opens Cline's sign-in screen and Bedrock cards never start`,
-		`to store the environment's key (again): ${STORE_BEDROCK_KEY_COMMAND}`,
-	]);
 }

@@ -1,6 +1,6 @@
 // Doctor row: whether Cline cards on Bedrock start. Cline's TUI only counts credentials stored in providers.json
 // (src/terminal/cline-tui-sign-in.ts), so the key must be stored there; without it every Bedrock card sits on Cline's
-// sign-in screen (issue #9). The user's `kanban cline store-bedrock-key` (src/setup/cline-bedrock-key.ts) stores
+// sign-in screen (issue #9). `kanban setup-provider bedrock` (src/setup/cline-bedrock-key.ts) stores
 // AWS_BEARER_TOKEN_BEDROCK from Kanban's environment. It replaces setup's cline-providers step in doctor (skipSteps),
 // so the region is checked here too. Read-only and never prints a key value.
 import {

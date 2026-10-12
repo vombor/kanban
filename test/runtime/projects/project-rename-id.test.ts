@@ -128,8 +128,11 @@ function expectRenamed(): void {
 	const config = readJson(getKanbanGlobalConfigPath()) as {
 		workspaces: Record<string, unknown>;
 		orchestrator: { wake: Record<string, unknown> };
+		providers: Record<string, unknown>;
 	};
 	expect(Object.keys(config.workspaces)).toEqual(["kanban", "foo"]);
+	// The Kanban project's id for `kanban setup-provider` (the default) follows the renamed project.
+	expect(config.providers).toEqual({ setupWorkspaceId: "kanban" });
 	expect(config.workspaces.kanban).toEqual({
 		name: "Kanban",
 		landing: { mode: "off" },
@@ -239,7 +242,7 @@ describe("kanban project rename-id", () => {
 				"workspaces/index.json",
 			]);
 			expect(result.plan.rewrites.find((rewrite) => rewrite.file === "config.json")?.detail).toBe(
-				"workspaces.kanban-2uge → workspaces.kanban; removed orchestrator.wake.target (no longer used)",
+				"workspaces.kanban-2uge → workspaces.kanban; providers.setupWorkspaceId kanban-2uge → kanban; removed orchestrator.wake.target (no longer used)",
 			);
 		});
 	});

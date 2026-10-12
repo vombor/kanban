@@ -47,7 +47,7 @@ type ModelsDocument = {
 	};
 };
 
-describe("kanban cline apply-lemonade-models", () => {
+describe("kanban setup-provider lemonade", () => {
 	let root: { path: string; cleanup: () => void };
 	let savedEnv: { CLINE_DIR?: string; CLINE_DATA_DIR?: string };
 	let modelsPath: string;
@@ -99,7 +99,7 @@ describe("kanban cline apply-lemonade-models", () => {
 
 	it("prints a command with the origin", () => {
 		expect(formatApplyLemonadeModelsCommand("http://127.0.0.1:3485/x")).toBe(
-			"kanban cline apply-lemonade-models --origin http://127.0.0.1:3485",
+			"kanban setup-provider lemonade --origin http://127.0.0.1:3485",
 		);
 	});
 

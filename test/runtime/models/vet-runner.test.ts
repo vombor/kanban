@@ -213,6 +213,12 @@ describe("kanban models vet: the runner", () => {
 			taskId: null,
 		});
 		expect(signInScreen.calls).toEqual([]);
+		// A provider `kanban setup-provider` sets up gets the command that fixes it.
+		const onClinePass = { ...signInScreen.input.combination, provider: "cline-pass" };
+		expect(
+			(await runVet({ ...signInScreen.input, combination: onClinePass }, signInScreen.deps)).failure?.detail,
+		).toContain("; fix with kanban setup-provider cline-pass");
+		expect(signInScreen.calls).toEqual([]);
 
 		const noTurn = createHarness(() => {});
 		noTurn.fake.startedTurn = false;

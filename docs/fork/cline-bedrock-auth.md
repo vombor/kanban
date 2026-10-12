@@ -13,7 +13,7 @@ its environment, and Cline's `providers.json` must store it too:
   Pipeline checks never see it, and `scripts/secret-guard.sh` blocks a push that contains its value.
 - `AWS_REGION`: not a secret (`Environment=AWS_REGION=us-west-2`).
 - `providers.bedrock.settings.apiKey` and `providers.bedrock.settings.aws.region` in
-  `~/.cline/data/settings/providers.json`: run `kanban cline store-bedrock-key` once, and again after the secret
+  `~/.cline/data/settings/providers.json`: run `kanban setup-provider bedrock` once, and again after the secret
   rotates. It copies the key from the environment, so the key never goes on a command line.
 
 ## Why the key must be stored (cline 3.0.69, issue #9, checked 2026-10-08)
@@ -51,16 +51,17 @@ it equals the env's.
 |---|---|
 | Key and region stored | PASS |
 | AWS credentials (iam/profile) and region stored | PASS (INFO when an unused key is stored too) |
-| Env set, no key stored | WARN: Bedrock cards open on Cline's sign-in screen → `kanban cline store-bedrock-key` |
-| Stored key differs from the env's | WARN: Cline uses the stored one → `kanban cline store-bedrock-key` |
-| No region stored | WARN (also when `AWS_REGION` is set: the TUI doesn't count it) → `kanban cline store-bedrock-key` |
+| Env set, no key stored | WARN: Bedrock cards open on Cline's sign-in screen → `kanban setup-provider bedrock` |
+| Stored key differs from the env's | WARN: Cline uses the stored one → `kanban setup-provider bedrock` |
+| No region stored | WARN (also when `AWS_REGION` is set: the TUI doesn't count it) → `kanban setup-provider bedrock` |
 | Env missing, no key stored | WARN: no key; set the podman secret first (hint: this page) |
 
 `kanban setup`'s `cline-providers` step only checks (status `manual`), says the same and prints the same command.
 
-## `kanban cline store-bedrock-key`
+## `kanban setup-provider bedrock`
 
-The user's command. It is in `USER_ONLY_COMMANDS`, so agent sessions are refused.
+Run by the user or the Kanban project's orchestrator; every other session is refused
+([setup-provider.md](setup-provider.md)). `kanban setup-provider` with no provider lists every provider's state.
 
 - It writes `providers.bedrock.settings.apiKey` from its own `AWS_BEARER_TOKEN_BEDROCK`, so run it from the environment
   Kanban runs in (`podman exec`). Without the variable it refuses.
@@ -75,10 +76,10 @@ The user's command. It is in `USER_ONLY_COMMANDS`, so agent sessions are refused
   then replaces the file atomically, keeping its mode, and prints the rollback line (`cp <backup> <providers.json>`).
   If a card launch rewrote the file in the meantime, it writes nothing; run it again.
 
-`kanban cline remove-bedrock-key` is still there, but it only refuses and points at `store-bedrock-key`.
+The old `kanban cline store-bedrock-key` and `remove-bedrock-key` are gone (2026-10-12).
 
-This follows `kanban cline apply-lemonade-models`: Kanban doesn't write Cline's files on its own (the one exception
-is the Lemonade context windows in models.json, issue #31); the user runs the command that does.
+Kanban doesn't write Cline's files on its own (the one exception is the Lemonade context windows in models.json, issue
+#31); the user or the Kanban orchestrator runs the command that does.
 
 ## When a card hits the sign-in screen anyway
 

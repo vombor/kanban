@@ -83,7 +83,7 @@ describe("Cline's TUI sign-in rule for ClinePass (cline 3.0.70)", () => {
 	});
 });
 
-describe("kanban cline store-cline-pass-key", () => {
+describe("kanban setup-provider cline-pass", () => {
 	let root: { path: string; cleanup: () => void };
 	let providersPath: string;
 	let backupDir: string;

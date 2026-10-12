@@ -72,6 +72,7 @@ import { createPipelineResubmitApi } from "../trpc/pipeline-resubmit-api";
 import { createPlansApi } from "../trpc/plans-api";
 import { createProjectsApi } from "../trpc/projects-api";
 import { createProviderCapacityApi } from "../trpc/provider-capacity-api";
+import { createProviderSetupApi } from "../trpc/provider-setup-api";
 import { createRuntimeApi } from "../trpc/runtime-api";
 import { createShortcutsApi } from "../trpc/shortcuts-api";
 import { createWorkspaceApi } from "../trpc/workspace-api";
@@ -407,6 +408,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 	});
 	const plansApi = createPlansApi({ log: isolation.log });
 	const kitSettingsApi = createKitSettingsApi({ log: isolation.log });
+	const providerSetupApi = createProviderSetupApi({ log: isolation.log });
 	const pipelineResubmitApi = createPipelineResubmitApi({
 		log: isolation.log,
 		loadWorkspaceState: loadWorkspaceStateById,
@@ -560,6 +562,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			isolationApi,
 			plansApi,
 			kitSettingsApi,
+			providerSetupApi,
 			pipelineResubmitApi,
 			providerCapacityApi,
 			pipelinePauseApi,

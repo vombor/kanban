@@ -112,9 +112,6 @@ describe("applyCliSessionScope", () => {
 				"project rename-id",
 				"isolation grant",
 				"isolation approve",
-				"cline apply-lemonade-models",
-				"cline store-bedrock-key",
-				"cline remove-bedrock-key",
 				"kit migrate-overrides",
 				"github bot create",
 				"kit create",
@@ -129,6 +126,53 @@ describe("applyCliSessionScope", () => {
 					}),
 				).toContain("is the user's");
 			}
+		});
+	});
+
+	it("asks the server who runs setup-provider, in a session or not; without an answer only the user with no live server goes ahead", async () => {
+		await withTemporaryKanbanHome(async () => {
+			const answering = (answer: { allowed: boolean; message: string | null }) => {
+				const query = vi.fn(async () => answer);
+				return { query, createClient: () => ({ providers: { authorizeSetup: { query } } }) };
+			};
+			const run = async (
+				createClient: () => unknown,
+				env: NodeJS.ProcessEnv,
+				isServerRunning: () => boolean = () => false,
+			) =>
+				await applyCliSessionScope({
+					commandPath: "setup-provider",
+					options: {},
+					args: ["bedrock"],
+					createClient: createClient as never,
+					env,
+					isServerRunning,
+				});
+			const allowed = answering({ allowed: true, message: null });
+			expect(await run(allowed.createClient, SESSION_ENV)).toBeNull();
+			expect(await run(allowed.createClient, {})).toBeNull();
+			expect(allowed.query).toHaveBeenCalledTimes(2);
+			// A process without a credential is asked too: the server traces it to a card's process tree.
+			const refused = answering({ allowed: false, message: "only the user or the Kanban project's orchestrator" });
+			expect(await run(refused.createClient, {})).toBe("only the user or the Kanban project's orchestrator");
+			expect(await run(refused.createClient, SESSION_ENV)).toBe(
+				"only the user or the Kanban project's orchestrator",
+			);
+			const unreachable = () => ({ providers: { authorizeSetup: { query: vi.fn(down) } } });
+			expect(await run(unreachable, SESSION_ENV)).toContain("could not be reached");
+			expect(await run(unreachable, {}, () => true)).toContain("could not be asked who calls");
+			expect(await run(unreachable, {})).toBeNull();
+			// Other commands never ask.
+			const other = vi.fn(down);
+			expect(
+				await applyCliSessionScope({
+					commandPath: "setup",
+					options: {},
+					createClient: (() => ({ providers: { authorizeSetup: { query: other } } })) as never,
+					env: {},
+				}),
+			).toBeNull();
+			expect(other).not.toHaveBeenCalled();
 		});
 	});
 

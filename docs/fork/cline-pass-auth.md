@@ -28,7 +28,7 @@ need a ClinePass API key. Kanban gets the key from its environment, and Cline's 
   Pipeline checks never see it (`SECRET_ENV_NAMES` in `src/pipeline/checks.ts`), and `scripts/secret-guard.sh` blocks a
   push that contains its value.
 - `providers["cline-pass"].settings.apiKey` in `~/.cline/data/settings/providers.json`: run
-  `kanban cline store-cline-pass-key` once from that environment (`podman exec`), and again after the secret rotates.
+  `kanban setup-provider cline-pass` once from that environment (`podman exec`), and again after the secret rotates.
   It copies the key from the environment, so the key never goes on a command line (`cline auth -p cline-pass -k <key>`
   would put it in argv and the shell history).
 
@@ -76,13 +76,14 @@ key, only whether one is stored and whether it equals the env's. The row appears
 |---|---|
 | The env's key stored (or a stored key and no env) | PASS |
 | A Cline account sign-in stored | PASS (INFO when `CLINE_API_KEY` is set: it is unused) |
-| Env set, no key stored | WARN: cline-pass cards open on Cline's sign-in screen → `kanban cline store-cline-pass-key` |
-| Stored key differs from the env's | WARN: Cline uses the stored one → `kanban cline store-cline-pass-key` |
+| Env set, no key stored | WARN: cline-pass cards open on Cline's sign-in screen → `kanban setup-provider cline-pass` |
+| Stored key differs from the env's | WARN: Cline uses the stored one → `kanban setup-provider cline-pass` |
 | Env missing, no key stored | WARN: no key; set the podman secret first (hint: this page) |
 
-## `kanban cline store-cline-pass-key`
+## `kanban setup-provider cline-pass`
 
-The user's command. It is in `USER_ONLY_COMMANDS`, so agent sessions are refused.
+Run by the user or the Kanban project's orchestrator; every other session is refused
+([setup-provider.md](setup-provider.md)).
 
 - It writes `providers["cline-pass"].settings.apiKey` from its own `CLINE_API_KEY`, so run it from the environment
   Kanban runs in. Without the variable it refuses.
@@ -96,8 +97,8 @@ The user's command. It is in `USER_ONLY_COMMANDS`, so agent sessions are refused
   then replaces the file atomically, keeping its mode, and prints the rollback line (`cp <backup> <providers.json>`).
   If a card launch rewrote the file in the meantime, it writes nothing; run it again.
 
-Like the other `kanban cline` commands, it is the only way Kanban writes this: Kanban doesn't change Cline's files on its
-own (the one exception is the Lemonade context windows in models.json, issue #31).
+Like the other `kanban setup-provider` providers, it is the only way Kanban writes this: Kanban doesn't change Cline's
+files on its own (the one exception is the Lemonade context windows in models.json, issue #31).
 
 ## Errors ClinePass returns
 

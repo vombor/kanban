@@ -1,7 +1,7 @@
 // The one write Kanban makes in Cline's files on its own (issue #31, the user's choice 2026-10-11): each Lemonade
 // model's `contextWindow` and `maxTokens` in Cline's models.json, kept equal to the `ctx_size` Lemonade loads the
 // model with, so a model reloaded with another ctx_size reaches the next Cline session without the user's
-// `kanban cline apply-lemonade-models`. Before, Cline compacted at the old size (a raised window) or sent more than
+// `kanban setup-provider lemonade`. Before, Cline compacted at the old size (a raised window) or sent more than
 // llama-server takes, "Context size has been exceeded." (a lowered one, #26).
 //
 // Narrow on purpose. The comparison is doctor's and apply's (planLemonadeModelsForEntry); of its differences only
@@ -11,7 +11,7 @@
 //   - when the window comes from Lemonade's `recipe_options.ctx_size`: the loaded model's (/health) or the recipe's
 //     (/models). A global ctx_size or `max_context_window` (the model's maximum, not what it loads with) is skipped.
 // Adding, removing or renaming models, the list form, `modelsSourceUrl`, vision, reasoning, prices and every other
-// key stay the user's apply-lemonade-models. The write is apply's: models.json as read is backed up into
+// key stay setup-provider lemonade. The write is apply's: models.json as read is backed up into
 // `<home>/backups/cline`, the file is left alone when it changed while Lemonade was asked, and it is replaced
 // atomically with its own mode (cline-file-write.ts). A running Cline session keeps the window it started with.
 import { readFile } from "node:fs/promises";
@@ -48,7 +48,7 @@ export interface LemonadeContextSkip {
 export interface LemonadeContextSyncPlan {
 	changes: LemonadeContextChange[];
 	skipped: LemonadeContextSkip[];
-	/** Differences left to the user's apply-lemonade-models (models to add or remove, other keys, the list form). */
+	/** Differences left to setup-provider lemonade (models to add or remove, other keys, the list form). */
 	userDifferences: number;
 }
 
@@ -70,7 +70,7 @@ export function planLemonadeContextSync(plan: LemonadeModelsPlan): LemonadeConte
 			changes: [],
 			skipped:
 				contextChanges.length > 0
-					? [{ id: null, reason: "models is a list, which only apply-lemonade-models rewrites" }]
+					? [{ id: null, reason: "models is a list, which only setup-provider lemonade rewrites" }]
 					: [],
 			userDifferences,
 		};

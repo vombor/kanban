@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { refuseRemoveClineBedrockKey, storeClineBedrockKey } from "../../../src/setup/cline-bedrock-key";
+import { storeClineBedrockKey } from "../../../src/setup/cline-bedrock-key";
 import { describeClineTuiSignInGap } from "../../../src/terminal/cline-tui-sign-in";
 import { createTempDir } from "../../utilities/temp-dir";
 
@@ -30,7 +30,7 @@ function providersFile(bedrockSettings: Record<string, unknown> | null): Record<
 	};
 }
 
-describe("kanban cline store-bedrock-key", () => {
+describe("kanban setup-provider bedrock", () => {
 	let root: { path: string; cleanup: () => void };
 	let providersPath: string;
 	let backupDir: string;
@@ -146,15 +146,6 @@ describe("kanban cline store-bedrock-key", () => {
 		writeFileSync(providersPath, "{not json");
 		expect((await run()).status).toBe("error");
 		expect(readFileSync(providersPath, "utf8")).toBe("{not json");
-	});
-});
-
-describe("kanban cline remove-bedrock-key", () => {
-	it("always refuses and points at store-bedrock-key", () => {
-		const result = refuseRemoveClineBedrockKey();
-		expect(result.status).toBe("refused");
-		expect(result.lines.join("\n")).toContain("sign-in screen");
-		expect(result.lines.join("\n")).toContain("kanban cline store-bedrock-key");
 	});
 });
 

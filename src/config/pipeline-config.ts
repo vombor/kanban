@@ -663,6 +663,18 @@ const githubSectionSchema = z
 	.strict();
 export type GitHubSettings = z.infer<typeof githubSectionSchema>;
 
+/** The Kanban project's own workspace on this machine (the vombor/kanban checkout). */
+export const DEFAULT_PROVIDER_SETUP_WORKSPACE_ID = "kanban-2uge";
+
+// Model providers' Cline settings (`kanban setup-provider`, src/setup/cline-provider-setup.ts). Besides the user, only
+// the orchestrator of `setupWorkspaceId` (the Kanban project's own) may run the command (src/isolation/cli-scope.ts).
+const providersSectionSchema = z
+	.object({
+		setupWorkspaceId: z.string().min(1).default(DEFAULT_PROVIDER_SETUP_WORKSPACE_ID),
+	})
+	.strict();
+export type ProvidersSettings = z.infer<typeof providersSectionSchema>;
+
 const SECTION_SCHEMAS = {
 	sessionSync: sessionSyncSectionSchema,
 	pipeline: pipelineSectionSchema,
@@ -675,6 +687,7 @@ const SECTION_SCHEMAS = {
 	projects: projectsSectionSchema,
 	isolation: isolationSectionSchema,
 	github: githubSectionSchema,
+	providers: providersSectionSchema,
 } as const;
 
 type SectionName = keyof typeof SECTION_SCHEMAS;

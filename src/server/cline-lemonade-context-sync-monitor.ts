@@ -84,7 +84,7 @@ function describeResult(result: LemonadeContextSyncResult, mode: ClineLemonadeCo
 		...result.changes.map((change) => `  ${describeLemonadeContextChange(change)}`),
 		...result.skipped.map((skip) => `  ${skip.id ?? "all models"}: skipped, ${skip.reason}`),
 		...(result.userDifferences > 0
-			? [`  ${result.userDifferences} other difference(s) are the user's \`kanban cline apply-lemonade-models\``]
+			? [`  ${result.userDifferences} other difference(s) are left to \`kanban setup-provider lemonade\``]
 			: []),
 	];
 }

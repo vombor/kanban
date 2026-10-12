@@ -165,8 +165,8 @@ orchestrator starts it in the background of its own session (it must stay in the
 
 ClinePass is Cline's subscription provider (ids `cline-pass/<model>`, e.g. `cline-pass/mimo-v2.6-flash`,
 `cline-pass/glm-5.3-flash`, `cline-pass/kimi-k3`). Its key comes from Kanban's environment (`CLINE_API_KEY`, a podman
-secret) and must be stored in Cline's providers.json with the user's `kanban cline store-cline-pass-key`, because
-Cline's TUI doesn't count the env's key (verified with real TUI runs, 2026-10-12): [cline-pass-auth.md](../fork/cline-pass-auth.md).
+secret) and must be stored in Cline's providers.json with `kanban setup-provider cline-pass` (the user or the Kanban
+orchestrator runs it), because Cline's TUI doesn't count the env's key (verified with real TUI runs, 2026-10-12): [cline-pass-auth.md](../fork/cline-pass-auth.md).
 For Kanban it is a cloud provider: a QA card on it takes a cloud QA slot. Its turns price at 0 by provider
 (`SUBSCRIPTION_PROVIDER_IDS`, as Cline itself prices them), `getModelVendor()` reads the model after the
 `cline-pass/` prefix, and its account answers ("No access to ClinePass subscription models yet", "Organization
@@ -184,8 +184,8 @@ on this machine, `http://localhost:13305/api/v1`): its turns are priced at 0, a 
 load allowance, and an unreachable server is a provider outage (backoff retries, then the outage hold).
 
 - Cline's model list (`modelsSourceUrl`): `/api/model-lists/lemonade`, downloaded models with `requireLabels`, from
-  `models.lists.lemonade.url`. Cline's entry is written by the user's `kanban cline apply-lemonade-models`
-  (models.json).
+  `models.lists.lemonade.url`. Cline's entry is written by `kanban setup-provider lemonade` (models.json;
+  the user or the Kanban orchestrator runs it).
 - Models loaded at once: `/api/v1/health` `max_models.llm` (doctor and `kit show` compare it with Kanban's capacity).
 - Outage probe and "is the model loaded?" (vet): `/api/v1/health`.
 - Context windows: `recipe_options.ctx_size`, kept in sync by the server.

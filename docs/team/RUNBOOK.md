@@ -64,18 +64,20 @@ Fix it before anything else.
   context windows in `models.json` (below). Every Cline launch gets
   Kanban's rules as worktree rules (`.cline/rules/kanban-*.md`, git-excluded) and `CLINE_DISABLE_CLINE_PASS_NOTICE=1`.
   Bedrock needs its key and region stored in Cline's `providers.json`: Cline's TUI doesn't count
-  `AWS_BEARER_TOKEN_BEDROCK`/`AWS_REGION` and opens its sign-in screen without them. Run `kanban cline store-bedrock-key`
+  `AWS_BEARER_TOKEN_BEDROCK`/`AWS_REGION` and opens its sign-in screen without them. Run `kanban setup-provider bedrock`
   from the environment Kanban starts from to store the env's key ([cline-bedrock-auth.md](../fork/cline-bedrock-auth.md)).
   ClinePass (`cline-pass`) is the same: its key comes in as `CLINE_API_KEY` (podman secret) and must be stored in
-  `providers.json` with `kanban cline store-cline-pass-key` ([cline-pass-auth.md](../fork/cline-pass-auth.md));
-  `kanban setup` and `kanban doctor` only check and print what to run (status "to do by hand").
+  `providers.json` with `kanban setup-provider cline-pass` ([cline-pass-auth.md](../fork/cline-pass-auth.md));
+  `kanban setup` and `kanban doctor` only check and print what to run (status "to do by hand"); `kanban setup-provider`
+  with no provider lists lemonade, bedrock and cline-pass with whether each is in sync. Only you and the Kanban
+  project's orchestrator may run it ([setup-provider.md](../fork/setup-provider.md)).
   `kanban models providers --cleanup` lists the edits for Cline's files; you make them. `kanban doctor` reports
   Kanban's rules left in `~/.cline/rules` and `*.bak-before-kanban-setup-*` backups with the `rm` command; it never
   deletes them.
 - **Cline's Lemonade models (`models.json`):** `kanban setup` and `kanban doctor` compare the `lemonade` provider entry
   (its `modelsSourceUrl` and each model's context window, maxTokens, vision, reasoning) with Kanban's model-lists route
   and what Lemonade reports now, and list every difference (doctor: WARN, INFO when Lemonade is down). To apply them,
-  run the printed `kanban cline apply-lemonade-models --origin <origin>` yourself (`--dry-run` first to see the
+  run the printed `kanban setup-provider lemonade --origin <origin>` yourself (`--dry-run` first to see the
   changes). It changes only the Lemonade entry and backs up the old file to `~/.kanban/backups/cline/`. To roll back,
   copy the backup over `~/.cline/data/settings/models.json`.
 - **Lemonade context windows follow a reload by themselves** (issue #31): the server's Lemonade context sync

@@ -1,8 +1,8 @@
-// `kanban cline apply-lemonade-models`: the one command that writes Cline's whole Lemonade entry in models.json, and
-// only when the user runs it. Kanban writes nothing under ~/.cline on its own (user rule, 2026-10-07; the user chose
-// "Kanban prints, the user applies"): `kanban setup` and doctor only print the differences and this command line. The
-// one exception is the server's context sync (cline-lemonade-context-sync.ts, issue #31): contextWindow and maxTokens
-// of models already in the entry.
+// `kanban setup-provider lemonade`: the one command that writes Cline's whole Lemonade entry in models.json, and
+// only when the user or the Kanban project's orchestrator runs it (src/isolation/cli-scope.ts). Kanban writes nothing
+// under ~/.cline on its own (user rule, 2026-10-07; the user chose "Kanban prints, the user applies"): `kanban setup`
+// and doctor only print the differences and this command line. The one exception is the server's context sync
+// (cline-lemonade-context-sync.ts, issue #31): contextWindow and maxTokens of models already in the entry.
 //
 // It changes the Lemonade provider entry and nothing else: `provider.modelsSourceUrl` (cline-models-source.ts) and
 // `models` (cline-lemonade-models.ts). Before writing it copies the file as read into the Kanban home's backups
@@ -23,12 +23,11 @@ import {
 	planModelsSourceUrl,
 	readClineLemonadeEntry,
 } from "./cline-models-source";
+import { formatSetupProviderCommand } from "./setup-provider-command";
 
-export const APPLY_LEMONADE_MODELS_COMMAND = "kanban cline apply-lemonade-models";
-
-/** The exact command line setup and doctor print: the user's to run. */
+/** The exact command line setup and doctor print: the user's (or the Kanban orchestrator's) to run. */
 export function formatApplyLemonadeModelsCommand(origin: string): string {
-	return `${APPLY_LEMONADE_MODELS_COMMAND} --origin ${new URL(origin).origin}`;
+	return formatSetupProviderCommand("lemonade", `--origin ${new URL(origin).origin}`);
 }
 
 /** Setup's and doctor's line telling the user what to run. */

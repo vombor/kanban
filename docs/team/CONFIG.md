@@ -194,7 +194,7 @@ session `__home_agent__:<ws>:<selected agent>` of the workspace the items are ab
 
 | Key | Default | What |
 |---|---|---|
-| `models.providers.default` | `bedrock` | the provider for Cline models. A card names another with its own provider (`-P`), e.g. ClinePass (`cline-pass`, key `CLINE_API_KEY`, stored by `kanban cline store-cline-pass-key`: [cline-pass-auth.md](../fork/cline-pass-auth.md)); no config key for it |
+| `models.providers.default` | `bedrock` | the provider for Cline models. A card names another with its own provider (`-P`), e.g. ClinePass (`cline-pass`, key `CLINE_API_KEY`, stored by `kanban setup-provider cline-pass`: [cline-pass-auth.md](../fork/cline-pass-auth.md)); no config key for it |
 | `models.providers.fallback` | `{}` | model id → provider, for models proven not to work on the default |
 | `models.providers.deprecated` | `{}` | documented workarounds `kanban models providers --cleanup` removes |
 | `models.providerCapacity.<id>.maxLoadedModels` | `lemonade: 1` | recovery's retries, nudges and resumes wait while another In Progress card of the project holds a different model on that provider, and the QA gate's QA card starts while In Progress cards of any project do (dev, fallback and QA cards alike); a local provider's QA cards are limited only by this, never by `pipeline.qa.slots`; `kanban bench calibrate` refuses a spec that would run more at once (merged over the default). Must match what the server keeps loaded (doctor and `kit show` compare): Lemonade's `max_models.llm` |
@@ -204,7 +204,7 @@ session `__home_agent__:<ws>:<selected agent>` of the workspace the items are ab
 | `agents.cline.dataDir` | null (`~/.cline/data`) | Cline's sessions and providers |
 | `agents.cline.turnDetector.mode` | `report` | Cline CLI turn-end detector and session sync's idle-TUI check: `off` / `report` / `on`. `report` while the legacy column-sync logic is still the reference |
 | `agents.cline.turnDetector.intervalSec` | 15 | |
-| `agents.cline.lemonadeContextSync.mode` | `on` | The server keeps each Lemonade model's `contextWindow`/`maxTokens` in Cline's models.json equal to Lemonade's `recipe_options.ctx_size` (only models already listed, nothing else; the rest is `kanban cline apply-lemonade-models`): `off` / `report` (log only) / `on`. Every change in the server log and `data/models/cline-lemonade-sync.jsonl` |
+| `agents.cline.lemonadeContextSync.mode` | `on` | The server keeps each Lemonade model's `contextWindow`/`maxTokens` in Cline's models.json equal to Lemonade's `recipe_options.ctx_size` (only models already listed, nothing else; the rest is `kanban setup-provider lemonade`): `off` / `report` (log only) / `on`. Every change in the server log and `data/models/cline-lemonade-sync.jsonl` |
 | `agents.cline.lemonadeContextSync.intervalSec` | 30 | Also runs right before each Cline launch |
 | `agents.codex.home` | null (`$CODEX_HOME`, else `~/.codex`) | |
 | `backups.board.enabled`, `.everyMin`, `.keep` | `true`, 10, 200 | every board write writes `board-latest.json`, plus a timestamped copy at most every `everyMin` |
@@ -269,6 +269,15 @@ create, register or remove projects. The user's escape hatch is `kanban isolatio
 sides), which waits for a one-time code printed only on the server's console (`kanban isolation approve <id> <code>`).
 Under `enforce` the user's own project add/create/remove waits for one too. Mode changes are logged (`mode_changed`).
 Before rolling back to a build without project isolation, remove the `isolation` keys: older builds reject them.
+
+## `providers.*`
+
+Model providers' Cline settings, written by `kanban setup-provider <provider>`
+([setup-provider.md](../fork/setup-provider.md)).
+
+| Key | Default | What |
+|---|---|---|
+| `providers.setupWorkspaceId` | `kanban-2uge` | the Kanban project's workspace: besides the user, only its orchestrator (sidebar session or headless wake) may run `kanban setup-provider`. `kanban project rename-id` keeps it on the renamed project |
 
 ## From kit.config.json
 

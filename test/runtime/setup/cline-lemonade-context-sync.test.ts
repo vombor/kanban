@@ -214,7 +214,7 @@ describe("Cline Lemonade context sync", () => {
 		const listResult = await sync();
 		expect(listResult.status).toBe("skipped");
 		expect(listResult.skipped).toEqual([
-			{ id: null, reason: "models is a list, which only apply-lemonade-models rewrites" },
+			{ id: null, reason: "models is a list, which only setup-provider lemonade rewrites" },
 		]);
 		expect(readFileSync(modelsPath, "utf8")).toBe(list);
 

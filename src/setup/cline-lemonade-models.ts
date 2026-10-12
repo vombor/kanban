@@ -16,8 +16,8 @@
 // contextWindow (see src/models/lemonade-models.ts for where the size comes from), maxTokens, supportsVision and
 // supportsReasoning, and zero prices when none are set; other keys of a model are kept, and models Lemonade no longer
 // lists are dropped. With Lemonade down no value changes (only a list is still rewritten as a record).
-// Read-only: `kanban setup` and doctor print the differences, and the user's `kanban cline apply-lemonade-models`
-// (cline-lemonade-apply.ts) writes them. The one exception is the server's context sync
+// Read-only: `kanban setup` and doctor print the differences, and `kanban setup-provider lemonade` (run by the user
+// or the Kanban orchestrator, cline-lemonade-apply.ts) writes them. The one exception is the server's context sync
 // (cline-lemonade-context-sync.ts, issue #31): from this same plan it writes only contextWindow and maxTokens of
 // models already in the file.
 import { DEFAULT_LEMONADE_MODEL_LIST_SETTINGS } from "../config/model-lists-config";

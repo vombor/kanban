@@ -6,11 +6,14 @@
 // (`isolation.whoami`, which knows the user's grants); when it can't be reached the env's workspace id and the local
 // config decide, without grants. A guard against ordinary use, not a sandbox: a process that drops its env gets past
 // it, which is why the runtime also traces credential-less calls to the session's process tree. With isolation off
-// everywhere nothing is scoped (the CLI behaves as before); only the user-only commands stay refused. Outside a
+// everywhere nothing is scoped (the CLI behaves as before); only the user-only commands stay refused, and the Kanban
+// orchestrator's commands (KANBAN_ORCHESTRATOR_OR_USER_COMMANDS) are asked of the server, in a session or not. Outside a
 // session, `kanban project add|create` waits for the console-code approval while some workspace is in `enforce`.
 
 import type { RuntimeTrpcClient } from "../commands/runtime-trpc-client";
 import type { IsolationMode, PipelineConfig } from "../config/pipeline-config";
+import { getDefaultKanbanHomePath, getKanbanHomePath } from "../state/kanban-home";
+import { readLiveKanbanServerLock } from "../state/kanban-server-lock";
 import { listWorkspaceIndexEntries, setWorkspaceAccessGuard } from "../state/workspace-state";
 import { describeIsolationAction } from "./action-names";
 import { type CompleteApprovalInput, completeIsolationApproval } from "./cli-approval";
@@ -21,7 +24,12 @@ import {
 	resolveIsolationMode,
 	resolveReachIsolationMode,
 } from "./isolation-settings";
-import { KANBAN_SESSION_CREDENTIAL_ENV, KANBAN_SESSION_WORKSPACE_ENV } from "./session-identity";
+import {
+	describeCaller,
+	KANBAN_SESSION_CREDENTIAL_ENV,
+	KANBAN_SESSION_WORKSPACE_ENV,
+	type RuntimeCaller,
+} from "./session-identity";
 
 export interface CliSessionScope {
 	workspaceId: string;
@@ -65,10 +73,6 @@ export const USER_ONLY_COMMANDS = [
 	"isolation grant",
 	"isolation revoke",
 	"isolation approve",
-	"cline apply-lemonade-models",
-	"cline store-bedrock-key",
-	"cline store-cline-pass-key",
-	"cline remove-bedrock-key",
 	"plan approve",
 	// Moves team keys into a new user kit and switches the project to it: a change of the project's team.
 	"kit migrate-overrides",
@@ -116,6 +120,79 @@ function orchestratorOrUserRefusal(commandPath: string): string {
 						? "pauses or resumes the project's QA pipeline"
 						: "changes the project's settings on its kit (role models, project facts)";
 	return `\`kanban ${commandPath}\` ${why}, so only the user or the project's orchestrator runs it, never a card session. Tell your orchestrator what you need.`;
+}
+
+/**
+ * Commands only the user and the Kanban project's own orchestrator (its sidebar session or headless wake; the workspace
+ * is `providers.setupWorkspaceId`, default kanban-2uge) may run, whatever the isolation mode: `setup-provider` writes
+ * a model provider's settings into Cline's files, which every project's Cline cards use. Every other project's
+ * orchestrator and every card session are refused. The running server decides who calls (`providers.authorizeSetup`,
+ * the strict caller lookup: a session without its credential is traced to its process tree, an unidentified caller is
+ * refused), outside a session too, since a card that drops its credential looks like the user from here.
+ */
+export const KANBAN_ORCHESTRATOR_OR_USER_COMMANDS = ["setup-provider"] as const;
+
+export type KanbanOrchestratorCallerDecision = { allowed: true } | { allowed: false; message: string };
+
+function kanbanOrchestratorOrUserRefusal(commandPath: string, kanbanWorkspaceId: string, who: string): string {
+	return `\`kanban ${commandPath}\` writes model providers' settings into Cline's files, which every project's Cline cards use, so only the user or the Kanban project's orchestrator (workspace ${kanbanWorkspaceId}) runs it; ${who} can't. Tell your orchestrator or the user which provider needs setting up.`;
+}
+
+/** The one rule for KANBAN_ORCHESTRATOR_OR_USER_COMMANDS, asked by the server's route with the strict caller. */
+export function decideKanbanOrchestratorCaller(
+	caller: RuntimeCaller,
+	kanbanWorkspaceId: string,
+	commandPath: string = KANBAN_ORCHESTRATOR_OR_USER_COMMANDS[0],
+): KanbanOrchestratorCallerDecision {
+	if (caller.kind === "user") {
+		return { allowed: true };
+	}
+	if (
+		caller.kind === "session" &&
+		caller.session.role === "orchestrator" &&
+		caller.session.workspaceId === kanbanWorkspaceId
+	) {
+		return { allowed: true };
+	}
+	return {
+		allowed: false,
+		message: kanbanOrchestratorOrUserRefusal(commandPath, kanbanWorkspaceId, describeCaller(caller)),
+	};
+}
+
+function isLiveServerOnHome(): boolean {
+	// The default home too: a `--home` elsewhere still writes the same Cline files.
+	return [getKanbanHomePath(), getDefaultKanbanHomePath()].some((home) => readLiveKanbanServerLock(home) !== null);
+}
+
+/**
+ * Asks the running server whether this process may run a KANBAN_ORCHESTRATOR_OR_USER_COMMANDS command. Without an
+ * answer only a process with no session credential and no live Kanban server goes ahead: no agent session outlives its
+ * server, so that is the user. Returns the refusal, or null.
+ */
+async function requireKanbanOrchestratorOrUser(input: {
+	commandPath: string;
+	env: NodeJS.ProcessEnv;
+	createClient: () => Pick<RuntimeTrpcClient, "providers">;
+	isServerRunning: () => boolean;
+	timeoutMs?: number;
+}): Promise<string | null> {
+	const answer = await Promise.race([
+		Promise.resolve()
+			.then(() => input.createClient().providers.authorizeSetup.query())
+			.catch(() => null),
+		new Promise<null>((resolve) => setTimeout(() => resolve(null), input.timeoutMs ?? 5000).unref()),
+	]);
+	if (answer) {
+		return answer.allowed ? null : (answer.message ?? `\`kanban ${input.commandPath}\` was refused.`);
+	}
+	if (readSessionCredential(input.env)) {
+		return `\`kanban ${input.commandPath}\` runs only for the user or the Kanban project's orchestrator, and the running Kanban server, which decides who calls, could not be reached.`;
+	}
+	if (input.isServerRunning()) {
+		return `\`kanban ${input.commandPath}\`: a Kanban server runs on this machine but could not be asked who calls (it decides who may run this; an older server must be restarted first).`;
+	}
+	return null;
 }
 
 /** The project changes that wait for an approval under `enforce` (src/isolation/approvals.ts). */
@@ -291,16 +368,29 @@ async function requireProjectChangeApproval(input: {
 export async function applyCliSessionScope(input: {
 	commandPath: string;
 	options: Record<string, unknown>;
-	createClient: () => Pick<RuntimeTrpcClient, "isolation">;
+	createClient: () => Pick<RuntimeTrpcClient, "isolation" | "providers">;
 	env?: NodeJS.ProcessEnv;
 	/** The command's arguments, for the approval's summary. */
 	args?: readonly string[];
 	approval?: Partial<CompleteApprovalInput>;
+	/** Whether a Kanban server is live on the home (its lock); tests inject it. */
+	isServerRunning?: () => boolean;
 }): Promise<string | null> {
 	const env = input.env ?? process.env;
 	// The hook commands run on every tool call (and in Cline's shared daemon with another card's env): never scoped.
 	if (input.commandPath === "hooks" || input.commandPath.startsWith("hooks ")) {
 		return null;
+	}
+	if (matchesCommandPath(input.commandPath, KANBAN_ORCHESTRATOR_OR_USER_COMMANDS)) {
+		const refusal = await requireKanbanOrchestratorOrUser({
+			commandPath: input.commandPath,
+			env,
+			createClient: input.createClient,
+			isServerRunning: input.isServerRunning ?? isLiveServerOnHome,
+		});
+		if (refusal) {
+			return refusal;
+		}
 	}
 	if (!readSessionCredential(env)) {
 		return input.commandPath in PROJECT_CHANGE_COMMANDS

@@ -249,7 +249,7 @@ describe("Cline models.json Lemonade metadata plan", () => {
 				"Gemma-4-12B-it-GGUF: add, context 65536 (recipe ctx_size), maxTokens 16384, vision",
 			);
 			expect(warn?.message).toContain("Old-GGUF: remove (Lemonade no longer lists it)");
-			expect(warn?.hint).toBe("kanban cline apply-lemonade-models --origin http://127.0.0.1:3485");
+			expect(warn?.hint).toBe("kanban setup-provider lemonade --origin http://127.0.0.1:3485");
 			expect(readFileSync(modelsPath, "utf8")).toBe(before);
 
 			const [down] = await check(createFakeLemonadeFetch({ down: true }));

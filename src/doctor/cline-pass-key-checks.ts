@@ -1,6 +1,6 @@
 // Doctor row: whether Cline cards on ClinePass (`cline-pass`) start. Cline's TUI only counts credentials stored in
 // providers.json (src/terminal/cline-tui-sign-in.ts), so without a stored key every cline-pass card sits on Cline's
-// sign-in screen, as Bedrock's did (issue #9). The user's `kanban cline store-cline-pass-key`
+// sign-in screen, as Bedrock's did (issue #9). `kanban setup-provider cline-pass`
 // (src/setup/cline-pass-key.ts) stores CLINE_API_KEY from Kanban's environment. Read-only and never prints a key value.
 
 import { readClineProvidersFile } from "../setup/cline-bedrock-key";
