@@ -111,7 +111,11 @@ describe("deliverTaskInput", () => {
 
 	it("reports hook and output activity as evidence when the state does not change", async () => {
 		const hookTerminal = createFakeTerminal({ onEnter: (_n, t) => t.patch({ lastHookAt: 300 }) });
-		const outputTerminal = createFakeTerminal({ onEnter: (_n, t) => t.patch({ lastOutputAt: 999 }) });
+		// An agent without a prompt-submit hook: its new output is the only sign it took the input.
+		const outputTerminal = createFakeTerminal({
+			agentId: "cline",
+			onEnter: (_n, t) => t.patch({ lastOutputAt: 999 }),
+		});
 
 		const viaHook = await runDelivery(deliverTaskInput(hookTerminal, "task-1", "go"));
 		const viaOutput = await runDelivery(deliverTaskInput(outputTerminal, "task-1", "go"));
@@ -122,6 +126,7 @@ describe("deliverTaskInput", () => {
 
 	it("presses Enter a second time when the first one shows no activity", async () => {
 		const terminal = createFakeTerminal({
+			agentId: "cline",
 			onEnter: (n, t) => {
 				if (n === 2) {
 					t.patch({ lastOutputAt: 500 });
@@ -147,12 +152,72 @@ describe("deliverTaskInput", () => {
 	});
 
 	it("refuses with user_typing and writes nothing while the user is typing in the terminal (issue #35)", async () => {
-		const terminal = createFakeTerminal({ userTyping: true });
+		// Codex too: the stricter delivery proof of issue #52 never types or presses Enter into a draft.
+		for (const agentId of ["claude", "codex"] as const) {
+			const terminal = createFakeTerminal({ agentId, userTyping: true });
 
-		const delivery = await runDelivery(deliverTaskInput(terminal, "task-1", "go"));
+			const delivery = await runDelivery(deliverTaskInput(terminal, "task-1", "go"));
 
-		expect(delivery).toMatchObject({ ok: false, status: "user_typing", enterAttempts: 0 });
-		expect(terminal.writeInput).not.toHaveBeenCalled();
+			expect(delivery).toMatchObject({ ok: false, status: "user_typing", enterAttempts: 0 });
+			expect(terminal.writeInput).not.toHaveBeenCalled();
+		}
+	});
+
+	describe("an idle agent whose prompt hook fires on submit (issue #52)", () => {
+		it("doesn't take a repaint for delivery: presses Enter again until the prompt hook shows", async () => {
+			// cline-pass-test's Codex sidebar, 2026-10-13 20:10Z: the wake sat in the composer, reported delivered.
+			const terminal = createFakeTerminal({
+				agentId: "codex",
+				onEnter: (n, t) =>
+					n === 1
+						? t.patch({ lastOutputAt: 500 })
+						: t.patch({ state: "running", reviewReason: null, lastHookAt: 600, lastOutputAt: 601 }),
+			});
+
+			const delivery = await runDelivery(
+				deliverTaskInput(terminal, "task-1", "30b1e: dev card ran but changed nothing"),
+			);
+
+			expect(delivery).toMatchObject({ ok: true, status: "delivered", evidence: "state", enterAttempts: 2 });
+			expect(terminal.writes).toEqual(["30b1e: dev card ran but changed nothing", "\r", "\r"]);
+		});
+
+		it("reports undelivered when both Enters only repaint the TUI", async () => {
+			const terminal = createFakeTerminal({
+				agentId: "codex",
+				onEnter: (n, t) => t.patch({ lastOutputAt: 500 + n }),
+			});
+
+			const delivery = await runDelivery(deliverTaskInput(terminal, "task-1", "go"));
+
+			expect(delivery).toMatchObject({ ok: false, status: "undelivered", evidence: null, enterAttempts: 2 });
+			expect(delivery.error).toMatch(/no prompt hook or state change/);
+		});
+
+		it("counts the prompt hook alone for Claude Code too", async () => {
+			const terminal = createFakeTerminal({ onEnter: (_n, t) => t.patch({ lastHookAt: 300, lastOutputAt: 301 }) });
+
+			expect(await runDelivery(deliverTaskInput(terminal, "task-1", "go"))).toMatchObject({
+				status: "delivered",
+				evidence: "hook",
+				enterAttempts: 1,
+			});
+		});
+
+		it("still takes output while the agent is running, or before its session ever reported a hook", async () => {
+			const running = createFakeTerminal({ agentId: "codex", onEnter: (_n, t) => t.patch({ lastOutputAt: 999 }) });
+			running.patch({ state: "running", reviewReason: null });
+			const noHooks = createFakeTerminal({ agentId: "codex", onEnter: (_n, t) => t.patch({ lastOutputAt: 999 }) });
+			noHooks.patch({ lastHookAt: null });
+
+			for (const terminal of [running, noHooks]) {
+				expect(await runDelivery(deliverTaskInput(terminal, "task-1", "go"))).toMatchObject({
+					status: "delivered",
+					evidence: "output",
+					enterAttempts: 1,
+				});
+			}
+		});
 	});
 
 	it("says why the user counts as typing: a draft since when, or a recent keystroke (issue #39)", async () => {

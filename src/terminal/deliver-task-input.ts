@@ -11,7 +11,12 @@
 //
 // Activity means the session summary moved after Enter: a state change, a
 // hook event or new output. Typing echoes before the mark is taken, so the
-// echo of the text itself does not count as delivery.
+// echo of the text itself does not count as delivery. New output alone doesn't
+// count for an idle agent whose prompt hook fires as soon as it takes a prompt
+// (Claude Code, Codex: agentHooksOnPromptSubmit) once the session has shown it
+// reports hooks: an Enter the TUI swallowed or turned into a newline in its
+// composer repaints too, and was taken as delivered while the text sat unsent
+// in the Codex sidebar (issue #52).
 //
 // Nothing is typed while the user is typing in that terminal
 // (TerminalSessionManager.hasTypedInputSinceEnter, the one "is the user typing"
@@ -29,6 +34,7 @@ import type {
 	RuntimeTaskTypedInput,
 } from "../core/api-contract";
 import { getAgentInputDeliveryProfile } from "./agent-session-adapters";
+import { agentHooksOnPromptSubmit } from "./orchestrator-agents";
 
 const FOCUS_IN = "\u001b[I";
 const ENTER = "\r";
@@ -112,6 +118,7 @@ function markOf(summary: RuntimeTaskSessionSummary): ActivityMark {
 function evidenceSince(
 	before: ActivityMark,
 	summary: RuntimeTaskSessionSummary,
+	outputCounts: boolean,
 ): RuntimeTaskInputDeliveryEvidence | null {
 	if (summary.state !== before.state) {
 		return "state";
@@ -119,10 +126,25 @@ function evidenceSince(
 	if ((summary.lastHookAt ?? null) !== before.lastHookAt) {
 		return "hook";
 	}
-	if ((summary.lastOutputAt ?? null) !== before.lastOutputAt) {
+	if (outputCounts && (summary.lastOutputAt ?? null) !== before.lastOutputAt) {
 		return "output";
 	}
 	return null;
+}
+
+/**
+ * Whether new output after Enter proves the TUI took the input. Not for an idle session of an agent whose prompt hook
+ * fires on submit and that has reported a hook before (issue #52): its submit shows up as that hook or a state change.
+ * A running TUI may queue the input without the hook, and a session without Kanban's hooks never sends one.
+ */
+function outputProvesDelivery(summary: RuntimeTaskSessionSummary, agentId: RuntimeAgentId | null): boolean {
+	return !(
+		agentId !== null &&
+		agentHooksOnPromptSubmit(agentId) &&
+		summary.state !== "running" &&
+		summary.lastHookAt !== null &&
+		summary.lastHookAt !== undefined
+	);
 }
 
 function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
@@ -197,7 +219,8 @@ export async function deliverTaskInput(
 
 	// Text and focus-in are written before the first await, so a caller that
 	// does not await still has the text in the PTY when this returns.
-	const profile = getAgentInputDeliveryProfile(initial.agentId ?? options.agentId ?? null);
+	const agentId = initial.agentId ?? options.agentId ?? null;
+	const profile = getAgentInputDeliveryProfile(agentId);
 	if (profile.focusInBeforeInput && !write(FOCUS_IN)) {
 		return result("no_session", { summary: terminal.getSummary(taskId), error: "Task session is not running." });
 	}
@@ -223,6 +246,7 @@ export async function deliverTaskInput(
 		return result("session_ended", { summary: beforeEnter, error: "Task session ended before Enter." });
 	}
 	const mark = markOf(beforeEnter);
+	const outputCounts = outputProvesDelivery(beforeEnter, agentId);
 
 	for (let attempt = 1; attempt <= MAX_ENTER_ATTEMPTS; attempt += 1) {
 		const afterEnter = write(ENTER);
@@ -253,7 +277,7 @@ export async function deliverTaskInput(
 					error: "Task session ended while waiting for the agent to pick up the input.",
 				});
 			}
-			const evidence = evidenceSince(mark, current);
+			const evidence = evidenceSince(mark, current, outputCounts);
 			if (evidence) {
 				return result("delivered", { evidence, enterAttempts: attempt, summary: current });
 			}
@@ -263,6 +287,8 @@ export async function deliverTaskInput(
 	return result("undelivered", {
 		enterAttempts: MAX_ENTER_ATTEMPTS,
 		summary: terminal.getSummary(taskId),
-		error: "Typed input not picked up (no session activity after Enter, twice).",
+		error: outputCounts
+			? "Typed input not picked up (no session activity after Enter, twice)."
+			: "Typed input not picked up (no prompt hook or state change after Enter, twice).",
 	});
 }
