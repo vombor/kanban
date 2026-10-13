@@ -133,15 +133,18 @@ describe("kit apply through the route", () => {
 			});
 			const readKit = () => JSON.parse(readFileSync(globalConfigPath, "utf8")).workspaces.foo.kit;
 			for (const caller of [OTHER_ORCHESTRATOR, OWN_CARD, UNKNOWN]) {
-				const response = await api.apply({
-					caller,
-					workspaceId: "foo",
-					request: { kitName: "team", preset: "lemonade" },
-				});
-				expect(response).toMatchObject({ ok: false, result: null });
+				for (const request of [
+					{ kitName: "team", preset: "lemonade" },
+					{ kitName: "legacy-team", landing: "qa" as const },
+				]) {
+					const response = await api.apply({ caller, workspaceId: "foo", request });
+					expect(response).toMatchObject({ ok: false, result: null });
+				}
 			}
-			expect(logged).toEqual(["kit.apply refused", "kit.apply refused", "kit.apply refused"]);
+			expect(logged).toEqual(Array.from({ length: 6 }, () => "kit.apply refused"));
 			expect(readKit().name).toBe("legacy-team");
+			const readLanding = () => JSON.parse(readFileSync(globalConfigPath, "utf8")).workspaces.foo.landing;
+			expect(readLanding()).toEqual({ mode: "off" });
 
 			// The orchestrator switches its own project's kit; a setting that doesn't fit team (lemonade) is dropped.
 			const switched = await api.apply({
@@ -160,14 +163,16 @@ describe("kit apply through the route", () => {
 				historyPath: getKitSettingsHistoryPath("foo"),
 			});
 			expect(readKit()).toEqual({ name: "team", preset: "lemonade", overrides: { "qa.blurb": "Foo" } });
+			expect(readLanding()).toEqual({ mode: "off" });
 
-			// Landing mode and removing a stored team key stay the user's.
+			// The orchestrator sets its own project's landing mode too (issue #42).
 			const landing = await api.apply({
 				caller: OWN_ORCHESTRATOR,
 				workspaceId: "foo",
-				request: { kitName: "legacy-team", landing: "qa" },
+				request: { kitName: "team", landing: "commit" },
 			});
-			expect(landing).toMatchObject({ ok: false, error: expect.stringContaining("landing mode is the user's") });
+			expect(landing).toMatchObject({ ok: true, result: { landing: { from: "off", to: "commit" }, written: true } });
+			expect(readLanding()).toEqual({ mode: "commit" });
 			expect(readKit()).toMatchObject({ name: "team", preset: "lemonade" });
 
 			const byUser = await api.apply({
@@ -188,9 +193,11 @@ describe("kit apply through the route", () => {
 				{ key: "(kit)", by: "orchestrator", via: "kit apply" },
 				{ key: "(preset)", by: "orchestrator", via: "kit apply" },
 				{ key: "tiers.tier2.1.model", by: "orchestrator", via: "kit apply" },
+				{ key: "(landing)", by: "orchestrator", via: "kit apply" },
 				{ key: "(kit)", by: "user", via: "kit apply" },
 				{ key: "(preset)", by: "user", via: "kit apply" },
 				{ key: "roles.dev.model", by: "user", via: "kit apply" },
+				{ key: "(landing)", by: "user", via: "kit apply" },
 			]);
 		});
 	});

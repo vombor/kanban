@@ -35,8 +35,8 @@ export function renderClaudeMdSection(): string {
   --custom --set roles.<role>.agent=...]\`; \`default\` when none is picked). A project's kit is the one chosen at
   creation; you may switch your own project to another kit or preset (\`kanban kit apply team --preset <p> --project
   <path>\`, \`kanban kit apply team --custom --set roles.dev.agent=<a> --set roles.qa.agent=<a> ...\`, \`kanban kit apply
-  <kit>\`; \`--dry-run\` first; settings that don't fit are dropped and listed; \`--landing\` is the user's), never
-  another project's. A project on
+  <kit>\`; \`--dry-run\` first; settings that don't fit are dropped and listed; \`--landing <mode>\` also sets your own
+  project's landing mode: off, commit, pr or qa), never another project's. A project on
   \`default\` (no kit entry): every card runs on the agent selected in Kanban settings, and nothing is QA'd, reworked
   or landed automatically.
 - The project's settings on its kit are yours to change, at once and without a card: any model the kit names

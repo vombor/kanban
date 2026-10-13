@@ -9,8 +9,9 @@
 // refused here, not discovered by the pipeline.
 //
 // Who may run it is decided by the runtime route (src/trpc/kit-settings-api.ts: the user and the project's own
-// orchestrator). The orchestrator switches its project's kit and edits its project settings; the landing mode and
-// removing a stored team key stay the user's, so its `--landing` and such an `--unset` are refused here.
+// orchestrator). The orchestrator switches its project's kit, sets its landing mode (`--landing`; user, 2026-10-13,
+// issue #42) and edits its project settings; removing a stored team key stays the user's, so such an `--unset` is
+// refused here. A landing change is logged to the settings history as `(landing)`, with who made it.
 import {
 	getWorkspacePipelineSettings,
 	type LandingMode,
@@ -201,11 +202,6 @@ export async function applyWorkspaceKit(input: ApplyKitInput): Promise<ApplyKitR
 	const settings = getWorkspacePipelineSettings(config, input.workspaceId);
 	const before = resolveWorkspaceKit(config, input.workspaceId, catalog);
 	const byOrchestrator = input.by?.kind === "orchestrator";
-	if (byOrchestrator && input.landing) {
-		throw new Error(
-			`--landing ${input.landing}: the landing mode is the user's (kanban kit apply ${input.kitName} --project ${input.workspaceId} --landing ${input.landing}); the orchestrator switches the kit and its project settings only.`,
-		);
-	}
 	const preset = choosePreset(input, settings.kit ? { name: settings.kit.name, preset: settings.kit.preset } : null);
 	const selection = formatKitSelection({ name: input.kitName, preset });
 	const team = resolveKitByName(catalog, input.kitName, {}, preset);
@@ -315,6 +311,9 @@ export async function applyWorkspaceKit(input: ApplyKitInput): Promise<ApplyKitR
 	}
 	if (before.kitName !== input.kitName) {
 		history.unshift({ ...base, key: "(kit)", from: before.kitName, to: input.kitName });
+	}
+	if (landing.from !== landing.to) {
+		history.push({ ...base, key: "(landing)", from: landing.from, to: landing.to });
 	}
 	await appendKitSettingsHistory(history, input.historyPath ?? getKitSettingsHistoryPath(input.workspaceId));
 	return { ...result, written: true };

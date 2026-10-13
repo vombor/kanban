@@ -383,8 +383,9 @@ A switch keeps the project's settings that still fit the new kit and drops the o
 (`dropped`, with why): a role, tier or list entry the new kit doesn't have, or a value that doesn't resolve on it
 (`roles.dev.tier dev` on the `cloud` preset, which has no tiers). Team keys stored before the split stay, as before. The checks a
 switch did before stay: an unknown kit, `--set` takes only project settings, the whole resolution must validate.
-`--landing` (the core landing mode) and `--unset` of a stored team key stay the user's: the orchestrator is
-refused them.
+`--landing` (the core landing mode) is the user's and the project's own orchestrator's (user, 2026-10-13, issue
+#42); a change is logged as a `(landing)` line with who made it. `--unset` of a stored team key stays the user's:
+the orchestrator is refused it.
 
 `team` needs its models: `--preset <name>`, or `--custom` with at least `--set roles.dev.agent=<agent>` and
 `--set roles.qa.agent=<agent>` (given now or already stored; without a QA agent no card would be QA'd). A project

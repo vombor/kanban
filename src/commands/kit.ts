@@ -538,7 +538,7 @@ export function registerKitCommand(program: Command): void {
 
 	kit.command("apply")
 		.description(
-			"Use a kit for a workspace (another team for the project). Only the user and the project's own orchestrator; never a card. Keeps the project settings that fit the new kit and reports the ones it drops; --set/--unset edit them (--set takes only model settings and project facts). The landing mode changes only with --landing (the user's).",
+			"Use a kit for a workspace (another team for the project). Only the user and the project's own orchestrator; never a card. Keeps the project settings that fit the new kit and reports the ones it drops; --set/--unset edit them (--set takes only model settings and project facts). The landing mode changes only with --landing.",
 		)
 		.argument("<name>", `Kit name (${TEAM_KIT_NAME} needs --preset <name> or --custom).`)
 		.option("--preset <name>", `The ${TEAM_KIT_NAME} kit's models: a preset (kanban kit presets).`)
@@ -550,7 +550,10 @@ export function registerKitCommand(program: Command): void {
 			"--project <workspace>",
 			"Workspace id or project path. Defaults to the project containing the current directory.",
 		)
-		.option("--landing <mode>", "Also set the landing mode: off, commit, pr or qa (the user's).")
+		.option(
+			"--landing <mode>",
+			"Also set the landing mode: off, commit, pr or qa (the user and the project's own orchestrator).",
+		)
 		.option(
 			"--set <key=value>",
 			"Set a project setting (a model the kit names, e.g. roles.<role>.model or tiers.<tier>.<i>.model, or a project fact; the value is JSON or text). Repeatable.",

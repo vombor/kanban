@@ -5,8 +5,9 @@
 //   - the orchestrator of THAT workspace (its sidebar session or its headless wake): allowed;
 //   - another workspace's orchestrator, any card session, an unidentified caller: refused.
 // The change applies at once: no card, no land, no console code. A kit itself (the team definition) is never changed
-// here: kits are created and edited only by the user (`kanban kit create|edit`). A switch's landing mode and removing a
-// stored team key stay the user's (applyWorkspaceKit refuses them for the orchestrator).
+// here: kits are created and edited only by the user (`kanban kit create|edit`). A switch's landing mode (`--landing`)
+// follows the same rule (user, 2026-10-13, issue #42); removing a stored team key stays the user's (applyWorkspaceKit
+// refuses it for the orchestrator).
 
 import { z } from "zod";
 import { runtimeLandingModeSchema } from "../core/api-contract";

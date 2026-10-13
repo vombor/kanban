@@ -4,7 +4,8 @@ import { dirname } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { applyWorkspaceKit } from "../../../src/kits/apply-kit";
-import { getKanbanKitsPath } from "../../../src/state/kanban-home";
+import { readKitSettingsHistory } from "../../../src/kits/project-settings";
+import { getKanbanKitsPath, getKitSettingsHistoryPath } from "../../../src/state/kanban-home";
 import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
 import { readLegacyTeamKitText } from "../../utilities/team-kits";
 
@@ -329,7 +330,48 @@ describe("applyWorkspaceKit: switching kits", () => {
 		});
 	});
 
-	it("refuses the orchestrator a landing change and the removal of a stored team key", async () => {
+	it("lets the orchestrator set its project's landing mode and logs who changed it", async () => {
+		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
+			writeConfig(globalConfigPath, {
+				workspaces: { foo: { landing: { mode: "off" }, kit: { name: "team", preset: "cloud" } } },
+			});
+			const by = { kind: "orchestrator", taskId: "__home_agent__:foo:claude" } as const;
+			const dryRun = await applyWorkspaceKit({
+				workspaceId: "foo",
+				kitName: "team",
+				landing: "qa",
+				by,
+				dryRun: true,
+			});
+			expect(dryRun).toMatchObject({ landing: { from: "off", to: "qa" }, written: false });
+			expect(readConfig(globalConfigPath).workspaces).toEqual({
+				foo: { landing: { mode: "off" }, kit: { name: "team", preset: "cloud" } },
+			});
+
+			const applied = await applyWorkspaceKit({ workspaceId: "foo", kitName: "team", landing: "qa", by });
+			expect(applied).toMatchObject({ landing: { from: "off", to: "qa" }, written: true });
+			expect(readConfig(globalConfigPath).workspaces).toEqual({
+				foo: { landing: { mode: "qa" }, kit: { name: "team", preset: "cloud", overrides: {} } },
+			});
+			// The same mode again changes nothing and logs nothing.
+			await applyWorkspaceKit({ workspaceId: "foo", kitName: "team", landing: "qa", by });
+			const history = await readKitSettingsHistory(getKitSettingsHistoryPath("foo"));
+			expect(history).toEqual([
+				{
+					at: expect.any(String),
+					workspaceId: "foo",
+					kitName: "team",
+					key: "(landing)",
+					from: "off",
+					to: "qa",
+					by,
+					via: "kit apply",
+				},
+			]);
+		});
+	});
+
+	it("refuses the orchestrator the removal of a stored team key", async () => {
 		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
 			const original = {
 				workspaces: {
@@ -344,9 +386,6 @@ describe("applyWorkspaceKit: switching kits", () => {
 			};
 			writeConfig(globalConfigPath, original);
 			const by = { kind: "orchestrator", taskId: "__home_agent__:foo:claude" } as const;
-			await expect(
-				applyWorkspaceKit({ workspaceId: "foo", kitName: "team", preset: "lemonade", landing: "qa", by }),
-			).rejects.toThrow(/landing mode is the user's/u);
 			await expect(
 				applyWorkspaceKit({
 					workspaceId: "foo",
