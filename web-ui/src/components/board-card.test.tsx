@@ -926,7 +926,9 @@ describe("BoardCard", () => {
 
 	it("puts the agent pill on the left of the agent row and the run stats right-justified on the same row", async () => {
 		setSelectedAgentId("claude");
-		setTaskTokenUsage([{ taskId: "7ad4d", input: 1_000, output: 20_000, cacheRead: 1_150_000, cacheWrite: 30_000 }]);
+		setTaskTokenUsage([
+			{ taskId: "7ad4d", input: 1_000, output: 20_000, cacheRead: 1_150_000, cacheWrite: 30_000, models: [] },
+		]);
 		await renderCard(
 			<BoardCard
 				card={createCard({ id: "7ad4d", agentId: "cline", agentSettings: { modelId: "gpt-x" } })}
@@ -1025,7 +1027,9 @@ describe("BoardCard", () => {
 			const now = Date.parse("2026-10-12T12:00:00Z");
 			vi.setSystemTime(now);
 			setSelectedAgentId("claude");
-			setTaskTokenUsage([{ taskId: "c41d0", input: 2_000, output: 6_000, cacheRead: 40_000, cacheWrite: 0 }]);
+			setTaskTokenUsage([
+				{ taskId: "c41d0", input: 2_000, output: 6_000, cacheRead: 40_000, cacheWrite: 0, models: [] },
+			]);
 			await renderCard(
 				<BoardCard
 					card={createCard({ id: "c41d0" })}
@@ -1059,7 +1063,9 @@ describe("BoardCard", () => {
 
 	it("shows the totals of Review and Done cards, and just the time before any token is counted", async () => {
 		setSelectedAgentId("claude");
-		setTaskTokenUsage([{ taskId: "d51e1", input: 1_000, output: 2_000, cacheRead: 1_150_000, cacheWrite: 0 }]);
+		setTaskTokenUsage([
+			{ taskId: "d51e1", input: 1_000, output: 2_000, cacheRead: 1_150_000, cacheWrite: 0, models: [] },
+		]);
 		await renderCard(
 			<>
 				<BoardCard
@@ -1142,6 +1148,58 @@ describe("BoardCard", () => {
 
 		expect(agentPill("own01")?.textContent).toBe("GitHub Copilot · mai-code-1.1-flash");
 		expect(agentPill("ses01")?.textContent).toBe("Cline");
+	});
+
+	it("shows the model a card's sessions used when the card names none, in the Cline model's place", async () => {
+		setSelectedAgentId("claude");
+		setTaskTokenUsage([
+			{ taskId: "cc001", input: 1, output: 2, cacheRead: 0, cacheWrite: 0, models: ["claude-opus-5-5"] },
+			{
+				taskId: "cx001",
+				input: 1,
+				output: 2,
+				cacheRead: 0,
+				cacheWrite: 0,
+				models: ["us.openai.gpt-6.1-sol", "us.openai.gpt-6.1"],
+			},
+			{ taskId: "cl001", input: 1, output: 2, cacheRead: 0, cacheWrite: 0, models: ["Qwen3-Coder-Next-GGUF"] },
+			{ taskId: "ef001", input: 1, output: 2, cacheRead: 0, cacheWrite: 0, models: ["gpt-6.1"] },
+		]);
+		await renderCard(
+			<>
+				<BoardCard card={createCard({ id: "cc001" })} index={0} columnId="review" />
+				<BoardCard card={createCard({ id: "cx001", agentId: "codex" })} index={1} columnId="in_progress" />
+				<BoardCard
+					card={createCard({ id: "cl001", agentId: "cline", agentSettings: { modelId: "gpt-x" } })}
+					index={2}
+					columnId="trash"
+				/>
+				<BoardCard
+					card={createCard({ id: "ef001", agentId: "codex", agentSettings: { reasoningEffort: "high" } })}
+					index={3}
+					columnId="review"
+				/>
+				<BoardCard card={createCard({ id: "no001" })} index={4} columnId="in_progress" />
+			</>,
+		);
+
+		// The used model sits where a Cline card's model does, and gives way first like it.
+		expect(agentPill("cc001")?.textContent).toBe("Claude Code · claude-opus-5-5");
+		expect(agentPill("cc001")?.getAttribute("title")).toBe("Claude Code · claude-opus-5-5");
+		const model = agentPill("cc001")?.querySelector('[data-testid="board-card-agent-model"]');
+		expect(model?.className.split(" ")).toEqual(expect.arrayContaining(["min-w-0", "truncate"]));
+		// Several models: the latest on the pill, all of them in its tooltip.
+		expect(agentPill("cx001")?.textContent).toBe("OpenAI Codex · us.openai.gpt-6.1-sol");
+		expect(agentPill("cx001")?.getAttribute("title")).toBe(
+			"OpenAI Codex · us.openai.gpt-6.1-sol\nModels used, latest first: us.openai.gpt-6.1-sol, us.openai.gpt-6.1",
+		);
+		// A model set on the card wins.
+		expect(agentPill("cl001")?.textContent).toBe("Cline · gpt-x");
+		expect(agentPill("cl001")?.getAttribute("title")).toBe("Cline · gpt-x");
+		// An effort set on the card stays beside the used model, instead of "Default model".
+		expect(agentPill("ef001")?.textContent).toBe("OpenAI Codex · gpt-6.1 (high)");
+		// No session yet: the name alone, as before.
+		expect(agentPill("no001")?.textContent).toBe("Claude Code");
 	});
 
 	it("shows only a named agent before the config has loaded", async () => {

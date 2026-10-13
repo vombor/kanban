@@ -6,11 +6,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeBoardCard, RuntimeBoardData, RuntimeTaskSessionSummary } from "../../../src/core/api-contract";
 import { createTaskTokenUsageLoader } from "../../../src/server/task-token-usage";
 import {
+	type AgentSessionUsage,
 	type AgentTokenUsageReader,
 	type AgentTokenUsageSources,
 	createAgentTokenUsageReader,
 	getClaudeProjectTranscriptDir,
-	type TokenCounts,
 } from "../../../src/terminal/agent-token-usage";
 import { createTempDir } from "../../utilities/temp-dir";
 
@@ -64,14 +64,17 @@ function summary(taskId: string, workspacePath: string): RuntimeTaskSessionSumma
 	};
 }
 
-const counts = (output: number): TokenCounts => ({ input: 1, output, cacheRead: 0, cacheWrite: 0 });
+const counts = (output: number, models: string[] = []): AgentSessionUsage => ({
+	counts: { input: 1, output, cacheRead: 0, cacheWrite: 0 },
+	models,
+});
 
 describe("createTaskTokenUsageLoader", () => {
 	it("measures every card past Backlog in its session's worktree, else the worktree Kanban would create", async () => {
 		const read = vi.fn<AgentTokenUsageReader["read"]>(
 			async () =>
 				new Map([
-					["/wt/aaaaa/repo-live", counts(10)],
+					["/wt/aaaaa/repo-live", counts(10, ["claude-opus-5-5"])],
 					["/home/wt/bbbbb/repo", counts(20)],
 				]),
 		);
@@ -89,8 +92,8 @@ describe("createTaskTokenUsageLoader", () => {
 
 		expect(read).toHaveBeenCalledWith(["/wt/aaaaa/repo-live", "/home/wt/bbbbb/repo", "/home/wt/ccccc/repo"], SOURCES);
 		expect(response.usage).toEqual([
-			{ taskId: "aaaaa", ...counts(10) },
-			{ taskId: "bbbbb", ...counts(20) },
+			{ taskId: "aaaaa", input: 1, output: 10, cacheRead: 0, cacheWrite: 0, models: ["claude-opus-5-5"] },
+			{ taskId: "bbbbb", input: 1, output: 20, cacheRead: 0, cacheWrite: 0, models: [] },
 		]);
 	});
 
@@ -123,7 +126,7 @@ describe("createTaskTokenUsageLoader", () => {
 		mkdirSync(dir, { recursive: true });
 		const transcript = join(dir, "session.jsonl");
 		const line = (id: string, output: number) =>
-			`${JSON.stringify({ type: "assistant", message: { id, usage: { input_tokens: 10, output_tokens: output } } })}\n`;
+			`${JSON.stringify({ type: "assistant", message: { id, model: "claude-opus-5-5", usage: { input_tokens: 10, output_tokens: output } } })}\n`;
 		writeFileSync(transcript, line("m1", 100));
 		const load = createTaskTokenUsageLoader({
 			reader: createAgentTokenUsageReader(),
@@ -134,7 +137,7 @@ describe("createTaskTokenUsageLoader", () => {
 		const summaries = [summary("aaaaa", worktree)];
 
 		expect((await load(scope, summaries)).usage).toEqual([
-			{ taskId: "aaaaa", input: 10, output: 100, cacheRead: 0, cacheWrite: 0 },
+			{ taskId: "aaaaa", input: 10, output: 100, cacheRead: 0, cacheWrite: 0, models: ["claude-opus-5-5"] },
 		]);
 
 		// Same size and mtime, other bytes: a cache hit answers the old count without reading the file.
@@ -146,7 +149,7 @@ describe("createTaskTokenUsageLoader", () => {
 		// The agent appends a turn: only the new line is read.
 		appendFileSync(transcript, line("m2", 50));
 		expect((await load(scope, summaries)).usage).toEqual([
-			{ taskId: "aaaaa", input: 20, output: 150, cacheRead: 0, cacheWrite: 0 },
+			{ taskId: "aaaaa", input: 20, output: 150, cacheRead: 0, cacheWrite: 0, models: ["claude-opus-5-5"] },
 		]);
 	});
 });

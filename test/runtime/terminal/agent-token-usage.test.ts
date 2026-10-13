@@ -132,7 +132,7 @@ describe("createAgentTokenUsageReader", () => {
 
 		const usage = await createAgentTokenUsageReader().read([worktree], sources);
 
-		expect(usage.get(worktree)).toEqual({ input: 5, output: 45, cacheRead: 250, cacheWrite: 50 });
+		expect(usage.get(worktree)?.counts).toEqual({ input: 5, output: 45, cacheRead: 250, cacheWrite: 50 });
 	});
 
 	it("reads appended lines on the next call and starts over when a file shrinks", async () => {
@@ -142,18 +142,18 @@ describe("createAgentTokenUsageReader", () => {
 			claudeAssistant("msg_1", { input_tokens: 1, output_tokens: 1 }),
 		]);
 		const reader = createAgentTokenUsageReader();
-		expect((await reader.read([worktree], sources)).get(worktree)?.output).toBe(1);
+		expect((await reader.read([worktree], sources)).get(worktree)?.counts.output).toBe(1);
 
 		appendFileSync(path, jsonl([claudeAssistant("msg_2", { input_tokens: 1, output_tokens: 9 })]));
 		// A line still being written isn't read until it ends.
 		appendFileSync(path, '{"type":"assistant","message":{"id":"msg_3","usage":{"output_tokens":');
-		expect((await reader.read([worktree], sources)).get(worktree)).toMatchObject({ input: 2, output: 10 });
+		expect((await reader.read([worktree], sources)).get(worktree)?.counts).toMatchObject({ input: 2, output: 10 });
 
 		appendFileSync(path, "100}}}\n");
-		expect((await reader.read([worktree], sources)).get(worktree)).toMatchObject({ output: 110 });
+		expect((await reader.read([worktree], sources)).get(worktree)?.counts).toMatchObject({ output: 110 });
 
 		writeFileSync(path, jsonl([claudeAssistant("msg_9", { input_tokens: 7, output_tokens: 7 })]));
-		expect((await reader.read([worktree], sources)).get(worktree)).toMatchObject({ input: 7, output: 7 });
+		expect((await reader.read([worktree], sources)).get(worktree)?.counts).toMatchObject({ input: 7, output: 7 });
 	});
 
 	it("counts Cline sessions in the worktree, de-duplicated across resumed sessions, without the totals message or the cached input", async () => {
@@ -182,7 +182,7 @@ describe("createAgentTokenUsageReader", () => {
 
 		const usage = await createAgentTokenUsageReader().read([worktree], sources);
 
-		expect(usage.get(worktree)).toEqual({ input: 317, output: 35, cacheRead: 30, cacheWrite: 3 });
+		expect(usage.get(worktree)?.counts).toEqual({ input: 317, output: 35, cacheRead: 30, cacheWrite: 3 });
 	});
 
 	it("counts Codex rollouts by their session cwd, input without the cached part", async () => {
@@ -198,7 +198,7 @@ describe("createAgentTokenUsageReader", () => {
 		]);
 		const reader = createAgentTokenUsageReader();
 
-		expect((await reader.read([worktree], sources)).get(worktree)).toEqual({
+		expect((await reader.read([worktree], sources)).get(worktree)?.counts).toEqual({
 			input: 20,
 			output: 10,
 			cacheRead: 100,
@@ -208,7 +208,7 @@ describe("createAgentTokenUsageReader", () => {
 			path,
 			jsonl([codexTokenCount(200, { input_tokens: 60, cached_input_tokens: 50, output_tokens: 10 })]),
 		);
-		expect((await reader.read([worktree], sources)).get(worktree)).toEqual({
+		expect((await reader.read([worktree], sources)).get(worktree)?.counts).toEqual({
 			input: 30,
 			output: 20,
 			cacheRead: 150,
@@ -225,7 +225,7 @@ describe("createAgentTokenUsageReader", () => {
 		expect((await reader.read([worktree], sources)).has(worktree)).toBe(false);
 
 		appendFileSync(path, jsonl([copilotShutdown(100, 10, 1000)]));
-		expect((await reader.read([worktree], sources)).get(worktree)).toEqual({
+		expect((await reader.read([worktree], sources)).get(worktree)?.counts).toEqual({
 			input: 100,
 			output: 10,
 			cacheRead: 1000,
@@ -233,7 +233,7 @@ describe("createAgentTokenUsageReader", () => {
 		});
 		// A resumed session's next shutdown carries the session's totals again.
 		appendFileSync(path, jsonl([copilotShutdown(150, 20, 1500)]));
-		expect((await reader.read([worktree], sources)).get(worktree)).toMatchObject({ input: 150, output: 20 });
+		expect((await reader.read([worktree], sources)).get(worktree)?.counts).toMatchObject({ input: 150, output: 20 });
 	});
 
 	it("adds up every agent that ran in the worktree and leaves out worktrees with nothing", async () => {
@@ -247,8 +247,141 @@ describe("createAgentTokenUsageReader", () => {
 
 		const usage = await createAgentTokenUsageReader().read([worktree, idle], sources);
 
-		expect(usage.get(worktree)).toEqual({ input: 11, output: 22, cacheRead: 0, cacheWrite: 0 });
+		expect(usage.get(worktree)?.counts).toEqual({ input: 11, output: 22, cacheRead: 0, cacheWrite: 0 });
 		expect(usage.has(idle)).toBe(false);
+	});
+
+	describe("models used", () => {
+		it("reads Claude Code's message.model by line time, without its <synthetic> error lines", async () => {
+			const { root, sources } = createSources();
+			const worktree = join(root, "worktrees", "abc12", "repo");
+			const line = (id: string, model: string, timestamp: string) => ({
+				type: "assistant",
+				timestamp,
+				message: { id, model, role: "assistant", usage: { input_tokens: 1, output_tokens: 1 } },
+			});
+			writeClaudeTranscript(sources, worktree, "s1.jsonl", [
+				line("m1", "claude-haiku-5-5", "2026-10-13T08:00:00.000Z"),
+				line("m2", "claude-opus-5-5", "2026-10-13T09:00:00.000Z"),
+				line("m3", "<synthetic>", "2026-10-13T10:00:00.000Z"),
+			]);
+			// An older session in the same worktree: haiku was used there last at 08:30, opus stays the latest.
+			writeClaudeTranscript(sources, worktree, "s0.jsonl", [
+				line("m0", "claude-haiku-5-5", "2026-10-13T08:30:00.000Z"),
+			]);
+
+			const usage = await createAgentTokenUsageReader().read([worktree], sources);
+
+			expect(usage.get(worktree)?.models).toEqual(["claude-opus-5-5", "claude-haiku-5-5"]);
+		});
+
+		it("reads Cline's modelInfo.id, but not from its own error notices", async () => {
+			const { root, sources } = createSources();
+			const worktree = join(root, "worktrees", "abc12", "repo");
+			writeClineSession(sources, "1791000000000_aaaa", worktree, [
+				{
+					id: "msg_1",
+					role: "assistant",
+					content: [{ type: "text" }],
+					ts: 1_791_000_000_000,
+					modelInfo: { id: "Qwen3-Coder-Next-GGUF", provider: "lemonade" },
+					metrics: { inputTokens: 10, outputTokens: 1 },
+				},
+				{
+					id: "error_1",
+					role: "assistant",
+					content: [{ type: "text", text: "No model loaded: gemma-4-31B" }],
+					ts: 1_791_000_001_000,
+					modelInfo: { id: "gemma-4-31B", provider: "lemonade" },
+					metadata: { displayOnly: true, displayRole: "error" },
+				},
+			]);
+
+			const usage = await createAgentTokenUsageReader().read([worktree], sources);
+
+			expect(usage.get(worktree)?.models).toEqual(["Qwen3-Coder-Next-GGUF"]);
+		});
+
+		it("reads Codex's turn_context model, a changed model coming first", async () => {
+			const { root, sources } = createSources();
+			const worktree = join(root, "worktrees", "abc12", "repo");
+			const path = writeCodexRollout(sources, "rollout-2026-10-13T00-00-00-x.jsonl", worktree, [
+				{
+					timestamp: "2026-10-13T08:00:00.000Z",
+					type: "turn_context",
+					payload: { cwd: worktree, model: "gpt-6.1" },
+				},
+				codexTokenCount(10, { input_tokens: 10, output_tokens: 0 }),
+			]);
+			const reader = createAgentTokenUsageReader();
+			expect((await reader.read([worktree], sources)).get(worktree)?.models).toEqual(["gpt-6.1"]);
+
+			appendFileSync(
+				path,
+				jsonl([
+					{
+						timestamp: "2026-10-13T09:00:00.000Z",
+						type: "turn_context",
+						payload: { cwd: worktree, model: "gpt-6.1-sol" },
+					},
+				]),
+			);
+			expect((await reader.read([worktree], sources)).get(worktree)?.models).toEqual(["gpt-6.1-sol", "gpt-6.1"]);
+		});
+
+		it("reads Copilot's assistant.message model before the session's token totals exist", async () => {
+			const { root, sources } = createSources();
+			const worktree = join(root, "worktrees", "abc12", "repo");
+			writeCopilotSession(sources, "8f1c", worktree, [
+				{
+					type: "session.start",
+					timestamp: "2026-10-13T08:00:00.000Z",
+					data: { selectedModel: "claude-sonnet-5.5" },
+				},
+				// Copilot's internal helper call, which never answered the card.
+				{ type: "model.turn_started", timestamp: "2026-10-13T08:00:01.000Z", data: { model: "gpt-4o-mini" } },
+				{ type: "assistant.message", timestamp: "2026-10-13T08:00:02.000Z", data: { model: "claude-sonnet-5.5" } },
+			]);
+
+			const usage = await createAgentTokenUsageReader().read([worktree], sources);
+
+			expect(usage.get(worktree)).toEqual({
+				counts: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				models: ["claude-sonnet-5.5"],
+			});
+		});
+
+		it("lists the models of every agent that ran in the worktree, most recently used first", async () => {
+			const { root, sources } = createSources();
+			const worktree = join(root, "worktrees", "abc12", "repo");
+			writeClaudeTranscript(sources, worktree, "s1.jsonl", [
+				{
+					type: "assistant",
+					timestamp: "2026-10-13T10:00:00.000Z",
+					message: { id: "m1", model: "claude-opus-5-5", usage: { output_tokens: 1 } },
+				},
+			]);
+			writeCopilotSession(sources, "9a", worktree, [
+				{ type: "assistant.message", timestamp: "2026-10-13T09:00:00.000Z", data: { model: "gpt-5-mini" } },
+				copilotShutdown(10, 20, 0),
+			]);
+
+			const usage = await createAgentTokenUsageReader().read([worktree], sources);
+
+			expect(usage.get(worktree)?.models).toEqual(["claude-opus-5-5", "gpt-5-mini"]);
+		});
+
+		it("names no model for sessions whose records carry none", async () => {
+			const { root, sources } = createSources();
+			const worktree = join(root, "worktrees", "abc12", "repo");
+			writeClaudeTranscript(sources, worktree, "s1.jsonl", [
+				claudeAssistant("m", { input_tokens: 1, output_tokens: 2 }),
+			]);
+
+			const usage = await createAgentTokenUsageReader().read([worktree], sources);
+
+			expect(usage.get(worktree)?.models).toEqual([]);
+		});
 	});
 
 	it("answers with nothing when no agent has any session files", async () => {

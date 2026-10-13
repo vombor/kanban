@@ -1,4 +1,5 @@
-// tRPC `workspace.getTaskTokenUsage`: the board cards' token counts of the calling workspace, a workspace procedure.
+// tRPC `workspace.getTaskTokenUsage`: the board cards' token counts and used models of the calling workspace, a
+// workspace procedure.
 import { describe, expect, it, vi } from "vitest";
 
 import type { RuntimeTaskTokenUsageResponse } from "../../../src/core/api-contract";
@@ -7,7 +8,16 @@ import { type RuntimeTrpcContext, runtimeAppRouter } from "../../../src/trpc/app
 
 const USER: RuntimeCaller = { kind: "user" };
 const FOO_USAGE: RuntimeTaskTokenUsageResponse = {
-	usage: [{ taskId: "f0ba7", input: 1_000, output: 2_000, cacheRead: 45_000, cacheWrite: 0 }],
+	usage: [
+		{
+			taskId: "f0ba7",
+			input: 1_000,
+			output: 2_000,
+			cacheRead: 45_000,
+			cacheWrite: 0,
+			models: ["claude-opus-5-5", "claude-haiku-5-5"],
+		},
+	],
 };
 
 function createCaller(context: Partial<RuntimeTrpcContext>) {
@@ -20,7 +30,7 @@ function createCaller(context: Partial<RuntimeTrpcContext>) {
 }
 
 describe("workspace.getTaskTokenUsage", () => {
-	it("answers the calling workspace's counts, with no price or cost", async () => {
+	it("answers the calling workspace's counts and used models, with no price or cost", async () => {
 		const loadTaskTokenUsage = vi.fn(async () => FOO_USAGE);
 		const caller = createCaller({
 			workspaceApi: { loadTaskTokenUsage } as unknown as RuntimeTrpcContext["workspaceApi"],

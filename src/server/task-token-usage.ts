@@ -1,4 +1,4 @@
-// The board cards' token counts (tRPC workspace.getTaskTokenUsage): every card past Backlog, measured in its worktree
+// The board cards' token counts and used models (tRPC workspace.getTaskTokenUsage): every card past Backlog, measured in its worktree
 // (the session's workspacePath, else the worktree Kanban would create; never the main checkout) by src/terminal/agent-token-usage.ts.
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -72,12 +72,12 @@ export function createTaskTokenUsageLoader(deps: TaskTokenUsageDependencies = {}
 		if (worktreeByTaskId.size === 0) {
 			return { usage: [] };
 		}
-		const counts = await reader.read([...new Set(worktreeByTaskId.values())], await readSources());
+		const usageByWorktree = await reader.read([...new Set(worktreeByTaskId.values())], await readSources());
 		const usage: RuntimeTaskTokenUsageResponse["usage"] = [];
 		for (const [taskId, worktree] of worktreeByTaskId) {
-			const taskCounts = counts.get(worktree);
-			if (taskCounts) {
-				usage.push({ taskId, ...taskCounts });
+			const taskUsage = usageByWorktree.get(worktree);
+			if (taskUsage) {
+				usage.push({ taskId, ...taskUsage.counts, models: taskUsage.models });
 			}
 		}
 		return { usage };

@@ -2,7 +2,7 @@ import { useCallback, useSyncExternalStore } from "react";
 
 import type { RuntimeTaskTokenUsage } from "@/runtime/types";
 
-// The current project's card token counts (read from the agents' own session files, src/terminal/agent-token-usage.ts):
+// The current project's card token counts and used models (read from the agents' own session files, src/terminal/agent-token-usage.ts):
 // the whole list as the runtime last answered workspace.getTaskTokenUsage (fetched by useTaskTokenUsagePolling), plus
 // the cards it pushed since (`task_token_usage_updated`, src/server/task-token-usage-monitor.ts).
 let usageByTaskId = new Map<string, RuntimeTaskTokenUsage>();
@@ -14,7 +14,9 @@ function isSameUsage(a: RuntimeTaskTokenUsage | undefined, b: RuntimeTaskTokenUs
 		a.input === b.input &&
 		a.output === b.output &&
 		a.cacheRead === b.cacheRead &&
-		a.cacheWrite === b.cacheWrite
+		a.cacheWrite === b.cacheWrite &&
+		a.models.length === b.models.length &&
+		a.models.every((model, index) => model === b.models[index])
 	);
 }
 

@@ -1,19 +1,24 @@
-// Token counts of a card's agent runs, read from each agent CLI's own session files, for the board card's token count
-// (user request 2026-10-12). Counts only, no prices: the team kit's card metrics (src/kits/team/bench/card-metrics.ts)
+// Token counts and models of a card's agent runs, read from each agent CLI's own session files, for the board card's
+// token count (user request 2026-10-12) and the model on its agent pill (user request 2026-10-13). Counts only, no prices: the team kit's card metrics (src/kits/team/bench/card-metrics.ts)
 // price Cline and Codex turns for the scoreboard. A session belongs to a worktree when its cwd is the worktree or
 // inside it, whichever agent wrote it, so a card that changed agents counts every run.
 //
 //  - Claude Code: `~/.claude/projects/<worktree path, every non-alphanumeric as ->/*.jsonl`, `message.usage` on
 //    assistant lines. One API message is written once per content block under the same id, so the last line per id
-//    counts, and ids are counted once across files.
+//    counts, and ids are counted once across files. The model is `message.model` (`<synthetic>` is Claude Code's own
+//    error line, no model ran), its time the line's `timestamp`.
 //  - Cline (3.x): `<data>/sessions/<id>/<id>.messages.json`, `metrics` on assistant messages (inputTokens include the
 //    cache reads and writes, on Lemonade and Bedrock alike), de-duplicated by message id across sessions (a resumed
 //    session copies the earlier messages); the empty trailing assistant message that carries the session's
-//    cumulative totals is skipped, as card-metrics does.
+//    cumulative totals is skipped, as card-metrics does. The model is the message's `modelInfo.id` at its `ts`; Cline's
+//    own error notices (`metadata.displayRole: "error"`) carry one too but no model answered them, so they don't count.
 //  - Codex: `<codex home>/sessions/YYYY/MM/DD/rollout-*.jsonl` whose session_meta cwd is the worktree; each change of
-//    `total_token_usage` adds that turn's `last_token_usage` (its input_tokens include cached_input_tokens).
+//    `total_token_usage` adds that turn's `last_token_usage` (its input_tokens include cached_input_tokens). The model
+//    is each `turn_context` line's `payload.model` (session_meta names none).
 //  - Copilot: `<copilot home>/session-state/<id>/events.jsonl` (the worktree from workspace.yaml's cwd). Only
 //    `session.shutdown` carries token totals (cumulative for the session), so a Copilot session counts once it ends.
+//    The model is each `assistant.message`'s `data.model` (its `model.turn_started` events also name the internal
+//    helper model Copilot calls, e.g. gpt-4o-mini, which never answered the card).
 //
 // The JSONL files only grow, so they are read on from the last complete line; Cline's messages.json is rewritten whole
 // and parsed again only when its size or mtime changes. A session's cwd never changes and is cached per file.
@@ -36,11 +41,25 @@ export interface AgentTokenUsageSources {
 	copilotSessionStatePath: string;
 }
 
-export interface AgentTokenUsageReader {
-	/** Token counts per worktree path (keyed as given) over every agent session run in it; worktrees with none are left out. */
-	read(worktreePaths: readonly string[], sources: AgentTokenUsageSources): Promise<Map<string, TokenCounts>>;
+export interface AgentSessionUsage {
+	counts: TokenCounts;
+	/** Every model that answered in the worktree's sessions, most recently used first. */
+	models: string[];
 }
 
+export interface AgentTokenUsageReader {
+	/**
+	 * Token counts and models per worktree path (keyed as given) over every agent session run in it; worktrees with
+	 * neither are left out.
+	 */
+	read(worktreePaths: readonly string[], sources: AgentTokenUsageSources): Promise<Map<string, AgentSessionUsage>>;
+}
+
+/** When each model last answered (ms since the epoch; 0 for a record without a time). */
+type ModelUses = Map<string, number>;
+
+/** Claude Code's model id on the lines it writes itself (an API error, an interrupted turn): no model ran. */
+const CLAUDE_SYNTHETIC_MODEL = "<synthetic>";
 const CLINE_SESSION_DIR = /^\d+_[a-z0-9]+$/iu;
 const CODEX_ROLLOUT_FILE = /^rollout-.*\.jsonl$/u;
 const CODEX_WALK_DEPTH = 3;
@@ -79,6 +98,33 @@ function count(value: unknown): number {
 
 function asRecord(value: unknown): Record<string, unknown> | null {
 	return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+/** An ISO time or epoch milliseconds; 0 when the record has none. */
+function readTime(value: unknown): number {
+	const time = typeof value === "string" ? Date.parse(value) : typeof value === "number" ? value : Number.NaN;
+	return Number.isFinite(time) ? time : 0;
+}
+
+function noteModel(uses: ModelUses, model: unknown, time: number): void {
+	if (typeof model !== "string") {
+		return;
+	}
+	const id = model.trim();
+	if (id && time >= (uses.get(id) ?? Number.NEGATIVE_INFINITY)) {
+		uses.set(id, time);
+	}
+}
+
+function addModelUses(target: ModelUses, uses: ModelUses): void {
+	for (const [model, time] of uses) {
+		noteModel(target, model, time);
+	}
+}
+
+/** Most recently used first; models with the same time keep the order they were seen in. */
+function listModelsByLastUse(uses: ModelUses): string[] {
+	return [...uses].sort((a, b) => b[1] - a[1]).map(([model]) => model);
 }
 
 interface CachedEntry {
@@ -234,6 +280,7 @@ async function listNames(dir: string): Promise<string[]> {
 interface ClaudeTranscriptState {
 	byMessageId: Map<string, TokenCounts>;
 	withoutId: TokenCounts;
+	models: ModelUses;
 }
 
 function applyClaudeLine(state: ClaudeTranscriptState, record: Record<string, unknown>): void {
@@ -241,6 +288,9 @@ function applyClaudeLine(state: ClaudeTranscriptState, record: Record<string, un
 		return;
 	}
 	const message = asRecord(record.message);
+	if (message?.model !== CLAUDE_SYNTHETIC_MODEL) {
+		noteModel(state.models, message?.model, readTime(record.timestamp));
+	}
 	const usage = asRecord(message?.usage);
 	if (!usage) {
 		return;
@@ -265,16 +315,22 @@ interface ClineTurn {
 	counts: TokenCounts;
 }
 
-function parseClineMessages(text: string): ClineTurn[] {
+interface ClineSessionMessages {
+	turns: ClineTurn[];
+	models: ModelUses;
+}
+
+function parseClineMessages(text: string): ClineSessionMessages {
+	const models: ModelUses = new Map();
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(text);
 	} catch {
-		return [];
+		return { turns: [], models };
 	}
 	const messages = Array.isArray(parsed) ? parsed : asRecord(parsed)?.messages;
 	if (!Array.isArray(messages)) {
-		return [];
+		return { turns: [], models };
 	}
 	const turns: ClineTurn[] = [];
 	let sessionInput = 0;
@@ -282,6 +338,9 @@ function parseClineMessages(text: string): ClineTurn[] {
 		const message = asRecord(value);
 		if (message?.role !== "assistant") {
 			continue;
+		}
+		if (asRecord(message.metadata)?.displayRole !== "error") {
+			noteModel(models, asRecord(message.modelInfo)?.id, readTime(message.ts));
 		}
 		const metrics = asRecord(message.metrics);
 		const input = count(metrics?.inputTokens);
@@ -302,16 +361,21 @@ function parseClineMessages(text: string): ClineTurn[] {
 			},
 		});
 	}
-	return turns;
+	return { turns, models };
 }
 
 interface CodexRolloutState {
 	lastTotal: unknown;
 	counts: TokenCounts;
+	models: ModelUses;
 }
 
 function applyCodexLine(state: CodexRolloutState, record: Record<string, unknown>): void {
 	const payload = asRecord(record.payload);
+	if (record.type === "turn_context") {
+		noteModel(state.models, payload?.model, readTime(record.timestamp));
+		return;
+	}
 	if (payload?.type !== "token_count") {
 		return;
 	}
@@ -334,9 +398,14 @@ function applyCodexLine(state: CodexRolloutState, record: Record<string, unknown
 
 interface CopilotEventsState {
 	counts: TokenCounts | null;
+	models: ModelUses;
 }
 
 function applyCopilotLine(state: CopilotEventsState, record: Record<string, unknown>): void {
+	if (record.type === "assistant.message") {
+		noteModel(state.models, asRecord(record.data)?.model, readTime(record.timestamp));
+		return;
+	}
 	if (record.type !== "session.shutdown") {
 		return;
 	}
@@ -378,7 +447,7 @@ async function listCodexRollouts(root: string): Promise<string[]> {
 export function createAgentTokenUsageReader(options: { now?: () => number } = {}): AgentTokenUsageReader {
 	const now = options.now ?? Date.now;
 	const claudeFiles = new Map<string, JsonlTail<ClaudeTranscriptState>>();
-	const clineFiles = new Map<string, WholeFile<ClineTurn[]>>();
+	const clineFiles = new Map<string, WholeFile<ClineSessionMessages>>();
 	const codexFiles = new Map<string, JsonlTail<CodexRolloutState>>();
 	const copilotFiles = new Map<string, JsonlTail<CopilotEventsState>>();
 	const sessionCwds = new Map<string, CachedValue<string[] | null>>();
@@ -386,9 +455,17 @@ export function createAgentTokenUsageReader(options: { now?: () => number } = {}
 	return {
 		read: async (worktreePaths, sources) => {
 			const at = now();
-			const worktrees = new Map<string, { key: string; counts: TokenCounts; seen: Set<string> }>();
+			const worktrees = new Map<
+				string,
+				{ key: string; counts: TokenCounts; models: ModelUses; seen: Set<string> }
+			>();
 			for (const path of worktreePaths) {
-				worktrees.set(normalizePath(path), { key: path, counts: emptyTokenCounts(), seen: new Set() });
+				worktrees.set(normalizePath(path), {
+					key: path,
+					counts: emptyTokenCounts(),
+					models: new Map(),
+					seen: new Set(),
+				});
 			}
 			const findWorktree = (cwds: readonly string[]) => {
 				for (const cwd of cwds) {
@@ -424,7 +501,7 @@ export function createAgentTokenUsageReader(options: { now?: () => number } = {}
 					const state = await readJsonlIncrementally(
 						claudeFiles,
 						join(dir, name),
-						() => ({ byMessageId: new Map(), withoutId: emptyTokenCounts() }),
+						() => ({ byMessageId: new Map(), withoutId: emptyTokenCounts(), models: new Map() }),
 						applyClaudeLine,
 						at,
 					);
@@ -435,6 +512,7 @@ export function createAgentTokenUsageReader(options: { now?: () => number } = {}
 						addOnce(worktree, `claude:${id}`, counts);
 					}
 					addTokenCounts(worktree.counts, state.withoutId);
+					addModelUses(worktree.models, state.models);
 				}
 			}
 
@@ -461,9 +539,12 @@ export function createAgentTokenUsageReader(options: { now?: () => number } = {}
 				if (!worktree) {
 					continue;
 				}
-				const turns = await readWholeFile(clineFiles, join(dir, `${name}.messages.json`), parseClineMessages, at);
-				for (const turn of turns ?? []) {
+				const session = await readWholeFile(clineFiles, join(dir, `${name}.messages.json`), parseClineMessages, at);
+				for (const turn of session?.turns ?? []) {
 					addOnce(worktree, turn.id ? `cline:${turn.id}` : null, turn.counts);
+				}
+				if (session) {
+					addModelUses(worktree.models, session.models);
 				}
 			}
 
@@ -484,12 +565,13 @@ export function createAgentTokenUsageReader(options: { now?: () => number } = {}
 				const state = await readJsonlIncrementally(
 					codexFiles,
 					file,
-					() => ({ lastTotal: null, counts: emptyTokenCounts() }),
+					() => ({ lastTotal: null, counts: emptyTokenCounts(), models: new Map() }),
 					applyCodexLine,
 					at,
 				);
 				if (state) {
 					addTokenCounts(worktree.counts, state.counts);
+					addModelUses(worktree.models, state.models);
 				}
 			}
 
@@ -512,22 +594,26 @@ export function createAgentTokenUsageReader(options: { now?: () => number } = {}
 				const state = await readJsonlIncrementally(
 					copilotFiles,
 					join(dir, "events.jsonl"),
-					() => ({ counts: null }),
+					() => ({ counts: null, models: new Map() }),
 					applyCopilotLine,
 					at,
 				);
 				if (state?.counts) {
 					addTokenCounts(worktree.counts, state.counts);
 				}
+				if (state) {
+					addModelUses(worktree.models, state.models);
+				}
 			}
 
 			for (const cache of [claudeFiles, clineFiles, codexFiles, copilotFiles, sessionCwds]) {
 				pruneIdle(cache, at);
 			}
-			const usage = new Map<string, TokenCounts>();
+			const usage = new Map<string, AgentSessionUsage>();
 			for (const worktree of worktrees.values()) {
-				if (getTokenCountsTotal(worktree.counts) > 0) {
-					usage.set(worktree.key, worktree.counts);
+				// A model without counts yet: a Copilot session writes its totals only when it ends.
+				if (getTokenCountsTotal(worktree.counts) > 0 || worktree.models.size > 0) {
+					usage.set(worktree.key, { counts: worktree.counts, models: listModelsByLastUse(worktree.models) });
 				}
 			}
 			return usage;

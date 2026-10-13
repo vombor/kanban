@@ -70,7 +70,9 @@ describe("BoardCardRunStats", () => {
 	const text = (testId: string) => container.querySelector(`[data-testid="${testId}"]`)?.textContent ?? null;
 
 	it("shows tokens in (cache included) and out apart, with an accessible label, and follows pushed counts", async () => {
-		setTaskTokenUsage([{ taskId: "7ad4d", input: 1_000, output: 48_000, cacheRead: 1_150_000, cacheWrite: 30_000 }]);
+		setTaskTokenUsage([
+			{ taskId: "7ad4d", input: 1_000, output: 48_000, cacheRead: 1_150_000, cacheWrite: 30_000, models: [] },
+		]);
 		await render(undefined);
 		expect(text("board-card-token-usage")).toBe("1.2M↓ 48k↑");
 		expect(text("board-card-tokens-in")).toBe("1.2M↓");
@@ -82,14 +84,21 @@ describe("BoardCardRunStats", () => {
 
 		await act(async () => {
 			mergeTaskTokenUsage([
-				{ taskId: "7ad4d", input: 1_000, output: 52_000, cacheRead: 2_150_000, cacheWrite: 30_000 },
+				{ taskId: "7ad4d", input: 1_000, output: 52_000, cacheRead: 2_150_000, cacheWrite: 30_000, models: [] },
 			]);
 		});
 		expect(text("board-card-token-usage")).toBe("2.2M↓ 52k↑");
 	});
 
 	it("keeps the full split in the tooltip and says that in includes the cache", () => {
-		const usage = { taskId: "7ad4d", input: 1_000, output: 48_000, cacheRead: 1_150_000, cacheWrite: 30_000 };
+		const usage = {
+			taskId: "7ad4d",
+			input: 1_000,
+			output: 48_000,
+			cacheRead: 1_150_000,
+			cacheWrite: 30_000,
+			models: [],
+		};
 		expect(getTokenUsageInOut(usage)).toEqual({ in: 1_181_000, out: 48_000 });
 		expect(describeTokenUsage(usage, getTokenUsageInOut(usage))).toBe(
 			[
@@ -118,6 +127,15 @@ describe("BoardCardRunStats", () => {
 	it("renders nothing before a token or a running second is known", async () => {
 		await render(summary({ state: "idle" }));
 		expect(container.querySelector('[data-testid="board-card-run-stats"]')).toBeNull();
+
+		// A Copilot session names its model before it writes any token total: still no count.
+		setTaskTokenUsage([
+			{ taskId: "7ad4d", input: 0, output: 0, cacheRead: 0, cacheWrite: 0, models: ["claude-sonnet-5.5"] },
+		]);
+		await render(summary({ state: "idle" }));
+		expect(container.querySelector('[data-testid="board-card-run-stats"]')).toBeNull();
+		await render(summary({ runningMs: 45_000, runCount: 1 }));
+		expect(text("board-card-run-stats")).toBe("45s");
 	});
 });
 

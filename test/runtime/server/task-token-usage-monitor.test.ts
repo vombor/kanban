@@ -7,12 +7,13 @@ import { createTaskTokenUsageMonitor } from "../../../src/server/task-token-usag
 
 const THROTTLE_MS = 5_000;
 
-const usage = (taskId: string, output: number): RuntimeTaskTokenUsage => ({
+const usage = (taskId: string, output: number, models: string[] = []): RuntimeTaskTokenUsage => ({
 	taskId,
 	input: 1,
 	output,
 	cacheRead: 0,
 	cacheWrite: 0,
+	models,
 });
 
 describe("createTaskTokenUsageMonitor", () => {
@@ -76,6 +77,22 @@ describe("createTaskTokenUsageMonitor", () => {
 		await vi.advanceTimersByTimeAsync(1);
 		expect(loadUsage).toHaveBeenCalledTimes(2);
 		expect(broadcast).toHaveBeenLastCalledWith("ws", [usage("aaaaa", 15)]);
+	});
+
+	it("pushes a card whose used models changed though its counts didn't", async () => {
+		const { monitor, broadcast, setUsage } = setup();
+		monitor.noteActivity("ws", "aaaaa");
+		await vi.advanceTimersByTimeAsync(0);
+
+		setUsage([usage("aaaaa", 10, ["gpt-6.1"]), usage("bbbbb", 20)]);
+		monitor.noteActivity("ws", "aaaaa");
+		await vi.advanceTimersByTimeAsync(THROTTLE_MS);
+		expect(broadcast).toHaveBeenLastCalledWith("ws", [usage("aaaaa", 10, ["gpt-6.1"])]);
+
+		setUsage([usage("aaaaa", 10, ["claude-sonnet-5.5", "gpt-6.1"]), usage("bbbbb", 20)]);
+		monitor.noteActivity("ws", "aaaaa");
+		await vi.advanceTimersByTimeAsync(THROTTLE_MS);
+		expect(broadcast).toHaveBeenLastCalledWith("ws", [usage("aaaaa", 10, ["claude-sonnet-5.5", "gpt-6.1"])]);
 	});
 
 	it("reads once more after a change and stops once the counts hold still", async () => {

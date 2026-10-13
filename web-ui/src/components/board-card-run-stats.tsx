@@ -22,7 +22,9 @@ export function BoardCardRunStats({
 	taskId: string;
 	sessionSummary: RuntimeTaskSessionSummary | undefined;
 }): React.ReactElement | null {
-	const usage = useTaskTokenUsage(taskId);
+	const entry = useTaskTokenUsage(taskId);
+	// An entry may carry only the models used (a Copilot session writes its token totals when it ends): no count yet.
+	const usage = entry && entry.input + entry.output + entry.cacheRead + entry.cacheWrite > 0 ? entry : null;
 	// The live span is read at render; the tick only redraws while the agent runs.
 	const [, setTick] = useState(0);
 	useInterval(() => setTick((tick) => tick + 1), sessionSummary?.state === "running" ? RUNNING_TIME_TICK_MS : null);

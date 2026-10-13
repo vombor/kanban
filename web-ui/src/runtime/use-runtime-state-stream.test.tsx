@@ -206,7 +206,14 @@ describe("useRuntimeStateStream reconnect", () => {
 	});
 
 	it("merges the current project's pushed token counts into the store, card by card", () => {
-		const counts = (taskId: string, output: number) => ({ taskId, input: 1, output, cacheRead: 0, cacheWrite: 0 });
+		const counts = (taskId: string, output: number) => ({
+			taskId,
+			input: 1,
+			output,
+			cacheRead: 0,
+			cacheWrite: 0,
+			models: [],
+		});
 		setTaskTokenUsage([counts("aaaaa", 10), counts("bbbbb", 20)]);
 		try {
 			act(() => {

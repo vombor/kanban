@@ -5,10 +5,11 @@ import { type DevInstance, startDevInstance } from "./dev-instance";
 // The board card on a phone (the config's Pixel 7) and on a narrow desktop column: a header strip across the card's top
 // with the task id, and the agent row with the agent pill (the effective agent, the selected one for a card that names
 // none) on the left and, right-justified on the same line, a Backlog card's prerequisites or a running card's live
-// token count and running time. The row never wraps: the model text truncates first, the stats stay whole.
+// token count and running time. The row never wraps: the model text truncates first, the stats stay whole. A card that
+// names no model shows the model its sessions used, read from the agent's own transcript.
 
 // A stand-in for Claude Code that stays running, so its card sits In Progress, and writes a transcript where Claude
-// Code does (one 1,500-token message every second), so the card's token count grows while it runs.
+// Code does (one 1,500-token message every second, with its model), so the card's token count grows while it runs.
 const FAKE_AGENT = `#!/usr/bin/env node
 const { appendFileSync, mkdirSync } = require("node:fs");
 const { homedir } = require("node:os");
@@ -19,7 +20,9 @@ let n = 0;
 setInterval(() => {
 	n += 1;
 	const usage = { input_tokens: 1000, output_tokens: 500 };
-	appendFileSync(join(dir, "fake.jsonl"), JSON.stringify({ type: "assistant", message: { id: "m" + n, usage } }) + "\\n");
+	const message = { id: "m" + n, model: "claude-opus-5-5", usage };
+	const line = { type: "assistant", timestamp: new Date().toISOString(), message };
+	appendFileSync(join(dir, "fake.jsonl"), JSON.stringify(line) + "\\n");
 }, 1000);
 process.stdout.write("working\\r\\n");
 process.stdin.resume();
@@ -188,7 +191,9 @@ for (const profile of ["phone", "desktop"] as const) {
 			await expectHeaderStrip(header, running);
 			const row = running.getByTestId("board-card-meta-row");
 			const pill = row.getByTestId("board-card-agent");
-			await expect(pill).toHaveText("Claude Code");
+			// The card names no model: the pill shows the one its transcript names, where a Cline card's model goes.
+			await expect(pill).toHaveText("Claude Code · claude-opus-5-5", { timeout: 30_000 });
+			await expect(pill.getByTestId("board-card-agent-model")).toHaveText("· claude-opus-5-5");
 			await expect(row.getByTestId("board-card-task-id")).toHaveCount(0);
 			// The agent row: the live token count and running time right-justified beside the pill, growing while it runs.
 			const stats = row.getByTestId("board-card-run-stats");

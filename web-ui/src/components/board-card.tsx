@@ -9,6 +9,7 @@ import { AlertCircle, AlertTriangle, Bot, GitBranch, Link2, Pencil, Play, Rotate
 import type { KeyboardEvent, MouseEvent } from "react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { describeBoardCardAgentModel } from "@/components/board-card-agent-model";
 import { BoardCardPipelineStage } from "@/components/board-card-pipeline-stage";
 import { BoardCardRunStats } from "@/components/board-card-run-stats";
 import { BoardCardTaskId } from "@/components/board-card-task-id";
@@ -21,6 +22,7 @@ import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import { useKanbanPaths } from "@/stores/kanban-paths-store";
 import { useLandingMode } from "@/stores/landing-mode-store";
 import { useSelectedAgentId } from "@/stores/selected-agent-store";
+import { useTaskTokenUsage } from "@/stores/task-token-usage-store";
 import { useTaskWorkspaceSnapshotValue } from "@/stores/workspace-metadata-store";
 import type { BoardCard as BoardCardModel, BoardColumnId } from "@/types";
 import { getTaskAutoReviewCancelButtonLabel, getTaskRoleBadgeLabel } from "@/types";
@@ -58,6 +60,8 @@ const DESCRIPTION_COLLAPSE_SUFFIX = `… ${DESCRIPTION_EXPAND_LABEL}`;
 const DESCRIPTION_EXPANDED_SUFFIX = `… ${DESCRIPTION_COLLAPSE_LABEL}`;
 // Done cards use a CSS line clamp instead of measuring; past this length the clamp almost always cuts text.
 const TRASH_DESCRIPTION_TOGGLE_MIN_CHARS = 160;
+/** Stable empty list, so a card without used models keeps its memoized pill label. */
+const NO_USED_MODELS: readonly string[] = [];
 
 function reconstructTaskWorktreeDisplayPath(
 	taskId: string,
@@ -478,23 +482,14 @@ export const BoardCard = memo(function BoardCard({
 	const agentLabel = effectiveAgentId
 		? (getRuntimeAgentCatalogEntry(effectiveAgentId)?.label ?? effectiveAgentId)
 		: null;
-	const modelOverrideLabel = useMemo(() => {
-		if (card.agentSettings === undefined) {
-			return null;
-		}
-		// Agent settings are opaque per-agent strings (e.g. Cline --provider/--model/--thinking), shown verbatim.
-		const { providerId, modelId, reasoningEffort } = card.agentSettings;
-		const effortLabel = reasoningEffort ? reasoningEffort : !providerId && !modelId ? "Default" : null;
-		if (providerId && !modelId) {
-			const providerLabel = `Provider: ${providerId}`;
-			return effortLabel ? `${providerLabel} (${effortLabel})` : providerLabel;
-		}
-		if (!modelId) {
-			return effortLabel ? `Default model (${effortLabel})` : null;
-		}
-		return effortLabel ? `${modelId} (${effortLabel})` : modelId;
-	}, [card.agentSettings]);
-	const agentPillTitle = [agentLabel, modelOverrideLabel].filter(Boolean).join(" · ");
+	// The card's own model, else the model its agent sessions last used (any CLI, read from its session files).
+	const usedModels = useTaskTokenUsage(card.id)?.models ?? NO_USED_MODELS;
+	const { label: modelLabel, usedModelsDetail } = useMemo(
+		() => describeBoardCardAgentModel(card.agentSettings, usedModels),
+		[card.agentSettings, usedModels],
+	);
+	const agentPillTitle = [agentLabel, modelLabel].filter(Boolean).join(" · ");
+	const agentPillTooltip = usedModelsDetail ? `${agentPillTitle}\n${usedModelsDetail}` : agentPillTitle;
 
 	const activeDescriptionDisplay = isDescriptionExpanded ? descriptionDisplay.expanded : descriptionDisplay.collapsed;
 
@@ -781,7 +776,7 @@ export const BoardCard = memo(function BoardCard({
 									{agentPillTitle ? (
 										<span
 											data-testid="board-card-agent"
-											title={agentPillTitle}
+											title={agentPillTooltip}
 											className={cn(
 												"inline-flex min-w-[26px] items-center gap-1 rounded-md border px-1.5 py-0.5 text-xs",
 												isTrashCard
@@ -795,11 +790,11 @@ export const BoardCard = memo(function BoardCard({
 												<span className="max-w-[calc(100%-16px)] shrink-0 truncate">{agentLabel}</span>
 											) : null}
 											{/* A space between flex items isn't drawn (gap-1 spaces them), but screen readers and copies read "Cline · model". */}
-											{agentLabel && modelOverrideLabel ? " " : null}
-											{modelOverrideLabel ? (
-												<span className="min-w-0 truncate">
+											{agentLabel && modelLabel ? " " : null}
+											{modelLabel ? (
+												<span className="min-w-0 truncate" data-testid="board-card-agent-model">
 													{agentLabel ? "· " : null}
-													{modelOverrideLabel}
+													{modelLabel}
 												</span>
 											) : null}
 										</span>

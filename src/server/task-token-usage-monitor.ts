@@ -1,4 +1,4 @@
-// Pushes the board cards' token counts live (user request 2026-10-12): while a browser follows a workspace, a card
+// Pushes the board cards' token counts and used models live (user request 2026-10-12): while a browser follows a workspace, a card
 // session's activity (a summary change: a hook, a state change) and, every `throttleMs`, a card session that is
 // running (its output alone changes no summary) re-read the workspace's counts, at most once per `throttleMs`; the
 // cards whose counts changed go to that workspace's clients only (`task_token_usage_updated`, never on the project
@@ -52,7 +52,9 @@ function isSameUsage(a: RuntimeTaskTokenUsage | undefined, b: RuntimeTaskTokenUs
 		a.input === b.input &&
 		a.output === b.output &&
 		a.cacheRead === b.cacheRead &&
-		a.cacheWrite === b.cacheWrite
+		a.cacheWrite === b.cacheWrite &&
+		a.models.length === b.models.length &&
+		a.models.every((model, index) => model === b.models[index])
 	);
 }
 
