@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { abortLiveRecognition, holdRecognition, releaseRecognition } from "@/voice/live-recognition";
 import {
 	getSpeechRecognitionConstructor,
+	RepeatedFinalFilter,
 	readSpeechTranscript,
 	type SpeechRecognitionConstructor,
 	type SpeechRecognitionErrorLike,
@@ -17,8 +18,9 @@ const EMPTY_TRANSCRIPT: SpeechTranscript = { finalText: "", interimText: "" };
 /** A session the browser hasn't started by then is given up on (long enough for the first microphone prompt). */
 export const RECOGNITION_START_TIMEOUT_MS = 15_000;
 /**
- * A started session whose microphone hasn't delivered audio by then is aborted with a message: the browser's `start`
- * only says the recognizer is set up, and Safari sends `start` and then nothing at all when the capture gets no audio.
+ * A started session whose capture source hasn't started by then (`audiostart`) is aborted with a message: the
+ * browser's `start` only says the recognizer is set up. `audiostart` itself is no proof of audio: in WebKit it is the
+ * capture source's `sourceStarted`, sent also for a capture that never delivers a sample (docs/fork/voice-chat.md).
  */
 export const RECOGNITION_AUDIO_TIMEOUT_MS = 4_000;
 /** A stopped session that hasn't ended by then is aborted, so it can't stay "listening". */
@@ -59,6 +61,20 @@ function describeRecognitionError(error: string): string {
 	return `Speech recognition failed (${error}).`;
 }
 
+// Safari's capture source failed while running: WebKit's capture unit got no audio from the microphone for 20 s
+// (CoreAudioCaptureUnit::verifyIsCapturing), and the next session sets the microphone up anew.
+const CAPTURE_STOPPED_MESSAGE = "The microphone delivered no audio. Tap the mic to try again.";
+// After the user's own stop with nothing recognised: Safari's "No speech detected" is the Speech framework's own error
+// for a task that got no speech, which is also what a microphone delivering no audio looks like.
+const NOTHING_HEARD_MESSAGE = "Nothing was heard. Tap the mic to try again.";
+
+function describeSessionError(code: string, message: string | undefined): string {
+	if (code === "audio-capture" && message === "Source is stopped") {
+		return CAPTURE_STOPPED_MESSAGE;
+	}
+	return describeRecognitionError(code);
+}
+
 const START_TIMEOUT_MESSAGE = "Speech recognition didn't start. Tap the mic to try again.";
 const NO_AUDIO_MESSAGE = "The microphone didn't open, so nothing was heard. Tap the mic to try again.";
 
@@ -73,13 +89,19 @@ interface RecognitionSession {
 	number: number;
 	/** The browser's `start` event came. */
 	started: boolean;
-	/** The microphone delivers audio (`audiostart`, or a first result from a browser without that event). */
+	/** The capture source started (`audiostart`, or a first result from a browser without that event). */
 	hearing: boolean;
 	stopRequested: boolean;
 	/** Length of the session's result list at its last result event. */
 	resultCount: number;
 	/** Results before this index were cleared (clear()): they are never shown or kept. */
 	clearedBefore: number;
+	/** Finals that only repeat the final before them (Safari on a stop), left out of the transcript. */
+	repeatedFinals: RepeatedFinalFilter;
+	/** Something was recognised (a result with text). */
+	heardSomething: boolean;
+	/** When start() was called, for the log's start and audiostart lines. */
+	startCalledAt: number;
 	timer: ReturnType<typeof setTimeout> | null;
 }
 
@@ -176,12 +198,21 @@ export function useSpeechRecognition(): SpeechRecognitionControls {
 				stopRequested: false,
 				resultCount: 0,
 				clearedBefore: 0,
+				repeatedFinals: new RepeatedFinalFilter(),
+				heardSomething: false,
+				startCalledAt: Date.now(),
 				timer: null,
 			};
 			const isCurrent = () => sessionRef.current === session;
 			// Listeners, not the on* handlers: they keep logging after the hook dropped the session.
+			// start and audiostart carry the time since start(): on iOS a capture that worked took about 200 ms or
+			// more to start, one that never delivered audio about 50 ms (user's log, 2026-10-12).
 			for (const type of LOGGED_EVENTS) {
-				recognition.addEventListener(type, () => logVoiceEvent(type, null, session.number));
+				recognition.addEventListener(type, () => {
+					const sinceStart =
+						type === "start" || type === "audiostart" ? `+${Date.now() - session.startCalledAt} ms` : null;
+					logVoiceEvent(type, sinceStart, session.number);
+				});
 			}
 			recognition.addEventListener("result", (event) => {
 				const { results } = event as SpeechRecognitionResultEventLike;
@@ -229,19 +260,27 @@ export function useSpeechRecognition(): SpeechRecognitionControls {
 				}
 				hear();
 				session.resultCount = event.results.length;
+				session.repeatedFinals.observe(event.results);
 				// A list shorter than the cleared part is a new one: the browser didn't keep the session's results.
 				if (session.resultCount < session.clearedBefore) {
 					session.clearedBefore = 0;
 				}
-				setTranscript(readSpeechTranscript(event.results, session.clearedBefore));
+				const next = readSpeechTranscript(event.results, session.clearedBefore, session.repeatedFinals.skipped);
+				if (next.finalText || next.interimText) {
+					session.heardSomething = true;
+				}
+				setTranscript(next);
 			};
 			recognition.onerror = (event) => {
 				if (!isCurrent()) {
 					return;
 				}
-				const quiet = session.stopRequested && QUIET_AFTER_STOP_ERRORS.has(event.error);
 				// The browser ends the session after an error; the state doesn't wait for that `end`.
-				finish(session, quiet ? null : describeRecognitionError(event.error));
+				if (session.stopRequested && QUIET_AFTER_STOP_ERRORS.has(event.error)) {
+					finish(session, session.heardSomething ? null : NOTHING_HEARD_MESSAGE);
+					return;
+				}
+				finish(session, describeSessionError(event.error, event.message));
 			};
 			recognition.onend = () => {
 				releaseRecognition(recognition);

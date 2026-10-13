@@ -76,6 +76,8 @@ export function useReplySpeech(taskId: string, summary: RuntimeTaskSessionSummar
 					setSpeaking(false);
 				}
 			};
+			// speak() only queues: `start` is when audio really plays, which on iOS changes the audio session.
+			utterance.onstart = () => logVoiceEvent("speech start");
 			utterance.onend = finish;
 			utterance.onerror = finish;
 			utteranceRef.current = utterance;

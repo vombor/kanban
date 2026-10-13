@@ -10,6 +10,7 @@ import {
 	type ReplySpeechControls,
 	useReplySpeech,
 } from "@/voice/use-reply-speech";
+import { getVoiceDebugEntries } from "@/voice/voice-debug-log";
 
 type ActGlobal = typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
 
@@ -140,6 +141,17 @@ describe("useReplySpeech", () => {
 		expect(controls().speaking).toBe(true);
 		act(() => synthesis.spoken[0]?.onend?.());
 		expect(controls().speaking).toBe(false);
+	});
+
+	// speak() only queues; on iOS real playback changes the audio session, which the voice log must tell apart.
+	it("logs when a reply really starts playing", () => {
+		window.localStorage.setItem(getSpeakRepliesStorageKey("task-1"), "true");
+		render(createSummary());
+		render(turnEnd("Done.", 10));
+		act(() => vi.advanceTimersByTime(REPLY_SETTLE_MS));
+		expect(getVoiceDebugEntries().map((entry) => entry.event)).not.toContain("speech start");
+		act(() => synthesis.spoken[0]?.onstart?.());
+		expect(getVoiceDebugEntries().map((entry) => entry.event)).toContain("speech start");
 	});
 
 	it("never reads the reply that was there when the panel opened, or the same turn twice", () => {

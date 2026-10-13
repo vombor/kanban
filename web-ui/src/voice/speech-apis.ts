@@ -18,7 +18,10 @@ export interface SpeechRecognitionLike extends EventTarget {
 	interimResults: boolean;
 	lang: string;
 	onstart: ((event: Event) => void) | null;
-	/** The microphone delivers audio: only from here on can anything be heard. */
+	/**
+	 * The capture source started. In WebKit that is the source's `sourceStarted`, which says nothing about samples:
+	 * a capture that never delivers audio still sends it (docs/fork/voice-chat.md).
+	 */
 	onaudiostart: ((event: Event) => void) | null;
 	onresult: ((event: SpeechRecognitionResultEventLike) => void) | null;
 	onerror: ((event: SpeechRecognitionErrorLike) => void) | null;
@@ -64,14 +67,67 @@ function joinWords(parts: string[]): string {
 		.join(" ");
 }
 
+function normalizeTranscript(text: string): string {
+	return text.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/**
+ * Follows one session's result list across its result events and marks the finals that only repeat the final before
+ * them. On iOS, Safari forwards every final the Speech framework reports as a new final result
+ * (`WebSpeechRecognizerTask`'s `didFinishRecognition`, appended by `SpeechRecognition::didReceiveResult`), and on a
+ * stop the framework can report the last utterance's final twice: "Hello hello hello" at index 0, then again at index
+ * 1 (user's log, 2026-10-12). A real second utterance is told apart by its interim results: the recognizer
+ * hypothesizes it (an interim result at its index) before it settles, while the repeat arrives final at once.
+ */
+export class RepeatedFinalFilter {
+	private readonly interimSeen = new Set<number>();
+	private readonly repeated = new Set<number>();
+
+	/** Reads a result event's list; call it for every result event of the session, in order. */
+	observe(results: SpeechRecognitionResultList): void {
+		for (let index = 0; index < results.length; index += 1) {
+			const result = results[index];
+			if (!result) {
+				continue;
+			}
+			if (!result.isFinal) {
+				this.interimSeen.add(index);
+				this.repeated.delete(index);
+				continue;
+			}
+			if (this.interimSeen.has(index) || this.repeated.has(index)) {
+				continue;
+			}
+			const previous = index > 0 ? results[index - 1] : undefined;
+			const text = normalizeTranscript(result[0]?.transcript ?? "");
+			if (previous?.isFinal && text !== "" && text === normalizeTranscript(previous[0]?.transcript ?? "")) {
+				this.repeated.add(index);
+			}
+		}
+	}
+
+	/** Indexes of finals that repeat the final before them, to leave out of the transcript. */
+	get skipped(): ReadonlySet<number> {
+		return this.repeated;
+	}
+}
+
 /**
  * Splits a result list into its final and interim text (best alternative of each result), from `fromIndex` on: the
- * results before it were cleared by the user while the session kept listening.
+ * results before it were cleared by the user while the session kept listening. Results in `skip` are left out
+ * (RepeatedFinalFilter).
  */
-export function readSpeechTranscript(results: SpeechRecognitionResultList, fromIndex = 0): SpeechTranscript {
+export function readSpeechTranscript(
+	results: SpeechRecognitionResultList,
+	fromIndex = 0,
+	skip: ReadonlySet<number> = new Set(),
+): SpeechTranscript {
 	const finalParts: string[] = [];
 	const interimParts: string[] = [];
 	for (let index = fromIndex; index < results.length; index += 1) {
+		if (skip.has(index)) {
+			continue;
+		}
 		const result = results[index];
 		const transcript = result?.[0]?.transcript ?? "";
 		(result?.isFinal ? finalParts : interimParts).push(transcript);

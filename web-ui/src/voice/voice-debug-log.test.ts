@@ -23,8 +23,12 @@ describe("voice debug log", () => {
 			logVoiceEvent("result", String(index), 1);
 		}
 		const entries = getVoiceDebugEntries();
-		expect(entries).toHaveLength(VOICE_DEBUG_LOG_LIMIT);
+		// The page line stays first however many entries the ring dropped (a copied log once began at #12 without it).
+		expect(entries).toHaveLength(VOICE_DEBUG_LOG_LIMIT + 1);
+		expect(entries[0]?.event).toBe("page");
+		expect(entries[1]?.detail).toBe("10");
 		expect(entries.at(-1)?.detail).toBe(String(VOICE_DEBUG_LOG_LIMIT + 9));
+		expect(getVoiceDebugEntries()).toBe(entries);
 	});
 
 	it("clips long details to one line and formats entries with UTC time and session", () => {

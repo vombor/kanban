@@ -568,8 +568,8 @@ describe("VoiceTerminalTouchBar", () => {
 		expect(lines[0]).toMatch(/^page browser tab; lang /);
 		expect(lines.slice(1)).toEqual([
 			expect.stringMatching(/^start\(\) lang /),
-			"start",
-			"audiostart",
+			"start +0 ms",
+			"audiostart +0 ms",
 			'result 1 (1 final) "hello"',
 			"stop()",
 			"end",

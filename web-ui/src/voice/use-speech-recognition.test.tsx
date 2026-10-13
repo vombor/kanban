@@ -145,14 +145,92 @@ describe("useSpeechRecognition", () => {
 		expect(controls().error).toBe(message);
 	});
 
-	it("says nothing about no-speech after the user's own stop", () => {
+	it("says nothing about no-speech after the user's own stop once something was heard", () => {
 		mount();
 		const recognition = startListening();
+		act(() => recognition.emitHypothesis("hello"));
 		act(() => controls().stop());
 		act(() => recognition.emitError("no-speech"));
 		act(() => recognition.emitEnd());
 		expect(controls().listening).toBe(false);
 		expect(controls().error).toBeNull();
+		expect(controls().transcript.finalText).toBe("");
+	});
+
+	// Safari after a first session (user's log, 2026-10-12): start and audiostart at once, never a result, and on the
+	// user's stop the Speech framework's "No speech detected". The bar says so instead of staying silent.
+	it("says nothing was heard when a stopped session heard nothing", () => {
+		mount();
+		const recognition = startListening();
+		expect(controls().listening).toBe(true);
+		act(() => vi.advanceTimersByTime(8_000));
+		act(() => controls().stop());
+		act(() => recognition.emitNoSpeechAfterStop());
+		expect(controls().listening).toBe(false);
+		expect(controls().starting).toBe(false);
+		expect(controls().error).toBe("Nothing was heard. Tap the mic to try again.");
+	});
+
+	it("says the microphone delivered no audio when Safari's capture source stopped", () => {
+		mount();
+		const recognition = startListening();
+		// WebKit's capture unit fails a capture that got no samples for 20 s.
+		act(() => vi.advanceTimersByTime(20_000));
+		act(() => recognition.emitError("audio-capture", "Source is stopped"));
+		expect(controls().listening).toBe(false);
+		expect(controls().error).toBe("The microphone delivered no audio. Tap the mic to try again.");
+		act(() => recognition.emitNoSpeechAfterStop());
+		expect(controls().error).toBe("The microphone delivered no audio. Tap the mic to try again.");
+		const next = startListening();
+		act(() => next.emitHypothesis("hello microphone"));
+		expect(controls().error).toBeNull();
+		expect(controls().transcript.interimText).toBe("hello microphone");
+	});
+
+	// User's log, 2026-10-12: on #7's stop Safari sent "Hello hello hello" final at index 0, then again final at
+	// index 1, and the terminal got "Hello hello hello Hello hello hello".
+	it("keeps a final once when Safari repeats it at a new index on stop", () => {
+		mount();
+		const recognition = startListening();
+		act(() => recognition.emitHypothesis("Hello"));
+		act(() => recognition.emitHypothesis("Hello hello hello"));
+		act(() => controls().stop());
+		act(() => recognition.emitFinal("Hello hello hello"));
+		act(() => recognition.emitFinal("Hello hello hello"));
+		act(() => recognition.emitEnd());
+		expect(controls().transcript).toEqual({ finalText: "Hello hello hello", interimText: "" });
+		expect(controls().error).toBeNull();
+	});
+
+	it("keeps a real second utterance with the same words, which Safari hypothesizes first", () => {
+		mount();
+		const recognition = startListening();
+		act(() => recognition.emitHypothesis("yes"));
+		act(() => recognition.emitFinal("yes"));
+		act(() => recognition.emitHypothesis("yes"));
+		act(() => recognition.emitFinal("yes"));
+		expect(controls().transcript.finalText).toBe("yes yes");
+	});
+
+	it("keeps a different final that arrives final at once", () => {
+		mount();
+		const recognition = startListening();
+		act(() => recognition.emitFinal("first part"));
+		act(() => recognition.emitFinal("second part"));
+		expect(controls().transcript.finalText).toBe("first part second part");
+	});
+
+	it("logs how long start and audiostart took after start()", () => {
+		mount();
+		act(() => controls().start());
+		const recognition = FakeSpeechRecognition.latest();
+		act(() => vi.advanceTimersByTime(212));
+		act(() => recognition.emitStart());
+		const lines = getVoiceDebugEntries()
+			.filter((entry) => entry.session !== null)
+			.map((entry) => `${entry.event}${entry.detail ? ` ${entry.detail}` : ""}`);
+		expect(lines).toContain("start +212 ms");
+		expect(lines).toContain("audiostart +212 ms");
 	});
 
 	it("clear while listening keeps the session, and what it hears next fills the empty transcript", () => {
@@ -433,8 +511,8 @@ describe("useSpeechRecognition", () => {
 			.map((entry) => `${entry.event}${entry.detail ? ` ${entry.detail}` : ""}`);
 		expect(lines).toEqual([
 			expect.stringMatching(/^start\(\) lang /),
-			"start",
-			"audiostart",
+			"start +0 ms",
+			"audiostart +0 ms",
 			'result 1 (1 final) "hello there"',
 			"stop()",
 			"error audio-capture: Source is muted",

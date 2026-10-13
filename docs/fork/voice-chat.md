@@ -23,15 +23,25 @@ dependency or secret for it. Shell terminals don't get the bar.
 - Starting to talk stops a reply that is being read out, before the microphone opens: the synthesizer is cancelled
   whenever it still speaks, even without a reply of ours (the silent primer, or a reply whose `end` never came),
   since on iOS a speaking synthesizer can keep the audio session from the microphone.
-- "Listening…" is shown only once the microphone delivers audio: the recognizer's `audiostart` event (or its first
+- "Listening…" is shown once the capture source has started: the recognizer's `audiostart` event (or its first
   result, for a browser without that event), until its `end`. Before that the bar says "Starting…". The browser's
-  `start` event only means the recognizer is set up: Safari sends `start` and then nothing at all when its
-  capture gets no audio, which used to read "Listening…" with nothing ever heard. A session whose microphone hasn't
-  delivered audio 4 s after `start` (`RECOGNITION_AUDIO_TIMEOUT_MS`) is aborted with "The microphone didn't open,
-  so nothing was heard. Tap the mic to try again." An error ends listening with its message, including "No speech
-  was heard" and "was interrupted" (those two stay quiet after your own stop). A session that doesn't start within
-  15 s (room for the first permission prompts), or doesn't end within 3 s of a stop, is aborted with a message, so
-  the bar never says it listens while nothing does.
+  `start` event only means the recognizer is set up. `audiostart` is no proof of audio either: in WebKit it is the
+  capture source's `sourceStarted`, sent also for a capture that never delivers a sample (see "Safari: no speech
+  after the first session"). A session whose capture hasn't started 4 s after `start` (`RECOGNITION_AUDIO_TIMEOUT_MS`)
+  is aborted with "The microphone didn't open, so nothing was heard. Tap the mic to try again." An error ends
+  listening with its message, including "No speech was heard" and "was interrupted". After your own stop those two
+  stay quiet when something was recognised, and say "Nothing was heard. Tap the mic to try again." when nothing
+  was. Safari's `audio-capture` "Source is stopped" says "The microphone delivered no audio." A session that doesn't
+  start within 15 s (room for the first permission prompts), or doesn't end within 3 s of a stop, is aborted with a
+  message.
+- A final result that only repeats the final before it is kept once (`RepeatedFinalFilter` in
+  `web-ui/src/voice/speech-apis.ts`). On a stop, Safari can send the last utterance's final twice: "Hello hello hello"
+  final at index 0, then again final at index 1 (user's log, 2026-10-12, which sent "Hello hello hello Hello hello
+  hello"). WebKit forwards every final the Speech framework reports (`WebSpeechRecognizerTask`'s
+  `didFinishRecognition`) and `SpeechRecognition::didReceiveResult` appends each one at a new index; WebKit itself
+  doesn't dedupe. A real second utterance with the same words is kept: the recognizer hypothesizes it first (an
+  interim result at its index), while the repeat arrives final at once. The same rule drops Chrome Android's
+  repeated finals of continuous mode when their text is equal.
 - On desktop, discarding (X, Escape) clears only the text: while listening, the mic keeps listening and what you say
   next fills the empty preview (the recognizer's results from before the clear are skipped by index, the words being
   said at that moment included). On a phone the X also stops the mic (see "On a phone"). Closing the bar, or
@@ -73,10 +83,16 @@ Checked in the engines' sources (2026-10-12), not in the test fake, which twice 
   aborts any other microphone session; WebKit's `SpeechRecognitionServer::handleRequest` aborts its recognizer
   with "Another request is started". `start()` has no user-gesture check in either (Blink only for on-device
   models being downloaded). A start inside the tap is kept anyway, since iOS ties audio to user interaction.
-- **iOS Safari (WebKit):** `start` is sent when the recognizer is set up, before the capture runs; `audiostart`
-  comes from the capture source once it delivers audio. A capture that delivers nothing sends no event at all, a
-  muted source sends `audio-capture` with the message "Source is muted". Error events carry a `message`, which the
-  log records. `stop()` finishes the SFSpeech task, and `end` follows the final result.
+- **iOS Safari (WebKit):** `start` is sent when the recognizer is set up (`SpeechRecognizer::start`), right before
+  the capture source is started; `audiostart` is that source's `sourceStarted`
+  (`SpeechRecognitionCaptureSourceImpl`), whether or not any audio sample follows. A muted source sends
+  `audio-capture` "Source is muted", a failed one `audio-capture` "Source is stopped". Error events carry a
+  `message`, which the log records. `stop()` finishes the SFSpeech task, and `end` follows the final result. A task
+  that got no speech ends with `aborted` and the Speech framework's own message "No speech detected"
+  (`didFinishSuccessfully:NO`, `task.error.localizedDescription`). Every session gets a new capture source: the
+  UI process asks the page's WebContent process to create one per request (`createRealtimeMediaSourceForSpeechRecognition`,
+  `SpeechRecognitionRealtimeMediaSourceManager::createSource`), and it is deleted when the session's recognizer
+  stops capture.
 - **Chrome Android:** `abort()` cancels and destroys Android's recognizer at once and sends `end`; `stop()` ends
   once Android delivers its results. A busy recognizer (`ERROR_RECOGNIZER_BUSY`) is reported as `not-allowed`,
   which reads "Microphone access was denied". In continuous mode Chrome marks every partial result final, so a long
@@ -84,20 +100,58 @@ Checked in the engines' sources (2026-10-12), not in the test fake, which twice 
 
 What is still unverified on the real phone, and what the diagnostic log shows for it:
 
-- that the second session gets `audiostart` after a reply was read aloud (look for `speech speak()`, `speech
-  cancel()` and then the session's `start` without `audiostart`, ending in "gave up");
 - that `end` comes after `stop()` (a `stop()` line with no `end` before the next `start()`);
 - which error iOS sends when the microphone is taken (`error audio-capture: …` with its message).
 
+### Safari: no speech after the first session
+
+User's logs, 2026-10-12 (iPhone, iOS 18.7, Safari 27.0.1, one page load, sessions #1 to #20): a session works on a
+fresh page, after a reply was really read aloud, and after Safari reported `audio-capture` "Source is stopped".
+Every other session, that is every session right after another one, never hears anything: `start` and
+`audiostart` 40 to 55 ms after `start()` (the working ones took 200 ms or more: #1 1.6 s, #7 220 ms, #19 212 ms), no
+`speechstart` or result while the user talks (17 s in #14), and on the user's stop `aborted` "No speech
+detected". This is a Safari bug the page can't fix; Kanban's handling of the sessions (new instance, start inside
+the tap, the old session aborted) is not what decides it.
+
+What WebKit's sources (main, 2026-10) confirm:
+
+- The failing sessions get no audio samples at all, not silent ones. #18 was left listening: exactly 20 s after
+  its `audiostart` it got `audio-capture` "Source is stopped". That is `CoreAudioCaptureUnit::verifyIsCapturing`,
+  which fails a capture whose microphone callback didn't run once in its interval (20 s while producing samples).
+- It isn't a cached capture source: each session gets a new one (above). But every capture source of the process
+  is a client of one shared `CoreAudioCaptureUnit`, and `BaseAudioCaptureUnit::continueStartProducingData` skips
+  the real start (`startUnit`: audio session category, `AudioOutputUnitStart`) when the unit already counts as
+  producing (`isProducingData()`, its `m_ioUnitStarted`). That fast path fits the 50 ms starts, the real start the
+  200 ms ones.
+- `captureFailed()` clears the unit's clients and stops it (`stopRunning`: `stopInternal` + `cleanupAudioUnit`), so
+  the next session starts the unit for real, which is why #19 worked. An audio session interruption suspends the
+  unit (`BaseAudioCaptureUnit::suspend` → `stopInternal`) and would have the same effect; that real playback
+  interrupts it is likely (the reply is played outside the page's process) but not confirmed in the sources.
+- When a capture stops, the unit keeps running while it has clients (`shouldContinueRunning()`: producing count,
+  rendering audio, or any client), and since WebKit 2f88bc0b (2026-06-26, "Speech recognition microphone source
+  should make sure to keep its audio session active while capturing") the speech recognition source's stop also
+  deactivates the page's audio session (`audioCaptureSourceStateChanged(No)` → `maybeDeactivateAudioSession`).
+  An audio unit left counting as started while its I/O no longer runs would give exactly the log above, but
+  which step leaves it so could not be pinned down in the sources, and Safari 27.0.1's code may differ from main.
+
+What the page can do: nothing found in the sources resets the shared unit from a page except a capture failure or
+an audio session interruption. `navigator.audioSession.type = "play-and-record"` keeps the session from being
+deactivated on main (`maybeDeactivateAudioSession` returns early for a category override), but not in the code of
+2f88bc0b, and nothing shows it would restart the unit, so it is not used. What helps on the phone today: leave the
+mic on until the bar says "The microphone delivered no audio" (20 s), or have a reply read aloud, and the next tap
+hears again; reloading the page probably does too (a fresh page worked, not verified). Worth reporting to WebKit.
+The log shows the signature: `start`/`audiostart` with `+40`–`+55 ms`, then nothing until "No speech detected".
+
 ## Diagnostic log
 
-The voice chat records what the browser's recognizer and synthesizer do: each session's `start()`, `start`,
-`audiostart`, `soundstart`, `speechstart`, `result` (count, final count, last text), `speechend`, `soundend`,
+The voice chat records what the browser's recognizer and synthesizer do: each session's `start()`, `start` and
+`audiostart` (each with the time since `start()`, `+212 ms`), `soundstart`, `speechstart`, `result` (count, final count, last text), `speechend`, `soundend`,
 `audioend`, `nomatch`, `error` (code and message), `end`, Kanban's own `stop()`, `abort()` and "gave up", reply
-speech's `speak()`, `cancel()` and its `end`/`error`, and once per page whether it runs as a home-screen web app
+speech's `speak()`, `cancel()`, its `start` (audio really plays; `speak()` only queues) and its `end`/`error`, and once per page whether it runs as a home-screen web app
 and the browser's user agent. Times are UTC, and `#n` is the session's number on the page.
 
-It records always (the last 120 entries, in memory only: nothing leaves the page) and is shown only on demand, so
+It records always (the page line, then the last 120 entries, in memory only: nothing leaves the page; a long
+session's interim results push older sessions out) and is shown only on demand, so
 after a failure it already holds what happened:
 
 - **On a phone:** hold the mic for 1 s. The press starts listening as any tap does (that session shows in the log
@@ -106,7 +160,7 @@ after a failure it already holds what happened:
   fixed, so use the long press there.
 
 The setting is remembered in localStorage (`kanban.voice-debug-log`). Copy puts the whole log on the clipboard for a
-report; Clear empties it.
+report and leaves the log as it is; Clear empties it, and the page line comes back with the next entry's time.
 
 ## Browser support
 

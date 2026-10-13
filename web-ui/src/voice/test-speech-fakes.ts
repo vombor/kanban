@@ -23,7 +23,12 @@ function toResultList(results: FakeResult[]): SpeechRecognitionResultList {
  * for the end (the test sends it with emitEnd(), as the browser does later), and one session at a time: start() while
  * another session hasn't ended ends that one first, with an `aborted` error and its `end` ("Another request is
  * started" in WebKit). Every event goes to the on* handler and to addEventListener listeners, as in a browser.
- * `start` and `audiostart` are separate events: emitStart() sends both unless told the microphone stays silent.
+ * `start` and `audiostart` are separate events: emitStart() sends both unless told the capture source doesn't start.
+ * `audiostart` is WebKit's capture source `sourceStarted`, not proof of audio: a session whose capture delivers
+ * nothing still gets it, then no result, and Safari ends it with emitNoSpeechAfterStop() on the user's stop.
+ * emitHypothesis()/emitFinal() build the result list as WebKit's SpeechRecognition::didReceiveResult does: every
+ * final is appended at a new index and the current hypothesis sits after the finals, so a final the Speech framework
+ * reports twice (Safari on a stop) is two final results with the same text.
  */
 export class FakeSpeechRecognition extends EventTarget implements SpeechRecognitionLike {
 	static instances: FakeSpeechRecognition[] = [];
@@ -41,6 +46,8 @@ export class FakeSpeechRecognition extends EventTarget implements SpeechRecognit
 	stopped = false;
 	aborted = false;
 	ended = false;
+	/** The finals so far, as WebKit keeps them (m_finalResults). */
+	private finals: string[] = [];
 
 	constructor() {
 		super();
@@ -93,8 +100,8 @@ export class FakeSpeechRecognition extends EventTarget implements SpeechRecognit
 	}
 
 	/**
-	 * The browser's `start` (the recognizer is set up) and, unless `audio` is false, its `audiostart` (the
-	 * microphone delivers audio). Safari's capture that gets no audio sends `start` and nothing after it.
+	 * The browser's `start` (the recognizer is set up) and, unless `audio` is false, its `audiostart` (the capture
+	 * source started, whether or not it ever delivers audio).
 	 */
 	emitStart({ audio = true }: { audio?: boolean } = {}): void {
 		if (FakeSpeechRecognition.live !== this) {
@@ -113,6 +120,30 @@ export class FakeSpeechRecognition extends EventTarget implements SpeechRecognit
 	emitResults(results: FakeResult[]): void {
 		const event = Object.assign(new Event("result"), { resultIndex: 0, results: toResultList(results) });
 		this.fire(event, this.onresult);
+	}
+
+	/** WebKit's interim result: the finals so far plus the hypothesis after them. */
+	emitHypothesis(transcript: string): void {
+		this.emitResults([
+			...this.finals.map((text) => ({ transcript: text, isFinal: true })),
+			{ transcript, isFinal: false },
+		]);
+	}
+
+	/** WebKit's final result: appended at a new index, the hypothesis gone. */
+	emitFinal(transcript: string): void {
+		this.finals.push(transcript);
+		this.emitResults(this.finals.map((text) => ({ transcript: text, isFinal: true })));
+	}
+
+	/**
+	 * Safari's end of a stopped session whose Speech framework task got no speech: `didFinishSuccessfully:NO` with the
+	 * framework's "No speech detected", sent as an `aborted` error, then `end`. A capture that delivered no audio
+	 * ends this way too, though the user spoke (user's log, 2026-10-12).
+	 */
+	emitNoSpeechAfterStop(): void {
+		this.emitError("aborted", "No speech detected");
+		this.emitEnd();
 	}
 
 	emitError(error: string, message = ""): void {
@@ -134,6 +165,7 @@ export class FakeSpeechRecognition extends EventTarget implements SpeechRecognit
 export class FakeUtterance {
 	lang = "";
 	volume = 1;
+	onstart: (() => void) | null = null;
 	onend: (() => void) | null = null;
 	onerror: (() => void) | null = null;
 	constructor(readonly text: string) {}

@@ -16,10 +16,14 @@ export interface VoiceDebugEntry {
 }
 
 let entries: VoiceDebugEntry[] = [];
+// Kept apart from the ring so it stays the log's first line however many entries came after it.
+let environment: VoiceDebugEntry | null = null;
+// What getVoiceDebugEntries() returns: one array per change, as useSyncExternalStore needs.
+let snapshot: VoiceDebugEntry[] = [];
 const listeners = new Set<() => void>();
-let environmentLogged = false;
 
 function emit(): void {
+	snapshot = environment ? [environment, ...entries] : entries;
 	for (const listener of listeners) {
 		listener();
 	}
@@ -40,16 +44,15 @@ function isStandaloneWebApp(): boolean {
 
 // Once per page, before its first entry: which browser, and whether it runs as a home-screen web app.
 function logEnvironment(): void {
-	if (environmentLogged || typeof navigator === "undefined") {
+	if (environment || typeof navigator === "undefined") {
 		return;
 	}
-	environmentLogged = true;
-	entries.push({
+	environment = {
 		at: Date.now(),
 		session: null,
 		event: "page",
 		detail: `${isStandaloneWebApp() ? "standalone web app" : "browser tab"}; lang ${navigator.language}; ${navigator.userAgent}`,
-	});
+	};
 }
 
 export function logVoiceEvent(event: string, detail: string | null = null, session: number | null = null): void {
@@ -60,14 +63,16 @@ export function logVoiceEvent(event: string, detail: string | null = null, sessi
 	emit();
 }
 
+/** Empties the log; the page line comes back, with a new time, before the next entry. */
 export function clearVoiceDebugLog(): void {
 	entries = [];
-	environmentLogged = false;
+	environment = null;
 	emit();
 }
 
+/** The page line first, then the last VOICE_DEBUG_LOG_LIMIT entries, oldest first. */
 export function getVoiceDebugEntries(): VoiceDebugEntry[] {
-	return entries;
+	return snapshot;
 }
 
 export function subscribeVoiceDebugLog(listener: () => void): () => void {
@@ -89,7 +94,7 @@ export function formatVoiceDebugEntry(entry: VoiceDebugEntry): string {
 	return `${formatClock(entry.at)}Z${session} ${entry.event}${entry.detail ? ` ${entry.detail}` : ""}`;
 }
 
-export function formatVoiceDebugLog(list: VoiceDebugEntry[] = entries): string {
+export function formatVoiceDebugLog(list: VoiceDebugEntry[] = getVoiceDebugEntries()): string {
 	return list.map(formatVoiceDebugEntry).join("\n");
 }
 
