@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 
 import { readPipelineConfig } from "../config/pipeline-config";
+import { resolveQaChromiumLibs } from "../pipeline/qa-browser-tooling";
 import { runQaShot } from "../pipeline/qa-shot";
 
 function splitList(value: string | undefined): string[] {
@@ -61,7 +62,7 @@ export function registerQaCommand(program: Command): void {
 					waitFor: options.waitFor ?? null,
 					fullPage: options.fullPage,
 					scripts: options.script,
-					chromiumLibs: process.env.QA_CHROMIUM_LIBS || config.pipeline.qa.chromiumLibs,
+					chromiumLibs: resolveQaChromiumLibs(process.env.QA_CHROMIUM_LIBS || config.pipeline.qa.chromiumLibs),
 				});
 				(result.exitCode === 0 ? process.stdout : process.stderr).write(`${result.message}\n`);
 				process.exitCode = result.exitCode;

@@ -49,6 +49,39 @@ function liveSidebar(workspaceId: string, agentId: RuntimeAgentId): PipelineSess
 }
 
 describe("watchdog wake target", () => {
+	it.each(["compact", "hidden"] as const)(
+		"%s notices still wake the sidebar with full details persisted first",
+		async (presentation) => {
+			const harness = createWatchdogHarness({
+				config: qaConfig({ mode: "sidebar", presentation, delivery: "type" }),
+			});
+			harnesses.push(harness);
+			harness.observe({
+				workspaceId: "foo",
+				board: stalledBoard(),
+				selectedAgentId: "codex",
+				sessions: [liveSidebar("foo", "codex")],
+			});
+			await harness.watchdog.tick();
+			const typed = harness.requests.find((request) => request.kind === "deliverInput");
+			expect(typed).toMatchObject({ workspaceId: "foo", taskId: createHomeAgentSessionId("foo", "codex") });
+			const text = typed && "text" in typed ? typed.text : "";
+			expect(text).toContain("Read the full wake notice");
+			expect(text).toContain(harness.paths("foo").decisions);
+			if (presentation === "hidden") {
+				expect(text).not.toContain("d0001");
+			} else {
+				expect(text).toContain("d0001");
+			}
+			const log = readFileSync(harness.paths("foo").decisions, "utf8");
+			expect(log).toContain('"kind":"wake-notice"');
+			expect(log).toContain("dev card has been in Review");
+			expect(log).toContain("standing rules for model/benchmark decisions");
+			await harness.watchdog.tick();
+			expect(harness.requests.filter((request) => request.kind === "deliverInput")).toHaveLength(1);
+		},
+	);
+
 	it.each(["claude", "codex", "cline"] as const)(
 		"wakes the selected agent %s in its sidebar session",
 		async (agentId) => {

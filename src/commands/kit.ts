@@ -97,6 +97,7 @@ function fromWire(result: WireKitApplyResult): KitApplyResult {
 		...result,
 		changes: result.changes.map((change) => ({ ...change, from: change.from, to: change.to })),
 		dropped: result.dropped.map((dropped) => ({ ...dropped, value: dropped.value })),
+		rebased: result.rebased.map((pin) => ({ ...pin, value: pin.value })),
 		unmetSettings: result.unmetSettings.map((status) => ({ ...status, current: status.current })),
 	};
 }
@@ -135,6 +136,12 @@ function formatApplyResult(result: KitApplyResult, dryRun: boolean): string[] {
 		lines.push(`Dropped project settings that don't fit kit ${to}:`);
 		for (const dropped of result.dropped) {
 			lines.push(`  ${dropped.key}: ${JSON.stringify(dropped.value)} (${dropped.why})`);
+		}
+	}
+	if (result.rebased.length > 0) {
+		lines.push(`Rebased onto the current preset ${result.preset.to}; removed project model pins:`);
+		for (const { key, value } of result.rebased) {
+			lines.push(`  ${key}: ${JSON.stringify(value)}`);
 		}
 	}
 	if (result.recommendedLandingMode && result.recommendedLandingMode !== result.landing.to) {
@@ -562,6 +569,16 @@ export function registerKitCommand(program: Command): void {
 		)
 		.option("--unset <key>", "Remove a stored override (a team key too, by the user only). Repeatable.", collect, [])
 		.option("--dry-run", "Print what would change; write nothing.")
+		.option(
+			"--rebase",
+			"Opt in to following the current preset again: drop project model pins, keep project facts and team keys.",
+		)
+		.option(
+			"--rebase-key <key>",
+			"With --rebase: drop only this stored model pin. Repeatable; otherwise all model pins are dropped.",
+			collect,
+			[],
+		)
 
 		.option("--json", "Print as JSON.")
 		.action(
@@ -575,6 +592,8 @@ export function registerKitCommand(program: Command): void {
 					set: string[];
 					unset: string[];
 					dryRun?: boolean;
+					rebase?: boolean;
+					rebaseKey: string[];
 					json?: boolean;
 				},
 			) => {
@@ -588,6 +607,8 @@ export function registerKitCommand(program: Command): void {
 						set: parseSetAssignments(options.set),
 						unset: options.unset,
 						dryRun: options.dryRun === true,
+						rebase: options.rebase === true,
+						rebaseKeys: options.rebaseKey,
 					});
 					if (options.json) {
 						printJson({ ok: true, ...result });

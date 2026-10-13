@@ -20,7 +20,7 @@
 // Ported from kit main 00514f2 lib/sidebar-wake.cjs (after the archive cut at 6da71597; wakeKey, pickFresh, markWoken,
 // keepForRetry, wakeText, wake) and archive/devteam-kit:services/review-watch.mjs@6da71597 (wakeOrchestrator). The
 // legacy fallback "typing failed twice → headless" is dropped: it started a second orchestrator beside a live sidebar.
-import type { OrchestratorWakeDelivery } from "../../config/pipeline-config";
+import type { OrchestratorWakeDelivery, OrchestratorWakePresentation } from "../../config/pipeline-config";
 import type { RuntimeAgentId, RuntimeTaskInputDeliveryResponse } from "../../core/api-contract";
 import type { PipelineSessionView } from "../engine";
 import type { WatchdogWorkspaceState } from "./watchdog-state";
@@ -65,6 +65,9 @@ export interface WakeTextInput {
 	now: Date;
 	/** When the user last typed into the orchestrator sidebar (epoch ms), or null. */
 	userTypedAt?: number | null;
+	presentation?: OrchestratorWakePresentation;
+	/** Full notice persisted before a shortened wake is delivered. */
+	noticeLogPath?: string;
 }
 
 /** The user typed into the sidebar this recently: the wake must not say nobody is watching (issue #35). */
@@ -123,6 +126,20 @@ export function decideWakeDelivery(input: WakeDeliveryInput): WakeDeliveryDecisi
 
 /** One line: which workspace and project, the items, and where to look. */
 export function buildWakeText(input: WakeTextInput): string {
+	if (input.presentation && input.presentation !== "full" && input.noticeLogPath) {
+		const prefix = `[kanban watchdog] ${input.workspaceId}: ${input.items.length} notice(s)`;
+		const summary =
+			input.presentation === "compact"
+				? `: ${input.items
+						.slice(0, 3)
+						.map((item) => {
+							const clean = cleanItem(item);
+							return clean.length > 140 ? `${clean.slice(0, 137)}…` : clean;
+						})
+						.join(" | ")}${input.items.length > 3 ? ` | +${input.items.length - 3} more` : ""}`
+				: "";
+		return `${prefix}${summary}. Read the full wake notice at ${input.now.toISOString()} in ${input.noticeLogPath}; handle orchestration yourself, leaving only product/budget decisions for the user.`;
+	}
 	const where = [
 		`ATTENTION ${input.attentionPath}`,
 		`pipeline decisions ${input.decisionsPath}`,
@@ -261,7 +278,7 @@ export interface WakeInput {
 	queued: readonly string[];
 	target: WakeTarget;
 	mode: WakeMode;
-	text: (items: readonly string[]) => string;
+	text: (items: readonly string[]) => string | Promise<string>;
 	now: number;
 	cooldownMs: number;
 	retryMs: number;
@@ -333,9 +350,9 @@ export async function wakeOrchestrator(input: WakeInput): Promise<WakeOutcome> {
 			return { path: "none", ok: true, items: [], detail: "nothing due" };
 		}
 		const decision = input.delivery?.(fresh) ?? null;
+		const text = await input.text(fresh);
 		let fallback = "";
 		if (decision?.silent && deps.queueSilent) {
-			const text = input.text(fresh);
 			const queued = await deps
 				.queueSilent(fresh, text, now + (input.quietMs ?? WAKE_USER_ACTIVE_MS))
 				.catch((error: unknown) => ({ ok: false, pending: 0, error: String(error) }));
@@ -350,7 +367,7 @@ export async function wakeOrchestrator(input: WakeInput): Promise<WakeOutcome> {
 			}
 			fallback = `; the silent queue failed (${queued.error ?? "?"}), so it was typed`;
 		}
-		const result = await deps.deliver(input.text(fresh));
+		const result = await deps.deliver(text);
 		if (result.ok) {
 			markWoken(state, fresh, now);
 			const detail = `${
@@ -390,7 +407,7 @@ export async function wakeOrchestrator(input: WakeInput): Promise<WakeOutcome> {
 			detail: `headless run failed to start: ${started.error ?? "?"}`,
 		};
 	}
-	const started = await deps.startSession(input.text(fresh));
+	const started = await deps.startSession(await input.text(fresh));
 	if (started.ok) {
 		markWoken(state, fresh, now);
 		return {

@@ -123,6 +123,10 @@ export type OrchestratorWakeMode = z.infer<typeof orchestratorWakeModeSchema>;
 export const orchestratorWakeDeliverySchema = z.enum(["type", "silent", "auto"]);
 export type OrchestratorWakeDelivery = z.infer<typeof orchestratorWakeDeliverySchema>;
 
+/** Sidebar text only; compact/hidden retain the full wake in the workspace's watchdog decision log. */
+export const orchestratorWakePresentationSchema = z.enum(["full", "compact", "hidden"]);
+export type OrchestratorWakePresentation = z.infer<typeof orchestratorWakePresentationSchema>;
+
 export const workspacePipelineSettingsSchema = z
 	.object({
 		name: z.string().nullable().default(null),
@@ -193,13 +197,23 @@ export const workspacePipelineSettingsSchema = z
 						restart: z.boolean().nullable().default(null),
 						// This workspace's overrides of `orchestrator.wake.delivery` / `.quietMin` (null keeps them).
 						delivery: orchestratorWakeDeliverySchema.nullable().default(null),
+						presentation: orchestratorWakePresentationSchema.nullable().default(null),
 						quietMin: z.number().positive().nullable().default(null),
 					})
 					.strict()
-					.default({ enabled: null, mode: null, restart: null, delivery: null, quietMin: null }),
+					.default({
+						enabled: null,
+						mode: null,
+						restart: null,
+						delivery: null,
+						presentation: null,
+						quietMin: null,
+					}),
 			})
 			.strict()
-			.default({ wake: { enabled: null, mode: null, restart: null, delivery: null, quietMin: null } }),
+			.default({
+				wake: { enabled: null, mode: null, restart: null, delivery: null, presentation: null, quietMin: null },
+			}),
 	})
 	.strict()
 	.transform(({ models: _removed, ...settings }) => settings);
@@ -370,6 +384,7 @@ const ORCHESTRATOR_WAKE_DEFAULTS = {
 	timeoutMin: 45,
 	liveSessionMin: 10,
 	delivery: "auto",
+	presentation: "full",
 	quietMin: 30,
 } as const;
 
@@ -387,6 +402,7 @@ const orchestratorSectionSchema = z
 				timeoutMin: z.number().positive().default(ORCHESTRATOR_WAKE_DEFAULTS.timeoutMin),
 				liveSessionMin: z.number().nonnegative().default(ORCHESTRATOR_WAKE_DEFAULTS.liveSessionMin),
 				delivery: orchestratorWakeDeliverySchema.default(ORCHESTRATOR_WAKE_DEFAULTS.delivery),
+				presentation: orchestratorWakePresentationSchema.default(ORCHESTRATOR_WAKE_DEFAULTS.presentation),
 				// `auto`: the user typed in the sidebar this recently = queue silently; also how long a silent notice
 				// waits unread before it is typed.
 				quietMin: z.number().positive().default(ORCHESTRATOR_WAKE_DEFAULTS.quietMin),
@@ -877,6 +893,7 @@ export function resolveWorkspaceWakeSettings(config: PipelineConfig, workspaceId
 		enabled: overrides.enabled ?? config.orchestrator.wake.enabled,
 		mode: overrides.mode ?? config.orchestrator.wake.mode,
 		delivery: overrides.delivery ?? config.orchestrator.wake.delivery,
+		presentation: overrides.presentation ?? config.orchestrator.wake.presentation,
 		quietMin: overrides.quietMin ?? config.orchestrator.wake.quietMin,
 	};
 }

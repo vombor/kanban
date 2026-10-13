@@ -177,6 +177,69 @@ describe("landing modes", () => {
 			expect(await harness.done("dev01")).toMatchObject({ ok: true, status: "trashed" });
 		});
 
+		it.each(["off", "commit", "pr"] as const)(
+			"landing %s: accepts cherry-picked work even after the base changes the same file (issue #46)",
+			async (mode) => {
+				repo = createLandRepo();
+				const worktree = repo.addWorktree("dev01");
+				repo.write(worktree, "src/app.ts", "export const value = 3;\n");
+				const head = repo.commitAll(worktree, "the work");
+				// Force a different cherry-pick SHA, then move the base beyond the picked patch.
+				repo.write(repo.repoPath, "README.md", "base advanced\n");
+				repo.commitAll(repo.repoPath, "base advanced");
+				repo.git(["cherry-pick", head]);
+				expect(repo.tip()).not.toBe(head);
+				repo.write(repo.repoPath, "src/app.ts", "export const value = 99;\n");
+				repo.commitAll(repo.repoPath, "later change");
+				const before = repo.tip();
+				const harness = createHarness({
+					repo,
+					config: landingConfig(mode),
+					cards: { review: [createCard({ id: "dev01" })] },
+					worktrees: { dev01: worktree },
+				});
+
+				expect(await harness.done("dev01")).toMatchObject({ ok: true, status: "trashed" });
+				expect(repo.tip()).toBe(before);
+				expect(harness.landed).toEqual([]);
+			},
+		);
+
+		it.each(["uncommitted", "committed", "merge"] as const)(
+			"still refuses cherry-picked work with additional %s work",
+			async (extra) => {
+				repo = createLandRepo();
+				const worktree = repo.addWorktree("dev01");
+				repo.write(worktree, "src/app.ts", "export const value = 3;\n");
+				const head = repo.commitAll(worktree, "the work");
+				repo.write(repo.repoPath, "README.md", "base advanced\n");
+				repo.commitAll(repo.repoPath, "base advanced");
+				repo.git(["cherry-pick", head]);
+				repo.write(repo.repoPath, "src/app.ts", "export const value = 99;\n");
+				repo.commitAll(repo.repoPath, "later change");
+				if (extra === "merge") {
+					// All non-merge patches are accounted for; only the merge's own edit is new.
+					repo.git(["merge", "--no-commit", "--no-ff", "main", "-s", "ours"], worktree);
+				}
+				repo.write(worktree, "extra.txt", "not on the base\n");
+				if (extra !== "uncommitted") {
+					repo.commitAll(worktree, "additional work");
+				}
+				const harness = createHarness({
+					repo,
+					config: landingConfig("off"),
+					cards: { review: [createCard({ id: "dev01" })] },
+					worktrees: { dev01: worktree },
+				});
+
+				expect(await harness.done("dev01")).toMatchObject({
+					status: "blocked",
+					landing: { decision: "discard_required" },
+				});
+				expect(harness.effects.deleteTaskWorktree).not.toHaveBeenCalled();
+			},
+		);
+
 		it("asks for pushed commits plus uncommitted changes on top", async () => {
 			repo = createLandRepo();
 			const worktree = repo.addWorktree("dev01");
@@ -671,7 +734,7 @@ describe("landing modes", () => {
 
 				expect(result).toMatchObject({ ok: false, status: "blocked", landing: { decision: "refused" } });
 				expect(result.error).toBe(
-					`Task "l0001" raced in runoff tier2-promos, which is decided (winner w0001); it must not land. The runoff's decision is final: discard it (kanban task done --task-id l0001 --discard), and to use its work, start a new card from its preserve/l0001-<model> tag.`,
+					`Task "l0001" raced in runoff tier2-promos, which is decided (winner w0001); it must not land. The runoff's decision is final: preserve its work and discard it (kanban task done --task-id l0001 --discard --tag preserve/l0001-unknown), then to use its work, start a new card from preserve/l0001-unknown.`,
 				);
 				expect(created.tip()).toBe(before);
 				expect(harness.columnOf("l0001")).toBe("review");

@@ -25,6 +25,103 @@ function readConfig(path: string): Record<string, unknown> {
 }
 
 describe("applyWorkspaceKit", () => {
+	it("rebases project models onto the current preset only on request, keeping facts, flow and other workspaces", async () => {
+		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
+			const pins = {
+				"roles.qa.model": "project-reviewer",
+				"roles.qa.provider": "project-provider",
+				"plan.candidates.0.model.model": "project-plan",
+			};
+			const kept = {
+				"qa.blurb": "Project context",
+				"checks.envFile": ".env.checks",
+				"fallback.requireApproval": true,
+			};
+			const original = {
+				workspaces: {
+					foo: {
+						landing: { mode: "qa" },
+						kit: { name: "team", preset: "cloud", overrides: { ...pins, ...kept } },
+					},
+					bar: { kit: { name: "team", preset: "cloud", overrides: pins } },
+				},
+			};
+			writeConfig(globalConfigPath, original);
+			const regular = await applyWorkspaceKit({ workspaceId: "foo", kitName: "team", dryRun: true });
+			expect(regular.overrides).toEqual({ ...pins, ...kept });
+			expect(regular.rebased).toEqual([]);
+			const dryRun = await applyWorkspaceKit({
+				workspaceId: "foo",
+				kitName: "team",
+				rebase: true,
+				dryRun: true,
+				by: { kind: "orchestrator", taskId: "sidebar" },
+			});
+			expect(dryRun.overrides).toEqual(kept);
+			expect(dryRun.rebased.map(({ key }) => key)).toEqual(Object.keys(pins).sort());
+			expect(dryRun.changes).toContainEqual(
+				expect.objectContaining({ key: "roles.qa.model", from: "project-reviewer", toSource: "preset:cloud" }),
+			);
+			expect(readConfig(globalConfigPath)).toEqual(original);
+			expect(await readKitSettingsHistory(getKitSettingsHistoryPath("foo"))).toEqual([]);
+			await applyWorkspaceKit({
+				workspaceId: "foo",
+				kitName: "team",
+				rebase: true,
+				by: { kind: "orchestrator", taskId: "sidebar" },
+			});
+			expect(readConfig(globalConfigPath).workspaces).toEqual({
+				...original.workspaces,
+				foo: { ...original.workspaces.foo, kit: { name: "team", preset: "cloud", overrides: kept } },
+			});
+			expect(
+				(await readKitSettingsHistory(getKitSettingsHistoryPath("foo"))).map(({ key, by }) => ({ key, by })),
+			).toEqual(
+				Object.keys(pins)
+					.sort()
+					.map((key) => ({ key, by: { kind: "orchestrator", taskId: "sidebar" } })),
+			);
+		});
+	});
+
+	it("supports selected pins and new --set values, and refuses facts, team keys and a custom-team rebase", async () => {
+		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
+			const overrides = {
+				"roles.qa.model": "project-reviewer",
+				"roles.dev.model": "project-dev",
+				"qa.blurb": "context",
+				"fallback.requireApproval": true,
+			};
+			const original = { workspaces: { foo: { kit: { name: "team", preset: "cloud", overrides } } } };
+			writeConfig(globalConfigPath, original);
+			for (const key of ["qa.blurb", "fallback.requireApproval", "roles.plan.model"]) {
+				await expect(
+					applyWorkspaceKit({ workspaceId: "foo", kitName: "team", rebase: true, rebaseKeys: [key] }),
+				).rejects.toThrow("not a stored project model setting");
+			}
+			await expect(
+				applyWorkspaceKit({ workspaceId: "foo", kitName: "team", rebaseKeys: ["roles.qa.model"] }),
+			).rejects.toThrow("requires --rebase");
+			await expect(
+				applyWorkspaceKit({ workspaceId: "foo", kitName: "team", preset: null, rebase: true }),
+			).rejects.toThrow("needs a preset");
+			expect(readConfig(globalConfigPath)).toEqual(original);
+			const result = await applyWorkspaceKit({
+				workspaceId: "foo",
+				kitName: "team",
+				rebase: true,
+				rebaseKeys: ["roles.qa.model"],
+				set: { "roles.dev.model": "new-project-dev" },
+			});
+			expect(result.rebased).toEqual([{ key: "roles.qa.model", value: "project-reviewer" }]);
+			expect(result.overrides).toEqual({
+				"roles.dev.model": "new-project-dev",
+				"qa.blurb": "context",
+				"fallback.requireApproval": true,
+			});
+		});
+	});
+
 	it("writes the kit name, keeps overrides and every other config key, and leaves landing alone", async () => {
 		await withTemporaryKanbanHome(async ({ globalConfigPath }) => {
 			writeConfig(globalConfigPath, {

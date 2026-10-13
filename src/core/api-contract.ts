@@ -880,6 +880,8 @@ export const runtimeTaskTrashRequestSchema = z.object({
 	taskId: z.string(),
 	trigger: runtimeTaskTrashRequestTriggerSchema.optional(),
 	landing: runtimeTaskLandingChoiceSchema.optional(),
+	/** Preserve the current work before an explicit discard; a failed tag prevents Done. */
+	tag: z.string().trim().startsWith("preserve/").min(10).optional(),
 });
 export type RuntimeTaskTrashRequest = z.infer<typeof runtimeTaskTrashRequestSchema>;
 
@@ -937,6 +939,7 @@ export const runtimeTaskTrashResponseSchema = z.object({
 	worktreeDeleted: z.boolean(),
 	worktreeDeleteError: z.string().optional(),
 	landing: runtimeTaskLandingOutcomeSchema.optional(),
+	preservedTag: z.string().optional(),
 	error: z.string().optional(),
 });
 export type RuntimeTaskTrashResponse = z.infer<typeof runtimeTaskTrashResponseSchema>;
@@ -986,6 +989,7 @@ export const runtimeTaskHistoryEntrySchema = z.object({
 	sessionsStopped: z.array(z.string()),
 	worktreeDeleted: z.boolean(),
 	worktreeDeleteError: z.string().optional(),
+	preservedTag: z.string().optional(),
 	error: z.string().optional(),
 });
 export type RuntimeTaskHistoryEntry = z.infer<typeof runtimeTaskHistoryEntrySchema>;

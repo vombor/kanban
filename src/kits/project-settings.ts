@@ -90,6 +90,16 @@ export type KitSettingKeyClass =
 	| { kind: "team"; message: string }
 	| { kind: "invalid"; message: string };
 
+/** Modern project model settings only: facts and legacy/team keys are never removed by a preset rebase. */
+export function listProjectModelSettingKeys(overrides: Record<string, unknown>, kit: KitDocument): string[] {
+	return Object.keys(overrides)
+		.filter((key) => {
+			const classified = classifyKitSettingKey(key, kit);
+			return classified.kind === "role" || classified.kind === "model";
+		})
+		.sort();
+}
+
 function isUnder(key: string, prefix: string): boolean {
 	return key === prefix || key.startsWith(`${prefix}.`);
 }

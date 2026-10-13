@@ -170,10 +170,14 @@ export function parseTaskTrashRequest(value: unknown): RuntimeTaskTrashRequest {
 	if (!taskId) {
 		throw new Error("Invalid task trash payload.");
 	}
+	if (parsed.tag && parsed.landing !== "discard") {
+		throw new Error("A preserve tag requires an explicit discard.");
+	}
 	return {
 		taskId,
 		...(parsed.trigger ? { trigger: parsed.trigger } : {}),
 		...(parsed.landing ? { landing: parsed.landing } : {}),
+		...(parsed.tag ? { tag: parsed.tag } : {}),
 	};
 }
 

@@ -39,6 +39,7 @@ describe("task guardrails", () => {
 		git(repo, "worktree", "add", "-q", otherWorktree, "-b", "card-2");
 		// What task-worktree.ts does for ignored paths: a symlink plus a managed exclude block.
 		symlinkSync(join(repo, "node_modules"), join(worktree, "node_modules"));
+		mkdirSync(join(repo, ".git", "info"), { recursive: true });
 		writeFileSync(
 			join(repo, ".git", "info", "exclude"),
 			"# kanban-managed-symlinked-ignored-paths:start\n# Keep symlinked ignored paths ignored inside Kanban task worktrees.\n/node_modules\n# kanban-managed-symlinked-ignored-paths:end\n",

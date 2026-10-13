@@ -133,7 +133,7 @@ describe("QA gate: QA waits for the scripted checks", () => {
 				"You may rely on these results in step 2 instead of running the same scripts again.",
 			].join("\n"),
 		);
-		expect(task?.prompt.endsWith("instead of running the same scripts again.")).toBe(true);
+		expect(task?.prompt).toContain("BROWSER TOOLING FALLBACK (supplement to step 3)");
 		const state = await harness.store.load("foo");
 		expect(readQaGateEntry(state.cards.qa001)).toMatchObject({ status: "queued", checks: "PASS" });
 		expect(state.cards[DEV.id]).not.toHaveProperty("qaChecksWait");

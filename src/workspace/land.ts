@@ -153,6 +153,40 @@ export async function checkLand(
 	return tree === baseTree ? { status: "noop", baseSha } : { status: "clean", baseSha, mergedTree: tree };
 }
 
+async function snapshotMatchesHead(input: { worktreePath: string; commit: string; parent: string }): Promise<boolean> {
+	const trees = await git(input.worktreePath, ["rev-parse", `${input.commit}^{tree}`, `${input.parent}^{tree}`]);
+	const [snapshotTree, headTree] = trees.stdout.split("\n");
+	return trees.ok && Boolean(snapshotTree) && snapshotTree === headTree;
+}
+
+/**
+ * A clean snapshot whose HEAD's patches are already on the base, including cherry-picks under different SHAs.
+ * Comparing trees alone misses work the base subsequently changed. `git cherry` ignores merges, so an unmerged
+ * merge commit must not be treated as accounted for: it may contain conflict-resolution work of its own.
+ */
+export async function isSnapshotOnBase(input: {
+	worktreePath: string;
+	commit: string;
+	parent: string;
+	baseSha: string;
+}): Promise<boolean> {
+	if (!(await snapshotMatchesHead(input))) {
+		return false;
+	}
+	const merges = await git(input.worktreePath, ["rev-list", "--merges", `${input.baseSha}..${input.parent}`]);
+	if (!merges.ok || merges.stdout) {
+		return false;
+	}
+	const cherry = await git(input.worktreePath, ["cherry", input.baseSha, input.parent]);
+	return (
+		cherry.ok &&
+		cherry.stdout
+			.split("\n")
+			.filter(Boolean)
+			.every((line) => /^- [0-9a-f]{40,64}$/u.test(line))
+	);
+}
+
 /**
  * Whether a worktree snapshot (src/pipeline/snapshots.ts) is just its HEAD, with nothing uncommitted, and that HEAD
  * is on a remote-tracking branch: the work is pushed (an opened PR), so deleting the worktree loses none of it.
@@ -162,9 +196,7 @@ export async function isSnapshotPushed(input: {
 	commit: string;
 	parent: string;
 }): Promise<boolean> {
-	const trees = await git(input.worktreePath, ["rev-parse", `${input.commit}^{tree}`, `${input.parent}^{tree}`]);
-	const [snapshotTree, headTree] = trees.stdout.split("\n");
-	if (!trees.ok || !snapshotTree || snapshotTree !== headTree) {
+	if (!(await snapshotMatchesHead(input))) {
 		return false;
 	}
 	const remotes = await git(input.worktreePath, [

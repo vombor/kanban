@@ -128,6 +128,14 @@ dev card stops ─▶ Review (settled) ─▶ snapshot refs/kanban/snapshots/<id
   home. When it stops, the QA gate ingests the outbox: QA log, artifacts, the dev card's pipeline state, the
   `verdictRecorded` event (the team scoreboard), and the QA card to Done (never landed). One actor moves cards, so QA
   can't race the lead.
+- **Browser fallback is explicit.** When the submitted snapshot has no root `browse` or `screenshot` script,
+  the gate appends scratch-only `kanban qa shot` instructions after the unchanged legacy QA prompt. It explains
+  installing Playwright in the scratch copy if needed, the cached `chromium_headless_shell` fallback, and the
+  Chromium library/font bundle. `qa shot` uses `QA_CHROMIUM_LIBS`, then `pipeline.qa.chromiumLibs`, then an installed
+  `<Kanban home>/vendor/chromium-libs` bundle. Project browser scripts still take priority; set
+  `qa.serversScript` or `qa.promptNotes.screenshotFallback` for project-specific server setup. Doctor warns when
+  the root scripts are missing, but does not claim the browser has been launched successfully. A UI PASS still
+  requires screenshots and an exercised interaction; HTTP/code traces do not replace visual evidence (issue #48).
 - **Missing or bad verdicts** get `pipeline.qa.maxNudges` nudges that quote what is wrong, after a 20 s grace. Then
   the round is STALLED. A UI card can't PASS with its visual check blocked: that counts as STALLED too.
 - **PASS** → the kit's `onPass` (a runoff may hold it) → the Done workflow's landing step: a `git merge-tree`
@@ -178,6 +186,12 @@ dev card stops ─▶ Review (settled) ─▶ snapshot refs/kanban/snapshots/<id
   --land`; release-hold and a column `--land` refuse before anything changes), handback refuses it, and a PASS it
   still gets is held, never landed. The decision is final, even if the winner is discarded later: nothing lands the
   runner-up. To use a loser's work, start a new card from its `preserve/<id>-<model>` tag.
+  Automatic loser cleanup creates that tag. For an escalated, unheld loser, use
+  `kanban task done --task-id <id> --discard --tag preserve/<id>-<model>`; for a held loser, use
+  `kanban task release-hold --task-id <id> --discard --tag preserve/<id>-<model>`.
+  The refusal prints the concrete tag and command. A plain `done --discard` does not create a tag.
+  The Done workflow preserves committed and uncommitted work before moving an unheld card; a tag failure leaves
+  the card, sessions and worktree in place, and a successful tag is recorded in task history.
 - **Pausing one project** (issue #23): `kanban pipeline pause [--workspace <id>] [--reason …]` and
   `kanban pipeline resume`, run by the user or that project's own orchestrator (never a card; the server checks).
   While paused, the gate still creates QA cards, queued in Backlog, but starts none. It nudges no QA card for its

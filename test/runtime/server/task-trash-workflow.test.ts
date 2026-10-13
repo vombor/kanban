@@ -45,6 +45,50 @@ function linkedBoard(reviewCardOverrides: Parameters<typeof createCard>[0] = { i
 }
 
 describe("task trash workflow", () => {
+	it("preserves a discard before moving the card or deleting its worktree, and records the tag", async () => {
+		const recordHistory = vi.fn();
+		const preserveWork = vi.fn(async () => {
+			expect(findCardInBoard(harness.store.stored.board, "task-1")?.columnId).toBe("review");
+			expect(harness.effects.deleteTaskWorktree).not.toHaveBeenCalled();
+		});
+		const harness = createHarness(linkedBoard(), { preserveWork, recordHistory });
+		const result = await harness.trash({ taskId: "task-1", landing: "discard", tag: "preserve/task-1-model" });
+		expect(result).toMatchObject({ ok: true, preservedTag: "preserve/task-1-model" });
+		expect(preserveWork).toHaveBeenCalledWith(SCOPE_MATCHER, "task-1", "preserve/task-1-model");
+		expect(recordHistory).toHaveBeenCalledWith(expect.objectContaining({ preservedTag: "preserve/task-1-model" }));
+	});
+
+	it("a failed preservation keeps the card, sessions, worktree and dependents in place", async () => {
+		const harness = createHarness(linkedBoard(), {
+			preserveWork: async () => {
+				throw new Error("tag failed");
+			},
+		});
+		expect(await harness.trash({ taskId: "task-1", landing: "discard", tag: "preserve/task-1-model" })).toMatchObject(
+			{ ok: false, status: "failed", error: expect.stringContaining("tag failed") },
+		);
+		expect(findCardInBoard(harness.store.stored.board, "task-1")?.columnId).toBe("review");
+		expect(harness.effects.stopTaskSession).not.toHaveBeenCalled();
+		expect(harness.effects.deleteTaskWorktree).not.toHaveBeenCalled();
+		expect(harness.effects.startTaskSession).not.toHaveBeenCalled();
+	});
+
+	it("a refused Done never tags work, and tagging an already-Done card is a no-op", async () => {
+		const preserveWork = vi.fn();
+		const refused = createHarness(linkedBoard(), {
+			preserveWork,
+			doneGate: async () => ({ proceed: false, reason: "held" }),
+		});
+		expect(await refused.trash({ taskId: "task-1", landing: "discard", tag: "preserve/task-1-model" })).toMatchObject(
+			{ status: "blocked" },
+		);
+		const done = createHarness(createBoard({ trash: [createCard({ id: "task-1" })] }), { preserveWork });
+		expect(await done.trash({ taskId: "task-1", landing: "discard", tag: "preserve/task-1-model" })).toMatchObject({
+			status: "already_done",
+		});
+		expect(preserveWork).not.toHaveBeenCalled();
+	});
+
 	it("moves a review card to Done, stops its sessions, starts its linked backlog task and removes the worktree", async () => {
 		const { store, effects, trash } = createHarness(
 			linkedBoard({

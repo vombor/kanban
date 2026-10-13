@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.1.70-fork.8]
+
+- Team routing now uses one fixed workflow with cloud, ClinePass, and Lemonade model presets; projects can deliberately rebase their model settings onto the current preset with `kanban kit apply --rebase`, preview it with `--dry-run`, or select pins with `--rebase-key` (#45).
+- The Lemonade preset uses Qwen3.8-27B for development, Muse-Glimmer-30B for QA and plans, and Qwen3-Coder-30B-A3B as the fallback.
+- A project's own orchestrator can set its landing mode with `kit apply --landing`, with caller-attributed history (#42); kit switches also keep a role's provider beside its project model (#40).
+- Done recognizes committed work already cherry-picked onto the base even after later base changes, while still protecting additional uncommitted work, new commits, and unique merge commits (#46).
+- `kanban task done --discard --tag preserve/...` preserves work before Done; runoff refusals print concrete preserving commands, and a failed tag leaves the card in place (#50).
+- QA PASS verdicts must account for every failed scripted-check step before landing (#41). QA receives explicit scratch-browser fallback instructions when project tooling is missing, and `qa shot` discovers installed Chromium libraries in the Kanban home (#48).
+- ClinePass usage limits with a reset time hold development and QA until reset instead of exhausting replacements and escalating each card (#49).
+- Watchdog notices support full, compact, or tiny hidden presentation with complete diagnostics retained (#51). Idle Claude/Codex delivery requires prompt-hook or state-change evidence, so a repaint no longer falsely confirms Enter submission (#52).
+- Settings provide a default launch model per agent CLI, including orchestrator sidebars and headless runs. Board cards show the model their sessions actually used, live input/output token counts, running time, and viewer-local timestamps.
+- Projects can be renamed through `kanban project rename` and the browser's project menu (#43). GitHub App setup links use the browser's actual origin behind tunnels.
+- Phone terminal controls include Paste and a full-width voice preview; iOS voice discard works on pointer events, and repeated final speech results are kept once with clearer capture diagnostics.
+- Releases publish a versioned container and `:stable`; `update.imageChannel` lets a pod follow releases or `:latest`. Kanban development and provider/container administration are documented for host-side use.
+
 ## [0.1.70-fork.7]
 
 - New routing kits: `team-cline` (ClinePass: glm-5.3 dev, kimi-k3 fallback, qwen3.8-max QA, minimax-m3 plans), and `team-local` now defaults to Muse-Glimmer 30B for dev and plans, Gemma 4 31B for QA and Laguna-XS 2.1 as the fallback; the `team` kit is renamed `team-cloud` (old configs keep working)

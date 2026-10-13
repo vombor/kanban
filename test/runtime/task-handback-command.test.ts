@@ -316,7 +316,7 @@ describe("kanban task handback", () => {
 			expect((await readRunoffs(path)).runoffs).toMatchObject([{ decided: runoff.decided, winner: "w0001" }]);
 			await escalate("l0001");
 			await expect(handbackTask({ cwd: "/repo", taskId: "l0001", note: "retry", extraRounds: 1 })).rejects.toThrow(
-				"which is decided (winner w0001); handing it back would let it land too. The runoff's decision is final: discard it (kanban task done --task-id l0001 --discard), and to use its work, start a new card from its preserve/l0001-<model> tag.",
+				"which is decided (winner w0001); handing it back would let it land too. The runoff's decision is final: preserve its work and discard it (kanban task done --task-id l0001 --discard --tag preserve/l0001-unknown), then to use its work, start a new card from preserve/l0001-unknown.",
 			);
 		});
 	});

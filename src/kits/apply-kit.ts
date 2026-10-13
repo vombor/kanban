@@ -29,6 +29,7 @@ import {
 	diffOverridesForHistory,
 	isProjectSettingClass,
 	type KitSettingsActor,
+	listProjectModelSettingKeys,
 } from "./project-settings";
 import { formatKitSelection, formatKitSelectionArgs } from "./renamed-kits";
 import {
@@ -53,6 +54,10 @@ export interface ApplyKitInput {
 	set?: Record<string, unknown>;
 	unset?: string[];
 	dryRun?: boolean;
+	/** Opt in to removing project model pins so the current preset supplies them again. */
+	rebase?: boolean;
+	/** With rebase, remove only these pins; absent/empty removes all modern project model pins. */
+	rebaseKeys?: string[];
 	configPath?: string;
 	kitsDir?: string;
 	historyPath?: string;
@@ -77,6 +82,7 @@ export interface ApplyKitResult {
 	changes: KitValueChange[];
 	/** Stored settings the switch removed because they don't fit the new kit. */
 	dropped: DroppedKitSetting[];
+	rebased: Array<{ key: string; value: unknown }>;
 	recommendedLandingMode: LandingMode | null;
 	/** The kit's `recommends.settings` the config doesn't meet yet (never applied here). */
 	unmetSettings: KitRecommendedSettingStatus[];
@@ -209,6 +215,27 @@ export async function applyWorkspaceKit(input: ApplyKitInput): Promise<ApplyKitR
 		throw new Error(`Kit ${selection} does not resolve: ${team.error}`);
 	}
 	const overrides: Record<string, unknown> = { ...(settings.kit?.overrides ?? {}) };
+	const rebased: ApplyKitResult["rebased"] = [];
+	if (input.rebaseKeys?.length && !input.rebase) {
+		throw new Error("--rebase-key requires --rebase.");
+	}
+	if (input.rebase) {
+		if (preset === null) {
+			throw new Error("--rebase needs a preset; a custom team or a kit without presets has no preset to follow.");
+		}
+		const modelKeys = new Set([
+			...listProjectModelSettingKeys(overrides, before.kit),
+			...listProjectModelSettingKeys(overrides, team.kit),
+		]);
+		const keys = input.rebaseKeys?.length ? [...new Set(input.rebaseKeys)] : [...modelKeys];
+		for (const key of keys) {
+			if (!modelKeys.has(key)) {
+				throw new Error(`--rebase-key ${key}: not a stored project model setting; facts and team keys are kept.`);
+			}
+			rebased.push({ key, value: overrides[key] });
+			delete overrides[key];
+		}
+	}
 	for (const key of input.unset ?? []) {
 		if (!Object.hasOwn(overrides, key)) {
 			throw new Error(`--unset ${key}: the workspace has no override for ${key}.`);
@@ -265,6 +292,7 @@ export async function applyWorkspaceKit(input: ApplyKitInput): Promise<ApplyKitR
 		overrides,
 		changes,
 		dropped,
+		rebased,
 		recommendedLandingMode: after.kit.recommends?.landingMode ?? null,
 		unmetSettings: evaluateKitRecommendedSettings(after.kit, config, input.workspaceId).filter(
 			(status) => status.status !== "met",

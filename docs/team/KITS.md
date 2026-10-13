@@ -158,6 +158,33 @@ on every evaluation, so a kit change needs no restart.
 The landing mode is a core setting ([CONFIG.md](CONFIG.md)), not a kit key. Applying a kit never changes it.
 `kanban kit apply team --preset cloud --project foo --landing qa` sets both in one step on purpose.
 
+### Rebase onto the current preset
+
+Project model pins are deliberate choices: they continue to override a preset when Kanban updates its models.
+Nothing rebases automatically. To follow the current preset again, the user or the project's own orchestrator runs:
+
+```sh
+kanban kit apply team --project notes --rebase --dry-run
+kanban kit apply team --project notes --rebase
+```
+
+The workspace's existing preset is kept when `--preset` is omitted. Add `--preset lemonade` to choose one explicitly.
+The dry run lists each removed pin and every resolved value/source change. By default `--rebase` removes modern
+project model settings: role agent/provider/model/tier picks, tier entries, QA reviewers, plan candidates and runoff
+models. Project facts (QA notes, checks environment, worktree links, post-land commands), stored team keys, landing
+mode and other projects stay as they are. Legacy keys stay too: migrate them with `kit migrate-overrides` first.
+
+To choose only some pins, repeat `--rebase-key`:
+
+```sh
+kanban kit apply team --project notes --rebase --rebase-key roles.qa.model --dry-run
+```
+
+`--set` applies after rebasing, so a project can follow the preset for some models and pin others in the same command.
+Each removed or changed setting is logged with its caller in `kit-settings-history.jsonl`. A custom team without a
+preset cannot rebase. Doctor describes pins as **INFO** with the optional dry-run command, never as an error or an
+automatic fix. Any model may still be selected; rebasing introduces no model allow-list requirement.
+
 ### Renamed kits
 
 `team-cloud`, `team-local` and `team-cline` were replaced on 2026-10-12 (`src/kits/renamed-kits.ts`):

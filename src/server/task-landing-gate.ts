@@ -49,6 +49,7 @@ import { takeTaskSnapshot } from "../pipeline/snapshots";
 import {
 	buildLandCommitMessage,
 	checkLand,
+	isSnapshotOnBase,
 	isSnapshotPushed,
 	type LandCheck,
 	type LandResult,
@@ -270,7 +271,11 @@ export function createTaskLandingGate(deps: TaskLandingGateDependencies = {}): T
 			dryRun: true,
 		});
 		const check: LandCheck = await checkLand({ repoPath: input.workspacePath, baseRef, commit: source.commit });
-		if (check.status === "noop" || (await isSnapshotPushed({ worktreePath, ...source }))) {
+		if (
+			check.status === "noop" ||
+			(check.status !== "error" && (await isSnapshotOnBase({ worktreePath, ...source, baseSha: check.baseSha }))) ||
+			(await isSnapshotPushed({ worktreePath, ...source }))
+		) {
 			return { proceed: true };
 		}
 		const detail =

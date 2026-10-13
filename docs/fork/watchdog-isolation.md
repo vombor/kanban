@@ -68,6 +68,36 @@ target won.
   process-sweep lines). A workspace's ATTENTION.md carries a PID-pressure line only because its own new work is
   held, and that line never wakes anyone. Prune-done runs per workspace, on that workspace's board only.
 
+## Sidebar notice presentation
+
+`orchestrator.wake.presentation` selects the wake text: `full` (default), `compact`, or `hidden`.
+`workspaces.<id>.orchestrator.wake.presentation` overrides it for one project (`null` inherits the global setting).
+Edit the Kanban home's config.json; the worker reads this on its next tick, with no restart:
+
+```json
+{
+  "orchestrator": { "wake": { "presentation": "compact" } },
+  "workspaces": {
+    "cline-pass-test": { "orchestrator": { "wake": { "presentation": "hidden" } } }
+  }
+}
+```
+
+- **Full:** the existing detailed wake, including reasons, paths and orchestration instructions.
+- **Compact:** up to three affected-card/reason summaries (140 characters each), with a count for further items.
+- **Hidden:** a tiny notice with the item count and a pointer to its full diagnostics. It hides the detailed body,
+  not the existence of the wake: the sidebar is an agent's raw terminal, so Kanban cannot collapse that agent's
+  transcript. This interpretation was confirmed by the user for issue #51.
+
+For compact and hidden text, the complete wake is first appended to that project's `watchdog-decisions.jsonl` as
+a `wake-notice` record. The short prompt tells the orchestrator to read the record at its exact timestamp and act
+on it. This includes queued/restart notices that might not be in ATTENTION.md. If the log cannot be written, the
+wake is retried without typing a broken pointer. Full details also remain in the usual pipeline/QA diagnostics.
+
+Presentation changes no routing, cooldown, draft protection, urgency, pipeline pause or orchestration decisions.
+Headless runs still receive complete queue items. Silent inbox delivery remains controlled independently by
+`orchestrator.wake.delivery`, described below.
+
 ## Silent wakes
 
 User request, 2026-10-12: "is there any way to have kanban message you silently so it doesn't interrupt what I'm

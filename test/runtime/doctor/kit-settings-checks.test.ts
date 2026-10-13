@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { parsePipelineConfig } from "../../../src/config/pipeline-config";
-import { checkKitLemonadeModels, checkKitRecommendedSettings } from "../../../src/doctor/kit-settings-checks";
+import {
+	checkKitLemonadeModels,
+	checkKitProjectSettings,
+	checkKitRecommendedSettings,
+} from "../../../src/doctor/kit-settings-checks";
 import { loadKitCatalog } from "../../../src/kits/resolve-kit";
 import {
 	createFakeLemonadeFetch,
@@ -48,6 +52,37 @@ function onTeamLocal(extra: Record<string, unknown> = {}) {
 }
 
 describe("kit settings doctor rows", () => {
+	it("describes deliberate preset pins as INFO with an opt-in rebase, never a warning", async () => {
+		const findings = checkKitProjectSettings({
+			config: parsePipelineConfig({
+				workspaces: {
+					foo: {
+						kit: {
+							name: "team",
+							preset: "cloud",
+							overrides: { "roles.qa.model": "project-reviewer", "qa.blurb": "context" },
+						},
+					},
+					bar: {
+						kit: {
+							name: "team",
+							preset: null,
+							overrides: { "roles.dev.agent": "codex", "roles.qa.agent": "cline" },
+						},
+					},
+				},
+			}).config,
+			catalog: await builtInCatalog(),
+			entries: [{ workspaceId: "foo" }, { workspaceId: "bar" }],
+		});
+		expect(findings.filter(({ level }) => level === "info")).toMatchObject([
+			{
+				message: expect.stringContaining("project model pin(s) override preset cloud (roles.qa.model)"),
+				hint: expect.stringContaining("--rebase --dry-run"),
+			},
+		]);
+		expect(findings.some(({ level }) => level === "warn")).toBe(false);
+	});
 	it("warns for every setting team (lemonade) needs and the config doesn't have, with the key to set", async () => {
 		const findings = checkKitRecommendedSettings({
 			config: parsePipelineConfig(onTeamLocal()).config,

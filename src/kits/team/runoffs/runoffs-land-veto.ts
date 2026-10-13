@@ -23,7 +23,7 @@ export function createRunoffsLandVeto(deps: RunoffsLandVetoDependencies = {}): K
 				return null;
 			}
 			return {
-				reason: `Task "${card.id}" raced in runoff ${runoff.name}, which is ${describeRunoffLandBar(runoff)}; it must not land. ${describeRunoffLoserWayOut(card.id, held)}`,
+				reason: `Task "${card.id}" raced in runoff ${runoff.name}, which is ${describeRunoffLandBar(runoff)}; it must not land. ${describeRunoffLoserWayOut(card.id, held, runoff.models?.[card.id] ?? card.agentSettings?.modelId)}`,
 			};
 		},
 	};

@@ -1161,6 +1161,7 @@ interface TrashTaskExecutionResult {
 	readyTaskIds: string[];
 	autoStartedTasks: JsonRecord[];
 	worktreeDeleted: boolean;
+	preservedTag?: string;
 	worktreeDeleteError?: string;
 	landing?: RuntimeTaskLandingOutcome;
 	alreadyInTrash: boolean;
@@ -1192,12 +1193,14 @@ async function trashTaskById(input: {
 	workspaceRepoPath: string;
 	runtimeClient: RuntimeTrpcClient;
 	landing?: RuntimeTaskLandingChoice;
+	tag?: string;
 	trigger?: "cli" | "approve";
 }): Promise<TrashTaskExecutionResult> {
 	const result = await input.runtimeClient.workspace.trashTask.mutate({
 		taskId: input.taskId,
 		trigger: input.trigger ?? "cli",
 		...(input.landing ? { landing: input.landing } : {}),
+		...(input.tag ? { tag: input.tag } : {}),
 	});
 	if (result.status === "not_found" || result.status === "failed" || result.status === "blocked") {
 		throw new Error(result.error ?? `Task "${input.taskId}" could not be moved to done.`);
@@ -1217,6 +1220,7 @@ async function trashTaskById(input: {
 			formatAutoStartedTask(state, input.workspaceRepoPath, started),
 		),
 		worktreeDeleted: result.worktreeDeleted,
+		...(result.preservedTag ? { preservedTag: result.preservedTag } : {}),
 		worktreeDeleteError: result.worktreeDeleteError,
 		...(result.landing ? { landing: result.landing } : {}),
 		alreadyInTrash,
@@ -1250,8 +1254,12 @@ export async function trashTask(input: {
 	column?: ListTaskColumn;
 	projectPath?: string;
 	landing?: RuntimeTaskLandingChoice;
+	tag?: string;
 }): Promise<JsonRecord> {
 	const target = resolveTaskCommandTarget(input, "task done");
+	if (input.tag && (target.kind !== "task" || input.landing !== "discard")) {
+		throw new Error("--tag requires --task-id and --discard.");
+	}
 	const workspace = await resolveRuntimeWorkspace(input.projectPath, input.cwd);
 	const workspaceRepoPath = workspace.repoPath;
 	const workspaceId = workspace.workspaceId;
@@ -1263,6 +1271,7 @@ export async function trashTask(input: {
 			workspaceRepoPath,
 			runtimeClient,
 			landing: input.landing,
+			tag: input.tag,
 		});
 		if (trashed.alreadyInTrash) {
 			return {
@@ -1281,6 +1290,7 @@ export async function trashTask(input: {
 			readyTaskIds: trashed.readyTaskIds,
 			autoStartedTasks: trashed.autoStartedTasks,
 			worktreeDeleted: trashed.worktreeDeleted,
+			...(trashed.preservedTag ? { preservedTag: trashed.preservedTag } : {}),
 			worktreeDeleteError: trashed.worktreeDeleteError,
 			...(trashed.landing ? { landing: trashed.landing } : {}),
 		};
@@ -1404,7 +1414,7 @@ export async function handbackTask(input: {
 	const decidedRunoff = findRunoffBarringLand((await readRunoffs(runoffsPath)).runoffs, input.taskId);
 	if (decidedRunoff) {
 		throw new Error(
-			`Task "${input.taskId}" raced in runoff ${decidedRunoff.name}, which is ${describeRunoffLandBar(decidedRunoff)}; handing it back would let it land too. ${describeRunoffLoserWayOut(input.taskId, readPipelineHold((await createPipelineStateStore().peek(workspaceId))?.cards[input.taskId]) !== null)}`,
+			`Task "${input.taskId}" raced in runoff ${decidedRunoff.name}, which is ${describeRunoffLandBar(decidedRunoff)}; handing it back would let it land too. ${describeRunoffLoserWayOut(input.taskId, readPipelineHold((await createPipelineStateStore().peek(workspaceId))?.cards[input.taskId]) !== null, decidedRunoff.models?.[input.taskId])}`,
 		);
 	}
 	const result = await handBackTask(createPipelineStateStore(), {
@@ -1948,6 +1958,7 @@ export function registerTaskCommand(program: Command): void {
 		.alias("done")
 		.description("Move a task or an entire column to done and clean up task workspaces.")
 		.option("--task-id <id>", "Task ID.")
+		.option("--tag <tag>", "With --task-id and --discard: preserve current work as a preserve/ tag before Done.")
 		.option(
 			"--column <column>",
 			"Column to move to done: backlog | in_progress | review | done. trash is also accepted.",
@@ -1969,6 +1980,7 @@ export function registerTaskCommand(program: Command): void {
 				projectPath?: string;
 				land?: boolean;
 				discard?: boolean;
+				tag?: string;
 			}) => {
 				await runTaskCommand(
 					async () =>
@@ -1978,6 +1990,7 @@ export function registerTaskCommand(program: Command): void {
 							column: options.column,
 							projectPath: options.projectPath,
 							landing: parseLandingChoice(options),
+							tag: options.tag,
 						}),
 				);
 			},

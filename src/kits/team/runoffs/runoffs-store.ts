@@ -12,6 +12,7 @@ import { readFile } from "node:fs/promises";
 import { z } from "zod";
 
 import { lockedFileSystem } from "../../../fs/locked-file-system";
+import { buildPreserveTag } from "../../../pipeline/rework-text";
 
 export const runoffResultSchema = z
 	.object({
@@ -135,11 +136,10 @@ export function describeRunoffLandBar(runoff: RunoffEntry): string {
  * release-hold (the landing gate refuses a plain Done of a held card). The decision is final, even if the winner is
  * discarded later, so a loser's work is used through a new card.
  */
-export function describeRunoffLoserWayOut(taskId: string, held: boolean): string {
-	const discard = held
-		? `kanban task release-hold --task-id ${taskId} --discard`
-		: `kanban task done --task-id ${taskId} --discard`;
-	return `The runoff's decision is final: discard it (${discard}), and to use its work, start a new card from its preserve/${taskId}-<model> tag.`;
+export function describeRunoffLoserWayOut(taskId: string, held: boolean, model?: string | null): string {
+	const tag = buildPreserveTag(taskId, model);
+	const discard = `kanban task ${held ? "release-hold" : "done"} --task-id ${taskId} --discard --tag ${tag}`;
+	return `The runoff's decision is final: preserve its work and discard it (${discard}), then to use its work, start a new card from ${tag}.`;
 }
 
 /**

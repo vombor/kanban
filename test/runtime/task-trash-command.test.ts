@@ -52,9 +52,9 @@ vi.mock("../../src/state/workspace-state", async (importOriginal) => {
 
 const SCOPE = { workspaceId: "ws-1", workspacePath: "/repo" };
 
-function installRuntime(store: WorkspaceStateStore, doneGate?: TaskDoneGate) {
+function installRuntime(store: WorkspaceStateStore, doneGate?: TaskDoneGate, preserveWork = vi.fn(async () => {})) {
 	const effects = createFakeTaskTrashWorkflowDependencies(store);
-	const workflow = createTaskTrashWorkflow({ ...effects.dependencies, doneGate });
+	const workflow = createTaskTrashWorkflow({ ...effects.dependencies, doneGate, preserveWork });
 	const trashTaskSpy = vi.spyOn(workflow, "trashTask");
 	const context = {
 		requestedWorkspaceId: SCOPE.workspaceId,
@@ -111,6 +111,47 @@ describe("kanban task done", () => {
 		});
 		expect(findCardInBoard(store.stored.board, "task-1")?.columnId).toBe("trash");
 		expect(effects.deleteTaskWorktree).toHaveBeenCalledTimes(1);
+	});
+
+	it("passes a preserve tag through the API into the Done workflow before a discard (issue #50)", async () => {
+		const store = createWorkspaceStateStore({
+			board: createBoard({ backlog: [createCard({ id: "loser1" })] }),
+			sessions: {},
+			revision: 1,
+		});
+		const preserveWork = vi.fn(async () => {});
+		const { effects } = installRuntime(store, undefined, preserveWork);
+		const output = await trashTask({
+			cwd: "/repo",
+			taskId: "loser1",
+			landing: "discard",
+			tag: "preserve/loser1-model",
+		});
+		expect(output).toMatchObject({ ok: true, preservedTag: "preserve/loser1-model" });
+		expect(preserveWork).toHaveBeenCalledWith(expect.objectContaining(SCOPE), "loser1", "preserve/loser1-model");
+		expect(preserveWork.mock.invocationCallOrder[0]).toBeLessThan(
+			effects.deleteTaskWorktree.mock.invocationCallOrder[0] ?? 0,
+		);
+	});
+
+	it("refuses a tag on a column, without a discard, or outside preserve/", async () => {
+		const store = createWorkspaceStateStore({
+			board: createBoard({ review: [createCard({ id: "loser1" })] }),
+			sessions: {},
+			revision: 1,
+		});
+		const { effects, caller } = installRuntime(store);
+		await expect(
+			trashTask({ cwd: "/repo", column: "review", landing: "discard", tag: "preserve/loser1-model" }),
+		).rejects.toThrow("--tag requires --task-id and --discard");
+		await expect(trashTask({ cwd: "/repo", taskId: "loser1", tag: "preserve/loser1-model" })).rejects.toThrow(
+			"--tag requires --task-id and --discard",
+		);
+		await expect(caller.workspace.trashTask({ taskId: "loser1", landing: "discard", tag: "main" })).rejects.toThrow();
+		await expect(caller.workspace.trashTask({ taskId: "loser1", tag: "preserve/loser1-model" })).rejects.toThrow(
+			"explicit discard",
+		);
+		expect(effects.deleteTaskWorktree).not.toHaveBeenCalled();
 	});
 
 	it("reports a card that is already done without cleaning up again", async () => {
@@ -217,7 +258,7 @@ describe("kanban task done", () => {
 				'Task "l0001" raced in runoff tier2-promos, which is decided (winner w0001); it must not land.',
 			);
 			await expect(releaseHoldTask({ cwd: "/repo", taskId: "l0002", landing: "land" })).rejects.toThrow(
-				"it must not land. The runoff's decision is final: discard it (kanban task release-hold --task-id l0002 --discard)",
+				"it must not land. The runoff's decision is final: preserve its work and discard it (kanban task release-hold --task-id l0002 --discard --tag preserve/l0002-unknown)",
 			);
 			expect(trashTaskSpy).not.toHaveBeenCalled();
 			expect((await createPipelineStateStore().load("ws-1")).cards.l0002?.hold).toMatchObject({
@@ -230,7 +271,7 @@ describe("kanban task done", () => {
 			);
 			// Not held: a plain Done discards it.
 			await expect(approveTask({ cwd: "/repo", taskId: "l0001" })).rejects.toThrow(
-				"The runoff's decision is final: discard it (kanban task done --task-id l0001 --discard), and to use its work, start a new card from its preserve/l0001-<model> tag.",
+				"The runoff's decision is final: preserve its work and discard it (kanban task done --task-id l0001 --discard --tag preserve/l0001-unknown), then to use its work, start a new card from preserve/l0001-unknown.",
 			);
 			// The board: Approve & land and the "land or discard?" dialog's land.
 			for (const request of [

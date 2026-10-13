@@ -53,6 +53,7 @@ import { checkKitLemonadeModels, checkKitProjectSettings, checkKitRecommendedSet
 import { checkOneOwner } from "./one-owner-checks";
 import { checkOpenAiCompatibleProvider } from "./openai-compatible-provider-checks";
 import { checkProjectShortcuts, type ProjectShortcutCheckDeps } from "./project-shortcut-checks";
+import { checkQaBrowserTooling } from "./qa-browser-tooling-checks";
 
 import { checkUncleanStopDamage } from "./unclean-stop-checks";
 import { checkWorktreeLinks } from "./worktree-link-checks";
@@ -188,6 +189,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
 	findings.push(...checkAgentDefaults(await readRuntimeAgentDefaults()));
 	findings.push(...(await checkContainerImageChannel(config.update.imageChannel, options.containerImageDeps)));
 	findings.push(...checkKitProjectSettings(projectContext));
+	findings.push(...(await checkQaBrowserTooling({ ...projectContext, entries: liveEntries })));
 	findings.push(...checkKitRecommendedSettings(projectContext));
 	findings.push(
 		...(await checkClineModelsAllowList({

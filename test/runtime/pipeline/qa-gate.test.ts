@@ -98,6 +98,8 @@ describe("QA gate", () => {
 
 		const tasks = createdTasks(harness.actions);
 		expect(tasks).toHaveLength(1);
+		expect(tasks[0]?.prompt).toContain("BROWSER TOOLING FALLBACK (supplement to step 3)");
+		expect(tasks[0]?.prompt).toContain("kanban qa shot --base <scratch-app-url>");
 		expect(tasks[0]).toMatchObject({
 			taskId: "qa001",
 			title: "QA d1111: Task d1111",

@@ -112,6 +112,7 @@ import {
 	resolveQaAgentError,
 	resolveQaProcessExit,
 } from "./qa-agent-error";
+import { buildQaBrowserToolingNote, QA_BROWSER_SCRIPTS, resolveQaChromiumLibs } from "./qa-browser-tooling";
 import {
 	buildQaChecksReport,
 	decideQaChecks,
@@ -865,7 +866,15 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			checksReport: buildQaChecksReport({ status: checks, snapshot: qaSnapshot.commit, baseRef: card.baseRef }),
 		});
 		const agentError = listQaAgentErrors(devEntry, qaSnapshot.commit).at(-1);
-		const prompt = agentError ? `${qaPrompt}\n\n${buildQaAgentErrorNote(agentError)}` : qaPrompt;
+		const browserNote = buildQaBrowserToolingNote({
+			scripts: await readSnapshotCheckScripts(snapshot.workspacePath, qaSnapshot.commit, QA_BROWSER_SCRIPTS),
+			scratchDir,
+			outboxDir,
+			chromiumLibs: resolveQaChromiumLibs(process.env.QA_CHROMIUM_LIBS || context.qa.chromiumLibs),
+		});
+		const prompt = [qaPrompt, browserNote, agentError ? buildQaAgentErrorNote(agentError) : null]
+			.filter(Boolean)
+			.join("\n\n");
 		const created = await deps.actions.run({
 			kind: "createTask",
 			workspaceId,

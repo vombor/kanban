@@ -179,6 +179,7 @@ describe("pipeline config", () => {
 			timeoutMin: 45,
 			liveSessionMin: 10,
 			delivery: "auto",
+			presentation: "full",
 			quietMin: 30,
 		});
 		expect(
@@ -304,6 +305,21 @@ describe("pipeline config", () => {
 			cooldownMin: 5,
 		});
 		expect(resolveWorkspaceWakeSettings(config, "unknown")).toMatchObject({ enabled: true, mode: "sidebar" });
+	});
+
+	it("inherits notice presentation per workspace without changing delivery or wake enablement", () => {
+		const { config, issues } = parsePipelineConfig({
+			orchestrator: { wake: { presentation: "compact" } },
+			workspaces: { foo: { orchestrator: { wake: { presentation: "hidden" } } }, bar: {} },
+		});
+		expect(issues).toEqual([]);
+		expect(resolveWorkspaceWakeSettings(config, "foo")).toMatchObject({
+			presentation: "hidden",
+			delivery: "auto",
+			enabled: true,
+		});
+		expect(resolveWorkspaceWakeSettings(config, "bar").presentation).toBe("compact");
+		expect(parsePipelineConfig({ orchestrator: { wake: { presentation: "bogus" } } }).issues).not.toEqual([]);
 	});
 
 	it("writes config.json keeping other keys, and refuses an edit that adds a settings issue", async () => {

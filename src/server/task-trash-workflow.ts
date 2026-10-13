@@ -68,6 +68,8 @@ export interface TaskTrashRequest extends TaskTrashWorkspaceScope {
 	trigger: TaskTrashTrigger;
 	/** Land or discard the work of a landing-mode-`qa` card (the done gate decides what it means). */
 	landing?: RuntimeTaskLandingChoice;
+	/** Tag the current work before an explicit discard. */
+	tag?: string;
 	/**
 	 * Re-checked inside the atomic board mutation. When it returns false the
 	 * card is left alone and the result is `skipped` (the reconciler only
@@ -124,6 +126,7 @@ export interface CreateTaskTrashWorkflowDependencies {
 	/** Broadcasts the new board to connected browsers. Awaited before sessions are stopped. */
 	onBoardMutated?: (scope: TaskTrashWorkspaceScope) => Promise<void> | void;
 	doneGate?: TaskDoneGate;
+	preserveWork?: (scope: TaskTrashWorkspaceScope, taskId: string, tag: string) => Promise<unknown>;
 	/** Appends the run's task history entry (src/state/task-history-log.ts). A failure only warns. */
 	recordHistory?: (entry: RuntimeTaskHistoryEntry) => Promise<void>;
 	now?: () => number;
@@ -145,6 +148,7 @@ interface TaskTrashTrace {
 	card: RuntimeBoardCard | null;
 	fromColumnId: RuntimeBoardColumnId | null;
 	sessionsStopped: string[];
+	preservedTag?: string;
 }
 
 interface CardLocation {
@@ -447,11 +451,43 @@ export function createTaskTrashWorkflow(deps: CreateTaskTrashWorkflowDependencie
 	};
 
 	const runTrashTask = async (request: TaskTrashRequest, trace: TaskTrashTrace): Promise<TaskTrashResult> => {
+		if (request.tag && (request.landing !== "discard" || !request.tag.startsWith("preserve/"))) {
+			return createResult(request, "failed", { error: "A preserve/ tag requires an explicit discard." });
+		}
 		const gate = await runDoneGate(request, trace);
 		if ("blocked" in gate) {
 			return gate.blocked;
 		}
 		const landing = gate.landing ? { landing: gate.landing } : {};
+		if (request.tag) {
+			const snapshot = await deps.mutateWorkspaceState(request.workspacePath, (state) => ({
+				board: state.board,
+				value: findCardLocation(state.board, request.taskId),
+				save: false,
+			}));
+			const location = snapshot.value;
+			if (
+				location &&
+				location.columnId !== "trash" &&
+				(!request.canTrash || request.canTrash(location.card, location.columnId))
+			) {
+				trace.card = location.card;
+				trace.fromColumnId = location.columnId;
+				try {
+					if (!deps.preserveWork) {
+						throw new Error("work preservation is unavailable");
+					}
+					await deps.preserveWork(request, request.taskId, request.tag);
+					trace.preservedTag = request.tag;
+				} catch (error) {
+					return createResult(request, "failed", {
+						...landing,
+						previousColumnId: location.columnId,
+						error: `Could not tag ${request.tag}: ${toErrorMessage(error)}; the card stays in place.`,
+					});
+				}
+			}
+		}
 
 		const boardStep = await moveCardToDone(request);
 		if (boardStep.kind !== "not_found") {
@@ -498,6 +534,7 @@ export function createTaskTrashWorkflow(deps: CreateTaskTrashWorkflowDependencie
 			worktreeDeleted: worktree.removed,
 			worktreeDeleteError: worktree.error,
 			...landing,
+			...(trace.preservedTag ? { preservedTag: trace.preservedTag } : {}),
 		});
 	};
 
@@ -529,6 +566,7 @@ export function createTaskTrashWorkflow(deps: CreateTaskTrashWorkflowDependencie
 						? { choice: request.landing ?? null, outcome: result?.landing ?? null }
 						: null,
 				sessionsStopped: trace.sessionsStopped,
+				...(trace.preservedTag ? { preservedTag: trace.preservedTag } : {}),
 				worktreeDeleted: result?.worktreeDeleted ?? false,
 				...(result?.worktreeDeleteError ? { worktreeDeleteError: result.worktreeDeleteError } : {}),
 				...(error ? { error } : {}),
@@ -587,6 +625,7 @@ export function createTrashTaskRequestHandler(
 			taskId: input.taskId,
 			trigger: input.trigger ?? "cli",
 			landing: input.landing,
+			tag: input.tag,
 			resolveCaller,
 		});
 }

@@ -19,7 +19,7 @@ import { listKitRoles } from "../kits/kit-roles";
 import type { KitDocument } from "../kits/kit-schema";
 import { getUsableTierEntries } from "../kits/kit-schema";
 import { assessLocalResidency, listKitLocalWorkingSet } from "../kits/local-residency";
-import { describeProjectSettings } from "../kits/project-settings";
+import { describeProjectSettings, listProjectModelSettingKeys } from "../kits/project-settings";
 import { DEFAULT_KIT_NAME, type KitCatalog, resolveWorkspaceKit } from "../kits/resolve-kit";
 import {
 	fetchLemonadeMaxLoadedLlms,
@@ -57,6 +57,15 @@ export function checkKitProjectSettings(context: KitSettingsCheckContext): Docto
 		const resolution = resolveWorkspaceKit(context.config, workspaceId, context.catalog);
 		if (Object.keys(resolution.overrides).length === 0) {
 			continue;
+		}
+		const pins = listProjectModelSettingKeys(resolution.overrides, resolution.kit);
+		if (resolution.presetName && pins.length > 0) {
+			findings.push({
+				level: "info",
+				area: "project",
+				message: `${workspaceId}: ${pins.length} project model pin(s) override preset ${resolution.presetName} (${pins.join(", ")}); these are deliberate project settings and stay until changed`,
+				hint: `kanban kit apply ${resolution.kitName} --preset ${resolution.presetName} --project ${workspaceId} --rebase --dry-run shows the current preset and what would change; add --rebase-key <key> to choose pins, omit --dry-run to apply`,
+			});
 		}
 		const classified = describeProjectSettings(
 			context.catalog,

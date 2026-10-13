@@ -35,6 +35,8 @@ export const kitApplyRequestSchema = z.object({
 	set: z.record(z.string(), z.unknown()).optional(),
 	unset: z.array(z.string().min(1)).optional(),
 	dryRun: z.boolean().optional(),
+	rebase: z.boolean().optional(),
+	rebaseKeys: z.array(z.string().min(1)).optional(),
 });
 export type KitApplyRequest = z.infer<typeof kitApplyRequestSchema>;
 
@@ -54,6 +56,7 @@ const kitApplyResultSchema = z.object({
 		}),
 	),
 	dropped: z.array(z.object({ key: z.string(), value: z.unknown(), why: z.string() })),
+	rebased: z.array(z.object({ key: z.string(), value: z.unknown() })),
 	recommendedLandingMode: runtimeLandingModeSchema.nullable(),
 	unmetSettings: z.array(
 		z.object({

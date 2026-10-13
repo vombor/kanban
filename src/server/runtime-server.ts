@@ -32,6 +32,7 @@ import { applyIssueSync } from "../issues/issue-apply";
 import { readAgentDefaultModels } from "../models/cline-providers";
 import type { PipelineActionRequest, PipelineActionResult } from "../pipeline/actions";
 import type { PipelineEventMap } from "../pipeline/events";
+import { preserveTaskWork } from "../pipeline/hold";
 import type { WatchdogActionRequest } from "../pipeline/watchdog/actions";
 import {
 	checkRateLimit,
@@ -575,6 +576,8 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 
 	const taskTrashWorkflow = createTaskTrashWorkflow({
 		mutateWorkspaceState,
+		preserveWork: async (scope, taskId, tag) =>
+			await preserveTaskWork({ workspacePath: scope.workspacePath, taskId, tag }),
 		stopTaskSession: async (scope, taskId) => {
 			const terminalManager = await getScopedTerminalManager(scope);
 			terminalManager.stopTaskSession(taskId);

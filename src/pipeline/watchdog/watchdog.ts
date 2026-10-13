@@ -141,6 +141,7 @@ import {
 	buildWakeText,
 	decideWakeDelivery,
 	isOrchestratorSessionLive,
+	keepForRetry,
 	planWakeRoute,
 	type WakeMode,
 	type WakeOutcome,
@@ -170,6 +171,7 @@ export type WatchdogDecisionKind =
 	| "pid"
 	| "pause"
 	| "wake"
+	| "wake-notice"
 	| "wake-request"
 	| "job"
 	| "error";
@@ -1198,8 +1200,8 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 			sessionId,
 			session,
 		};
-		const text = (fresh: readonly string[]) =>
-			buildWakeText({
+		const text = async (fresh: readonly string[]) => {
+			const input = {
 				workspaceId,
 				projectPath: snapshot.workspacePath,
 				attentionPath: paths.attention,
@@ -1208,7 +1210,23 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 				items: fresh,
 				now: new Date(context.now),
 				userTypedAt: reportedSession?.viewerTypedAt ?? null,
-			});
+			};
+			if (wakeSettings.presentation !== "full") {
+				// Persist every word before delivery: queued/restart items may not be in ATTENTION.md, and a live agent
+				// can read this as soon as Enter arrives. A log failure must not send a pointer to missing diagnostics.
+				const notice: WatchdogDecisionRecord = {
+					at: input.now.toISOString(),
+					workspaceId,
+					taskId: null,
+					kind: "wake-notice",
+					mode: context.mode,
+					outcome: "acted",
+					note: `Full wake notice (${wakeSettings.presentation} presentation): ${buildWakeText(input)}`,
+				};
+				await decisionLog.append([notice]);
+			}
+			return buildWakeText({ ...input, presentation: wakeSettings.presentation, noticeLogPath: paths.decisions });
+		};
 		const quietMs = wakeSettings.quietMin * MIN;
 		const delivery = (fresh: readonly string[]) =>
 			decideWakeDelivery({
@@ -1352,6 +1370,7 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 				},
 			});
 		} catch (error) {
+			keepForRetry(state, items, queued, context.now);
 			record(records, context, {
 				workspaceId,
 				taskId: null,
