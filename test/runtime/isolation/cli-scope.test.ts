@@ -158,11 +158,9 @@ describe("applyCliSessionScope", () => {
 			expect(await run(allowed.createClient, {})).toBeNull();
 			expect(allowed.query).toHaveBeenCalledTimes(2);
 			// A process without a credential is asked too: the server traces it to a card's process tree.
-			const refused = answering({ allowed: false, message: "only the user or the Kanban project's orchestrator" });
-			expect(await run(refused.createClient, {})).toBe("only the user or the Kanban project's orchestrator");
-			expect(await run(refused.createClient, SESSION_ENV)).toBe(
-				"only the user or the Kanban project's orchestrator",
-			);
+			const refused = answering({ allowed: false, message: "only the user runs it" });
+			expect(await run(refused.createClient, {})).toBe("only the user runs it");
+			expect(await run(refused.createClient, SESSION_ENV)).toBe("only the user runs it");
 			const unreachable = () => ({ providers: { authorizeSetup: { query: vi.fn(down) } } });
 			expect(await run(unreachable, SESSION_ENV)).toContain("could not be reached");
 			expect(await run(unreachable, {}, () => true)).toContain("could not be asked who calls");
@@ -196,7 +194,7 @@ describe("applyCliSessionScope", () => {
 				}),
 			).toBe("restart update refused");
 			expect(query).toHaveBeenCalledWith({ command: "restart update" });
-			// Not a machine-wide command: under enforce the Kanban orchestrator may still run it.
+			// Not a machine-wide command: under enforce the setup workspace's orchestrator may still run it.
 			expect(matchesCommandPath("restart update", MACHINE_WIDE_COMMANDS)).toBe(false);
 			expect(matchesCommandPath("restart prepare", MACHINE_WIDE_COMMANDS)).toBe(true);
 		});

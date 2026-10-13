@@ -130,12 +130,14 @@ function orchestratorOrUserRefusal(commandPath: string): string {
 }
 
 /**
- * Commands only the user and the Kanban project's own orchestrator (its sidebar session or headless wake; the workspace
- * is `providers.setupWorkspaceId`, default kanban-2uge) may run, whatever the isolation mode: `setup-provider` writes
- * a model provider's settings into Cline's files, which every project's Cline cards use, and `restart update` restarts
- * the pod's container onto a newer image, which stops every project's agents (the server's `restart.update` route
- * checks the caller again, src/trpc/restart-update-api.ts). Every other project's orchestrator and every card session
- * are refused. The running server decides who calls (`providers.authorizeSetup`,
+ * Commands that are the user's, whatever the isolation mode (docs/fork/development.md: Kanban is developed outside the
+ * pod, so these pod-level jobs are the user's alone). The rule still lets through the orchestrator of
+ * `providers.setupWorkspaceId` (default kanban-2uge; its sidebar session or headless wake), which matters only in a
+ * Kanban where that project is registered: elsewhere no session has that workspace id, so only the user passes.
+ * `setup-provider` writes a model provider's settings into Cline's files, which every project's Cline cards use, and
+ * `restart update` restarts the pod's container onto a newer image, which stops every project's agents (the server's
+ * `restart.update` route checks the caller again, src/trpc/restart-update-api.ts). Every other orchestrator and every
+ * card session are refused. The running server decides who calls (`providers.authorizeSetup`,
  * the strict caller lookup: a session without its credential is traced to its process tree, an unidentified caller is
  * refused), outside a session too, since a card that drops its credential looks like the user from here.
  */
@@ -154,7 +156,7 @@ function kanbanOrchestratorOrUserRefusal(commandPath: string, kanbanWorkspaceId:
 					"writes model providers' settings into Cline's files, which every project's Cline cards use",
 					"which provider needs setting up",
 				];
-	return `\`kanban ${commandPath}\` ${why}, so only the user or the Kanban project's orchestrator (workspace ${kanbanWorkspaceId}) runs it; ${who} can't. Tell your orchestrator or the user ${ask}.`;
+	return `\`kanban ${commandPath}\` ${why}, so only the user runs it (apart from the orchestrator of workspace ${kanbanWorkspaceId}, where that project is registered); ${who} can't. Tell your orchestrator or the user ${ask}.`;
 }
 
 /** The one rule for KANBAN_ORCHESTRATOR_OR_USER_COMMANDS, asked by the server's route with the strict caller. */
@@ -207,7 +209,7 @@ async function requireKanbanOrchestratorOrUser(input: {
 		return answer.allowed ? null : (answer.message ?? `\`kanban ${input.commandPath}\` was refused.`);
 	}
 	if (readSessionCredential(input.env)) {
-		return `\`kanban ${input.commandPath}\` runs only for the user or the Kanban project's orchestrator, and the running Kanban server, which decides who calls, could not be reached.`;
+		return `\`kanban ${input.commandPath}\` runs only for the user, and the running Kanban server, which decides who calls, could not be reached.`;
 	}
 	if (input.isServerRunning()) {
 		return `\`kanban ${input.commandPath}\`: a Kanban server runs on this machine but could not be asked who calls (it decides who may run this; an older server must be restarted first).`;

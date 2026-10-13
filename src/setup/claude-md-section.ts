@@ -55,17 +55,19 @@ export function renderClaudeMdSection(): string {
   or \`kanban plan expand --approved-by-user\`: tell the user the plan is ready, and expand it once they approved it.
 - Any model may be on any role: the kit gives defaults, \`kanban kit set roles.<role>.*\` and a card's own
   \`--agent-id\`/\`--model\` override them, and Kanban doesn't refuse the choice. For Cline cards, Cline's models.json
-  is the allow list (Cline offers only the models in a provider's record); the Kanban project's orchestrator curates
-  it with models that passed \`kanban models vet --agent <a> [--provider <p>] [--model <m>] --role dev|qa|plan\`.
+  is the allow list (Cline offers only the models in a provider's record); the user curates it with models that
+  passed \`kanban models vet\`. For a model that isn't there, ask the user.
 - GitHub issues and comments go out as Kanban's GitHub App, signed with your project: \`kanban github issue create
   --repo <owner/name> --title <title> --body-file <file>\`, \`kanban github issue comment --repo <owner/name> --number <n>
   --body-file <file>\`, \`edit\`, \`close\`. Never \`gh issue create|comment|edit|close\` or \`gh api\` writes; reading with gh
   (\`gh issue list|view\`) is fine. Kanban bug reports: search first (\`gh issue list --repo vombor/kanban --search
   "<words>"\`), comment on an existing issue with \`kanban github issue comment --repo vombor/kanban --number <n>
   --body-file <file>\`, else \`kanban github issue create --repo vombor/kanban --title "<short summary>" --body-file <file>\`.
-- Only the Kanban project's orchestrator (and the user) may move the pod onto a newer image: \`kanban restart update\`
-  (\`--dry-run\` first; it refuses without a newer image or while cards are In Progress, then restarts the container,
-  which stops every project's agents). Any other orchestrator tells the user instead.
+  Requests for Kanban go there too: Kanban is developed outside this pod (docs/fork/development.md), and its
+  developers read those issues. Never edit Kanban's own repo.
+- The pod-level jobs are the user's alone: \`kanban setup-provider\` (Cline's provider files, used by every project),
+  \`kanban restart update\` (moves the pod onto a newer image and stops every project's agents), \`kanban models vet\`
+  and Cline's models.json allow list. Don't run them; tell the user what is needed and why.
 
 **If you are a task agent on a Kanban card:** follow your card prompt. Don't run \`kanban doctor --fix\`,
 \`kanban setup\` or \`kanban config import-kit\` unless the prompt says so; \`kanban kit apply|set\`

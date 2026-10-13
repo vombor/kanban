@@ -29,8 +29,8 @@ The id (`triton`) is Cline's provider id, what a card's `-P` and a kit role's `p
 the providers with their own setup code (`lemonade`, `bedrock`, `cline-pass`) or `cline`. A bad entry makes the whole
 `providers` section fall back to its defaults, with an issue in `kanban config show` and doctor.
 
-Kanban itself never writes config.json for this: add the entry by hand, then run `kanban setup-provider <id>` (the user
-or the Kanban project's orchestrator).
+Kanban itself never writes config.json for this: add the entry by hand, then run `kanban setup-provider <id>` (the
+user's, [setup-provider.md](setup-provider.md)).
 
 ## What `kanban setup-provider <id>` writes
 

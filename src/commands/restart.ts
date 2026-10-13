@@ -11,8 +11,8 @@
 //            recovery would do with the live board instead.
 //   update   restarts the pod's container onto the registry's newer image: the server checks, runs the same prepare
 //            with the update in the manifest, shuts down and exits with 75, and the Quadlet unit's Restart=always and
-//            Pull=newer bring it back on the new image (src/trpc/restart-update-api.ts decides everything; only the
-//            user and the Kanban project's orchestrator, KANBAN_ORCHESTRATOR_OR_USER_COMMANDS in cli-scope.ts).
+//            Pull=newer bring it back on the new image (src/trpc/restart-update-api.ts decides everything; it is the
+//            user's, KANBAN_ORCHESTRATOR_OR_USER_COMMANDS in cli-scope.ts).
 //
 // Ported from archive/devteam-kit:bin/prepare-restart.mjs@6da71597 and bin/recover-restart.mjs@6da71597. Restart
 // recovery acts only with `pipeline.recovery.mode: "on"` (src/pipeline/recovery-stage.ts); until the cutover the
@@ -190,7 +190,7 @@ export function registerRestartCommand(program: Command): void {
 	restart
 		.command("update")
 		.description(
-			"Restart the pod's container onto a newer ghcr.io/vombor/kanban:latest: checks a newer image exists and no card is In Progress, runs restart prepare, then Kanban shuts down and exits with 75 so the Quadlet unit (Restart=always, Pull=newer) starts it again on the new image. Only in a container; only the user and the Kanban project's orchestrator.",
+			"Restart the pod's container onto a newer ghcr.io/vombor/kanban:latest: checks a newer image exists and no card is In Progress, runs restart prepare, then Kanban shuts down and exits with 75 so the Quadlet unit (Restart=always, Pull=newer) starts it again on the new image. Only in a container; the user's to run (agent sessions are refused).",
 		)
 		.option("--force", "Restart even without a newer image, an unreachable registry or with cards In Progress.")
 		.option("--dry-run", "Check and print what would happen; tag, write and stop nothing.")

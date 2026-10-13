@@ -1,12 +1,12 @@
 // `kanban setup-provider lemonade`: the one command that writes Cline's whole Lemonade entry in models.json, and
-// only when the user or the Kanban project's orchestrator runs it (src/isolation/cli-scope.ts). Kanban writes nothing
+// only when the user runs it (src/isolation/cli-scope.ts). Kanban writes nothing
 // under ~/.cline on its own (user rule, 2026-10-07; the user chose "Kanban prints, the user applies"): `kanban setup`
 // and doctor only print the differences and this command line. The one exception is the server's context sync
 // (cline-lemonade-context-sync.ts, issue #31): contextWindow and maxTokens of models already in the entry.
 //
 // It changes the Lemonade provider entry and nothing else: it drops `provider.modelsSourceUrl` (cline-models-source.ts:
 // Cline would offer every model a dynamic list returns) and fills in the metadata of the models already in `models`
-// (cline-lemonade-models.ts). Which models are in the record is the Kanban orchestrator's: it never adds or removes
+// (cline-lemonade-models.ts). Which models are in the record is the user's: it never adds or removes
 // one (docs/team/MODELS.md). Before writing it copies the file as read into the Kanban home's backups
 // (`<home>/backups/cline/`, never next to Cline's files; the file can hold API keys, so the copy is 0600), then
 // replaces models.json atomically with its own mode (cline-file-write.ts). A file that changes while Lemonade is asked
@@ -22,7 +22,7 @@ import {
 import { CLINE_LEMONADE_PROVIDER_ID, planModelsSourceUrl, readClineLemonadeEntry } from "./cline-models-source";
 import { formatSetupProviderCommand } from "./setup-provider-command";
 
-/** The exact command line setup and doctor print: the user's (or the Kanban orchestrator's) to run. */
+/** The exact command line setup and doctor print: the user's to run. */
 export function formatApplyLemonadeModelsCommand(): string {
 	return formatSetupProviderCommand("lemonade");
 }

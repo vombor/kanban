@@ -40,7 +40,7 @@ The Bedrock key `AWS_BEARER_TOKEN_BEDROCK` (with `AWS_REGION`) comes in through 
 (`Secret=<name>,type=env,target=AWS_BEARER_TOKEN_BEDROCK`) and is handled like `GH_TOKEN`: pipeline checks never see
 it and secret-guard knows its value. `AWS_REGION` is not a secret and stays everywhere. Cline's TUI, which every card
 runs in, only counts a key and region stored in `providers.json` (with the env alone it opens Cline's sign-in screen,
-issue #9). So `kanban setup-provider bedrock` (run by the user or the Kanban orchestrator) copies the env's key there,
+issue #9). So `kanban setup-provider bedrock` (run by the user) copies the env's key there,
 and `kanban doctor` warns when none is stored or the stored one differs ([cline-bedrock-auth.md](cline-bedrock-auth.md)).
 
 The ClinePass key `CLINE_API_KEY` (Cline's subscription provider `cline-pass`) takes the same route

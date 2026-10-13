@@ -1,8 +1,8 @@
 // Cline's ClinePass key (`cline-pass`, Cline's subscription provider): Kanban's environment holds it (CLINE_API_KEY, a
 // podman secret in the container, docs/fork/cline-pass-auth.md), and Cline's providers.json must store it too, because
 // Cline's interactive TUI only counts stored credentials (src/terminal/cline-tui-sign-in.ts), as for Bedrock (issue #9).
-// Read by doctor's row (src/doctor/cline-pass-key-checks.ts); `kanban setup-provider cline-pass` (run by the user or
-// the Kanban project's orchestrator, the only path that changes providers.json for it) copies the env's key in. Never prints or returns a key value: only
+// Read by doctor's row (src/doctor/cline-pass-key-checks.ts); `kanban setup-provider cline-pass` (the user's, the
+// only path that changes providers.json for it) copies the env's key in. Never prints or returns a key value: only
 // whether one is stored and whether it equals the env's.
 //
 // What cline 3.0.70 does (checked in the bundled CLI and with real TUI runs in a throwaway CLINE_DIR/CLINE_DATA_DIR

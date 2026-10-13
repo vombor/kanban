@@ -3,10 +3,10 @@
 // Cline offers every id the provider's `modelsSourceUrl` returns, so a dynamic list (the legacy kit's model-lists
 // service at http://127.0.0.1:13306/lemonade/models, or Kanban's route in src/server/model-lists-route.ts) would offer
 // every model Lemonade has, vetted or not. The provider's `models` record is the allow list (docs/team/MODELS.md),
-// curated by the Kanban orchestrator, so any `modelsSourceUrl` is to be dropped. Read-only: Kanban writes nothing
+// curated by the user, so any `modelsSourceUrl` is to be dropped. Read-only: Kanban writes nothing
 // under ~/.cline (user rule, 2026-10-07; the Lemonade context windows are the one exception, issue #31), so
-// `kanban setup` and doctor only report it, and `kanban setup-provider lemonade` (run by the user or the Kanban
-// orchestrator, src/setup/cline-lemonade-apply.ts) is the one thing that changes the file. The provider entry is never
+// `kanban setup` and doctor only report it, and `kanban setup-provider lemonade` (run by the user,
+// src/setup/cline-lemonade-apply.ts) is the one thing that changes the file. The provider entry is never
 // created.
 import { readFile } from "node:fs/promises";
 import { z } from "zod";

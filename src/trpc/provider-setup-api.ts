@@ -2,9 +2,9 @@
 // the CLI asks here before it writes a model provider's settings into Cline's files (and before `kanban restart
 // update`, whose own route checks again, src/trpc/restart-update-api.ts), so the server decides who calls
 // with the strict caller lookup (a session without its credential is traced to its process tree), in every isolation
-// mode, off included. The rule is cli-scope.ts's decideKanbanOrchestratorCaller: the user and the orchestrator of
-// `providers.setupWorkspaceId` (the Kanban project) are allowed; another project's orchestrator, any card and an
-// unidentified caller are refused (and logged). The write itself stays in the CLI, which reads the key from its env.
+// mode, off included. The rule is cli-scope.ts's decideKanbanOrchestratorCaller: the user is allowed (and the
+// orchestrator of `providers.setupWorkspaceId`, the Kanban project, where it is registered); any other orchestrator,
+// any card and an unidentified caller are refused (and logged). The write itself stays in the CLI, which reads the key from its env.
 import { z } from "zod";
 
 import { readPipelineConfig } from "../config/pipeline-config";
@@ -50,7 +50,7 @@ export function createProviderSetupApi(deps: CreateProviderSetupApiDependencies)
 				from: fromWorkspaceId,
 				to: kanbanWorkspaceId,
 				action: "providers.authorizeSetup",
-				detail: `${command} is the user's and the Kanban orchestrator's (${caller.kind === "session" ? `${caller.session.role} via ${caller.via}` : caller.kind === "unknown" ? caller.reason : "user"})`,
+				detail: `${command} is the user's (${caller.kind === "session" ? `${caller.session.role} via ${caller.via}` : caller.kind === "unknown" ? caller.reason : "user"})`,
 			});
 			return { allowed: false, message: decision.message };
 		},

@@ -1,6 +1,6 @@
 // Doctor row: does the metadata of Cline's Lemonade models (models.json) match what Lemonade reports now? Lists
 // changed context windows, vision and the rest, with the command the user runs to apply them, and the record's
-// models Lemonade doesn't list (which models are in the record is the Kanban orchestrator's). Of those,
+// models Lemonade doesn't list (which models are in the record is the user's). Of those,
 // the server's Lemonade context sync (`agents.cline.lemonadeContextSync`, issue #31) writes the context windows
 // itself; the row says what it will do, or that it is off, so a difference that stays means the sync is off or
 // failed (its history: `<home>/data/models/cline-lemonade-sync.jsonl`). Cheap: one catalog round to Lemonade (its

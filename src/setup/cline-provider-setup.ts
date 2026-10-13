@@ -2,10 +2,10 @@
 // one row per provider, with what it writes, its sync check (the doctor row's answer) and its write. Each write is the
 // provider's own module, unchanged: the plan and diff, the backup into `<home>/backups/cline`, the atomic write
 // through cline-file-write.ts, only that provider's keys, and never a printed secret. Kanban writes these only when
-// the user or the Kanban project's orchestrator runs the command (KANBAN_ORCHESTRATOR_OR_USER_COMMANDS in
+// the user runs the command (KANBAN_ORCHESTRATOR_OR_USER_COMMANDS in
 // src/isolation/cli-scope.ts); the server's Lemonade context sync stays its own (cline-lemonade-context-sync.ts).
 //
-// Which models a provider's `models` record in models.json lists is the Kanban orchestrator's (the record is Cline's
+// Which models a provider's `models` record in models.json lists is the user's (the record is Cline's
 // allow list, docs/team/MODELS.md): a provider's write keeps the records it finds and only fills in or refreshes their
 // metadata (context window, maxTokens, vision, reasoning), never adds or removes a model, and drops a
 // `modelsSourceUrl` (Cline offers every id it returns). A new provider type here follows the same rule.

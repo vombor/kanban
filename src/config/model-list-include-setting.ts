@@ -2,8 +2,8 @@
 // model-lists route lists (2026-10-12; the models stay installed on Lemonade). Deliberately narrow: config.json has
 // no general setter, and this one takes only that key. The write goes through updatePipelineConfigFile (config lock,
 // atomic, every other key kept). The model-lists route reads config.json on every request. Cline's lemonade provider
-// is not pointed at that route: what Cline offers is the models record in its models.json, curated by the Kanban
-// orchestrator (docs/team/MODELS.md), which this setting never changes.
+// is not pointed at that route: what Cline offers is the models record in its models.json, curated by the user
+// (docs/team/MODELS.md), which this setting never changes.
 import { getKanbanGlobalConfigPath } from "../state/kanban-home";
 import { LEMONADE_MODEL_LIST_INCLUDE_KEY, modelListIncludeSchema } from "./model-lists-config";
 import { updatePipelineConfigFile } from "./pipeline-config";
@@ -50,7 +50,7 @@ async function writeInclude(include: string[] | null, configPath: string): Promi
 		from,
 		to: include,
 		configPath,
-		next: "Kanban's model-lists route follows now. What Cline offers is the lemonade models record in Cline's models.json, which the Kanban orchestrator curates; this doesn't change it.",
+		next: "Kanban's model-lists route follows now. What Cline offers is the lemonade models record in Cline's models.json, which the user curates; this doesn't change it.",
 	};
 }
 

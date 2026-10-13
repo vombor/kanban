@@ -99,7 +99,7 @@ describe("restart.update", () => {
 			const response = await api.update(caller, request({ force: true }));
 			expect(response.status).toBe("refused");
 			expect(response.message).toContain("restarts the pod's container onto a newer image");
-			expect(response.message).toContain("only the user or the Kanban project's orchestrator");
+			expect(response.message).toContain("only the user runs it");
 		}
 		expect(isolationLog).toHaveBeenCalledWith(
 			[KANBAN, "foo"],
@@ -191,6 +191,24 @@ describe("restart.update", () => {
 		const response = await api.update({ kind: "user" }, request({ dryRun: true }));
 		expect(response.status).toBe("dry_run");
 		expect(prepared.every((input) => input.dryRun)).toBe(true);
+		vi.advanceTimersByTime(5_000);
+		expect(requestExit).not.toHaveBeenCalled();
+	});
+
+	it("is the user's alone in a pod without the Kanban project registered", async () => {
+		vi.useFakeTimers();
+		const { api, requestExit } = harness({
+			listWorkspaces: async () => [
+				{ workspaceId: "foo", repoPath: "/projects/foo" },
+				{ workspaceId: "notes", repoPath: "/projects/notes" },
+			],
+		});
+		for (const caller of [session("foo", "orchestrator"), session("notes", "orchestrator"), session("foo", "card")]) {
+			const response = await api.update(caller, request({ force: true }));
+			expect(response.status).toBe("refused");
+			expect(response.message).toContain("only the user runs it");
+		}
+		expect((await api.update({ kind: "user" }, request({ dryRun: true }))).status).toBe("dry_run");
 		vi.advanceTimersByTime(5_000);
 		expect(requestExit).not.toHaveBeenCalled();
 	});

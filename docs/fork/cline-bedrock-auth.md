@@ -60,7 +60,7 @@ it equals the env's.
 
 ## `kanban setup-provider bedrock`
 
-Run by the user or the Kanban project's orchestrator; every other session is refused
+Run by the user (a pod-level job, [development.md](development.md)); every agent session is refused
 ([setup-provider.md](setup-provider.md)). `kanban setup-provider` with no provider lists every provider's state.
 
 - It writes `providers.bedrock.settings.apiKey` from its own `AWS_BEARER_TOKEN_BEDROCK`, so run it from the environment
@@ -79,7 +79,7 @@ Run by the user or the Kanban project's orchestrator; every other session is ref
 The old `kanban cline store-bedrock-key` and `remove-bedrock-key` are gone (2026-10-12).
 
 Kanban doesn't write Cline's files on its own (the one exception is the Lemonade context windows in models.json, issue
-#31); the user or the Kanban orchestrator runs the command that does.
+#31); the user runs the command that does.
 
 ## When a card hits the sign-in screen anyway
 

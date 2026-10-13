@@ -1,6 +1,6 @@
-// `kanban models vet` (docs/team/MODELS.md "Vetting"): the Kanban orchestrator's smoke test for one agent + provider
+// `kanban models vet` (docs/team/MODELS.md "Vetting"): the user's smoke test for one agent + provider
 // + model and role (src/models/vetting/). It writes a report under `<home>/data/models/vetting/<run>` and changes
-// nothing else: Kanban keeps no list of allowed models. Cline's models.json is the allow list, and the orchestrator
+// nothing else: Kanban keeps no list of allowed models. Cline's models.json is the allow list, and the user
 // puts a model there by hand once it passed.
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readdir, stat, writeFile } from "node:fs/promises";
@@ -350,7 +350,7 @@ export function registerModelsVetCommand(models: Command): void {
 	models
 		.command("vet")
 		.description(
-			"Run a throwaway smoke-test card (scratch repo in a temp dir, never landed) for one agent + provider + model and role, and write a report (passed, failed or inconclusive, with the tool-call counts). Changes nothing else. Waits first for the provider's capacity (models.providerCapacity). Exit 0 when it passed, 1 when it failed, 2 when it was inconclusive (a harness or environment cause).",
+			"Run a throwaway smoke-test card (scratch repo in a temp dir, never landed) for one agent + provider + model and role, and write a report (passed, failed or inconclusive, with the tool-call counts). Changes nothing else. Waits first for the provider's capacity (models.providerCapacity). Exit 0 when it passed, 1 when it failed, 2 when it was inconclusive (a harness or environment cause). Vetting and Cline's models.json allow list are the user's.",
 		)
 		.requiredOption("--agent <agent>", "The agent CLI.")
 		.option("--provider <provider>", "The provider (none: the agent's own).")

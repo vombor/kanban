@@ -1,5 +1,8 @@
 # Container lifecycle (ghcr.io/vombor/kanban image)
 
+The pod runs project work only; Kanban itself is developed outside it, and how a push becomes the pod's next image
+is in [development.md](development.md).
+
 The dev-pod image (`ghcr.io/vombor/kanban`, built from `deploy/Containerfile` by `.github/workflows/image.yml`)
 starts Kanban through `deploy/kanban-entrypoint.sh` (`/usr/local/bin/kanban-entrypoint`), which ties the dev-team
 kit on the persistent volume (`/root/.kanban`) to the container's start and stop:
@@ -74,9 +77,10 @@ updates containers that run under a systemd unit (quadlet does that) with a full
 ## Updating from inside (`kanban restart update`)
 
 Kanban can't pull an image from inside its container, but with the unit's `Pull=newer` and `Restart=always` it
-doesn't have to: it only has to exit. `kanban restart update` (the user, or the Kanban project's orchestrator, whose
-standing permission the user gave on 2026-10-12; any other project's orchestrator and every card are refused, the
-server's `restart.update` route decides with the strict caller):
+doesn't have to: it only has to exit. `kanban restart update` is the user's (since 2026-10-13 Kanban is developed outside
+the pod, [development.md](development.md), so the Kanban project's orchestrator that had the user's standing
+permission of 2026-10-12 no longer runs in the pod; every orchestrator and every card is refused, the server's
+`restart.update` route decides with the strict caller):
 
 1. refuses outside a container (no `/run/.containerenv`);
 2. compares the running build (`KANBAN_IMAGE_REVISION`/`KANBAN_IMAGE_CREATED`, set from build args by CI; the same
@@ -113,7 +117,7 @@ or `Restart=always`. Without `Restart=always` the update restart only stops the 
 | `GH_TOKEN` | unset | the user's classic PAT (scopes `repo`, `read:packages`, `write:packages`, `workflow`). gh reads it; at start the entrypoint adds the npm `${GH_TOKEN}` reference for `@vombor` to `~/.npmrc` and runs `gh auth setup-git`. Pass it as a podman secret, not `Environment=`. Agent sessions keep it (PR cards need gh), except Copilot's; see [github-auth.md](github-auth.md) |
 
 E.g. to tag the cards of more than one board before a stop:
-`Environment="KANBAN_PRESTOP_HOOK=/root/.kanban/bin/kit prepare-restart --project foo; /root/.kanban/bin/kit prepare-restart --project kanban-2uge"`
+`Environment="KANBAN_PRESTOP_HOOK=/root/.kanban/bin/kit prepare-restart --project foo; /root/.kanban/bin/kit prepare-restart --project notes"`
 (`kit prepare-restart` alone covers one project: the one for its cwd, else the first in kit.config.json).
 
 ## Verify

@@ -120,6 +120,16 @@ describe("renderAppendSystemPrompt", () => {
 		expect(rendered).not.toContain("moonshot");
 		expect(rendered).not.toContain("xhigh");
 	});
+
+	it("sends Kanban bugs to vombor/kanban issues and leaves the pod-level jobs to the user", () => {
+		const rendered = renderAppendSystemPrompt("kanban");
+		expect(rendered).toContain("Kanban itself is developed outside this pod");
+		expect(rendered).toContain("kanban github issue create --repo vombor/kanban");
+		expect(rendered).toContain(
+			"The pod-level jobs are the user's alone: `kanban setup-provider`, `kanban restart update`, `kanban models vet` and Cline's models.json allow list.",
+		);
+		expect(rendered).not.toContain("Kanban project's orchestrator");
+	});
 });
 
 describe("resolveHomeAgentAppendSystemPrompt", () => {

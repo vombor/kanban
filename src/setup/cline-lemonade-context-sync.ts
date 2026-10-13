@@ -11,7 +11,7 @@
 //   - when the window comes from Lemonade's `recipe_options.ctx_size`: the loaded model's (/health) or the recipe's
 //     (/models). A global ctx_size or `max_context_window` (the model's maximum, not what it loads with) is skipped.
 // The list form, dropping `modelsSourceUrl`, vision, reasoning, prices and every other key stay setup-provider
-// lemonade; which models are in the record is the Kanban orchestrator's (never added or removed by either). The write is apply's: models.json as read is backed up into
+// lemonade; which models are in the record is the user's (never added or removed by either). The write is apply's: models.json as read is backed up into
 // `<home>/backups/cline`, the file is left alone when it changed while Lemonade was asked, and it is replaced
 // atomically with its own mode (cline-file-write.ts). A running Cline session keeps the window it started with.
 import { readFile } from "node:fs/promises";

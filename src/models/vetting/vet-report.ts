@@ -1,7 +1,7 @@
 // What `kanban models vet` leaves behind: `report.md` (people) and `result.json` (the run and its summary) in
 // `<home>/data/models/vetting/<run>/`. The summary says passed, failed or inconclusive with the tool-call counts. An
 // `inconclusive` run (`failure.harness`: sign-in, provider and transport errors, a context overflow, no capacity,
-// Kanban) says nothing about the model. Nothing is written anywhere else: the Kanban orchestrator decides whether the
+// Kanban) says nothing about the model. Nothing is written anywhere else: the user decides whether the
 // model goes into Cline's models.json (docs/team/MODELS.md).
 import { describeCombination } from "../model-combination";
 import type { VetRunResult } from "./vet-runner";

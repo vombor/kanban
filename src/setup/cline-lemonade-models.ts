@@ -12,7 +12,7 @@
 //   - The output budget is min(maxTokens, window - input - 1024), so maxTokens can't push a request past the window.
 //   - `modelsSourceUrl` only ever yields ids (`extractModelIdsFromPayload`), so the metadata can't ride on the
 //     model-lists route; it has to be in models.json.
-// The record is the allow list (docs/team/MODELS.md): Cline offers only the models in it, and the Kanban orchestrator
+// The record is the allow list (docs/team/MODELS.md): Cline offers only the models in it, and the user
 // curates it by hand with models that passed `kanban models vet`. So the wanted record has exactly the models the
 // file has, never one more or one less; of those Lemonade lists, the metadata is refreshed: contextWindow (see
 // src/models/lemonade-models.ts for where the size comes from), maxTokens, supportsVision and supportsReasoning, and
@@ -20,8 +20,8 @@
 // reported. A `provider.defaultModelId` that isn't in the record becomes the record's first model (the record is what
 // Cline offers). With Lemonade down no value changes (only a list is still rewritten as a record). Another provider type
 // in the setup-provider registry follows the same rule: keep the records it finds, only fill in their metadata.
-// Read-only: `kanban setup` and doctor print the differences, and `kanban setup-provider lemonade` (run by the user
-// or the Kanban orchestrator, cline-lemonade-apply.ts) writes them. The one exception is the server's context sync
+// Read-only: `kanban setup` and doctor print the differences, and `kanban setup-provider lemonade` (run by the user,
+// cline-lemonade-apply.ts) writes them. The one exception is the server's context sync
 // (cline-lemonade-context-sync.ts, issue #31): from this same plan it writes only contextWindow and maxTokens of
 // models already in the file.
 import { DEFAULT_LEMONADE_MODEL_LIST_SETTINGS } from "../config/model-lists-config";

@@ -1,4 +1,4 @@
-// The Lemonade entry's `provider.defaultModelId` against the models record (the Kanban orchestrator's allow list,
+// The Lemonade entry's `provider.defaultModelId` against the models record (the user's allow list,
 // docs/team/MODELS.md): the models.json plan and kanban setup-provider lemonade move a default the record doesn't
 // list to its first model, and `models.lists.lemonade.include` (which only filters the model-lists route) never adds
 // or removes a record model. A fake Lemonade and a temp models.json (never the real ~/.cline or Lemonade).

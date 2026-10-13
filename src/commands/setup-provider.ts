@@ -1,7 +1,7 @@
 // `kanban setup-provider [<provider>]`: writes one model provider's Cline settings (the providers and what each writes:
 // src/setup/cline-provider-setup.ts); with no provider it lists them and whether each is in sync (the doctor rows'
-// answer). Only the user and the Kanban project's orchestrator run it (KANBAN_ORCHESTRATOR_OR_USER_COMMANDS in
-// src/isolation/cli-scope.ts, asked of the server before this runs); `kanban setup` and doctor only print it.
+// answer). It is the user's to run (KANBAN_ORCHESTRATOR_OR_USER_COMMANDS in src/isolation/cli-scope.ts, asked of the
+// server before this runs; docs/fork/development.md); `kanban setup` and doctor only print it.
 import type { Command } from "commander";
 
 import { readPipelineConfig } from "../config/pipeline-config";
@@ -112,7 +112,7 @@ export function registerSetupProviderCommand(program: Command): void {
 			`The provider to set up: ${SETUP_PROVIDER_IDS.join(", ")}, or an OpenAI-compatible provider of config.json (providers.openaiCompatible.<id>). Without one, lists them.`,
 		)
 		.description(
-			"Write a model provider's settings into Cline's files (models.json, providers.json) as Kanban needs them for Cline cards, or with no provider list the providers and whether each is in sync. Each provider changes only its own entry, backs the file up into the Kanban home (backups/cline/) first, writes atomically and never prints a key; keys come from Kanban's environment, never the command line. Only the user and the Kanban project's orchestrator may run it; `kanban setup` and `kanban doctor` just print it. The server's Lemonade context sync (agents.cline.lemonadeContextSync) is separate.",
+			"Write a model provider's settings into Cline's files (models.json, providers.json) as Kanban needs them for Cline cards, or with no provider list the providers and whether each is in sync. Each provider changes only its own entry, backs the file up into the Kanban home (backups/cline/) first, writes atomically and never prints a key; keys come from Kanban's environment, never the command line. It is the user's to run (agent sessions are refused); `kanban setup` and `kanban doctor` just print it. The server's Lemonade context sync (agents.cline.lemonadeContextSync) is separate.",
 		)
 		.option("--dry-run", "Print what would change; write nothing.")
 		.option("--json", "Print the result as JSON.")

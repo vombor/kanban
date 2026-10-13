@@ -77,7 +77,7 @@ Fix it before anything else.
   Kanban's rules left in `~/.cline/rules` and `*.bak-before-kanban-setup-*` backups with the `rm` command; it never
   deletes them.
 - **Cline's Lemonade models (`models.json`):** the `lemonade` entry's `models` record is Cline's allow list
-  ([MODELS.md](MODELS.md)): the Kanban orchestrator adds a model there by hand once it passed `kanban models vet`, and
+  ([MODELS.md](MODELS.md)): the user adds a model there by hand once it passed `kanban models vet`, and
   the entry has no `modelsSourceUrl`. `kanban setup` and `kanban doctor` compare the record's models (context window,
   maxTokens, vision, reasoning) with what Lemonade reports now, report a `modelsSourceUrl` and the record's models
   Lemonade doesn't list (doctor: WARN, INFO when Lemonade is down). To apply them, run the printed
@@ -88,7 +88,7 @@ Fix it before anything else.
   the same way every 30 s and right before each Cline launch, and writes only `contextWindow` and `maxTokens` of
   models already in the entry, from Lemonade's `recipe_options.ctx_size` (never `max_context_window`), with the same
   backup and atomic write. It is the one write Kanban makes in Cline's files on its own; dropping `modelsSourceUrl`
-  and every other key stay the command's, and which models are in the record is the Kanban orchestrator's. Each change (old -> new per model, with the Lemonade value)
+  and every other key stay the command's, and which models are in the record is the user's. Each change (old -> new per model, with the Lemonade value)
   is in the server log and `~/.kanban/data/models/cline-lemonade-sync.jsonl`, as are report-mode, skipped and failed
   writes. A running Cline session keeps its window; the next one gets the new one.
 
@@ -162,8 +162,8 @@ Each step logs one result line to `<kit home>/logs/kanban-entrypoint.log` (`rest
 `timed out`); a failed or hung step never holds up the stop (`deploy/kanban-entrypoint.sh`,
 `docs/fork/container-lifecycle.md`). Only a Kanban-only restart (no container stop) needs both run by hand first.
 `kanban restart recover --dry-run` shows what restart recovery would do on the live board. Without `--dry-run` it
-asks the worker to check now. Never restart the pod yourself, with one exception: the Kanban project's orchestrator
-may run `kanban restart update` (user, 2026-10-12) to move the pod onto a newer `ghcr.io/vombor/kanban:latest`. It
+asks the worker to check now. Never restart the pod yourself: moving the pod onto a newer `ghcr.io/vombor/kanban:latest` is the user's
+`kanban restart update` (Kanban is developed outside the pod since 2026-10-13, docs/fork/development.md). It
 refuses without a newer image or while cards are In Progress (`--force`), runs restart prepare and exits 75; the unit's
 `Restart=always` + `Pull=newer` bring the container back on the new image (docs/fork/container-lifecycle.md,
 "Updating from inside").

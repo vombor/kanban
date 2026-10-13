@@ -1,7 +1,7 @@
 // `kanban setup-provider <id>` for an OpenAI-compatible provider of config.json (`providers.openaiCompatible.<id>`,
 // src/config/openai-compatible-providers-config.ts): Cline's custom provider `<id>`, computed from the config and what
-// the server reports, compared with Cline's files, and written only when the user or the Kanban project's orchestrator
-// runs the command. Doctor's row (src/doctor/openai-compatible-provider-checks.ts) prints the same plan.
+// the server reports, compared with Cline's files, and written only when the user runs the
+// command. Doctor's row (src/doctor/openai-compatible-provider-checks.ts) prints the same plan.
 //
 // Two files, as cline 3.0.70's TUI needs them for a keyless custom provider (real TUI runs, 2026-10-11 against LocalAI
 // and 2026-10-12 against the user's Triton router, in throwaway CLINE_DIR/CLINE_DATA_DIR):

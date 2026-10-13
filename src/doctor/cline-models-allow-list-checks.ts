@@ -1,7 +1,7 @@
 // Doctor row: Cline's models.json is the allow list (docs/team/MODELS.md). A provider with an entry there offers only
 // the models in its `models` record, so a kit role (roles, QA routes, the fallback, runoff models) or a card that puts
 // a Cline card on a model its provider's record doesn't have is a warning: Cline couldn't select that model. Nothing
-// more: Kanban refuses no model on any role, and the record is the Kanban orchestrator's to curate (never --fix).
+// more: Kanban refuses no model on any role, and the record is the user's to curate (never --fix).
 // A provider without an entry in models.json (Cline's built-in ones: bedrock, cline-pass, ...) has no record here,
 // so it isn't checked; non-Cline agents get no model check at all.
 import type { PipelineConfig } from "../config/pipeline-config";
@@ -48,7 +48,7 @@ function findMissingModel(
 }
 
 function hintFor(provider: string, modelsPath: string): string {
-	return `pick a model in ${modelsPath}'s ${provider} record (kanban kit set roles.<role>.model ... / kanban task update ...), or have the Kanban orchestrator add it there once it passed kanban models vet`;
+	return `pick a model in ${modelsPath}'s ${provider} record (kanban kit set roles.<role>.model ... / kanban task update ...), or ask the user to add it there once it passed kanban models vet`;
 }
 
 export async function checkClineModelsAllowList(context: ClineModelsAllowListCheckContext): Promise<DoctorFinding[]> {

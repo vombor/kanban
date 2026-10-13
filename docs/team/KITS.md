@@ -785,7 +785,7 @@ On top come each model's KV cache at that context and its compute buffers. Their
 these three, so check the free memory with all three loaded before raising a context. `--save-options` replaces the model's stored
 options, so repeat the backend. Cline's models.json follows by itself: the server's Lemonade context sync
 (`agents.cline.lemonadeContextSync`, on by default) writes the new `contextWindow`/`maxTokens` within 30 s and
-before the next Cline launch. Which models are in the record is the Kanban orchestrator's (by hand, with models that
+before the next Cline launch. Which models are in the record is the user's (by hand, with models that
 passed `kanban models vet`); `kanban setup-provider lemonade` fills in their metadata:
 
 ```sh
@@ -814,7 +814,7 @@ The other local gotchas:
 - **Context overflow.** Cline compacts at 0.9 × the `contextWindow` in its models.json, so that window must be the
   one Lemonade really loads. The server's Lemonade context sync keeps it so after a reload (`report`/`off` in
   `agents.cline.lemonadeContextSync` stop it), `kanban doctor`'s "cline lemonade models" row compares them, and
-  `kanban setup-provider lemonade` (the user or the Kanban orchestrator runs it) fixes the rest of the record's metadata. Beyond that,
+  `kanban setup-provider lemonade` (the user runs it) fixes the rest of the record's metadata. Beyond that,
   recovery (mode `on`) clears an overflowed history.
 - **Models.** `kanban doctor` also warns when Lemonade doesn't list a model the preset routes to, hasn't downloaded
   it, or doesn't mark it tool-calling. It reports INFO when Lemonade is down.

@@ -1,6 +1,6 @@
-// Who may run `kanban setup-provider` (KANBAN_ORCHESTRATOR_OR_USER_COMMANDS in src/isolation/cli-scope.ts): the user
-// and the Kanban project's orchestrator, decided by the server's route with the strict caller
-// (src/trpc/provider-setup-api.ts).
+// Who may run `kanban setup-provider` (KANBAN_ORCHESTRATOR_OR_USER_COMMANDS in src/isolation/cli-scope.ts): the user,
+// and the orchestrator of `providers.setupWorkspaceId` only where that project is registered, decided by the server's
+// route with the strict caller (src/trpc/provider-setup-api.ts).
 import { describe, expect, it, vi } from "vitest";
 
 import { parsePipelineConfig } from "../../../src/config/pipeline-config";
@@ -25,7 +25,7 @@ function session(workspaceId: string, role: "orchestrator" | "card", via: "crede
 }
 
 describe("decideKanbanOrchestratorCaller", () => {
-	it("allows the user and the Kanban project's orchestrator, refuses everyone else with who may run it", () => {
+	it("allows the user and the setup workspace's orchestrator, refuses everyone else with who may run it", () => {
 		expect(decideKanbanOrchestratorCaller({ kind: "user" }, KANBAN)).toEqual({ allowed: true });
 		expect(decideKanbanOrchestratorCaller(session(KANBAN, "orchestrator"), KANBAN)).toEqual({ allowed: true });
 		// Its headless wake or a credential-less call traced to its process tree is the same orchestrator.
@@ -42,7 +42,7 @@ describe("decideKanbanOrchestratorCaller", () => {
 			const decision = decideKanbanOrchestratorCaller(caller, KANBAN);
 			expect(decision.allowed).toBe(false);
 			expect(decision.allowed ? null : decision.message).toContain(
-				"only the user or the Kanban project's orchestrator (workspace kanban-2uge) runs it",
+				"only the user runs it (apart from the orchestrator of workspace kanban-2uge, where that project is registered)",
 			);
 		}
 		const other = decideKanbanOrchestratorCaller(session("foo", "orchestrator"), KANBAN);
@@ -75,5 +75,28 @@ describe("providers.authorizeSetup", () => {
 			expect.objectContaining({ kind: "refused", action: "providers.authorizeSetup", taskId: "t1", from: "foo" }),
 		);
 		expect((await api.authorize({ kind: "unknown", reason: "the caller lookup failed" })).allowed).toBe(false);
+	});
+
+	it("allows only the user where the setup workspace is not registered (Kanban developed outside the pod)", async () => {
+		// The pod registers foo and notes, not kanban-2uge: every session there belongs to one of them, so no session
+		// carries the setup workspace's id, and every orchestrator and card is refused for both commands.
+		const log = vi.fn(async () => {});
+		const api = createProviderSetupApi({ log, readSetupWorkspaceId: async () => KANBAN });
+		for (const command of ["setup-provider", "restart update"]) {
+			expect(await api.authorize({ kind: "user" }, command)).toEqual({ allowed: true, message: null });
+			const sessions: RuntimeCaller[] = [
+				session("foo", "orchestrator"),
+				session("notes", "orchestrator", "process"),
+				session("foo", "card"),
+				session("notes", "card", "process"),
+				{ kind: "unknown", reason: "no session above the caller" },
+			];
+			for (const caller of sessions) {
+				const answer = await api.authorize(caller, command);
+				expect(answer.allowed).toBe(false);
+				expect(answer.message).toContain("only the user runs it");
+			}
+		}
+		expect(log).toHaveBeenCalledTimes(10);
 	});
 });

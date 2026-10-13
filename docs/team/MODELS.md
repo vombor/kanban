@@ -10,20 +10,23 @@ read from whatever model is chosen (`getModelVendor()`), so a kit's `qa.requireD
 - **Cline cards**: Cline's own `models.json` (`<cline data>/settings/models.json`) is the allow list. A provider
   with an entry there offers only the models in its `models` record, and the provider must have **no**
   `modelsSourceUrl` (Cline offers every id that URL returns, so a dynamic list would offer unvetted models). The
-  Kanban orchestrator curates the record by hand, with models that passed `kanban models vet`.
+  user curates the record by hand, with models that passed `kanban models vet`.
 - **Other agents** (Claude Code, Codex, Copilot, ...): no model check at all.
 
 ## Who does what
 
-- **The Kanban orchestrator** vets a model with `kanban models vet` (below) and, once it passed, adds it to the
-  provider's `models` record in Cline's models.json by hand (a dry `kanban setup-provider <provider> --dry-run`
-  then shows the metadata it fills in). It takes a model out the same way.
-- **`kanban setup-provider <provider>`** (the user or the Kanban orchestrator, [setup-provider.md](../fork/setup-provider.md))
+- **The user** vets a model with `kanban models vet` (below) and, once it passed, adds it to the provider's
+  `models` record in Cline's models.json by hand (a dry `kanban setup-provider <provider> --dry-run` then shows the
+  metadata it fills in). They take a model out the same way. These are pod-level jobs, the user's alone since Kanban
+  is developed outside the pod (2026-10-13, [development.md](../fork/development.md)); until then the Kanban
+  project's orchestrator did them.
+- **`kanban setup-provider <provider>`** (the user's, [setup-provider.md](../fork/setup-provider.md))
   never adds or removes a model: it keeps the records it finds, only fills in or refreshes their metadata (context
   window, maxTokens, vision, reasoning) and drops a `modelsSourceUrl`. Every provider type in its registry follows
   that rule. The server's Lemonade context sync writes only the context windows of models already in the record.
 - **A project's orchestrator** picks its project's role models (`kanban kit set roles.<role>.model ...`). For a Cline
-  role, `kanban doctor` warns when the provider's record doesn't list the model (Cline couldn't select it).
+  role, `kanban doctor` warns when the provider's record doesn't list the model (Cline couldn't select it); a model
+  the record lacks, or a provider to set up, is something it asks the user for.
 - **Cards**: nothing here (`models vet` is refused from a card).
 
 ## Doctor
@@ -89,8 +92,8 @@ orchestrator starts it in the background of its own session (it must stay in the
 
 ClinePass is Cline's subscription provider (ids `cline-pass/<model>`, e.g. `cline-pass/mimo-v2.6-flash`,
 `cline-pass/glm-5.3-flash`, `cline-pass/kimi-k3`). Its key comes from Kanban's environment (`CLINE_API_KEY`, a podman
-secret) and must be stored in Cline's providers.json with `kanban setup-provider cline-pass` (the user or the Kanban
-orchestrator runs it), because Cline's TUI doesn't count the env's key (verified with real TUI runs, 2026-10-12): [cline-pass-auth.md](../fork/cline-pass-auth.md).
+secret) and must be stored in Cline's providers.json with `kanban setup-provider cline-pass` (the user
+runs it), because Cline's TUI doesn't count the env's key (verified with real TUI runs, 2026-10-12): [cline-pass-auth.md](../fork/cline-pass-auth.md).
 For Kanban it is a cloud provider: a QA card on it takes a cloud QA slot. Its turns price at 0 by provider
 (`SUBSCRIPTION_PROVIDER_IDS`, as Cline itself prices them), `getModelVendor()` reads the model after the
 `cline-pass/` prefix, and its account answers ("No access to ClinePass subscription models yet", "Organization
@@ -156,8 +159,8 @@ on this machine, `http://localhost:13305/api/v1`): its turns are priced at 0, a 
 (`pipeline.qa.slots`) and waits only for `models.providerCapacity.lemonade`, a vet run gives the first reply the local
 load allowance, and an unreachable server is a provider outage (backoff retries, then the outage hold).
 
-- Cline's model list: the lemonade entry's `models` record in models.json, curated by the Kanban orchestrator; no
-  `modelsSourceUrl`. `kanban setup-provider lemonade` (the user or the Kanban orchestrator) fills in the record's
+- Cline's model list: the lemonade entry's `models` record in models.json, curated by the user; no
+  `modelsSourceUrl`. `kanban setup-provider lemonade` (the user's) fills in the record's
   metadata from Lemonade and drops a `modelsSourceUrl`. Kanban's `/api/model-lists/lemonade` route still answers
   (downloaded models with `models.lists.lemonade.requireLabels`, limited to `models.lists.lemonade.include` when
   the user set one), but Cline is no longer pointed at it. A `provider.defaultModelId` the record doesn't list is

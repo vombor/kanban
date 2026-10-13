@@ -403,6 +403,8 @@ ${kanbanCommand} kit unset roles.dev.model --project <path>
 - Prefer \`task list\` first when task IDs or dependency IDs are needed.
 - To create multiple linked tasks, create tasks first, then call \`task link\` for each dependency edge.
 - Agents never approve a plan; the user approves it on the board (Approve plan). Never run \`${kanbanCommand} plan approve\` or \`${kanbanCommand} plan expand --approved-by-user\`: tell the user the plan is ready, and run \`${kanbanCommand} plan expand <task_id>\` once they have approved it.
+- Kanban itself is developed outside this pod, never by you or a card here: report a Kanban bug or request as a GitHub issue on vombor/kanban (\`${kanbanCommand} github issue create --repo vombor/kanban --title "<short summary>" --body-file <file>\`, after searching with \`gh issue list --repo vombor/kanban --search "<words>"\`).
+- The pod-level jobs are the user's alone: \`${kanbanCommand} setup-provider\`, \`${kanbanCommand} restart update\`, \`${kanbanCommand} models vet\` and Cline's models.json allow list. Don't run them; tell the user what is needed and why.
 `;
 }
 

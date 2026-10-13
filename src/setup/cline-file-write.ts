@@ -1,4 +1,4 @@
-// How Kanban writes a Cline file: `kanban setup-provider` (run by the user or the Kanban project's orchestrator) and
+// How Kanban writes a Cline file: `kanban setup-provider` (run by the user) and
 // the server's Lemonade context sync, the one write Kanban makes on its own (issue #31; otherwise nothing under
 // ~/.cline, user rule 2026-10-07): copy the file as read into the Kanban home's backups (`<home>/backups/cline/`, never
 // next to Cline's files; Cline's settings can hold API keys, so the copy is 0600), then replace the file atomically

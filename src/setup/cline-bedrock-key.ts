@@ -2,8 +2,8 @@
 // and Cline's providers.json must store it too, because Cline's interactive TUI only counts stored credentials
 // (src/terminal/cline-tui-sign-in.ts): every card runs in that TUI, and without a stored key it opens Cline's
 // sign-in screen and never takes the prompt (issue #9, 2026-10-08: after `remove-bedrock-key` every Cline card did).
-// Read by `kanban setup`'s cline-providers step and doctor's row; `kanban setup-provider bedrock` (run by the user or
-// the Kanban project's orchestrator, the only path that changes providers.json for it) copies the env's key and region
+// Read by `kanban setup`'s cline-providers step and doctor's row; `kanban setup-provider bedrock` (the user's, the
+// only path that changes providers.json for it) copies the env's key and region
 // in. Never prints or returns a key value: only whether one is there and whether it equals the env's.
 //
 // What cline 3.0.69 does (checked in the bundled CLI, with real TUI runs in a throwaway CLINE_DIR/CLINE_DATA_DIR,

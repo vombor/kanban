@@ -82,7 +82,7 @@ key, only whether one is stored and whether it equals the env's. The row appears
 
 ## `kanban setup-provider cline-pass`
 
-Run by the user or the Kanban project's orchestrator; every other session is refused
+Run by the user (a pod-level job, [development.md](development.md)); every agent session is refused
 ([setup-provider.md](setup-provider.md)).
 
 - It writes `providers["cline-pass"].settings.apiKey` from its own `CLINE_API_KEY`, so run it from the environment

@@ -53,7 +53,8 @@ npx @vombor/kanban@next
 npm i -g @vombor/kanban@next
 kanban
 ```
-Releases and the dev container's setup: `RELEASE_WORKFLOW.md` and `docs/fork/github-auth.md`.
+Releases and the dev container's setup: `RELEASE_WORKFLOW.md` and `docs/fork/github-auth.md`. Developing the fork
+(outside the pod): `docs/fork/development.md`.
 
 Run this from the root of any git repo. Kanban will detect your installed CLI agent and launch a local running webserver in your browser. No account or setup required, it works right out of the box.
 

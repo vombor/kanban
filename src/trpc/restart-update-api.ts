@@ -6,8 +6,8 @@
 // `Restart=always` starts it again, where `Pull=newer` pulls the newer image first.
 //
 // Every decision is here, never in the CLI: the caller (cli-scope.ts's decideKanbanOrchestratorCaller with the strict
-// lookup: the user and the Kanban project's orchestrator, `providers.setupWorkspaceId`; another project's orchestrator,
-// every card and an unidentified caller are refused), running in a container (/run/.containerenv), a newer image
+// lookup: the user's, apart from the orchestrator of `providers.setupWorkspaceId` where it is registered; any other
+// orchestrator, every card and an unidentified caller are refused), running in a container (/run/.containerenv), a newer image
 // (the running build's stamp against `:latest`'s labels) and no card In Progress; `force` skips the last two. Every
 // request, refused or not, goes to the server log and `<home>/logs/restart-update.jsonl`.
 import { appendFile, mkdir } from "node:fs/promises";
@@ -170,7 +170,7 @@ export function createRestartUpdateApi(deps: CreateRestartUpdateApiDependencies)
 					from: fromWorkspaceId,
 					to: kanbanWorkspaceId,
 					action: "restart.update",
-					detail: `restart update is the user's and the Kanban orchestrator's (${who})`,
+					detail: `restart update is the user's (${who})`,
 				});
 				return await finish("refused", decision.message);
 			}

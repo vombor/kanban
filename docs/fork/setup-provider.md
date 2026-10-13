@@ -18,7 +18,7 @@ kanban setup-provider <provider> [--json]   # write it
 | `cline-pass` | providers.json, the `cline-pass` entry: `apiKey` from `CLINE_API_KEY` | | [cline-pass-auth.md](cline-pass-auth.md) |
 | `<id>` of `providers.openaiCompatible` in config.json (e.g. `triton`) | models.json, the `<id>` entry: provider name, baseUrl, protocol and the context window and maxTokens of the models it already has (never adds a model; drops a `modelsSourceUrl`); providers.json, the `<id>` entry: provider, baseUrl, model (and `apiKey` from `apiKeyEnv`) | | [openai-compatible-providers.md](openai-compatible-providers.md) |
 
-A provider's `models` record in models.json is Cline's allow list, curated by the Kanban orchestrator by hand with
+A provider's `models` record in models.json is Cline's allow list, curated by the user by hand with
 models that passed `kanban models vet` ([MODELS.md](../team/MODELS.md)). So a provider's write keeps the records it
 finds and only fills in or refreshes their metadata (context window, maxTokens, vision, reasoning): it never adds or
 removes a model, and it drops a `modelsSourceUrl` (Cline offers every id that URL returns). A new provider type in
@@ -37,9 +37,10 @@ gone, without aliases.
 
 ## Who may run it
 
-The user, and the orchestrator of the Kanban project itself: its sidebar session or a headless wake of the workspace
-`providers.setupWorkspaceId` (default `kanban-2uge`). Every other project's orchestrator and every card session is
-refused with a message saying who may run it. The rule is `KANBAN_ORCHESTRATOR_OR_USER_COMMANDS` /
+The user. Kanban is developed outside the pod ([development.md](development.md)), so setting up a provider is a
+pod-level job and the user's alone; an orchestrator that needs one tells the user. Every agent session is refused
+with a message saying who may run it. The rule still lets through the orchestrator of `providers.setupWorkspaceId`
+(default `kanban-2uge`), but that workspace is no longer registered in the pod, so no session there carries its id. The rule is `KANBAN_ORCHESTRATOR_OR_USER_COMMANDS` /
 `decideKanbanOrchestratorCaller()` in `src/isolation/cli-scope.ts`, in every isolation mode, off included.
 
 The CLI checks this before the command runs (cli.ts's preAction), and it asks the running server
