@@ -26,7 +26,14 @@ export function describeTokenUsage(usage: RuntimeTaskTokenUsage, totals: TokenUs
 }
 
 /** A card's tokens in and out, "1.2M↓ 48k↑" (all its agent sessions), with the full split in its tooltip. No cost. */
-export function BoardCardTokenUsage({ usage }: { usage: RuntimeTaskTokenUsage }): React.ReactElement {
+export function BoardCardTokenUsage({
+	usage,
+}: {
+	usage: RuntimeTaskTokenUsage | null | undefined;
+}): React.ReactElement | null {
+	if (!usage || usage.input + usage.output + usage.cacheRead + usage.cacheWrite === 0) {
+		return null;
+	}
 	const totals = getTokenUsageInOut(usage);
 	const tokensIn = formatTokenCount(totals.in);
 	const tokensOut = formatTokenCount(totals.out);
@@ -36,7 +43,7 @@ export function BoardCardTokenUsage({ usage }: { usage: RuntimeTaskTokenUsage })
 				data-testid="board-card-token-usage"
 				role="img"
 				aria-label={`${tokensIn} tokens in, ${tokensOut} tokens out`}
-				className="whitespace-nowrap"
+				className="ml-auto shrink-0 whitespace-nowrap font-mono text-[11px] leading-none text-text-tertiary"
 			>
 				<span data-testid="board-card-tokens-in">{tokensIn}↓</span>{" "}
 				<span data-testid="board-card-tokens-out">{tokensOut}↑</span>

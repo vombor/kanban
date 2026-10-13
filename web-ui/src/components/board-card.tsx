@@ -11,8 +11,9 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "rea
 import { createPortal } from "react-dom";
 import { describeBoardCardAgentModel } from "@/components/board-card-agent-model";
 import { BoardCardPipelineStage } from "@/components/board-card-pipeline-stage";
-import { BoardCardRunStats } from "@/components/board-card-run-stats";
+import { BoardCardRunningTime } from "@/components/board-card-running-time";
 import { BoardCardTaskId } from "@/components/board-card-task-id";
+import { BoardCardTokenUsage } from "@/components/board-card-token-usage";
 import { PlanApprovalButton } from "@/components/plan-approval-button";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
@@ -485,7 +486,8 @@ export const BoardCard = memo(function BoardCard({
 		: null;
 	// The card's own model, else the model its agent sessions last used (any CLI, read from its session files), else
 	// the agent's default model from Kanban settings, which its launch will pass.
-	const usedModels = useTaskTokenUsage(card.id)?.models ?? NO_USED_MODELS;
+	const tokenUsage = useTaskTokenUsage(card.id);
+	const usedModels = tokenUsage?.models ?? NO_USED_MODELS;
 	const agentDefaults = useAgentDefaults();
 	const { label: modelLabel, detail: modelDetail } = useMemo(
 		() => describeBoardCardAgentModel(card.agentSettings, usedModels, { agentId: effectiveAgentId, agentDefaults }),
@@ -576,12 +578,13 @@ export const BoardCard = memo(function BoardCard({
 								isDependencyTarget && "kb-board-card-dependency-target",
 							)}
 						>
-							{/* The card's header: a strip across its top that holds only the task id. */}
+							{/* The card's header: task id on the left, lifetime token consumption on the right. */}
 							<div
-								className="flex items-center border-b border-border bg-surface-1 px-2.5 py-1"
+								className="flex items-center gap-2 border-b border-border bg-surface-1 px-2.5 py-1"
 								data-testid="board-card-header"
 							>
 								<BoardCardTaskId taskId={card.id} />
+								<BoardCardTokenUsage usage={tokenUsage} />
 							</div>
 							<div className="p-2.5">
 								<div className="flex items-center gap-2" style={{ minHeight: 24 }}>
@@ -773,8 +776,8 @@ export const BoardCard = memo(function BoardCard({
 										) : null}
 									</div>
 								) : null}
-								{/* The agent row: the agent pill, then a Backlog card's prerequisites or any later card's token count and running time, right-justified. */}
-								{/* On a narrow card only the pill shrinks, down to its icon (border + padding + 12 px icon = 26 px); the run stats stay whole, and a Backlog card's prerequisites are capped to what the pill's 26 px and the gap leave, so they truncate only after it. Caps, not shrink factors: a weighted shrink still takes a fraction of a pixel from the other item, and its ellipsis then eats characters. */}
+								{/* The agent row: the agent pill, then a Backlog card's prerequisites or any later card's running time, right-justified. */}
+								{/* On a narrow card only the pill shrinks, down to its icon (26 px); time stays whole and prerequisites are capped to the remaining space. */}
 								<div className="mt-1 flex min-w-0 items-center gap-2" data-testid="board-card-meta-row">
 									{agentPillTitle ? (
 										<span
@@ -823,7 +826,7 @@ export const BoardCard = memo(function BoardCard({
 											</Tooltip>
 										) : null
 									) : (
-										<BoardCardRunStats taskId={card.id} sessionSummary={sessionSummary} />
+										<BoardCardRunningTime sessionSummary={sessionSummary} />
 									)}
 								</div>
 								{columnId === "review" || columnId === "in_progress" ? (

@@ -179,7 +179,7 @@ describe("deliverTaskInput", () => {
 			);
 
 			expect(delivery).toMatchObject({ ok: true, status: "delivered", evidence: "state", enterAttempts: 2 });
-			expect(terminal.writes).toEqual(["30b1e: dev card ran but changed nothing", "\r", "\r"]);
+			expect(terminal.writes).toEqual(["\u001b[200~30b1e: dev card ran but changed nothing\u001b[201~", "\r", "\r"]);
 		});
 
 		it("reports undelivered when both Enters only repaint the TUI", async () => {
@@ -204,20 +204,43 @@ describe("deliverTaskInput", () => {
 			});
 		});
 
-		it("still takes output while the agent is running, or before its session ever reported a hook", async () => {
+		it("still takes output while a running session with known hooks queues input", async () => {
 			const running = createFakeTerminal({ agentId: "codex", onEnter: (_n, t) => t.patch({ lastOutputAt: 999 }) });
 			running.patch({ state: "running", reviewReason: null });
-			const noHooks = createFakeTerminal({ agentId: "codex", onEnter: (_n, t) => t.patch({ lastOutputAt: 999 }) });
-			noHooks.patch({ lastHookAt: null });
-
-			for (const terminal of [running, noHooks]) {
-				expect(await runDelivery(deliverTaskInput(terminal, "task-1", "go"))).toMatchObject({
-					status: "delivered",
-					evidence: "output",
-					enterAttempts: 1,
-				});
-			}
+			expect(await runDelivery(deliverTaskInput(running, "task-1", "go"))).toMatchObject({
+				status: "delivered",
+				evidence: "output",
+				enterAttempts: 1,
+			});
 		});
+
+		it("brackets Codex text so Enter stays a submission when the TUI reads both writes together", async () => {
+			const terminal = createFakeTerminal({
+				agentId: "codex",
+				onEnter: (_n, t) => t.patch({ state: "running", lastHookAt: 300 }),
+			});
+			expect(await runDelivery(deliverTaskInput(terminal, "task-1", "one\n two"))).toMatchObject({
+				status: "delivered",
+				enterAttempts: 1,
+			});
+			expect(terminal.writes).toEqual(["\u001b[200~one two\u001b[201~", "\r"]);
+		});
+
+		it.each(["running", "awaiting_review"] as const)(
+			"a fresh %s Codex sidebar's repaint is not proof of its first submission",
+			async (state) => {
+				const terminal = createFakeTerminal({
+					agentId: "codex",
+					onEnter: (_n, t) => t.patch({ lastOutputAt: 999 }),
+				});
+				terminal.patch({ state, lastHookAt: null });
+				expect(await runDelivery(deliverTaskInput(terminal, "task-1", "go"))).toMatchObject({
+					status: "undelivered",
+					evidence: null,
+					enterAttempts: 2,
+				});
+			},
+		);
 	});
 
 	it("says why the user counts as typing: a draft since when, or a recent keystroke (issue #39)", async () => {

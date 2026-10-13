@@ -3,9 +3,9 @@ import { devices, expect, type Locator, test } from "@playwright/test";
 import { type DevInstance, startDevInstance } from "./dev-instance";
 
 // The board card on a phone (the config's Pixel 7) and on a narrow desktop column: a header strip across the card's top
-// with the task id, and the agent row with the agent pill (the effective agent, the selected one for a card that names
-// none) on the left and, right-justified on the same line, a Backlog card's prerequisites or a running card's live
-// token count and running time. The row never wraps: the model text truncates first, the stats stay whole. A card that
+// with the task id and live tokens, and the agent row with the agent pill (the effective agent, the selected one for a card that names
+// none) on the left and, right-justified on the same line, a Backlog card's prerequisites or a running card's time.
+// The row never wraps: the model text truncates first, the time stays whole. A card that
 // names no model shows the model its sessions used, read from the agent's own transcript.
 
 // A stand-in for Claude Code that stays running, so its card sits In Progress, and writes a transcript where Claude
@@ -130,9 +130,13 @@ async function expectSameHeight(first: Locator, second: Locator): Promise<void> 
 // At the right end of its row.
 async function expectRightJustified(inner: Locator, outer: Locator): Promise<void> {
 	const [a, b] = await Promise.all([inner.boundingBox(), outer.boundingBox()]);
+	const inset = await outer.evaluate((element) => {
+		const style = getComputedStyle(element);
+		return Number.parseFloat(style.paddingRight) + Number.parseFloat(style.borderRightWidth);
+	});
 	expect(a && b).toBeTruthy();
 	if (a && b) {
-		expect(Math.abs(b.x + b.width - (a.x + a.width))).toBeLessThan(1);
+		expect(Math.abs(b.x + b.width - inset - (a.x + a.width))).toBeLessThan(1);
 	}
 }
 
@@ -173,7 +177,7 @@ for (const profile of ["phone", "desktop"] as const) {
 			test.use({ ...desktopChrome, viewport: { width: 900, height: 800 } });
 		}
 
-		test("the card shows the task id in its header, and the agent pill with the run stats or prerequisites right-justified below", async ({
+		test("the card shows token consumption in its header and running time or prerequisites beside the agent", async ({
 			page,
 		}, testInfo) => {
 			await page.addInitScript(() => {
@@ -195,21 +199,19 @@ for (const profile of ["phone", "desktop"] as const) {
 			await expect(pill).toHaveText("Claude Code · claude-opus-5-5", { timeout: 30_000 });
 			await expect(pill.getByTestId("board-card-agent-model")).toHaveText("· claude-opus-5-5");
 			await expect(row.getByTestId("board-card-task-id")).toHaveCount(0);
-			// The agent row: the live token count and running time right-justified beside the pill, growing while it runs.
-			const stats = row.getByTestId("board-card-run-stats");
-			// Tokens in and out apart, always the tight form "1.2M↓ 48k↑ · 12m", on one line.
-			await expect(stats).toHaveText(/^\d+(\.\d)?k↓ \d+(\.\d)?k?↑·\d+(s|m)$/u, { timeout: 30_000 });
-			await expect(stats.getByTestId("board-card-token-usage")).toHaveAttribute(
-				"aria-label",
-				/^\d+(\.\d)?k tokens in, \d+(\.\d)?k? tokens out$/u,
-			);
+			const stats = row.getByTestId("board-card-running-time");
+			const tokens = header.getByTestId("board-card-token-usage");
+			await expect(stats).toHaveText(/^\d+(s|m)$/u, { timeout: 30_000 });
+			await expect(tokens).toHaveText(/^\d+(\.\d)?k↓ \d+(\.\d)?k?↑$/u, { timeout: 30_000 });
+			await expect(tokens).toHaveAttribute("aria-label", /^\d+(\.\d)?k tokens in, \d+(\.\d)?k? tokens out$/u);
 			await expectOneLine(pill, stats);
 			await expectContentInside(pill);
 			await expectRightJustified(stats, row);
-			await expectOneLine(stats.getByTestId("board-card-tokens-in"), stats.getByTestId("board-card-tokens-out"));
-			await expectOneLine(stats.getByTestId("board-card-tokens-out"), stats.getByTestId("board-card-running-time"));
+			await expectOneLine(taskId, tokens);
+			await expectRightJustified(tokens, header);
+			await expectOneLine(tokens.getByTestId("board-card-tokens-in"), tokens.getByTestId("board-card-tokens-out"));
 			const readTokens = async () =>
-				Number.parseFloat((await stats.getByTestId("board-card-tokens-in").textContent()) ?? "");
+				Number.parseFloat((await tokens.getByTestId("board-card-tokens-in").textContent()) ?? "");
 			const before = await readTokens();
 			await expect.poll(readTokens, { timeout: 20_000 }).toBeGreaterThan(before);
 			await testInfo.attach("running card", { body: await running.screenshot(), contentType: "image/png" });
@@ -222,7 +224,7 @@ for (const profile of ["phone", "desktop"] as const) {
 			const backlogRow = backlog.getByTestId("board-card-meta-row");
 			const backlogPill = backlogRow.getByTestId("board-card-agent");
 			await expect(backlogPill).toHaveText(`Claude Code · ${LONG_MODEL}`);
-			await expect(backlog.getByTestId("board-card-run-stats")).toHaveCount(0);
+			await expect(backlog.getByTestId("board-card-running-time")).toHaveCount(0);
 			const waiting = backlogRow.getByTestId("board-card-prerequisites");
 			await expect(waiting).toHaveText("Waiting on 1 of 1");
 			if (profile === "phone") {

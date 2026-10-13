@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.70-fork.9]
+
+- Token consumption moves to the card header's top-right beside the task id; running time stays beside the agent below. Verified on desktop and phone layouts.
+- Codex watchdog wakes use explicit bracketed paste so Enter submits even when a delayed TUI reads the text and Enter together. Fresh sidebars require prompt-hook or state-change confirmation, so a repaint cannot falsely acknowledge the first wake. Reproduced and verified through real Kanban/Codex sessions with headless Chrome, including held-input draft protection (#52).
+
 ## [0.1.70-fork.8]
 
 - Team routing now uses one fixed workflow with cloud, ClinePass, and Lemonade model presets; projects can deliberately rebase their model settings onto the current preset with `kanban kit apply --rebase`, preview it with `--dry-run`, or select pins with `--rebase-key` (#45).

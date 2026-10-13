@@ -2,12 +2,11 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { BoardCardRunStats } from "@/components/board-card-run-stats";
-import { describeRunningTime } from "@/components/board-card-running-time";
-import { describeTokenUsage, getTokenUsageInOut } from "@/components/board-card-token-usage";
+import { BoardCardRunningTime, describeRunningTime } from "@/components/board-card-running-time";
+import { BoardCardTokenUsage, describeTokenUsage, getTokenUsageInOut } from "@/components/board-card-token-usage";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { RuntimeTaskSessionSummary } from "@/runtime/types";
-import { mergeTaskTokenUsage, setTaskTokenUsage } from "@/stores/task-token-usage-store";
+import { mergeTaskTokenUsage, setTaskTokenUsage, useTaskTokenUsage } from "@/stores/task-token-usage-store";
 
 const NOW = Date.parse("2026-10-12T12:00:00Z");
 
@@ -31,7 +30,17 @@ function summary(overrides: Partial<RuntimeTaskSessionSummary>): RuntimeTaskSess
 	};
 }
 
-describe("BoardCardRunStats", () => {
+function CardMetrics({ sessionSummary }: { sessionSummary: RuntimeTaskSessionSummary | undefined }) {
+	const usage = useTaskTokenUsage("7ad4d");
+	return (
+		<>
+			<BoardCardTokenUsage usage={usage} />
+			<BoardCardRunningTime sessionSummary={sessionSummary} />
+		</>
+	);
+}
+
+describe("board card token usage and running time", () => {
 	let container: HTMLDivElement;
 	let root: Root;
 	let previousActEnvironment: boolean | undefined;
@@ -62,7 +71,7 @@ describe("BoardCardRunStats", () => {
 		await act(async () => {
 			root.render(
 				<TooltipProvider>
-					<BoardCardRunStats taskId="7ad4d" sessionSummary={sessionSummary} />
+					<CardMetrics sessionSummary={sessionSummary} />
 				</TooltipProvider>,
 			);
 		});
@@ -111,7 +120,7 @@ describe("BoardCardRunStats", () => {
 
 	it("ticks a running card's time and holds a finished one", async () => {
 		await render(summary({ state: "running", startedAt: NOW - 30_000, stateChangedAt: NOW - 30_000, runCount: 1 }));
-		expect(text("board-card-run-stats")).toBe("30s");
+		expect(text("board-card-running-time")).toBe("30s");
 		await act(async () => {
 			vi.advanceTimersByTime(15_000);
 		});
@@ -126,16 +135,18 @@ describe("BoardCardRunStats", () => {
 
 	it("renders nothing before a token or a running second is known", async () => {
 		await render(summary({ state: "idle" }));
-		expect(container.querySelector('[data-testid="board-card-run-stats"]')).toBeNull();
+		expect(container.querySelector('[data-testid="board-card-running-time"]')).toBeNull();
 
 		// A Copilot session names its model before it writes any token total: still no count.
-		setTaskTokenUsage([
-			{ taskId: "7ad4d", input: 0, output: 0, cacheRead: 0, cacheWrite: 0, models: ["claude-sonnet-5.5"] },
-		]);
+		await act(async () => {
+			setTaskTokenUsage([
+				{ taskId: "7ad4d", input: 0, output: 0, cacheRead: 0, cacheWrite: 0, models: ["claude-sonnet-5.5"] },
+			]);
+		});
 		await render(summary({ state: "idle" }));
-		expect(container.querySelector('[data-testid="board-card-run-stats"]')).toBeNull();
+		expect(container.querySelector('[data-testid="board-card-token-usage"]')).toBeNull();
 		await render(summary({ runningMs: 45_000, runCount: 1 }));
-		expect(text("board-card-run-stats")).toBe("45s");
+		expect(text("board-card-running-time")).toBe("45s");
 	});
 });
 

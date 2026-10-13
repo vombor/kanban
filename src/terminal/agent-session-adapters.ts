@@ -123,10 +123,13 @@ interface HookCommandMetadata {
 export interface AgentInputDeliveryProfile {
 	/** The TUI ignores input while the terminal is unfocused, so a focus-in escape is written first. */
 	focusInBeforeInput: boolean;
+	/** Explicit paste boundaries keep Enter outside the TUI's unbracketed-paste heuristic. */
+	bracketedPaste: boolean;
 }
 
 const DEFAULT_INPUT_DELIVERY_PROFILE: AgentInputDeliveryProfile = {
 	focusInBeforeInput: false,
+	bracketedPaste: false,
 };
 
 /**
@@ -1061,6 +1064,10 @@ async function shouldConfineCodexWrites(input: AgentAdapterLaunchInput, guardrai
 }
 
 const codexAdapter: AgentSessionAdapter = {
+	// Codex 0.162.1 treats buffered text + CR as a paste burst, inserting a newline instead of submitting. Explicit
+	// paste events clear that suppression window (paste_burst.rs clear_after_explicit_paste), even when the TUI reads
+	// both writes at once. Verified through a throwaway Kanban sidebar with the real CLI and headless Chrome.
+	inputDelivery: { focusInBeforeInput: false, bracketedPaste: true },
 	recovery: { clearContextCommand: "/new", cancelTurnInput: ESCAPE },
 	async prepare(input) {
 		logWorkspacePreTrustError("codex", await ensureCodexWorkspaceTrusted(input.cwd));
@@ -2214,7 +2221,7 @@ export function buildCopilotProviderEnv(
 // onto per-task agentSettings (#592): --model / --reasoning-effort / provider come from the card.
 const copilotAdapter: AgentSessionAdapter = {
 	// GitHub Copilot's TUI drops input while the terminal is unfocused (fork/copilot, from #286).
-	inputDelivery: { focusInBeforeInput: true },
+	inputDelivery: { focusInBeforeInput: true, bracketedPaste: false },
 	async prepare(input) {
 		let args = [...input.args];
 		// Copilot gets Kanban's env as is, its own token included. Copilot CLI 1.0.93 (`copilot help environment`):

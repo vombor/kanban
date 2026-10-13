@@ -13,8 +13,8 @@
 // hook event or new output. Typing echoes before the mark is taken, so the
 // echo of the text itself does not count as delivery. New output alone doesn't
 // count for an idle agent whose prompt hook fires as soon as it takes a prompt
-// (Claude Code, Codex: agentHooksOnPromptSubmit) once the session has shown it
-// reports hooks: an Enter the TUI swallowed or turned into a newline in its
+// (Claude Code, Codex: agentHooksOnPromptSubmit), including a fresh session that
+// has not reported its first prompt hook: an Enter the TUI swallowed or turned into a newline in its
 // composer repaints too, and was taken as delivered while the text sat unsent
 // in the Codex sidebar (issue #52).
 //
@@ -134,16 +134,15 @@ function evidenceSince(
 
 /**
  * Whether new output after Enter proves the TUI took the input. Not for an idle session of an agent whose prompt hook
- * fires on submit and that has reported a hook before (issue #52): its submit shows up as that hook or a state change.
- * A running TUI may queue the input without the hook, and a session without Kanban's hooks never sends one.
+ * fires on submit (issue #52): its submit shows up as that hook or a state change. A fresh sidebar starts "running"
+ * before any prompt, so that state alone does not prove it can queue input. A running TUI that has reported hooks
+ * may queue the input without another immediate hook.
  */
 function outputProvesDelivery(summary: RuntimeTaskSessionSummary, agentId: RuntimeAgentId | null): boolean {
 	return !(
 		agentId !== null &&
 		agentHooksOnPromptSubmit(agentId) &&
-		summary.state !== "running" &&
-		summary.lastHookAt !== null &&
-		summary.lastHookAt !== undefined
+		(summary.state !== "running" || summary.lastHookAt === null || summary.lastHookAt === undefined)
 	);
 }
 
@@ -227,7 +226,7 @@ export async function deliverTaskInput(
 	const payload = flattenTaskInputText(text);
 	let latest: RuntimeTaskSessionSummary | null = initial;
 	if (payload.length > 0) {
-		latest = write(payload);
+		latest = write(profile.bracketedPaste ? `\u001b[200~${payload}\u001b[201~` : payload);
 		if (!latest) {
 			return result("no_session", { summary: terminal.getSummary(taskId), error: "Task session is not running." });
 		}

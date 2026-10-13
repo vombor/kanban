@@ -905,9 +905,9 @@ describe("BoardCard", () => {
 	const metaRowOf = (taskId: string) =>
 		container.querySelector(`[data-task-id="${taskId}"] [data-testid="board-card-meta-row"]`);
 	const runStatsOf = (taskId: string) =>
-		container.querySelector(`[data-task-id="${taskId}"] [data-testid="board-card-run-stats"]`);
+		container.querySelector(`[data-task-id="${taskId}"] [data-testid="board-card-running-time"]`);
 
-	it("puts the task id alone in a header strip across the top of the card", async () => {
+	it("keeps the task id alone in the header before token consumption is known", async () => {
 		setSelectedAgentId("claude");
 		await renderCard(<BoardCard card={createCard({ id: "7ad4d" })} index={0} columnId="review" />);
 
@@ -926,7 +926,7 @@ describe("BoardCard", () => {
 		expect(metaRowOf("7ad4d")?.querySelector('[data-testid="board-card-task-id"]')).toBeNull();
 	});
 
-	it("puts the agent pill on the left of the agent row and the run stats right-justified on the same row", async () => {
+	it("puts token consumption at the header's right and the agent pill below", async () => {
 		setSelectedAgentId("claude");
 		setTaskTokenUsage([
 			{ taskId: "7ad4d", input: 1_000, output: 20_000, cacheRead: 1_150_000, cacheWrite: 30_000, models: [] },
@@ -941,14 +941,18 @@ describe("BoardCard", () => {
 
 		const row = metaRowOf("7ad4d");
 		const pill = row?.querySelector('[data-testid="board-card-agent"]');
-		const stats = runStatsOf("7ad4d");
+		const stats = headerOf("7ad4d")?.querySelector('[data-testid="board-card-token-usage"]');
 		expect(pill?.textContent).toBe("Cline · gpt-x");
 		expect(pill?.getAttribute("title")).toBe("Cline · gpt-x");
-		expect(Array.from(row?.children ?? [])).toEqual([pill, stats]);
+		expect(Array.from(row?.children ?? [])).toEqual([pill]);
+		expect(Array.from(headerOf("7ad4d")?.children ?? [])).toEqual([
+			headerOf("7ad4d")?.querySelector('[data-testid="board-card-task-id"]'),
+			stats,
+		]);
 		expect(stats?.textContent).toBe("1.2M↓ 20k↑");
 		expect(row?.className).toContain("items-center");
 		expect(row?.className).not.toContain("flex-wrap");
-		// The stats stay on one line at the right end; only the pill truncates.
+		// Token consumption stays on one line at the right end of the header.
 		expect(stats?.className.split(" ")).toEqual(expect.arrayContaining(["ml-auto", "shrink-0", "whitespace-nowrap"]));
 		expect(pill?.className).toContain("min-w-[26px]");
 		// The model gives way first: the agent name doesn't shrink and is capped to the pill beside its icon.
@@ -1016,14 +1020,14 @@ describe("BoardCard", () => {
 			</>,
 		);
 
-		expect(container.querySelector('[data-testid="board-card-run-stats"]')).toBeNull();
+		expect(container.querySelector('[data-testid="board-card-running-time"]')).toBeNull();
 		expect(container.querySelector('[data-testid="board-card-prerequisites"]')).toBeNull();
 		for (const id of ["b31c9", "c41d0", "d51e1"]) {
 			expect(Array.from(metaRowOf(id)?.children ?? [])).toEqual([agentPill(id)]);
 		}
 	});
 
-	it("shows a running card's tokens and live running time on the agent row, never a cost", async () => {
+	it("shows a running card's tokens in the header and its live running time on the agent row", async () => {
 		vi.useFakeTimers();
 		try {
 			const now = Date.parse("2026-10-12T12:00:00Z");
@@ -1050,14 +1054,18 @@ describe("BoardCard", () => {
 
 			const stats = runStatsOf("c41d0");
 			expect(stats?.parentElement).toBe(metaRowOf("c41d0"));
-			expect(stats?.textContent).toBe("42k↓ 6k↑·12m");
+			expect(stats?.textContent).toBe("12m");
+			expect(headerOf("c41d0")?.querySelector('[data-testid="board-card-token-usage"]')?.textContent).toBe(
+				"42k↓ 6k↑",
+			);
+			expect(metaRowOf("c41d0")?.querySelector('[data-testid="board-card-token-usage"]')).toBeNull();
 			expect(stats?.textContent).not.toMatch(/\$|cost/iu);
 
 			// The time follows the running agent.
 			await act(async () => {
 				vi.advanceTimersByTime(60_000);
 			});
-			expect(stats?.querySelector('[data-testid="board-card-running-time"]')?.textContent).toBe("13m");
+			expect(stats?.textContent).toBe("13m");
 		} finally {
 			vi.useRealTimers();
 		}
@@ -1096,7 +1104,8 @@ describe("BoardCard", () => {
 			</>,
 		);
 
-		expect(runStatsOf("d51e1")?.textContent).toBe("1.2M↓ 2k↑·1h 05m");
+		expect(runStatsOf("d51e1")?.textContent).toBe("1h 05m");
+		expect(headerOf("d51e1")?.querySelector('[data-testid="board-card-token-usage"]')?.textContent).toBe("1.2M↓ 2k↑");
 		expect(runStatsOf("e61f2")?.textContent).toBe("45s");
 		expect(runStatsOf("e61f2")?.querySelector('[data-testid="board-card-token-usage"]')).toBeNull();
 		// Never on a Backlog card: its agent row keeps the prerequisites only.
