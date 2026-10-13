@@ -10,8 +10,8 @@ import { listKitModels } from "../../../src/kits/team/bench/price-sync-job";
 import { createCardHistory, createEffectiveCard } from "../../utilities/effective-card";
 
 const MUSE = { provider: "lemonade", model: "Muse-Glimmer-30B-GGUF-Q4_K_M" };
-const LAGUNA = { provider: "lemonade", model: "Laguna-XS-2.1-GGUF-Q4_K_M" };
-const GEMMA = { provider: "lemonade", model: "gemma-4-31B-it-qat-q4_0-gguf-Q4_0" };
+const QWEN_CODER = { provider: "lemonade", model: "Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M" };
+const GEMMA = { provider: "lemonade", model: "gemma-4-E4B-it-GGUF-Q4_K_M" };
 
 /** The team kit with the lemonade preset (what team-local was until 2026-10-12). */
 function resolveTeamLocal(overrides: Record<string, unknown> = {}) {
@@ -97,7 +97,7 @@ describe("the team kit's lemonade preset", () => {
 				history: createCardHistory(),
 			});
 		expect(qaFor(MUSE)).toMatchObject({ kind: "qa", agentId: "cline", model: GEMMA, route: null });
-		expect(qaFor(LAGUNA)).toMatchObject({ kind: "qa", model: GEMMA, route: null });
+		expect(qaFor(QWEN_CODER)).toMatchObject({ kind: "qa", model: GEMMA, route: null });
 	});
 
 	it("refuses QA by the dev model's own family", () => {
@@ -124,14 +124,14 @@ describe("the team kit's lemonade preset", () => {
 		});
 		expect(
 			policy.onFail({ dev, cause: "fail", verdict: null, history: createCardHistory([1, 2, 3]), limits }),
-		).toMatchObject({ action: "escalate", to: { agentId: "cline", model: LAGUNA }, requireApproval: false });
+		).toMatchObject({ action: "escalate", to: { agentId: "cline", model: QWEN_CODER }, requireApproval: false });
 		// One workflow for every team (user 2026-10-12): an outage hold that lasted maxMin hands the task to the fallback
 		// too. On one Lemonade server the sibling waits on the same outage, then goes to the orchestrator (a fallback
 		// sibling never falls back again).
 		expect(policy.onOutage({ dev, heldMin: 200, maxMin: 360 })).toMatchObject({ action: "hold" });
 		expect(policy.onOutage({ dev, heldMin: 400, maxMin: 360 })).toMatchObject({
 			action: "escalate",
-			to: { agentId: "cline", model: LAGUNA },
+			to: { agentId: "cline", model: QWEN_CODER },
 			requireApproval: false,
 		});
 	});
@@ -143,11 +143,19 @@ describe("the team kit's lemonade preset", () => {
 			{ label: "roles.dev", combination: onCline(MUSE) },
 			{ label: "roles.qa", combination: onCline(GEMMA) },
 			{ label: "roles.plan", combination: onCline(MUSE) },
-			{ label: "roles.fallback", combination: onCline(LAGUNA) },
+			{ label: "roles.fallback", combination: onCline(QWEN_CODER) },
 		]);
-		// No text in the kit names the models it ran before 2026-10-12.
+		// No text in the kit names the models it ran before 2026-10-12, or the ones it dropped on 2026-10-13.
 		const text = JSON.stringify(kit);
-		for (const old of ["Qwen3.8-27B", "Devstral-Small-2-24B", "GLM", "98304", "Gemma-4-12B"]) {
+		for (const old of [
+			"Qwen3.8-27B",
+			"Devstral-Small-2-24B",
+			"GLM",
+			"98304",
+			"Gemma-4-12B",
+			"Laguna-XS-2.1",
+			"gemma-4-31B",
+		]) {
 			expect(text).not.toContain(old);
 		}
 	});
@@ -197,7 +205,7 @@ describe("the team kit's lemonade preset", () => {
 		// The one refusal is a sample card built on the QA model itself: the kit requires a QA model of another
 		// vendor and has none for Gemma, so a card someone builds on Gemma waits in Review.
 		expect(report.warnings).toEqual([
-			expect.stringContaining("gemma-4-31B-it-qat-q4_0-gguf-Q4_0 is from the dev card's vendor (google)"),
+			expect.stringContaining("gemma-4-E4B-it-GGUF-Q4_K_M is from the dev card's vendor (google)"),
 		]);
 		expect(report.recommendedLandingMode).toBe("qa");
 		const text = formatKitReport(report).join("\n");

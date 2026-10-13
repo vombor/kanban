@@ -30,7 +30,7 @@ const WITH_TEAM_LOCAL_ROLES = {
 	...LEMONADE_MODELS_PAYLOAD,
 	data: [
 		...LEMONADE_MODELS_PAYLOAD.data,
-		...["Muse-Glimmer-30B-GGUF-Q4_K_M", "gemma-4-31B-it-qat-q4_0-gguf-Q4_0"].map((id) => ({
+		...["Muse-Glimmer-30B-GGUF-Q4_K_M", "gemma-4-E4B-it-GGUF-Q4_K_M"].map((id) => ({
 			id,
 			object: "model",
 			owned_by: "lemonade",
@@ -89,7 +89,7 @@ describe("kit settings doctor rows", () => {
 		expect(findings[0]).toMatchObject({
 			level: "warn",
 			message:
-				"local: kit team (lemonade) routes to Lemonade models it can't run: Laguna-XS-2.1-GGUF-Q4_K_M is not listed by Lemonade",
+				"local: kit team (lemonade) routes to Lemonade models it can't run: Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M is not listed by Lemonade",
 		});
 		const down = await checkKitLemonadeModels({ ...context, fetch: createFakeLemonadeFetch({ down: true }) });
 		expect(down).toMatchObject([{ level: "info", message: expect.stringContaining("did not answer") }]);

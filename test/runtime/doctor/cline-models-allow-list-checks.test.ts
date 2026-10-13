@@ -11,8 +11,8 @@ import { createTempDir } from "../../utilities/temp-dir";
 import { createBoard, createCard } from "../../utilities/workspace-state-store";
 
 const MUSE = "Muse-Glimmer-30B-GGUF-Q4_K_M";
-const GEMMA = "gemma-4-31B-it-qat-q4_0-gguf-Q4_0";
-const LAGUNA = "Laguna-XS-2.1-GGUF-Q4_K_M";
+const GEMMA = "gemma-4-E4B-it-GGUF-Q4_K_M";
+const QWEN_CODER = "Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M";
 
 describe("doctor: Cline's models.json is the allow list", () => {
 	let root: { path: string; cleanup: () => void };
@@ -63,11 +63,11 @@ describe("doctor: Cline's models.json is the allow list", () => {
 			{
 				level: "warn",
 				area: "project",
-				message: `local: kit team (lemonade) roles.fallback puts Cline cards on lemonade + ${LAGUNA}, which lemonade's models record in Cline's models.json doesn't list, so Cline couldn't select it`,
+				message: `local: kit team (lemonade) roles.fallback puts Cline cards on lemonade + ${QWEN_CODER}, which lemonade's models record in Cline's models.json doesn't list, so Cline couldn't select it`,
 				hint: expect.stringContaining("kanban models vet"),
 			},
 		]);
-		writeModels([MUSE, GEMMA, LAGUNA]);
+		writeModels([MUSE, GEMMA, QWEN_CODER]);
 		expect(await check({ kit: "team-local" })).toEqual([]);
 	});
 

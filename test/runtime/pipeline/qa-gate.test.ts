@@ -318,7 +318,7 @@ describe("QA gate", () => {
 		const busy = createCard({ id: "d2222", ...onQwen });
 		await send(harness, { review: [dev], in_progress: [busy] });
 		expect(createdTasks(harness.actions)).toMatchObject([
-			{ taskId: "qa001", agentSettings: { providerId: "lemonade", modelId: "gemma-4-31B-it-qat-q4_0-gguf-Q4_0" } },
+			{ taskId: "qa001", agentSettings: { providerId: "lemonade", modelId: "gemma-4-E4B-it-GGUF-Q4_K_M" } },
 		]);
 
 		// Lemonade loads one model: Gemma would evict Qwen while d2222 still runs on it. One record per hold.
@@ -326,7 +326,7 @@ describe("QA gate", () => {
 		const qa = createCard({ id: "qa001", role: "qa", reviewsTaskId: "d1111", ...onQwen });
 		const qaOnGemma = {
 			...qa,
-			agentSettings: { providerId: "lemonade", modelId: "gemma-4-31B-it-qat-q4_0-gguf-Q4_0" },
+			agentSettings: { providerId: "lemonade", modelId: "gemma-4-E4B-it-GGUF-Q4_K_M" },
 		};
 		await send(harness, { backlog: [qaOnGemma], in_progress: [busy], review: [dev] });
 		await send(harness, { backlog: [qaOnGemma], in_progress: [busy], review: [dev] });
@@ -583,7 +583,7 @@ describe("QA gate", () => {
 		};
 		const onGemma = {
 			agentId: "cline" as const,
-			agentSettings: { providerId: "lemonade", modelId: "gemma-4-31B-it-qat-q4_0-gguf-Q4_0" },
+			agentSettings: { providerId: "lemonade", modelId: "gemma-4-E4B-it-GGUF-Q4_K_M" },
 		};
 		const localQa = (id: string, devId: string) => createCard({ id, role: "qa", reviewsTaskId: devId, ...onGemma });
 		const cloudQa = (id: string, devId: string) => createCard({ id, role: "qa", reviewsTaskId: devId });

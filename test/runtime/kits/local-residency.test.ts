@@ -5,8 +5,8 @@ import { resolveTeamKit } from "../../utilities/team-kits";
 
 const TEAM_LOCAL_SET = [
 	"Muse-Glimmer-30B-GGUF-Q4_K_M",
-	"gemma-4-31B-it-qat-q4_0-gguf-Q4_0",
-	"Laguna-XS-2.1-GGUF-Q4_K_M",
+	"gemma-4-E4B-it-GGUF-Q4_K_M",
+	"Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M",
 ];
 
 describe("local residency", () => {

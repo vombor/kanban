@@ -281,7 +281,7 @@ describe("rework limits", () => {
 		expect(first.actions[0]).toMatchObject({
 			task: {
 				agentId: "cline",
-				agentSettings: { providerId: "lemonade", modelId: "Laguna-XS-2.1-GGUF-Q4_K_M" },
+				agentSettings: { providerId: "lemonade", modelId: "Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M" },
 			},
 		});
 
@@ -290,14 +290,14 @@ describe("rework limits", () => {
 		const sibling = {
 			...DEV,
 			id: "s0001",
-			agentSettings: { providerId: "lemonade", modelId: "Laguna-XS-2.1-GGUF-Q4_K_M" },
+			agentSettings: { providerId: "lemonade", modelId: "Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M" },
 		};
 		await fallback.seed("s0001", {
 			qaVerdicts: fails.map((verdict) => ({ ...verdict, snapshot: "snap-s0001" })),
 			sibling: { of: "d1111", kind: "escalation", at: new Date(REWORK_T0 - 60_000).toISOString() },
 		});
 		await fallback.tick({ review: [sibling] }, [
-			{ taskId: "s0001", agentId: "cline", modelId: "Laguna-XS-2.1-GGUF-Q4_K_M" },
+			{ taskId: "s0001", agentId: "cline", modelId: "Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M" },
 		]);
 		expect(kinds(fallback.actions)).toEqual(["blockTask:s0001"]);
 		expect(readEscalationRecord(readQaflow(await fallback.entry("s0001")))).toMatchObject({ to: "orchestrator" });

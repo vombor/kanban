@@ -1,7 +1,7 @@
 {
 	"preset": 1,
 	"name": "lemonade",
-	"description": "Local Lemonade models only (Cline + provider lemonade, no cloud anywhere, $0 per run): Muse-Glimmer-30B (Meta) builds and plans, gemma-4-31B (Google, another family, with vision) reviews, Laguna-XS-2.1 (Poolside, a third family) is the fallback dev model. All three passed kanban models vet for dev and QA (2026-10-12); none was vetted for plan. Needs Lemonade's max_loaded_models at 3 and the Cline turn detector on",
+	"description": "Local Lemonade models only (Cline + provider lemonade, no cloud anywhere, $0 per run): Muse-Glimmer-30B (Meta) builds and plans, gemma-4-E4B (Google, another family, with vision) reviews, Qwen3-Coder-30B-A3B (Qwen, a third family) is the fallback dev model. Muse-Glimmer passed kanban models vet for dev and QA (2026-10-12), Qwen3-Coder for dev and QA and gemma-4-E4B for QA (2026-10-13); none was vetted for plan. Needs Lemonade's max_loaded_models at 3 and the Cline turn detector on",
 	"roles": {
 		"dev": {
 			"agent": "cline",
@@ -11,8 +11,8 @@
 		"qa": {
 			"agent": "cline",
 			"provider": "lemonade",
-			"model": "gemma-4-31B-it-qat-q4_0-gguf-Q4_0",
-			"note": "gemma-4-31B QAT (passed kanban models vet for QA 2026-10-12): another family (google) than the Muse-Glimmer dev model (meta) and the Laguna fallback model (poolside), with vision, so it reads screenshots"
+			"model": "gemma-4-E4B-it-GGUF-Q4_K_M",
+			"note": "gemma-4-E4B (passed kanban models vet for QA 2026-10-13): another family (google) than the Muse-Glimmer dev model (meta) and the Qwen3-Coder fallback model (qwen), with vision, so it reads screenshots"
 		},
 		"plan": {
 			"agent": "cline",
@@ -21,7 +21,7 @@
 		},
 		"fallback": {
 			"tier": "senior",
-			"note": "fallback dev model (Laguna-XS-2.1-GGUF-Q4_K_M, Poolside, a third family, passed kanban models vet for dev 2026-10-12) on the dev role's agent"
+			"note": "fallback dev model (Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M, Qwen, a third family, passed kanban models vet for dev 2026-10-13) on the dev role's agent"
 		}
 	},
 	"plan": {
@@ -38,9 +38,9 @@
 				"agent": "cline",
 				"model": {
 					"provider": "lemonade",
-					"model": "Laguna-XS-2.1-GGUF-Q4_K_M"
+					"model": "Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M"
 				},
-				"note": "candidate (not vetted for plan; passed dev and QA 2026-10-12): the fallback dev model; 65536 context as Lemonade loads it"
+				"note": "candidate (not vetted for plan; passed dev and QA 2026-10-13): the fallback dev model; 65536 context as Lemonade loads it"
 			}
 		],
 		"note": "Plans run on roles.plan (the dev tier's model) in Cline's plan mode (--plan)."
@@ -55,24 +55,24 @@
 			},
 			{
 				"provider": "lemonade",
-				"model": "Laguna-XS-2.1-GGUF-Q4_K_M",
-				"note": "the fallback dev model (tier senior), passed kanban models vet for dev 2026-10-12: tool-calling, 65536 context as Lemonade loads it"
+				"model": "Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M",
+				"note": "the fallback dev model (tier senior), passed kanban models vet for dev 2026-10-13: a MoE with 3B active, tool-calling, 65536 context as Lemonade loads it"
 			}
 		],
 		"qa": [
 			{
 				"provider": "lemonade",
-				"model": "gemma-4-31B-it-qat-q4_0-gguf-Q4_0",
+				"model": "gemma-4-E4B-it-GGUF-Q4_K_M",
 				"default": true,
-				"note": "QA pick (passed kanban models vet for QA 2026-10-12): another family (google) than the Muse-Glimmer dev (meta) and Laguna fallback (poolside) models, vision + tool-calling, 17.6 GB at Q4_0 (QAT); Lemonade loads it at 65536"
+				"note": "QA pick (passed kanban models vet for QA 2026-10-13): another family (google) than the Muse-Glimmer dev (meta) and Qwen3-Coder fallback (qwen) models, vision + tool-calling, 5.9 GB at Q4_K_M; Lemonade loads it at 65536"
 			}
 		],
 		"senior": [
 			{
 				"provider": "lemonade",
-				"model": "Laguna-XS-2.1-GGUF-Q4_K_M",
+				"model": "Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M",
 				"default": true,
-				"note": "fallback dev model (passed kanban models vet for dev 2026-10-12): Poolside's Laguna-XS-2.1, a third family, neither the Muse-Glimmer dev model (meta) nor the Gemma QA model (google), so its sibling is still reviewed by Gemma; tool-calling, 18.9 GB at Q4_K_M, 65536 context as Lemonade loads it"
+				"note": "fallback dev model (passed kanban models vet for dev 2026-10-13): Qwen's Qwen3-Coder-30B-A3B, a third family, neither the Muse-Glimmer dev model (meta) nor the Gemma QA model (google), so its sibling is still reviewed by Gemma; a MoE with 3B active, tool-calling, no vision, 17.4 GB at Q4_K_M, 65536 context as Lemonade loads it (max 262144)"
 			}
 		]
 	},
@@ -82,8 +82,8 @@
 		"senior": "the fallback dev model: a family other than dev and QA"
 	},
 	"tierNotes": {
-		"dev": "Memory budget (one GPU: Ryzen AI MAX+ 395, 96 GB GPU-addressable of 125 GB RAM): dev + QA + fallback must stay resident side by side within 80 GB, leaving 16 GB headroom. Weights (Lemonade's sizes), each loaded at 65536 context: Muse-Glimmer-30B 16.9 GB, gemma-4-31B QAT 17.6 GB, Laguna-XS-2.1 18.9 GB: 53.4 GB of weights. Each model's KV cache at 65536 and its compute buffers come on top; their sizes are not measured yet, so check the free memory with all three loaded before raising a context. Change a context with lemonade load <model> --ctx-size <n> --llamacpp vulkan --save-options. Three models resident at once needs Lemonade's max_loaded_models at 3 (and models.providerCapacity.lemonade.maxLoadedModels equal to it). kanban bench calibrate can still compare candidates",
-		"qa": "requireDifferentVendor reads the family from the model id (Muse → meta, Gemma → google, Laguna → poolside, Qwen → qwen, Devstral → mistral, DeepSeek → deepseek)"
+		"dev": "Memory budget (one GPU: Ryzen AI MAX+ 395, 96 GB GPU-addressable of 125 GB RAM): dev + QA + fallback must stay resident side by side within 80 GB, leaving 16 GB headroom. Weights (Lemonade's sizes), each loaded at 65536 context: Muse-Glimmer-30B 16.9 GB, gemma-4-E4B 5.9 GB, Qwen3-Coder-30B-A3B 17.4 GB: 40.2 GB of weights. Each model's KV cache at 65536 and its compute buffers come on top; their sizes are not measured yet, so check the free memory with all three loaded before raising a context. Change a context with lemonade load <model> --ctx-size <n> --llamacpp vulkan --save-options. Three models resident at once needs Lemonade's max_loaded_models at 3 (and models.providerCapacity.lemonade.maxLoadedModels equal to it). kanban bench calibrate can still compare candidates",
+		"qa": "requireDifferentVendor reads the family from the model id (Muse → meta, Gemma → google, Qwen → qwen, Laguna → poolside, Devstral → mistral, DeepSeek → deepseek)"
 	},
 	"recommends": {
 		"settings": [
