@@ -114,6 +114,11 @@ export interface StallInput {
 	pidBrownout: boolean;
 	/** The workspace's QA pipeline is paused (workspace-pause.ts): its queued QA cards and its Review cards wait. */
 	pipelinePaused?: boolean;
+	/**
+	 * Queued QA cards the QA gate holds until their provider's usage limit resets (qa-gate.ts `usage_limit` waits,
+	 * issue #49): they wait on purpose, possibly for hours, like QA cards held by PID pressure or a pause.
+	 */
+	limitHeldQaCardIds?: ReadonlySet<string>;
 	settings: StallSettings;
 	/** The snapshot's `reviewSettleMs` (isReviewSettled); absent: the default. */
 	reviewSettleMs?: number;
@@ -270,13 +275,16 @@ export function detectStalls(input: StallInput): StallResult {
 
 	// Dev card id → a QA card working on it: the QA gate's running QA card (findRunningQaCard: In Progress, or in
 	// Review until its verdict is ingested, its slot freed or not; issue #33), or a legacy one In Progress. A QA card
-	// idling in Backlog doesn't count (c1e30 10/05), unless PID pressure (bfb20 10/05) or the workspace's pause holds it.
+	// idling in Backlog doesn't count (c1e30 10/05), unless PID pressure (bfb20 10/05), the workspace's pause or its
+	// provider's usage limit (issue #49) holds it.
 	const hasQaCard = new Set<string>();
-	const qaCardCounts = (column: RuntimeBoardColumnId | undefined) =>
-		column === "in_progress" || (column === "backlog" && (input.pidPressure || Boolean(input.pipelinePaused)));
+	const qaCardCounts = (column: RuntimeBoardColumnId | undefined, qaTaskId: string) =>
+		column === "in_progress" ||
+		(column === "backlog" &&
+			(input.pidPressure || Boolean(input.pipelinePaused) || Boolean(input.limitHeldQaCardIds?.has(qaTaskId))));
 	for (const { column, card } of cards) {
 		const role = input.roles.get(card.id);
-		if (role?.role === "qa" && role.reviewsTaskId && qaCardCounts(column)) {
+		if (role?.role === "qa" && role.reviewsTaskId && qaCardCounts(column, card.id)) {
 			hasQaCard.add(role.reviewsTaskId);
 		}
 	}
@@ -287,7 +295,7 @@ export function detectStalls(input: StallInput): StallResult {
 			devTaskId: devId,
 			columnOf: (taskId) => columnOf.get(taskId) ?? null,
 		});
-		if (running || (qaCard && qaCardCounts(columnOf.get(qaCard)))) {
+		if (running || (qaCard && qaCardCounts(columnOf.get(qaCard), qaCard))) {
 			hasQaCard.add(devId);
 		}
 	}

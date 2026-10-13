@@ -14,6 +14,7 @@ import {
 	isContextOverflowError,
 	isPoisonedHistoryError,
 	type ProviderAccountErrorKind,
+	readProviderLimitResetAt,
 } from "../terminal/cline-provider-error";
 import type { ClineSessionDetail, ClineSessionDetailMessage } from "../terminal/cline-session-files";
 import { getClineImageRejection } from "../terminal/cline-turn-outcome";
@@ -27,6 +28,28 @@ export {
 	isPoisonedHistoryError,
 	type ProviderAccountErrorKind,
 };
+
+/** Work on a provider whose usage limit ended goes out this long after the reset it named (clock skew, rounding). */
+export const USAGE_LIMIT_MARGIN_MS = 60_000;
+
+/** A provider usage limit that says when it ends (issue #49): the account's period is used up, not the card's fault. */
+export interface ProviderUsageLimit {
+	/** When the provider says the limit resets (epoch ms). */
+	resetAt: number;
+	text: string;
+}
+
+/**
+ * The provider usage limit in an error text, counted from `seenAt` (when the provider said it), or null: not a limit
+ * (getProviderAccountError), or one that names no reset. A limit without a reset keeps the provider-retry path.
+ */
+export function readProviderUsageLimit(text: string, seenAt: number | null): ProviderUsageLimit | null {
+	if (seenAt === null || getProviderAccountError(text) !== "limit") {
+		return null;
+	}
+	const resetAt = readProviderLimitResetAt(text, seenAt);
+	return resetAt === null ? null : { resetAt, text: text.slice(0, 300) };
+}
 
 // Provider errors worth a backoff retry rather than a nudge (daf86a5: three 5xx in 25 s escalated 0789a; 519d05f:
 // stream timeouts; 6698365: "connection refused" from a restarting Lemonade).
@@ -161,6 +184,8 @@ export type AgentRunError =
 	| { kind: "provider_error"; text: string }
 	/** The provider refuses the user's account (no subscription, an organization account): no rerun helps. */
 	| { kind: "provider_account"; text: string }
+	/** The provider's usage limit, with when it resets: every run on the provider fails the same until then (issue #49). */
+	| { kind: "usage_limit"; text: string; resetAt: number }
 	| { kind: "session_failed"; text: string };
 
 /**
@@ -182,6 +207,10 @@ export function detectRunError(detail: ClineSessionDetail): AgentRunError | null
 	}
 	const error = detectFinalProviderError(detail.messages);
 	if (error) {
+		const limit = readProviderUsageLimit(error.text, detail.messages.at(-1)?.ts ?? detail.lastWriteAt);
+		if (limit) {
+			return { kind: "usage_limit", text: limit.text, resetAt: limit.resetAt };
+		}
 		const account = getProviderAccountError(error.text);
 		return {
 			kind: isContextOverflowError(error.text)

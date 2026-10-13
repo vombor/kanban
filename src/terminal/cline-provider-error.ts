@@ -50,6 +50,39 @@ export function getProviderAccountError(text: string): ProviderAccountErrorKind 
 	return PROVIDER_ACCOUNT_ERROR_PATTERNS.find(({ pattern }) => pattern.test(text))?.kind ?? null;
 }
 
+const LIMIT_RESET_PATTERN =
+	/\bresets in\s+((?:\d+\s*(?:days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)\b[\s,]*(?:and\s+)?)+)/i;
+const LIMIT_RESET_PART_PATTERN = /(\d+)\s*([a-z]+)/gi;
+const LIMIT_RESET_UNIT_MS: ReadonlyArray<{ pattern: RegExp; ms: number }> = [
+	{ pattern: /^d(?:ays?)?$/, ms: 86_400_000 },
+	{ pattern: /^h(?:ours?|rs?)?$/, ms: 3_600_000 },
+	{ pattern: /^m(?:inutes?|ins?)?$/, ms: 60_000 },
+	{ pattern: /^s(?:econds?|ecs?)?$/, ms: 1000 },
+];
+/** A reset further out than this is no period a hold should wait for (a misread). */
+const LIMIT_RESET_MAX_MS = 8 * 86_400_000;
+
+/**
+ * When a provider usage limit ends, from its own text ("You have reached your 5-hour Clinepass limit. The limit resets
+ * in 4h 13m, please try again later.", issue #49), counted from `seenAt` (when the provider said it). Null when the
+ * text names no reset.
+ */
+export function readProviderLimitResetAt(text: string, seenAt: number): number | null {
+	const match = LIMIT_RESET_PATTERN.exec(text);
+	if (!match?.[1]) {
+		return null;
+	}
+	let ms = 0;
+	for (const part of match[1].matchAll(LIMIT_RESET_PART_PATTERN)) {
+		const unit = LIMIT_RESET_UNIT_MS.find(({ pattern }) => pattern.test((part[2] ?? "").toLowerCase()));
+		if (!unit) {
+			return null;
+		}
+		ms += Number(part[1]) * unit.ms;
+	}
+	return ms > 0 && ms <= LIMIT_RESET_MAX_MS ? seenAt + ms : null;
+}
+
 /** A fatal API error shown as the whole final reply is at most this long (longer text is the agent talking). */
 const FINAL_ERROR_MAX_LENGTH = 600;
 

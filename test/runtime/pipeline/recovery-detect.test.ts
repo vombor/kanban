@@ -12,6 +12,7 @@ import {
 	isPoisonedHistoryError,
 	isRetryableProviderError,
 	isTransientProviderError,
+	readProviderUsageLimit,
 } from "../../../src/pipeline/recovery-detect";
 import { KANBAN_CLINE_HUB_ABORT_REASONS } from "../../../src/terminal/cline-hub-abort-reason";
 import type { ClineSessionDetail, ClineSessionDetailMessage } from "../../../src/terminal/cline-session-files";
@@ -191,6 +192,53 @@ describe("provider error classes", () => {
 		}
 		expect(getProviderAccountError("You have reached your free limit. Please try again later.")).toBeNull();
 		expect(getProviderAccountError("503 Service Unavailable")).toBeNull();
+	});
+
+	it("reads when a provider usage limit resets from its own text (issue #49)", () => {
+		const SEEN = Date.parse("2026-10-13T16:31:17.000Z");
+		const H = 3_600_000;
+		const M = 60_000;
+		// The text cline-pass-test's QA cards ended on, 2026-10-13.
+		const ISSUE_49 =
+			"You have reached your 5-hour Clinepass limit. The limit resets in 4h 13m, please try again later.";
+		expect(readProviderUsageLimit(ISSUE_49, SEEN)).toEqual({ resetAt: SEEN + 4 * H + 13 * M, text: ISSUE_49 });
+		for (const [reset, ms] of [
+			["45m", 45 * M],
+			["2 hours and 5 minutes", 2 * H + 5 * M],
+			["1d 3h", 27 * H],
+			["30s", 30_000],
+		] as const) {
+			const text = `You have reached your weekly ClinePass limit. The limit resets in ${reset}, please try again later.`;
+			expect(readProviderUsageLimit(text, SEEN)?.resetAt, reset).toBe(SEEN + ms);
+		}
+		// A limit that names no reset, or a misread one, keeps the provider-retry path.
+		expect(
+			readProviderUsageLimit("You have reached your ClinePass limit for this period. Please try again later.", SEEN),
+		).toBeNull();
+		expect(
+			readProviderUsageLimit(
+				"You have reached your ClinePass limit. The limit resets in 30d, please try again later.",
+				SEEN,
+			),
+		).toBeNull();
+		// Only the provider's usage limit: other texts with "resets in" aren't one.
+		expect(readProviderUsageLimit("The connection resets in 5m. Please try again later.", SEEN)).toBeNull();
+		expect(readProviderUsageLimit(ISSUE_49, null)).toBeNull();
+
+		// A run that ended on it is a usage limit, counted from the notice's own time, else the session's last write.
+		const notice = { displayError: true };
+		expect(
+			detectRunError(detailOf([text("user", "go"), text("assistant", ISSUE_49, { ...notice, ts: SEEN })])),
+		).toEqual({
+			kind: "usage_limit",
+			text: ISSUE_49,
+			resetAt: SEEN + 4 * H + 13 * M,
+		});
+		expect(detectRunError(detailOf([text("user", "go"), text("assistant", ISSUE_49, notice)]))).toEqual({
+			kind: "usage_limit",
+			text: ISSUE_49,
+			resetAt: 2 + 4 * H + 13 * M,
+		});
 	});
 
 	it("never reads the reason of a run Kanban ended through the Cline hub as a provider error (issues #28, #32)", () => {

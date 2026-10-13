@@ -537,6 +537,48 @@ describe("decideRecovery: Review cards", () => {
 			expect(decision.reason).toContain("after 4 provider retries");
 			expect(decision.patch.nudges).toBeUndefined();
 		});
+
+		it("holds a usage limit that names its reset until then, without spending a provider retry (issue #49)", () => {
+			const ISSUE_49 =
+				"You have reached your 5-hour Clinepass limit. The limit resets in 4h 13m, please try again later.";
+			const seenAt = NOW - MIN;
+			const limitTurn = detail(
+				[
+					message("user", "Implement the thing."),
+					message("assistant", ISSUE_49, { displayError: true, ts: seenAt }),
+				],
+				{ writtenAgoMs: MIN },
+			);
+			const resetAt = seenAt + (4 * 60 + 13) * MIN;
+			const retryAt = new Date(resetAt + MIN).toISOString();
+			const held = expectKind(
+				decideRecovery(input({ model: CLINE_PASS, canProbe: false, detail: limitTurn })),
+				"hold",
+			);
+			expect(held.reason).toContain("provider usage limit on cline-pass/mimo-v2.6-flash, not a model failure");
+			expect(held.reason).toContain(`retrying at ${retryAt}`);
+			expect(held.patch.retryAt).toBe(retryAt);
+			expect(held.patch.transient).toBeUndefined();
+			// Even with every provider retry used up, the reset is waited for, never escalated.
+			const usedUp = flow({
+				transient: [1, 2, 3, 4].map((n) => ({ at: new Date(NOW - n * MIN).toISOString(), warn: ISSUE_49 })),
+			});
+			expect(
+				expectKind(
+					decideRecovery(input({ model: CLINE_PASS, canProbe: false, flow: usedUp, detail: limitTurn })),
+					"hold",
+				).patch.retryAt,
+			).toBe(retryAt);
+			// Waiting until the retry is due, then the provider retry goes out.
+			const waiting = flow({ retryAt });
+			expect(
+				decideRecovery(input({ model: CLINE_PASS, canProbe: false, flow: waiting, detail: limitTurn })).kind,
+			).toBe("wait");
+			const due = decideRecovery(
+				input({ model: CLINE_PASS, canProbe: false, flow: waiting, detail: limitTurn, now: resetAt + 2 * MIN }),
+			);
+			expect(due.kind).toBe("nudge");
+		});
 	});
 
 	describe("a stop seen while the provider is at capacity (follow-up of issue #32)", () => {

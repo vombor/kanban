@@ -52,6 +52,8 @@ import {
 	isRetryableProviderError,
 	isTransientProviderError,
 	type PrematureStop,
+	readProviderUsageLimit,
+	USAGE_LIMIT_MARGIN_MS,
 } from "./recovery-detect";
 import {
 	buildClearedPrematurePrompt,
@@ -726,6 +728,24 @@ function decideSettledReview(input: RecoveryCardInput): RecoveryDecision {
 				`provider account error on ${modelLabel(input.model)}, not a model failure: ${stop.error.slice(0, 160)}`,
 				[ACCOUNT_ERROR_NEXT_STEP],
 			),
+			clearHold,
+		);
+	}
+	// The provider's usage limit with its reset (issue #49, ClinePass's 5-hour limit): every request fails the same until
+	// then, so the card waits for the reset instead of spending its provider retries and escalating. Not counted as a
+	// retry: a limit that comes back after its reset waits again.
+	const usageLimit =
+		stop && account === "limit"
+			? readProviderUsageLimit(stop.error, input.detail?.messages.at(-1)?.ts ?? input.now)
+			: null;
+	if (usageLimit) {
+		const retryAt = iso(Math.max(usageLimit.resetAt + USAGE_LIMIT_MARGIN_MS, input.now));
+		return withPatch(
+			{
+				kind: "hold",
+				reason: `provider usage limit on ${modelLabel(input.model)}, not a model failure: retrying at ${retryAt}, after it resets; no QA. ${usageLimit.text.slice(0, 120)}`,
+				patch: { retryAt },
+			},
 			clearHold,
 		);
 	}

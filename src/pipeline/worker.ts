@@ -436,6 +436,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 		}),
 		takeWakeNotes: takeWorkspaceIssueWakeNotes,
 		readChecksStatus: () => checks.status?.() ?? null,
+		readQaQueueWaits: (workspaceId) => qaGate.describeQueueWaits?.(workspaceId) ?? new Map(),
 		readRestartPass: (workspaceId) => recovery.restartPass?.(workspaceId) ?? null,
 		log,
 	});

@@ -86,6 +86,20 @@ describe("detectStalls", () => {
 		expect(detectStalls(input(board, { pidPressure: true })).items).toHaveLength(0);
 	});
 
+	it("counts a backlog QA card the QA gate holds for its provider's usage limit (issue #49)", () => {
+		const board = createBoard({
+			review: [old("d0001"), old("d0002")],
+			backlog: [
+				old("qa001", { prompt: "You are the QA reviewer (round 1) for Kanban dev card d0001." }),
+				old("qa002", { prompt: "You are the QA reviewer (round 1) for Kanban dev card d0002." }),
+			],
+		});
+		// Only the held one: qa002 idles in Backlog for no reason the gate knows.
+		expect(
+			detectStalls(input(board, { limitHeldQaCardIds: new Set(["qa001"]) })).items.map((item) => item.key),
+		).toEqual(["d0002:review-stall"]);
+	});
+
 	it("flags no Review card and counts a backlog QA card while the workspace's QA pipeline is paused", () => {
 		const board = createBoard({
 			review: [old("d0001"), old("d0002")],

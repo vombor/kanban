@@ -95,6 +95,13 @@ function describeQueuedQa(qaTaskId: string, round: number, wait: QaQueueWait | u
 			next: `QA r${round}`,
 		});
 	}
+	if (wait?.kind === "usage_limit") {
+		return stage("qa_queued", `Waiting for ${wait.provider ?? "provider"} limit reset`, {
+			...fields,
+			next: `QA r${round}`,
+			deadline: wait.until ?? null,
+		});
+	}
 	if (wait?.kind === "paused") {
 		return stage("qa_queued", "QA paused", { ...fields, next: `QA r${round} on resume` });
 	}

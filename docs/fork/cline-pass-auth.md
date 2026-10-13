@@ -110,10 +110,15 @@ session then `failed`); it doesn't retry them itself. Kanban reads them through 
 |---|---|---|
 | "No access to ClinePass subscription models yet. Subscribe to ClinePass, ..." | escalates to the orchestrator at once: "provider account error ..., not a model failure" (no retry, nudge or outage hold) | STALLED at once with the error, no replacement QA card; the rework stage escalates it to the orchestrator |
 | "Organization accounts cannot use ClinePass subscriptions. ..." | the same | the same |
-| "You have reached your ClinePass limit ... Please try again later." | the provider-error retries (`pipeline.recovery.retryBackoffMin`), then an escalation "provider usage limit ..., not a model failure" (ClinePass has no outage probe) | the usual QA agent-error replacements, then STALLED |
+| "You have reached your 5-hour Clinepass limit. The limit resets in 4h 13m, please try again later." (a limit that says when it resets) | waits for the reset: the provider retry goes out a minute after it (`retryAt`), counts as no retry and never escalates; a limit that comes back after its reset waits again | the QA card is replaced without using up a replacement, and no QA card on that provider starts in any project until a minute after the reset (the dev card shows "Waiting for cline-pass limit reset" with the time); the worker starts them then by itself |
+| "You have reached your ClinePass limit ... Please try again later." (no reset named) | the provider-error retries (`pipeline.recovery.retryBackoffMin`), then an escalation "provider usage limit ..., not a model failure" (ClinePass has no outage probe) | the usual QA agent-error replacements, then STALLED |
 
-After fixing the account (subscribe, switch to a personal account, or wait for the limit), restart the card
-(`kanban task resume <id>`).
+The reset is read by `readProviderLimitResetAt()` (cline-provider-error.ts) from the notice's own time (issue #49:
+cline-pass-test's QA cards used up their replacements on the 5-hour limit within a minute and escalated both dev
+cards). The QA gate keeps the hold in the worker's memory only: after a worker restart the next QA card on the provider
+meets the limit once more and the hold comes back, again without using up a replacement.
+
+After fixing the account (subscribe, or switch to a personal account), restart the card (`kanban task resume <id>`).
 
 A card that hits the sign-in screen anyway is a silent stall of kind `no_session`; its reason names what providers.json
 lacks ("providers.json stores no ClinePass key"), and recovery escalates it without a nudge, as for Bedrock

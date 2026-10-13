@@ -30,9 +30,11 @@ export interface QaAgentErrorRecord {
 	text: string;
 	/** For `image_rejected`: an image over the size limits rather than a text-only model. */
 	tooLarge?: boolean;
+	/** For `usage_limit`: when the provider said its limit resets (epoch ms). */
+	resetAt?: number;
 }
 
-export type QaAgentError = Pick<QaAgentErrorRecord, "kind" | "text" | "tooLarge">;
+export type QaAgentError = Pick<QaAgentErrorRecord, "kind" | "text" | "tooLarge" | "resetAt">;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -67,10 +69,16 @@ export function readQaRequeuedAt(entry: PipelineCardState | undefined): number {
 	return Math.max(readLastHandbackAt(entry), readResubmitRequestAt(entry));
 }
 
-/** The QA agent errors on `snapshot` since the dev card last asked for a new QA round, oldest first. */
+/**
+ * The QA agent errors on `snapshot` since the dev card last asked for a new QA round, oldest first. A provider usage
+ * limit is no QA agent error (issue #49): the account's period ran out, so it uses up no replacement and its QA card's
+ * replacement gets no note.
+ */
 export function listQaAgentErrors(entry: PipelineCardState | undefined, snapshot: string): QaAgentErrorRecord[] {
 	const since = readQaRequeuedAt(entry);
-	return readQaAgentErrors(entry).filter((record) => record.snapshot === snapshot && record.at > since);
+	return readQaAgentErrors(entry).filter(
+		(record) => record.snapshot === snapshot && record.at > since && record.kind !== "usage_limit",
+	);
 }
 
 /**
@@ -86,6 +94,7 @@ export function resolveQaAgentError(
 			kind: runError.kind,
 			text: runError.text,
 			...(runError.kind === "image_rejected" ? { tooLarge: runError.tooLarge } : {}),
+			...(runError.kind === "usage_limit" ? { resetAt: runError.resetAt } : {}),
 		};
 	}
 	if (session?.reviewReason === "error") {

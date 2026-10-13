@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { RuntimeBoardCard, RuntimeBoardColumnId } from "../../../src/core/api-contract";
 import { handBackTask } from "../../../src/pipeline/handback";
@@ -1203,6 +1203,89 @@ describe("QA gate", () => {
 			const escalated = (state.cards.d1111?.qaflow as Record<string, unknown> | undefined)?.escalated;
 			expect(escalated).toMatchObject({ to: "orchestrator", cause: "qa_agent_error" });
 			expect(createdTasks(harness.actions)).toEqual([]);
+		});
+
+		it("holds QA on a provider whose usage limit was reached until it resets, without using a replacement (issue #49)", async () => {
+			const harness = createHarness({ config });
+			await startQa(harness);
+			const provider = readQaGateEntry((await harness.store.load("foo")).cards.qa001)?.model?.provider;
+			expect(provider).toBeTruthy();
+			// cline-pass-test, 2026-10-13 16:31Z: every QA card failed within ~20 s on the 5-hour limit.
+			const LIMIT =
+				"You have reached your 5-hour Clinepass limit. The limit resets in 4h 13m, please try again later.";
+			const resetAt = T0 + 60_000 + (4 * 60 + 13) * 60_000;
+			const until = resetAt + 60_000;
+			harness.setRunError("qa001", { kind: "usage_limit", text: LIMIT, resetAt });
+			await endInReview(harness, "qa001", T0 + 60_000);
+
+			let state = await harness.store.load("foo");
+			expect(readQaGateEntry(state.cards.qa001)).toMatchObject({ status: "superseded", trashed: true });
+			expect(readQaVerdictRecords(state.cards.d1111)).toEqual([]);
+			expect(state.cards.d1111?.qaAgentErrors).toMatchObject([{ qaTaskId: "qa001", kind: "usage_limit", resetAt }]);
+			const ingested = harness.readCardDecisions("foo", "qa_ingest").at(-1)?.note ?? "";
+			expect(ingested).toContain(`provider ${provider} reached its usage limit`);
+			expect(ingested).toContain("without using a replacement");
+			expect(ingested).toContain(`no QA card on ${provider} starts before ${new Date(until).toISOString()}`);
+
+			// The replacement is queued but waits for the reset, recorded once, and shown on the dev card with its time.
+			await replace(harness, "qa001", "qa002");
+			const queuedColumns = { backlog: [qaCard("qa002")], review: [dev()], trash: [qaCard("qa001")] };
+			harness.setNow(T0 + 2 * 60 * 60_000);
+			await send(harness, queuedColumns);
+			expect(harness.actions.some((action) => action.kind === "startTask")).toBe(false);
+			const waits = harness.readDecisions("foo").filter((record) => record.note.includes("usage limit to reset"));
+			expect(waits).toHaveLength(1);
+			expect(waits[0]?.note).toContain(`waiting for ${provider}'s usage limit to reset`);
+			expect(waits[0]?.note).toContain("queued: qa002");
+			const stages = harness.messages.flatMap((message) =>
+				message.type === "cardStages" && message.workspaceId === "foo" ? message.stages : [],
+			);
+			expect(stages.filter((stage) => stage.taskId === "d1111").at(-1)).toMatchObject({
+				kind: "qa_queued",
+				label: `Waiting for ${provider} limit reset`,
+				qaTaskId: "qa002",
+				deadline: until,
+			});
+
+			// After the reset it starts; nothing was STALLED, nothing escalated.
+			harness.setNow(until + 1000);
+			await send(harness, queuedColumns);
+			expect(harness.actions.filter((action) => action.kind === "startTask").map((action) => action.taskId)).toEqual(
+				["qa002"],
+			);
+			state = await harness.store.load("foo");
+			expect(readQaVerdictRecords(state.cards.d1111)).toEqual([]);
+			expect((state.cards.d1111?.qaflow as Record<string, unknown> | undefined)?.escalated).toBeUndefined();
+			expect(harness.actions.some((action) => action.kind === "blockTask")).toBe(false);
+		});
+
+		it("starts the held QA card at the reset by itself: nothing on the board changes then (issue #49)", async () => {
+			vi.useFakeTimers({ now: T0 });
+			try {
+				const harness = createHarness({ config, clock: () => Date.now() });
+				await startQa(harness);
+				const resetAt = T0 + 2 * 60_000 + 30 * 60_000;
+				harness.setRunError("qa001", {
+					kind: "usage_limit",
+					text: "You have reached your 5-hour Clinepass limit. The limit resets in 30m, please try again later.",
+					resetAt,
+				});
+				vi.advanceTimersByTime(60_000);
+				await send(harness, { review: [dev(), qaCard("qa001")] });
+				vi.advanceTimersByTime(21_000);
+				await send(harness, { review: [dev(), qaCard("qa001")] });
+				await replace(harness, "qa001", "qa002");
+				expect(harness.actions.some((action) => action.kind === "startTask")).toBe(false);
+
+				// No new snapshot: the worker's wake at the reset (plus the margin) evaluates the workspace again.
+				vi.advanceTimersByTime(resetAt + 60_000 - Date.now() + 1);
+				await harness.worker.idle();
+				expect(
+					harness.actions.filter((action) => action.kind === "startTask").map((action) => action.taskId),
+				).toEqual(["qa002"]);
+			} finally {
+				vi.useRealTimers();
+			}
 		});
 
 		it("still nudges a QA card that just stopped without a verdict", async () => {

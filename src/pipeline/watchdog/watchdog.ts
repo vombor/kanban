@@ -87,7 +87,7 @@ import {
 } from "../engine";
 import type { PipelineFeatureJob, PipelineFeatureRegistry } from "../features";
 import type { PipelineStateStore } from "../pipeline-state";
-import { readQaGateEntry } from "../qa-gate";
+import { type QaQueueWait, readQaGateEntry } from "../qa-gate";
 import type { RestartPassView } from "../recovery-stage";
 import { lostToRestart, type RestartManifest, readRestartManifest } from "../restart-recovery";
 import type { WatchdogActions } from "./actions";
@@ -228,6 +228,8 @@ export interface WatchdogDependencies {
 	findRunningTool?: AgentToolProcessFinder;
 	/** The worker's checks runner status (`ChecksRunner.status`), so a card whose checks run is not reported idle. */
 	readChecksStatus?: () => ChecksRunnerStatus | null;
+	/** Why each queued QA card of a workspace waited at the QA gate's last tick (QaGate.describeQueueWaits). */
+	readQaQueueWaits?: (workspaceId: string) => ReadonlyMap<string, QaQueueWait>;
 	/** Restart recovery's pass over a workspace in this worker life (RecoveryStage.restartPass), for the restart wake. */
 	readRestartPass?: (workspaceId: string) => RestartPassView | null;
 	/** This server's image build (default: readRunningImageBuild, the image's env), for an update restart's wake. */
@@ -601,6 +603,11 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 				pidPressure: context.pidLevel !== "none",
 				pidBrownout: context.pidLevel === "brownout",
 				pipelinePaused: settings.pipeline.paused,
+				limitHeldQaCardIds: new Set(
+					[...(deps.readQaQueueWaits?.(workspaceId) ?? new Map<string, QaQueueWait>())].flatMap(
+						([qaTaskId, wait]) => (wait.kind === "usage_limit" ? [qaTaskId] : []),
+					),
+				),
 				settings: config.watchdog.stall,
 				reviewSettleMs: snapshot.reviewSettleMs,
 				now: context.now,
