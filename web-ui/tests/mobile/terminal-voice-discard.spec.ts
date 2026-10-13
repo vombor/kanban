@@ -169,8 +169,26 @@ test("the X is the key pad toggle's size, and a tap while listening clears the t
 	expect(discardBox?.width).toBe(toggleBox?.width);
 	expect(discardBox?.height).toBe(toggleBox?.height);
 	expect(discardBox?.width).toBeGreaterThanOrEqual(44);
-	// Above the row, next to the text.
+	// Above the row, inside the preview box at its right edge and vertically centered there, beside the text.
 	expect((discardBox?.y ?? 0) + (discardBox?.height ?? 0)).toBeLessThanOrEqual(toggleBox?.y ?? 0);
+	const previewBox = await discard.locator("xpath=..").boundingBox();
+	const barBox = await page
+		.getByRole("toolbar", { name: "Terminal controls" })
+		.filter({ visible: true })
+		.locator("xpath=..")
+		.boundingBox();
+	const textBox = await page.getByRole("textbox", { name: "Voice message" }).boundingBox();
+	if (!discardBox || !previewBox || !barBox || !textBox) {
+		throw new Error("The preview has no box.");
+	}
+	// Full bleed: the panel's whole width.
+	expect(previewBox.x).toBe(barBox.x);
+	expect(previewBox.width).toBe(barBox.width);
+	expect(previewBox.x + previewBox.width - (discardBox.x + discardBox.width)).toBeLessThanOrEqual(8);
+	expect(Math.abs(previewBox.y + previewBox.height / 2 - (discardBox.y + discardBox.height / 2))).toBeLessThanOrEqual(
+		1,
+	);
+	expect(textBox.x + textBox.width).toBeLessThanOrEqual(discardBox.x);
 	const iconWidths = await Promise.all(
 		[discard, toggle].map((button) => button.locator("svg").evaluate((icon) => icon.getBoundingClientRect().width)),
 	);

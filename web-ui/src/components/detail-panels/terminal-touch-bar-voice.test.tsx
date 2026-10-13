@@ -240,6 +240,23 @@ describe("VoiceTerminalTouchBar", () => {
 		expect(discard.querySelector("svg")?.getAttribute("width")).toBe("18");
 	});
 
+	it("preview box is full bleed with the X inside it at its right edge, beside the text and never over it", () => {
+		render();
+		dictate("hello");
+		const discard = button("Discard voice message");
+		const box = discard.parentElement;
+		// The box undoes the touch bar's side padding and has no side border or rounding.
+		expect(box?.className).toContain("-mx-1.5");
+		expect(box?.className).toContain("border-y");
+		expect(box?.className).not.toContain("rounded");
+		// Centered in the box however many lines the text takes.
+		expect(box?.className).toContain("items-center");
+		// The textarea and the X are the box's two flex items, the X last: it is not laid over the text.
+		expect(Array.from(box?.children ?? [])).toEqual([preview(), discard]);
+		expect(discard.className).not.toContain("absolute");
+		expect(preview()?.className).not.toContain("border");
+	});
+
 	it("X clears the dictated text without sending, keeps the keyboard's focus, and Enter goes to the terminal again", () => {
 		render();
 		const recognition = dictate("never mind");

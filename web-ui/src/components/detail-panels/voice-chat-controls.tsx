@@ -129,7 +129,8 @@ function TouchDiscardButton({ voice }: { voice: VoiceChatControls }): ReactEleme
 
 /**
  * The editable preview of what was dictated, with its discard (X) and, in the desktop's bar, its send button. On a
- * phone (`touch`) the touch bar's Enter sends it, and the X is a touch bar button that also stops the mic.
+ * phone (`touch`) it spans the touch bar edge to edge, the touch bar's Enter sends it, and the X inside it is a touch bar
+ * button that also stops the mic.
  */
 export function VoicePreview({
 	voice,
@@ -153,45 +154,59 @@ export function VoicePreview({
 		}
 	};
 
+	const textarea = (
+		<textarea
+			aria-label="Voice message"
+			value={voiceInput.previewText}
+			readOnly={voiceInput.listening}
+			placeholder={voiceInput.listening ? "Listening…" : undefined}
+			onChange={(event) => voiceInput.setDraft(event.target.value)}
+			onKeyDown={handleKeyDown}
+			rows={2}
+			className={cn(
+				layout === "touch"
+					? "min-h-11 min-w-0 flex-1 resize-none bg-transparent px-3 py-1.5 text-[13px] text-text-primary placeholder:text-text-tertiary focus:outline-none"
+					: "min-h-11 flex-1 resize-none rounded-md border border-border bg-surface-2 px-2 py-1.5 text-[13px] text-text-primary placeholder:text-text-tertiary focus:border-border-focus focus:outline-none",
+				voiceInput.listening && "text-text-secondary",
+			)}
+		/>
+	);
+
+	if (layout === "touch") {
+		// Full bleed across the touch bar (its px-1.5 undone), the X inside the box at its right edge and centered
+		// however many lines the text takes. The X is the box's own flex item beside the textarea, never laid over it,
+		// so no text sits under the finger that taps it.
+		return (
+			<div className="-mx-1.5 flex items-center gap-1 border-y border-border bg-surface-2 py-1 pr-1.5 focus-within:border-border-focus">
+				{textarea}
+				<TouchDiscardButton voice={voice} />
+			</div>
+		);
+	}
+
 	return (
 		<div className="flex items-end gap-2">
-			<textarea
-				aria-label="Voice message"
-				value={voiceInput.previewText}
-				readOnly={voiceInput.listening}
-				placeholder={voiceInput.listening ? "Listening…" : undefined}
-				onChange={(event) => voiceInput.setDraft(event.target.value)}
-				onKeyDown={handleKeyDown}
-				rows={2}
-				className={cn(
-					"min-h-11 flex-1 resize-none rounded-md border border-border bg-surface-2 px-2 py-1.5 text-[13px] text-text-primary placeholder:text-text-tertiary focus:border-border-focus focus:outline-none",
-					voiceInput.listening && "text-text-secondary",
-				)}
-			/>
-			{layout === "touch" ? (
-				<TouchDiscardButton voice={voice} />
-			) : (
-				<div className="flex flex-col gap-1">
-					<Button
-						variant="primary"
-						size="md"
-						icon={voiceInput.isSending ? <Spinner size={14} /> : <SendHorizontal size={16} />}
-						aria-label="Send voice message"
-						disabled={!voice.canSend}
-						onClick={voice.send}
-					/>
-					<Button
-						variant="ghost"
-						size="md"
-						icon={<X size={16} />}
-						aria-label="Discard voice message"
-						// Keeps the focus.
-						onMouseDown={(event) => event.preventDefault()}
-						onPointerDown={(event) => event.preventDefault()}
-						onClick={voice.discard}
-					/>
-				</div>
-			)}
+			{textarea}
+			<div className="flex flex-col gap-1">
+				<Button
+					variant="primary"
+					size="md"
+					icon={voiceInput.isSending ? <Spinner size={14} /> : <SendHorizontal size={16} />}
+					aria-label="Send voice message"
+					disabled={!voice.canSend}
+					onClick={voice.send}
+				/>
+				<Button
+					variant="ghost"
+					size="md"
+					icon={<X size={16} />}
+					aria-label="Discard voice message"
+					// Keeps the focus.
+					onMouseDown={(event) => event.preventDefault()}
+					onPointerDown={(event) => event.preventDefault()}
+					onClick={voice.discard}
+				/>
+			</div>
 		</div>
 	);
 }

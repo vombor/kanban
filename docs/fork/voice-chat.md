@@ -140,7 +140,9 @@ row on a phone, so there is no separate voice bar (user request, 2026-10-12):
   desktop's Send button: while listening it stops the mic and sends what you said once its final text is in (see
   "Speech in"), with nothing heard it only stops the mic. Otherwise it is the terminal's Enter, the keyboard's own
   submit, so text dictated into the terminal goes out first and stays sent.
-- The X that clears the dictated text sits next to the preview, not in the row, and has the key pad toggle's size
+- The preview spans the terminal panel edge to edge (no side margin or border), and the X that clears the dictated text
+  sits inside it at its right edge, vertically centered however many lines the text takes, beside the text and never
+  over it (its own flex item, so no text lies under a finger tapping it); it is not in the row, and has the key pad toggle's size
   (44 px). A tap clears the text and, while the mic is on (or still opening), stops it without keeping what it heard;
   the next mic tap records afresh. It doesn't keep listening as the desktop's X does, because on iOS the recognizer
   sends one hypothesis that grows at the same index until the utterance ends (WebKit's
