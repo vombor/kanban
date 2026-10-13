@@ -158,4 +158,15 @@ describe("describeRunningTime", () => {
 			describeRunningTime({ totalMs: 1_000, runningSince: NOW, runCount: 0, firstRunStartedAt: null }),
 		).toContain("(runs not counted)");
 	});
+
+	it("shows the first start in the viewer's time zone, with its date when it isn't today there", () => {
+		const options = { now: Date.parse("2026-10-13T12:00:00.000Z"), locale: "en-GB", timeZone: "Europe/Berlin" };
+		const time = { totalMs: 60_000, runningSince: null, runCount: 1 };
+		expect(
+			describeRunningTime({ ...time, firstRunStartedAt: Date.parse("2026-10-13T05:03:00.000Z") }, options),
+		).toContain("First run started 07:03\n");
+		expect(
+			describeRunningTime({ ...time, firstRunStartedAt: Date.parse("2026-10-11T22:30:00.000Z") }, options),
+		).toContain("First run started 12 Oct, 00:30\n");
+	});
 });

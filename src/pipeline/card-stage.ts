@@ -48,14 +48,38 @@ export interface PipelineCardStagesInput {
 
 type Stage = Omit<RuntimePipelineCardStage, "taskId">;
 
-function stage(kind: Stage["kind"], label: string, fields: Partial<Omit<Stage, "kind" | "label">> = {}): Stage {
+// An ISO 8601 instant as Kanban writes them (`toISOString()`, or with an offset), seconds optional.
+const DETAIL_INSTANT_PATTERN = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})/g;
+
+/**
+ * The instants in a stage's detail. The details are Kanban's own texts (holds, escalations, recovery reasons) that
+ * other readers (the decision log, `kanban pipeline status`) take with their UTC instants, so the text stays as written
+ * and its instants travel beside it, for the browser to show in the viewer's time zone.
+ */
+export function findDetailTimes(detail: string | null): Stage["detailTimes"] {
+	if (!detail) {
+		return [];
+	}
+	return [...detail.matchAll(DETAIL_INSTANT_PATTERN)].flatMap((match) => {
+		const at = Date.parse(match[0]);
+		return Number.isFinite(at) ? [{ text: match[0], at }] : [];
+	});
+}
+
+function stage(
+	kind: Stage["kind"],
+	label: string,
+	fields: Partial<Omit<Stage, "kind" | "label" | "detailTimes">> = {},
+): Stage {
+	const detail = fields.detail ?? null;
 	return {
 		kind,
 		label,
 		next: fields.next ?? null,
 		qaTaskId: fields.qaTaskId ?? null,
 		deadline: fields.deadline ?? null,
-		detail: fields.detail ?? null,
+		detail,
+		detailTimes: findDetailTimes(detail),
 		inFlight: fields.inFlight ?? false,
 	};
 }

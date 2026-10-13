@@ -419,6 +419,7 @@ describe("pipeline worker host: the watchdog", () => {
 			qaTaskId: null,
 			deadline: null,
 			detail: null,
+			detailTimes: [],
 			inFlight: true,
 		};
 		const child = harness.children[0];

@@ -15,6 +15,7 @@ function stage(taskId: string, overrides: Partial<RuntimePipelineCardStage> = {}
 		qaTaskId: null,
 		deadline: Date.parse("2026-10-11T07:03:00.000Z"),
 		detail: null,
+		detailTimes: [],
 		inFlight: true,
 		...overrides,
 	};

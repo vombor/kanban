@@ -5,6 +5,7 @@ import { cn } from "@/components/ui/cn";
 import { Tooltip } from "@/components/ui/tooltip";
 import type { RuntimePipelineCardStage, RuntimePipelineCardStageKind } from "@/runtime/types";
 import { usePipelineCardStage } from "@/stores/pipeline-card-stage-store";
+import { formatLocalTime, formatTextTimes, type LocalTimeFormatOptions } from "@/utils/format-local-time";
 
 type StageTone = "active" | "waiting" | "attention" | "done" | "muted";
 
@@ -60,13 +61,11 @@ function getStageIcon(tone: StageTone, kind: RuntimePipelineCardStageKind): Reac
 	return <Workflow size={12} className="shrink-0" />;
 }
 
-/** "07:03": a deadline today in the viewer's time zone, short enough for a phone. */
-export function formatPipelineStageDeadline(deadline: number): string {
-	return new Date(deadline).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
-/** The stage in one line: "Checks running (test) · QA next · until 07:03". */
-export function describePipelineCardStage(stage: RuntimePipelineCardStage): string {
+/**
+ * The stage in one line: "Checks running (test) · QA next · until 07:03", the deadline in the viewer's time zone (with
+ * its date when it isn't today there).
+ */
+export function describePipelineCardStage(stage: RuntimePipelineCardStage, options?: LocalTimeFormatOptions): string {
 	const parts = [stage.label];
 	if (stage.qaTaskId && !stage.label.includes(stage.qaTaskId)) {
 		parts[0] = `${stage.label} (${stage.qaTaskId})`;
@@ -75,9 +74,17 @@ export function describePipelineCardStage(stage: RuntimePipelineCardStage): stri
 		parts.push(stage.next);
 	}
 	if (stage.deadline !== null) {
-		parts.push(`until ${formatPipelineStageDeadline(stage.deadline)}`);
+		parts.push(`until ${formatLocalTime(stage.deadline, options)}`);
 	}
 	return parts.join(" · ");
+}
+
+/** The stage's longer reason for its tooltip, its instants (written in UTC by the runtime) in the viewer's time zone. */
+export function describePipelineCardStageDetail(
+	stage: RuntimePipelineCardStage,
+	options?: LocalTimeFormatOptions,
+): string | null {
+	return stage.detail === null ? null : formatTextTimes(stage.detail, stage.detailTimes, options);
 }
 
 /** The card's pipeline stage (landing mode qa), as the pipeline worker last reported it; nothing when it has none. */
@@ -101,8 +108,9 @@ export function BoardCardPipelineStage({ taskId }: { taskId: string }): ReactEle
 			<span className="truncate">{text}</span>
 		</span>
 	);
-	return stage.detail ? (
-		<Tooltip side="bottom" content={stage.detail}>
+	const detail = describePipelineCardStageDetail(stage);
+	return detail ? (
+		<Tooltip side="bottom" content={detail}>
 			{badge}
 		</Tooltip>
 	) : (

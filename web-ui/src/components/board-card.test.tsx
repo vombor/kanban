@@ -4,7 +4,6 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BoardCard } from "@/components/board-card";
-import { formatPipelineStageDeadline } from "@/components/board-card-pipeline-stage";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import { setKanbanPaths } from "@/stores/kanban-paths-store";
@@ -13,6 +12,7 @@ import { setPipelineCardStages } from "@/stores/pipeline-card-stage-store";
 import { setSelectedAgentId } from "@/stores/selected-agent-store";
 import { setTaskTokenUsage } from "@/stores/task-token-usage-store";
 import type { ReviewTaskWorkspaceSnapshot } from "@/types";
+import { formatLocalTime } from "@/utils/format-local-time";
 import type * as ReactUse from "@/utils/react-use";
 
 let mockWorkspaceSnapshot: ReviewTaskWorkspaceSnapshot | undefined;
@@ -434,13 +434,12 @@ describe("BoardCard", () => {
 					qaTaskId: null,
 					deadline,
 					detail: null,
+					detailTimes: [],
 					inFlight: true,
 				},
 			]);
 		});
-		expect(stageBadge()?.textContent).toBe(
-			`Checks running (test) · QA next · until ${formatPipelineStageDeadline(deadline)}`,
-		);
+		expect(stageBadge()?.textContent).toBe(`Checks running (test) · QA next · until ${formatLocalTime(deadline)}`);
 		expect(stageBadge()?.getAttribute("data-stage-kind")).toBe("checks_running");
 
 		await act(async () => {
@@ -453,6 +452,7 @@ describe("BoardCard", () => {
 					qaTaskId: "12ab6",
 					deadline: null,
 					detail: null,
+					detailTimes: [],
 					inFlight: true,
 				},
 			]);

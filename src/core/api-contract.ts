@@ -533,8 +533,13 @@ export const runtimePipelineCardStageSchema = z.object({
 	qaTaskId: z.string().nullable(),
 	/** When the stage ends at the latest (epoch ms), e.g. QA starts without the checks then. */
 	deadline: z.number().nullable(),
-	/** The longer reason (a hold's, a wait's), for a tooltip. */
+	/** The longer reason (a hold's, a wait's), for a tooltip. Its instants are written in UTC (ISO 8601). */
 	detail: z.string().nullable(),
+	/**
+	 * Every instant written into `detail`: its exact `text` there and the instant (epoch ms), so the browser shows it in
+	 * the viewer's time zone while the CLI keeps the UTC text.
+	 */
+	detailTimes: z.array(z.object({ text: z.string(), at: z.number() })),
 	/** Checks or QA are queued or running for the card: Approve & land would skip them, so the browser asks first. */
 	inFlight: z.boolean(),
 });

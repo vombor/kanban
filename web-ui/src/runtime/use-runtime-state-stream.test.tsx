@@ -174,6 +174,7 @@ describe("useRuntimeStateStream reconnect", () => {
 			qaTaskId: null,
 			deadline: null,
 			detail: null,
+			detailTimes: [],
 			inFlight: true,
 		};
 		act(() => {

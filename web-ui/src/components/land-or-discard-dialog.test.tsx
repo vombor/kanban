@@ -1,11 +1,10 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-import { formatPipelineStageDeadline } from "@/components/board-card-pipeline-stage";
 import { LandOrDiscardDialog } from "@/components/land-or-discard-dialog";
 import type { RuntimePipelineCardStage, RuntimeTaskLandingChoice } from "@/runtime/types";
 import { setPipelineCardStages } from "@/stores/pipeline-card-stage-store";
+import { formatLocalTime } from "@/utils/format-local-time";
 
 type ActGlobal = typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
 
@@ -21,6 +20,7 @@ function stage(overrides: Partial<RuntimePipelineCardStage> = {}): RuntimePipeli
 		qaTaskId: null,
 		deadline: DEADLINE,
 		detail: null,
+		detailTimes: [],
 		inFlight: true,
 		...overrides,
 	};
@@ -109,7 +109,7 @@ describe("LandOrDiscardDialog", () => {
 
 			expect(document.body.textContent).toContain("The pipeline is still working on it:");
 			expect(document.body.textContent).toContain(
-				`Checks running (test) · QA next · until ${formatPipelineStageDeadline(DEADLINE)}`,
+				`Checks running (test) · QA next · until ${formatLocalTime(DEADLINE)}`,
 			);
 			expect(document.body.textContent).toContain(
 				"Land squash-lands it now and skips the rest of its checks and QA.",

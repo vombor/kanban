@@ -4,7 +4,11 @@
 import { describe, expect, it } from "vitest";
 
 import type { RuntimeBoardCard, RuntimeBoardColumnId } from "../../../src/core/api-contract";
-import { describePipelineCardStages, type PipelineCardStagesInput } from "../../../src/pipeline/card-stage";
+import {
+	describePipelineCardStages,
+	findDetailTimes,
+	type PipelineCardStagesInput,
+} from "../../../src/pipeline/card-stage";
 import type { PipelineCardOutcome } from "../../../src/pipeline/engine";
 import { PIPELINE_STATE_VERSION, type PipelineCardState } from "../../../src/pipeline/pipeline-state";
 import type { QaGateEntry, QaQueueWait } from "../../../src/pipeline/qa-gate";
@@ -106,6 +110,7 @@ describe("describePipelineCardStages", () => {
 				qaTaskId: null,
 				deadline: Date.parse("2026-10-11T07:03:23.000Z"),
 				detail: null,
+				detailTimes: [],
 				inFlight: true,
 			},
 		]);
@@ -274,12 +279,21 @@ describe("describePipelineCardStages", () => {
 		).toMatchObject({ kind: "stopped", detail: "kit said stop" });
 		expect(
 			describeStages({ cards: { [DEV.id]: { qaflow: { retryAt: "2026-10-11T07:00:00.000Z" } } } })[0],
-		).toMatchObject({ kind: "recovery", detail: "provider-error retry due at 2026-10-11T07:00:00.000Z" });
+		).toMatchObject({
+			kind: "recovery",
+			detail: "provider-error retry due at 2026-10-11T07:00:00.000Z",
+			detailTimes: [{ text: "2026-10-11T07:00:00.000Z", at: Date.parse("2026-10-11T07:00:00.000Z") }],
+		});
 		expect(
 			describeStages({
 				cards: { [DEV.id]: { hold: { group: "r1", at: "2026-10-11T06:00:00.000Z", round: 1 } } },
 			})[0],
-		).toMatchObject({ kind: "held", label: "Held" });
+		).toMatchObject({
+			kind: "held",
+			label: "Held",
+			detail: "held for r1 since 2026-10-11T06:00:00.000Z",
+			detailTimes: [{ text: "2026-10-11T06:00:00.000Z", at: Date.parse("2026-10-11T06:00:00.000Z") }],
+		});
 	});
 
 	it("shows a sent rework on an In Progress card until it returns", () => {
@@ -300,6 +314,7 @@ describe("describePipelineCardStages", () => {
 			label: "Rework sent",
 			next: "QA r2 next",
 			inFlight: false,
+			detailTimes: [{ text: "2026-10-11T06:36:00.000Z", at: Date.parse("2026-10-11T06:36:00.000Z") }],
 		});
 		const returned = { [DEV.id]: { qaflow: { reworks: [{ ...rework, returned: "2026-10-11T06:43:00.000Z" }] } } };
 		expect(describeStages({ column: "in_progress", cards: returned, outcome: null })).toEqual([]);
@@ -313,5 +328,21 @@ describe("describePipelineCardStages", () => {
 		expect(describeStages({ outcome: { kind: "no_work" } })).toEqual([]);
 		expect(describeStages({ outcome: null })).toEqual([]);
 		expect(describeStages({ column: "backlog" })).toEqual([]);
+	});
+});
+
+describe("findDetailTimes", () => {
+	it("lists every instant a detail embeds, as written there, for the browser to show locally", () => {
+		expect(
+			findDetailTimes("sent 2026-10-11T06:36:00.000Z, due 2026-10-11T09:00+02:00 or 2026-10-11T07:00:05Z"),
+		).toEqual([
+			{ text: "2026-10-11T06:36:00.000Z", at: Date.parse("2026-10-11T06:36:00.000Z") },
+			{ text: "2026-10-11T09:00+02:00", at: Date.parse("2026-10-11T07:00:00.000Z") },
+			{ text: "2026-10-11T07:00:05Z", at: Date.parse("2026-10-11T07:00:05.000Z") },
+		]);
+		expect(findDetailTimes("2 card(s) ahead in the machine-wide checks queue")).toEqual([]);
+		expect(findDetailTimes(null)).toEqual([]);
+		// A date without a time of day or zone isn't an instant.
+		expect(findDetailTimes("plan of 2026-10-11, at 07:00")).toEqual([]);
 	});
 });

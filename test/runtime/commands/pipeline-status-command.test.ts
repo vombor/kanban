@@ -39,6 +39,7 @@ const STAGE: RuntimePipelineCardStage = {
 	qaTaskId: null,
 	deadline: Date.parse("2026-10-11T07:03:00.000Z"),
 	detail: "QA starts without the checks at 07:03",
+	detailTimes: [],
 	inFlight: true,
 };
 

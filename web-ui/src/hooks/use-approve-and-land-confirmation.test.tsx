@@ -31,6 +31,7 @@ function stage(overrides: Partial<RuntimePipelineCardStage> = {}): RuntimePipeli
 		qaTaskId: null,
 		deadline: null,
 		detail: null,
+		detailTimes: [],
 		inFlight: true,
 		...overrides,
 	};
