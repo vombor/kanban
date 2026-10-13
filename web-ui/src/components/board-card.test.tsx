@@ -898,7 +898,33 @@ describe("BoardCard", () => {
 	const agentPill = (taskId: string) =>
 		container.querySelector(`[data-task-id="${taskId}"] [data-testid="board-card-agent"]`);
 
-	it("starts the agent row with the task id, then the agent pill, and keeps the token count off it", async () => {
+	const headerOf = (taskId: string) =>
+		container.querySelector(`[data-task-id="${taskId}"] [data-testid="board-card-header"]`);
+	const metaRowOf = (taskId: string) =>
+		container.querySelector(`[data-task-id="${taskId}"] [data-testid="board-card-meta-row"]`);
+	const runStatsOf = (taskId: string) =>
+		container.querySelector(`[data-task-id="${taskId}"] [data-testid="board-card-run-stats"]`);
+
+	it("puts the task id alone in a header strip across the top of the card", async () => {
+		setSelectedAgentId("claude");
+		await renderCard(<BoardCard card={createCard({ id: "7ad4d" })} index={0} columnId="review" />);
+
+		const header = headerOf("7ad4d");
+		const taskId = header?.querySelector('[data-testid="board-card-task-id"]');
+		expect(taskId?.textContent).toBe("7ad4d");
+		expect(Array.from(header?.children ?? [])).toEqual([taskId]);
+		// Flush with the card's top: the card's first child, set apart by its own surface and a bottom border.
+		const card = header?.parentElement;
+		expect(card?.firstElementChild).toBe(header);
+		expect(card?.className.split(" ")).toEqual(expect.arrayContaining(["overflow-hidden", "rounded-md"]));
+		expect(card?.className.split(" ")).not.toContain("p-2.5");
+		expect(header?.className.split(" ")).toEqual(
+			expect.arrayContaining(["bg-surface-1", "border-b", "border-border"]),
+		);
+		expect(metaRowOf("7ad4d")?.querySelector('[data-testid="board-card-task-id"]')).toBeNull();
+	});
+
+	it("puts the agent pill on the left of the agent row and the run stats right-justified on the same row", async () => {
 		setSelectedAgentId("claude");
 		setTaskTokenUsage([{ taskId: "7ad4d", input: 1_000, output: 20_000, cacheRead: 1_150_000, cacheWrite: 30_000 }]);
 		await renderCard(
@@ -909,36 +935,32 @@ describe("BoardCard", () => {
 			/>,
 		);
 
-		const row = container.querySelector('[data-testid="board-card-meta-row"]');
-		const taskId = row?.querySelector('[data-testid="board-card-task-id"]');
+		const row = metaRowOf("7ad4d");
 		const pill = row?.querySelector('[data-testid="board-card-agent"]');
-		expect(taskId?.textContent).toBe("7ad4d");
+		const stats = runStatsOf("7ad4d");
 		expect(pill?.textContent).toBe("Cline · gpt-x");
 		expect(pill?.getAttribute("title")).toBe("Cline · gpt-x");
-		// The card has a count, but the second row takes it: never the agent line.
-		expect(row?.querySelector('[data-testid="board-card-token-usage"]')).toBeNull();
-		expect(
-			container.querySelector('[data-testid="board-card-second-row"] [data-testid="board-card-token-usage"]'),
-		).not.toBeNull();
-		expect(Array.from(row?.children ?? [])).toEqual([taskId, pill]);
-		// The id and pill share one line that never wraps: only the model text truncates.
-		expect(taskId?.className).toContain("whitespace-nowrap");
-		expect(taskId?.className).toContain("shrink-0");
-		// The model gives way first: the agent name barely shrinks (shrink-[0.01]) and truncates only after it.
+		expect(Array.from(row?.children ?? [])).toEqual([pill, stats]);
+		expect(stats?.textContent).toBe("1.2M tok");
+		expect(row?.className).toContain("items-center");
+		expect(row?.className).not.toContain("flex-wrap");
+		// The stats stay on one line at the right end; only the pill truncates.
+		expect(stats?.className.split(" ")).toEqual(expect.arrayContaining(["ml-auto", "shrink-0", "whitespace-nowrap"]));
+		expect(pill?.className).toContain("min-w-[26px]");
+		// The model gives way first: the agent name doesn't shrink and is capped to the pill beside its icon.
 		const [agentName, model] = Array.from(pill?.querySelectorAll(".truncate") ?? []);
 		expect(agentName?.textContent).toBe("Cline");
-		expect(agentName?.className).toContain("shrink-[0.01]");
+		expect(agentName?.className.split(" ")).toEqual(expect.arrayContaining(["shrink-0", "max-w-[calc(100%-16px)]"]));
 		expect(model?.textContent).toBe("· gpt-x");
-		expect(row?.className).not.toContain("flex-wrap");
+		expect(model?.className.split(" ")).toContain("min-w-0");
 	});
 
-	it("puts the task id in a bordered pill shaped like the agent pill, on the left of the line", async () => {
+	it("puts the task id in a bordered pill shaped like the agent pill", async () => {
 		setSelectedAgentId("claude");
 		await renderCard(<BoardCard card={createCard({ id: "7ad4d" })} index={0} columnId="backlog" />);
 
-		const row = container.querySelector('[data-testid="board-card-meta-row"]');
-		const taskId = row?.querySelector('[data-testid="board-card-task-id"]');
-		expect(taskId?.parentElement?.firstElementChild).toBe(taskId);
+		const taskId = headerOf("7ad4d")?.querySelector('[data-testid="board-card-task-id"]');
+		expect(taskId?.className).toContain("whitespace-nowrap");
 		for (const name of ["rounded-md", "border", "border-border", "px-1.5", "py-0.5", "text-xs"]) {
 			expect(taskId?.className.split(" ")).toContain(name);
 			expect(agentPill("7ad4d")?.className.split(" ")).toContain(name === "border-border" ? "border" : name);
@@ -947,7 +969,7 @@ describe("BoardCard", () => {
 
 	const prerequisites = { total: 2, done: 1, waitingOnTaskIds: ["aaaa1"], missingTaskIds: [] };
 
-	it("shows a Backlog card's prerequisites in the centered second row, not on the id line", async () => {
+	it("shows a Backlog card's prerequisites right-justified on the agent row", async () => {
 		setSelectedAgentId("claude");
 		await renderCard(
 			<BoardCard
@@ -958,17 +980,19 @@ describe("BoardCard", () => {
 			/>,
 		);
 
-		const secondRow = container.querySelector('[data-testid="board-card-second-row"]');
-		expect(secondRow?.className).toContain("justify-center");
-		expect(secondRow?.querySelector('[data-testid="board-card-prerequisites"]')?.textContent).toBe(
-			"Waiting on 1 of 2",
+		const row = metaRowOf("b31c9");
+		const waiting = row?.querySelector('[data-testid="board-card-prerequisites"]');
+		expect(waiting?.textContent).toBe("Waiting on 1 of 2");
+		expect(Array.from(row?.children ?? [])).toEqual([agentPill("b31c9"), waiting]);
+		// One line at the right end; it truncates only once the pill is down to its icon (26 px, plus the 8-px gap).
+		expect(waiting?.className.split(" ")).toEqual(
+			expect.arrayContaining(["ml-auto", "shrink-0", "whitespace-nowrap", "max-w-[calc(100%-34px)]"]),
 		);
-		const metaRow = container.querySelector('[data-testid="board-card-meta-row"]');
-		expect(metaRow?.querySelector('[data-testid="board-card-prerequisites"]')).toBeNull();
-		expect(metaRow?.compareDocumentPosition(secondRow as Node)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+		expect(agentPill("b31c9")?.className.split(" ")).toContain("min-w-[26px]");
+		expect(runStatsOf("b31c9")).toBeNull();
 	});
 
-	it("shows no second row on Backlog cards without prerequisites, nor on later cards with nothing counted", async () => {
+	it("shows nothing right of the pill on Backlog cards without prerequisites, nor on later cards with nothing counted", async () => {
 		setSelectedAgentId("claude");
 		await renderCard(
 			<>
@@ -988,14 +1012,14 @@ describe("BoardCard", () => {
 			</>,
 		);
 
-		expect(container.querySelector('[data-testid="board-card-second-row"]')).toBeNull();
+		expect(container.querySelector('[data-testid="board-card-run-stats"]')).toBeNull();
 		expect(container.querySelector('[data-testid="board-card-prerequisites"]')).toBeNull();
+		for (const id of ["b31c9", "c41d0", "d51e1"]) {
+			expect(Array.from(metaRowOf(id)?.children ?? [])).toEqual([agentPill(id)]);
+		}
 	});
 
-	const secondRowOf = (taskId: string) =>
-		container.querySelector(`[data-task-id="${taskId}"] [data-testid="board-card-second-row"]`);
-
-	it("shows a running card's tokens and live running time in the centered second row, never a cost", async () => {
+	it("shows a running card's tokens and live running time on the agent row, never a cost", async () => {
 		vi.useFakeTimers();
 		try {
 			const now = Date.parse("2026-10-12T12:00:00Z");
@@ -1018,18 +1042,16 @@ describe("BoardCard", () => {
 				/>,
 			);
 
-			const row = secondRowOf("c41d0");
-			expect(row?.className).toContain("justify-center");
-			expect(row?.textContent).toBe("48k tok·12m");
-			expect(row?.textContent).not.toMatch(/\$|cost/iu);
-			const metaRow = container.querySelector('[data-testid="board-card-meta-row"]');
-			expect(metaRow?.compareDocumentPosition(row as Node)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+			const stats = runStatsOf("c41d0");
+			expect(stats?.parentElement).toBe(metaRowOf("c41d0"));
+			expect(stats?.textContent).toBe("48k tok·12m");
+			expect(stats?.textContent).not.toMatch(/\$|cost/iu);
 
 			// The time follows the running agent.
 			await act(async () => {
 				vi.advanceTimersByTime(60_000);
 			});
-			expect(row?.querySelector('[data-testid="board-card-running-time"]')?.textContent).toBe("13m");
+			expect(stats?.querySelector('[data-testid="board-card-running-time"]')?.textContent).toBe("13m");
 		} finally {
 			vi.useRealTimers();
 		}
@@ -1066,11 +1088,14 @@ describe("BoardCard", () => {
 			</>,
 		);
 
-		expect(secondRowOf("d51e1")?.textContent).toBe("1.2M tok·1h 05m");
-		expect(secondRowOf("e61f2")?.textContent).toBe("45s");
-		expect(secondRowOf("e61f2")?.querySelector('[data-testid="board-card-token-usage"]')).toBeNull();
-		// Never on a Backlog card: its second row keeps the prerequisites only.
-		expect(secondRowOf("f71a3")?.textContent).toBe("Waiting on 1 of 2");
+		expect(runStatsOf("d51e1")?.textContent).toBe("1.2M tok·1h 05m");
+		expect(runStatsOf("e61f2")?.textContent).toBe("45s");
+		expect(runStatsOf("e61f2")?.querySelector('[data-testid="board-card-token-usage"]')).toBeNull();
+		// Never on a Backlog card: its agent row keeps the prerequisites only.
+		expect(runStatsOf("f71a3")).toBeNull();
+		expect(metaRowOf("f71a3")?.querySelector('[data-testid="board-card-prerequisites"]')?.textContent).toBe(
+			"Waiting on 1 of 2",
+		);
 	});
 
 	it("shows the selected agent on a card with no agent of its own (default kit)", async () => {
@@ -1127,8 +1152,8 @@ describe("BoardCard", () => {
 			</>,
 		);
 
-		const row = container.querySelector('[data-task-id="b31c9"] [data-testid="board-card-meta-row"]');
-		expect(row?.textContent).toBe("b31c9");
+		expect(metaRowOf("b31c9")?.textContent).toBe("");
+		expect(headerOf("b31c9")?.textContent).toBe("b31c9");
 		expect(agentPill("c41d0")?.textContent).toBe("Cline");
 	});
 

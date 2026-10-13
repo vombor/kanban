@@ -364,12 +364,11 @@ body,
 	border-radius: var(--radius-md);
 }
 
-.kb-board-card-dependency-source {
-	box-shadow: inset 0 0 0 1px var(--color-accent);
-}
-
+/* An inset outline, not an inset box-shadow: the card header's background would paint over a shadow. */
+.kb-board-card-dependency-source,
 .kb-board-card-dependency-target {
-	box-shadow: inset 0 0 0 1px var(--color-accent);
+	outline: 1px solid var(--color-accent);
+	outline-offset: -1px;
 }
 
 /* -- Dependency overlay -- */

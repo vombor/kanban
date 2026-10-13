@@ -2,10 +2,10 @@ import { devices, expect, type Locator, test } from "@playwright/test";
 
 import { type DevInstance, startDevInstance } from "./dev-instance";
 
-// The board card's agent row on a phone (the config's Pixel 7) and on a narrow desktop column: the task id pill, then
-// the agent pill (the effective agent, the selected one for a card that names none), and under them the centered
-// second row with a Backlog card's prerequisites, or a running card's live token count and running time. The id never
-// wraps and the pill stays on its line; the model text truncates first.
+// The board card on a phone (the config's Pixel 7) and on a narrow desktop column: a header strip across the card's top
+// with the task id, and the agent row with the agent pill (the effective agent, the selected one for a card that names
+// none) on the left and, right-justified on the same line, a Backlog card's prerequisites or a running card's live
+// token count and running time. The row never wraps: the model text truncates first, the stats stay whole.
 
 // A stand-in for Claude Code that stays running, so its card sits In Progress, and writes a transcript where Claude
 // Code does (one 1,500-token message every second), so the card's token count grows while it runs.
@@ -90,7 +90,7 @@ test.beforeAll(async () => {
 		]),
 	);
 	runCliJson(["task", "start", "--task-id", runningTaskId, "--project-path", projectPath]);
-	// The Backlog card waits on the running one: "Waiting on 1 of 1" in its second row.
+	// The Backlog card waits on the running one: "Waiting on 1 of 1" on its agent row.
 	runCliJson([
 		"task",
 		"link",
@@ -118,26 +118,46 @@ async function expectOneLine(first: Locator, second: Locator): Promise<void> {
 	expect(b.x).toBeGreaterThan(a.x + a.width - 1);
 }
 
-// Same height (the id pill is shaped like the agent pill).
+// Same height: one line each.
 async function expectSameHeight(first: Locator, second: Locator): Promise<void> {
 	const [a, b] = await Promise.all([first.boundingBox(), second.boundingBox()]);
 	expect(Math.abs((a?.height ?? 0) - (b?.height ?? 99))).toBeLessThan(1);
 }
 
-// Centered in the card's line: equal space left and right.
-async function expectCentered(inner: Locator, outer: Locator): Promise<void> {
+// At the right end of its row.
+async function expectRightJustified(inner: Locator, outer: Locator): Promise<void> {
 	const [a, b] = await Promise.all([inner.boundingBox(), outer.boundingBox()]);
 	expect(a && b).toBeTruthy();
 	if (a && b) {
-		expect(Math.abs(a.x - b.x - (b.x + b.width - (a.x + a.width)))).toBeLessThan(2);
+		expect(Math.abs(b.x + b.width - (a.x + a.width))).toBeLessThan(1);
 	}
 }
 
-async function expectInside(inner: Locator, outer: Locator): Promise<void> {
-	const [a, b] = await Promise.all([inner.boundingBox(), outer.boundingBox()]);
+// The pill's text truncates inside it and never spills out over the run stats or prerequisites.
+async function expectContentInside(pill: Locator): Promise<void> {
+	const overflow = await pill.evaluate((element) => {
+		const box = element.getBoundingClientRect();
+		// A fully truncated span is 0 px wide and draws nothing, wherever the gap puts it.
+		const drawn = Array.from(element.children, (child) => child.getBoundingClientRect()).filter(
+			(rect) => rect.width >= 1,
+		);
+		return Math.max(0, ...drawn.map((rect) => rect.right - box.right));
+	});
+	expect(overflow).toBeLessThan(0.5);
+}
+
+// The text fits its box, with no ellipsis.
+async function expectNotTruncated(text: Locator): Promise<void> {
+	expect(await text.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+}
+
+// A strip across the card: flush with its top and as wide as the card inside its 1-px border.
+async function expectHeaderStrip(header: Locator, card: Locator): Promise<void> {
+	const [a, b] = await Promise.all([header.boundingBox(), card.boundingBox()]);
 	expect(a && b).toBeTruthy();
 	if (a && b) {
-		expect(a.x + a.width).toBeLessThanOrEqual(b.x + b.width + 0.5);
+		expect(Math.abs(a.y - b.y)).toBeLessThan(1.5);
+		expect(Math.abs(a.width - b.width)).toBeLessThan(2.5);
 	}
 }
 
@@ -150,7 +170,7 @@ for (const profile of ["phone", "desktop"] as const) {
 			test.use({ ...desktopChrome, viewport: { width: 900, height: 800 } });
 		}
 
-		test("the card shows the task id pill, then the agent pill, and a Backlog card its prerequisites below", async ({
+		test("the card shows the task id in its header, and the agent pill with the run stats or prerequisites right-justified below", async ({
 			page,
 		}, testInfo) => {
 			await page.addInitScript(() => {
@@ -162,28 +182,21 @@ for (const profile of ["phone", "desktop"] as const) {
 			// On a phone the columns scroll sideways.
 			await expect(running).toBeVisible({ timeout: 30_000 });
 			await running.scrollIntoViewIfNeeded();
-			const taskId = running.getByTestId("board-card-task-id");
-			const pill = running.getByTestId("board-card-agent");
+			const header = running.getByTestId("board-card-header");
+			const taskId = header.getByTestId("board-card-task-id");
 			await expect(taskId).toHaveText(runningTaskId);
+			await expectHeaderStrip(header, running);
+			const row = running.getByTestId("board-card-meta-row");
+			const pill = row.getByTestId("board-card-agent");
 			await expect(pill).toHaveText("Claude Code");
-			// No token count on the agent line: the second row takes it.
-			await expect(running.getByTestId("board-card-meta-row").getByTestId("board-card-token-usage")).toHaveCount(0);
-			await expectOneLine(taskId, pill);
-			await expectSameHeight(taskId, pill);
-			await expectInside(pill, running.getByTestId("board-card-meta-row"));
-			// The second row: the live token count and running time, centered under the line, growing while it runs.
-			const stats = running.getByTestId("board-card-second-row");
+			await expect(row.getByTestId("board-card-task-id")).toHaveCount(0);
+			// The agent row: the live token count and running time right-justified beside the pill, growing while it runs.
+			const stats = row.getByTestId("board-card-run-stats");
 			await expect(stats).toHaveText(/^\d+(\.\d)?k tok·\d+(s|m)$/u, { timeout: 30_000 });
-			const [tokens, time, line] = await Promise.all([
-				stats.getByTestId("board-card-token-usage").boundingBox(),
-				stats.getByTestId("board-card-running-time").boundingBox(),
-				running.getByTestId("board-card-meta-row").boundingBox(),
-			]);
-			expect(tokens && time && line).toBeTruthy();
-			if (tokens && time && line) {
-				expect(Math.abs(tokens.x - line.x - (line.x + line.width - (time.x + time.width)))).toBeLessThan(2);
-				expect(time.y).toBeGreaterThan(line.y + line.height - 1);
-			}
+			await expectOneLine(pill, stats);
+			await expectContentInside(pill);
+			await expectRightJustified(stats, row);
+			await expectOneLine(stats.getByTestId("board-card-token-usage"), stats.getByTestId("board-card-running-time"));
 			const readTokens = async () =>
 				Number.parseFloat((await stats.getByTestId("board-card-token-usage").textContent()) ?? "");
 			const before = await readTokens();
@@ -192,19 +205,26 @@ for (const profile of ["phone", "desktop"] as const) {
 
 			const backlog = page.locator(`[data-task-id="${backlogTaskId}"]`).filter({ visible: true }).first();
 			await backlog.scrollIntoViewIfNeeded();
-			const backlogId = backlog.getByTestId("board-card-task-id");
-			const backlogPill = backlog.getByTestId("board-card-agent");
+			const backlogHeader = backlog.getByTestId("board-card-header");
+			await expect(backlogHeader.getByTestId("board-card-task-id")).toHaveText(backlogTaskId);
+			await expectHeaderStrip(backlogHeader, backlog);
+			const backlogRow = backlog.getByTestId("board-card-meta-row");
+			const backlogPill = backlogRow.getByTestId("board-card-agent");
 			await expect(backlogPill).toHaveText(`Claude Code · ${LONG_MODEL}`);
-			await expect(backlog.getByTestId("board-card-token-usage")).toHaveCount(0);
-			const waiting = backlog.getByTestId("board-card-second-row").getByTestId("board-card-prerequisites");
+			await expect(backlog.getByTestId("board-card-run-stats")).toHaveCount(0);
+			const waiting = backlogRow.getByTestId("board-card-prerequisites");
 			await expect(waiting).toHaveText("Waiting on 1 of 1");
-			await expectCentered(waiting, backlog.getByTestId("board-card-meta-row"));
-			// The long model truncates inside the pill, and on the narrowest columns the agent name too; the id stays whole on
-			// the same line.
-			await expectOneLine(backlogId, backlogPill);
-			await expectInside(backlogPill, backlog.getByTestId("board-card-meta-row"));
-			// One line each: the id pill is as tall as the agent pill.
-			await expectSameHeight(backlogId, backlogPill);
+			if (profile === "phone") {
+				// A phone's column has room for the whole label: it doesn't give up characters while the pill can shrink.
+				await expectNotTruncated(waiting.locator(".truncate"));
+				await expectNotTruncated(backlogPill.locator(".truncate").first());
+			}
+			// The long model truncates inside the pill, and on the narrowest columns the agent name too; the prerequisites
+			// stay whole on the same line, at its right end, as tall as the pill.
+			await expectOneLine(backlogPill, waiting);
+			await expectContentInside(backlogPill);
+			await expectRightJustified(waiting, backlogRow);
+			await expectSameHeight(backlogPill, waiting);
 			await testInfo.attach("backlog card", { body: await backlog.screenshot(), contentType: "image/png" });
 		});
 	});

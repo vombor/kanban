@@ -84,7 +84,7 @@ describe("BoardCardRunStats", () => {
 
 	it("ticks a running card's time and holds a finished one", async () => {
 		await render(summary({ state: "running", startedAt: NOW - 30_000, stateChangedAt: NOW - 30_000, runCount: 1 }));
-		expect(text("board-card-second-row")).toBe("30s");
+		expect(text("board-card-run-stats")).toBe("30s");
 		await act(async () => {
 			vi.advanceTimersByTime(15_000);
 		});
@@ -99,7 +99,7 @@ describe("BoardCardRunStats", () => {
 
 	it("renders nothing before a token or a running second is known", async () => {
 		await render(summary({ state: "idle" }));
-		expect(container.querySelector('[data-testid="board-card-second-row"]')).toBeNull();
+		expect(container.querySelector('[data-testid="board-card-run-stats"]')).toBeNull();
 	});
 });
 
