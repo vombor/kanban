@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BoardCard } from "@/components/board-card";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { RuntimeTaskSessionSummary } from "@/runtime/types";
+import { setAgentDefaults } from "@/stores/agent-defaults-store";
 import { setKanbanPaths } from "@/stores/kanban-paths-store";
 import { setLandingMode } from "@/stores/landing-mode-store";
 import { setPipelineCardStages } from "@/stores/pipeline-card-stage-store";
@@ -195,6 +196,7 @@ describe("BoardCard", () => {
 		setLandingMode(null);
 		setPipelineCardStages([]);
 		setSelectedAgentId(null);
+		setAgentDefaults(null);
 		setTaskTokenUsage([]);
 		vi.restoreAllMocks();
 		container.remove();
@@ -1200,6 +1202,38 @@ describe("BoardCard", () => {
 		expect(agentPill("ef001")?.textContent).toBe("OpenAI Codex · gpt-6.1 (high)");
 		// No session yet: the name alone, as before.
 		expect(agentPill("no001")?.textContent).toBe("Claude Code");
+	});
+
+	it("shows the agent's default model from Kanban settings before any session, where the card names none", async () => {
+		setSelectedAgentId("claude");
+		setAgentDefaults({ claude: { modelId: "opus", reasoningEffort: "high" }, codex: { modelId: "sol" } });
+		setTaskTokenUsage([
+			{ taskId: "us001", input: 1, output: 2, cacheRead: 0, cacheWrite: 0, models: ["claude-opus-5-5"] },
+		]);
+		await renderCard(
+			<>
+				<BoardCard card={createCard({ id: "df001" })} index={0} columnId="backlog" />
+				<BoardCard card={createCard({ id: "cx002", agentId: "codex" })} index={1} columnId="backlog" />
+				<BoardCard
+					card={createCard({ id: "ow001", agentSettings: { modelId: "sonnet" } })}
+					index={2}
+					columnId="backlog"
+				/>
+				<BoardCard card={createCard({ id: "us001" })} index={3} columnId="review" />
+				<BoardCard card={createCard({ id: "kr001", agentId: "kiro" })} index={4} columnId="backlog" />
+			</>,
+		);
+
+		expect(agentPill("df001")?.textContent).toBe("Claude Code · opus (high)");
+		expect(agentPill("df001")?.getAttribute("title")).toBe(
+			"Claude Code · opus (high)\nDefault model for this agent (Kanban settings)",
+		);
+		expect(agentPill("cx002")?.textContent).toBe("OpenAI Codex · sol");
+		// The card's own model, and then the model a session used, win over the default.
+		expect(agentPill("ow001")?.textContent).toBe("Claude Code · sonnet");
+		expect(agentPill("us001")?.textContent).toBe("Claude Code · claude-opus-5-5");
+		// No default for the agent: the name alone.
+		expect(agentPill("kr001")?.textContent).toBe("Kiro");
 	});
 
 	it("shows only a named agent before the config has loaded", async () => {

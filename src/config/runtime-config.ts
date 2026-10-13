@@ -5,6 +5,7 @@
 import { readFile } from "node:fs/promises";
 import { getRuntimeAgentCatalogEntry, isRuntimeAgentLaunchSupported } from "../core/agent-catalog";
 import type { RuntimeAgentId } from "../core/api-contract";
+import { normalizeRuntimeAgentDefaultSettings, type RuntimeAgentDefaultSettings } from "../core/task-agent-settings";
 import { type LockRequest, lockedFileSystem } from "../fs/locked-file-system";
 import { getKanbanGlobalConfigPath, KANBAN_HOME_MARKER_VERSION } from "../state/kanban-home";
 import { detectInstalledCommands } from "../terminal/agent-registry";
@@ -13,6 +14,7 @@ interface RuntimeGlobalConfigFileShape {
 	/** Initialized-home marker, see kanban-home.ts. */
 	home?: number;
 	selectedAgentId?: RuntimeAgentId;
+	agentDefaults?: RuntimeAgentDefaultSettings;
 	selectedShortcutLabel?: string;
 	agentAutonomousModeEnabled?: boolean;
 	readyForReviewNotificationsEnabled?: boolean;
@@ -23,6 +25,8 @@ interface RuntimeGlobalConfigFileShape {
 export interface RuntimeConfigState {
 	globalConfigPath: string;
 	selectedAgentId: RuntimeAgentId;
+	/** Kanban's default model per agent CLI, passed at launch when a card names none (resolveLaunchAgentSettings). */
+	agentDefaults: RuntimeAgentDefaultSettings;
 	selectedShortcutLabel: string | null;
 	agentAutonomousModeEnabled: boolean;
 	readyForReviewNotificationsEnabled: boolean;
@@ -34,6 +38,7 @@ export interface RuntimeConfigState {
 
 export interface RuntimeConfigUpdateInput {
 	selectedAgentId?: RuntimeAgentId;
+	agentDefaults?: RuntimeAgentDefaultSettings;
 	selectedShortcutLabel?: string | null;
 	agentAutonomousModeEnabled?: boolean;
 	readyForReviewNotificationsEnabled?: boolean;
@@ -44,6 +49,7 @@ export interface RuntimeConfigUpdateInput {
 // Keys this module rewrites. Every other key in the global config.json (home-resolver and team settings) is preserved.
 const MANAGED_GLOBAL_CONFIG_KEYS: ReadonlySet<string> = new Set([
 	"selectedAgentId",
+	"agentDefaults",
 	"selectedShortcutLabel",
 	"agentAutonomousModeEnabled",
 	"readyForReviewNotificationsEnabled",
@@ -176,6 +182,7 @@ function toRuntimeConfigState({
 	return {
 		globalConfigPath,
 		selectedAgentId: normalizeAgentId(globalConfig?.selectedAgentId),
+		agentDefaults: normalizeRuntimeAgentDefaultSettings(globalConfig?.agentDefaults),
 		selectedShortcutLabel: normalizeShortcutLabel(globalConfig?.selectedShortcutLabel),
 		agentAutonomousModeEnabled: normalizeBoolean(
 			globalConfig?.agentAutonomousModeEnabled,
@@ -208,6 +215,7 @@ async function writeRuntimeGlobalConfigFile(
 	configPath: string,
 	config: {
 		selectedAgentId?: RuntimeAgentId;
+		agentDefaults?: RuntimeAgentDefaultSettings;
 		selectedShortcutLabel?: string | null;
 		agentAutonomousModeEnabled?: boolean;
 		readyForReviewNotificationsEnabled?: boolean;
@@ -220,6 +228,9 @@ async function writeRuntimeGlobalConfigFile(
 	const existingSelectedAgentId = hasOwnKey(existing, "selectedAgentId")
 		? normalizeAgentId(existing?.selectedAgentId)
 		: undefined;
+	const agentDefaults = normalizeRuntimeAgentDefaultSettings(
+		config.agentDefaults === undefined ? existing?.agentDefaults : config.agentDefaults,
+	);
 	const selectedShortcutLabel =
 		config.selectedShortcutLabel === undefined ? undefined : normalizeShortcutLabel(config.selectedShortcutLabel);
 	const existingSelectedShortcutLabel = hasOwnKey(existing, "selectedShortcutLabel")
@@ -255,6 +266,9 @@ async function writeRuntimeGlobalConfigFile(
 		}
 	} else if (existingSelectedAgentId !== undefined) {
 		payload.selectedAgentId = existingSelectedAgentId;
+	}
+	if (Object.keys(agentDefaults).length > 0) {
+		payload.agentDefaults = agentDefaults;
 	}
 	if (selectedShortcutLabel !== undefined) {
 		if (selectedShortcutLabel) {
@@ -310,6 +324,7 @@ async function loadRuntimeConfigLocked(globalConfigPath: string): Promise<Runtim
 function createRuntimeConfigStateFromValues(input: {
 	globalConfigPath: string;
 	selectedAgentId: RuntimeAgentId;
+	agentDefaults: RuntimeAgentDefaultSettings;
 	selectedShortcutLabel: string | null;
 	agentAutonomousModeEnabled: boolean;
 	readyForReviewNotificationsEnabled: boolean;
@@ -319,6 +334,7 @@ function createRuntimeConfigStateFromValues(input: {
 	return {
 		globalConfigPath: input.globalConfigPath,
 		selectedAgentId: normalizeAgentId(input.selectedAgentId),
+		agentDefaults: normalizeRuntimeAgentDefaultSettings(input.agentDefaults),
 		selectedShortcutLabel: normalizeShortcutLabel(input.selectedShortcutLabel),
 		agentAutonomousModeEnabled: normalizeBoolean(
 			input.agentAutonomousModeEnabled,
@@ -347,6 +363,12 @@ export async function loadGlobalRuntimeConfig(): Promise<RuntimeConfigState> {
 	);
 }
 
+/** Kanban's per-agent default models from config.json, read without the first-start agent pick (no write). */
+export async function readRuntimeAgentDefaults(): Promise<RuntimeAgentDefaultSettings> {
+	const globalConfig = await readRuntimeConfigFile<RuntimeGlobalConfigFileShape>(getRuntimeGlobalConfigPath());
+	return normalizeRuntimeAgentDefaultSettings(globalConfig?.agentDefaults);
+}
+
 /**
  * The runtime config a project's board sees. Today that is the global config: the one per-project setting, the
  * shortcuts, is in the shortcut store (src/projects/project-shortcut-store.ts), never in the project's repo.
@@ -357,6 +379,8 @@ export async function loadRuntimeConfig(_projectPath: string): Promise<RuntimeCo
 
 export async function saveRuntimeConfig(config: {
 	selectedAgentId: RuntimeAgentId;
+	/** Absent: the stored defaults are kept. */
+	agentDefaults?: RuntimeAgentDefaultSettings;
 	selectedShortcutLabel: string | null;
 	agentAutonomousModeEnabled: boolean;
 	readyForReviewNotificationsEnabled: boolean;
@@ -366,13 +390,18 @@ export async function saveRuntimeConfig(config: {
 	const globalConfigPath = getRuntimeGlobalConfigPath();
 	return await lockedFileSystem.withLocks(getRuntimeConfigLockRequests(globalConfigPath), async () => {
 		await writeRuntimeGlobalConfigFile(globalConfigPath, config);
-		return createRuntimeConfigStateFromValues({ globalConfigPath, ...config });
+		const agentDefaults = config.agentDefaults ?? (await readRuntimeAgentDefaults());
+		return createRuntimeConfigStateFromValues({ globalConfigPath, ...config, agentDefaults });
 	});
 }
 
 function applyRuntimeConfigUpdates(current: RuntimeConfigState, updates: RuntimeConfigUpdateInput) {
 	return {
 		selectedAgentId: updates.selectedAgentId ?? current.selectedAgentId,
+		agentDefaults:
+			updates.agentDefaults === undefined
+				? current.agentDefaults
+				: normalizeRuntimeAgentDefaultSettings(updates.agentDefaults),
 		selectedShortcutLabel:
 			updates.selectedShortcutLabel === undefined ? current.selectedShortcutLabel : updates.selectedShortcutLabel,
 		agentAutonomousModeEnabled: updates.agentAutonomousModeEnabled ?? current.agentAutonomousModeEnabled,
@@ -391,6 +420,7 @@ async function writeRuntimeConfigUpdates(
 	const nextConfig = applyRuntimeConfigUpdates(current, updates);
 	const hasChanges =
 		nextConfig.selectedAgentId !== current.selectedAgentId ||
+		JSON.stringify(nextConfig.agentDefaults) !== JSON.stringify(current.agentDefaults) ||
 		nextConfig.selectedShortcutLabel !== current.selectedShortcutLabel ||
 		nextConfig.agentAutonomousModeEnabled !== current.agentAutonomousModeEnabled ||
 		nextConfig.readyForReviewNotificationsEnabled !== current.readyForReviewNotificationsEnabled ||

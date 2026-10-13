@@ -15,7 +15,7 @@ import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { appendFile, mkdir, open, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import type { RuntimeAgentId } from "../../core/api-contract";
+import type { RuntimeAgentId, RuntimeTaskAgentSettings } from "../../core/api-contract";
 import {
 	getKanbanDataPath,
 	getKanbanLogsPath,
@@ -221,6 +221,8 @@ export interface OrchestratorRunOptions {
 	workspaceId: string;
 	projectPath: string;
 	agentId: RuntimeAgentId;
+	/** The run's model/effort: Kanban's per-agent default (resolveLaunchAgentSettings); none = the CLI's own config. */
+	agentSettings?: RuntimeTaskAgentSettings;
 	timeoutMin: number;
 	liveSessionMin: number;
 	/** Skip the live interactive-session check (a human-run test). */
@@ -315,7 +317,7 @@ export async function runOrchestratorHeadless(
 				attentionPath: paths.attention,
 				logsPath,
 			});
-			const command = getHeadlessOrchestratorCommand(options.agentId, prompt);
+			const command = getHeadlessOrchestratorCommand(options.agentId, prompt, options.agentSettings);
 			if (!command) {
 				break;
 			}

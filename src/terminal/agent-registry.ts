@@ -154,6 +154,7 @@ export function buildRuntimeConfigResponse(
 
 	return {
 		selectedAgentId: runtimeConfig.selectedAgentId,
+		agentDefaults: runtimeConfig.agentDefaults,
 		selectedShortcutLabel: runtimeConfig.selectedShortcutLabel,
 		agentAutonomousModeEnabled: runtimeConfig.agentAutonomousModeEnabled,
 		debugModeEnabled: isRuntimeDebugModeEnabled(),

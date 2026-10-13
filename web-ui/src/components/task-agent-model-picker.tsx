@@ -1,14 +1,19 @@
 import * as Collapsible from "@radix-ui/react-collapsible";
 import { getRuntimeAgentCatalogEntry, getRuntimeLaunchSupportedAgentCatalog } from "@runtime-agent-catalog";
+import { getAgentDefaultSettings } from "@runtime-task-agent-settings";
 import { ChevronDown } from "lucide-react";
 import type { ReactElement } from "react";
 import { useCallback, useMemo, useState } from "react";
 
-import { OpaqueTaskAgentSettingsFields } from "@/components/opaque-task-agent-settings-fields";
+import {
+	OpaqueTaskAgentSettingsFields,
+	type OpaqueTaskAgentSettingsPlaceholders,
+} from "@/components/opaque-task-agent-settings-fields";
 import { patchAgentSettings } from "@/components/task-agent-settings-state";
 import { cn } from "@/components/ui/cn";
 import { NativeSelect } from "@/components/ui/native-select";
 import type { RuntimeAgentId, RuntimeTaskAgentSettings } from "@/runtime/types";
+import { useAgentDefaults } from "@/stores/agent-defaults-store";
 
 // ---------------------------------------------------------------------------
 // Hook: the agent override options for a task
@@ -91,6 +96,19 @@ export function TaskAgentModelPicker({
 	const showFreeTextProviderInput = Boolean(effectiveAgentId && effectiveCapabilities?.providerOverride !== "none");
 	const showFreeTextModelInput = Boolean(effectiveAgentId && effectiveCapabilities?.modelOverride !== "none");
 	const showFreeTextEffortInput = Boolean(effectiveAgentId && effectiveCapabilities?.effortOverride !== "none");
+	// An empty field runs on the agent's default from Kanban settings: its model, and its provider and effort only
+	// while the card names no model (resolveLaunchAgentSettings).
+	const agentDefaults = useAgentDefaults();
+	const placeholders = useMemo<OpaqueTaskAgentSettingsPlaceholders>(() => {
+		const defaults = effectiveAgentId ? getAgentDefaultSettings(effectiveAgentId, agentDefaults) : undefined;
+		const cardNamesModel = Boolean(agentSettings?.modelId);
+		const placeholderFor = (value: string | undefined) => (value ? `Default: ${value}` : undefined);
+		return {
+			providerId: cardNamesModel ? undefined : placeholderFor(defaults?.providerId),
+			modelId: placeholderFor(defaults?.modelId),
+			reasoningEffort: cardNamesModel ? undefined : placeholderFor(defaults?.reasoningEffort),
+		};
+	}, [agentDefaults, agentSettings?.modelId, effectiveAgentId]);
 
 	const updateOpaqueSetting = useCallback(
 		(field: "providerId" | "modelId" | "reasoningEffort", rawValue: string) => {
@@ -163,6 +181,7 @@ export function TaskAgentModelPicker({
 						</div>
 						<OpaqueTaskAgentSettingsFields
 							agentSettings={agentSettings}
+							placeholders={placeholders}
 							agentLabel={effectiveAgentLabel}
 							docsUrl={effectiveCapabilities?.docsUrl}
 							showProviderInput={showFreeTextProviderInput}

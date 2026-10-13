@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+	mergeAgentDefaultModels,
 	readClineDefaultModel,
 	resolveEffectiveAgent,
 	resolveEffectiveAgentWithSource,
@@ -90,5 +91,23 @@ describe("resolveEffectiveModel", () => {
 		expect(
 			readClineDefaultModel({ lastUsedProvider: "x", providers: { x: { settings: { model: "" } } } }),
 		).toBeNull();
+	});
+});
+
+describe("mergeAgentDefaultModels", () => {
+	it("puts Kanban's per-agent default models over the CLIs' own, since that is what a launch passes", () => {
+		expect(
+			mergeAgentDefaultModels(
+				{
+					cline: { providerId: "lemonade", modelId: "Qwen3-Coder" },
+					codex: { modelId: "sol" },
+					claude: { reasoningEffort: "max" },
+				},
+				{ cline: { provider: "bedrock", model: "anthropic.claude" } },
+			),
+		).toEqual({
+			cline: { provider: "lemonade", model: "Qwen3-Coder" },
+			codex: { provider: null, model: "sol" },
+		});
 	});
 });

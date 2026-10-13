@@ -15,6 +15,7 @@ function createRuntimeConfigResponse(
 ): RuntimeConfigResponse {
 	return {
 		selectedAgentId,
+		agentDefaults: {},
 		selectedShortcutLabel: null,
 		agentAutonomousModeEnabled: true,
 		effectiveCommand: selectedAgentId,

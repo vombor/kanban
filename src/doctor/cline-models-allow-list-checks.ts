@@ -4,14 +4,12 @@
 // more: Kanban refuses no model on any role, and the record is the Kanban orchestrator's to curate (never --fix).
 // A provider without an entry in models.json (Cline's built-in ones: bedrock, cline-pass, ...) has no record here,
 // so it isn't checked; non-Cline agents get no model check at all.
-import { readFile } from "node:fs/promises";
-
 import type { PipelineConfig } from "../config/pipeline-config";
 import type { RuntimeAgentId, RuntimeBoardData } from "../core/api-contract";
 import { listKitRoutes } from "../kits/kit-routes";
 import { type KitCatalog, resolveWorkspaceKit } from "../kits/resolve-kit";
+import { readClineModelRecords } from "../models/cline-model-records";
 import { providerForModel } from "../models/cline-providers";
-import { readStoredModels } from "../setup/cline-lemonade-models";
 import { agentReadsClineModelsFile } from "../terminal/agent-session-adapters";
 import type { DoctorFinding } from "./doctor-report";
 
@@ -26,29 +24,6 @@ export interface ClineModelsAllowListCheckContext {
 	selectedAgentId: RuntimeAgentId;
 	/** The workspace's board; null when it can't be read (its cards are then not checked). */
 	loadBoard: (workspaceId: string) => Promise<RuntimeBoardData | null>;
-}
-
-/** The model ids of every provider entry in models.json that has a `models` record; null when there is no file. */
-export async function readClineModelRecords(modelsPath: string): Promise<Map<string, Set<string>> | null> {
-	let document: unknown;
-	try {
-		document = JSON.parse(await readFile(modelsPath, "utf8"));
-	} catch {
-		// No file, or one the setup rows already report as unreadable.
-		return null;
-	}
-	const providers =
-		document && typeof document === "object" ? (document as { providers?: unknown }).providers : undefined;
-	if (!providers || typeof providers !== "object" || Array.isArray(providers)) {
-		return null;
-	}
-	const records = new Map<string, Set<string>>();
-	for (const [providerId, entry] of Object.entries(providers as Record<string, unknown>)) {
-		if (entry && typeof entry === "object" && "models" in entry) {
-			records.set(providerId, new Set(Object.keys(readStoredModels((entry as { models: unknown }).models).models)));
-		}
-	}
-	return records;
 }
 
 interface ModelUse {

@@ -6,6 +6,7 @@ import * as RadixSelect from "@radix-ui/react-select";
 import * as RadixSwitch from "@radix-ui/react-switch";
 import { getRuntimeAgentCatalogEntry, getRuntimeLaunchSupportedAgentCatalog } from "@runtime-agent-catalog";
 import { areRuntimeProjectShortcutsEqual } from "@runtime-shortcuts";
+import { normalizeRuntimeAgentDefaultSettings, type RuntimeAgentDefaultSettings } from "@runtime-task-agent-settings";
 import {
 	Bell,
 	Check,
@@ -23,6 +24,7 @@ import {
 	X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AgentDefaultModelFields } from "@/components/agent-default-model-fields";
 import { GitHubAppSettingsSection } from "@/components/github-app-settings-section";
 import {
 	getRuntimeShortcutIconComponent,
@@ -353,6 +355,7 @@ export function RuntimeSettingsDialog({
 	const { config, isLoading, isSaving, save } = useRuntimeConfig(open, workspaceId, initialConfig);
 	const { resetLayoutCustomizations } = useLayoutCustomizations();
 	const [selectedAgentId, setSelectedAgentId] = useState<RuntimeAgentId>("claude");
+	const [agentDefaults, setAgentDefaults] = useState<RuntimeAgentDefaultSettings>({});
 	const [agentAutonomousModeEnabled, setAgentAutonomousModeEnabled] = useState(true);
 	const [readyForReviewNotificationsEnabled, setReadyForReviewNotificationsEnabled] = useState(true);
 	const [initialThemeId, setInitialThemeId] = useState<ThemeId>(readStoredThemeId);
@@ -430,6 +433,7 @@ export function RuntimeSettingsDialog({
 	const firstInstalledAgentId = displayedAgents.find((agent) => agent.installed)?.id;
 	const fallbackAgentId = firstInstalledAgentId ?? displayedAgents[0]?.id ?? "claude";
 	const initialSelectedAgentId = configuredAgentId ?? fallbackAgentId;
+	const initialAgentDefaults = config?.agentDefaults;
 	const initialAgentAutonomousModeEnabled = config?.agentAutonomousModeEnabled ?? true;
 	const initialReadyForReviewNotificationsEnabled = config?.readyForReviewNotificationsEnabled ?? true;
 	const initialShortcuts = config?.shortcuts ?? [];
@@ -440,6 +444,12 @@ export function RuntimeSettingsDialog({
 			return false;
 		}
 		if (selectedAgentId !== initialSelectedAgentId) {
+			return true;
+		}
+		if (
+			JSON.stringify(normalizeRuntimeAgentDefaultSettings(agentDefaults)) !==
+			JSON.stringify(normalizeRuntimeAgentDefaultSettings(initialAgentDefaults))
+		) {
 			return true;
 		}
 		if (agentAutonomousModeEnabled !== initialAgentAutonomousModeEnabled) {
@@ -469,10 +479,12 @@ export function RuntimeSettingsDialog({
 		);
 	}, [
 		agentAutonomousModeEnabled,
+		agentDefaults,
 		commitPromptTemplate,
 		config,
 		draftThemeId,
 		initialAgentAutonomousModeEnabled,
+		initialAgentDefaults,
 		initialCommitPromptTemplate,
 		initialOpenPrPromptTemplate,
 		initialReadyForReviewNotificationsEnabled,
@@ -492,6 +504,7 @@ export function RuntimeSettingsDialog({
 			return;
 		}
 		setSelectedAgentId(configuredAgentId ?? fallbackAgentId);
+		setAgentDefaults(config?.agentDefaults ?? {});
 		setAgentAutonomousModeEnabled(config?.agentAutonomousModeEnabled ?? true);
 		setReadyForReviewNotificationsEnabled(config?.readyForReviewNotificationsEnabled ?? true);
 		setShortcuts(config?.shortcuts ?? []);
@@ -500,6 +513,7 @@ export function RuntimeSettingsDialog({
 		setSaveError(null);
 	}, [
 		config?.agentAutonomousModeEnabled,
+		config?.agentDefaults,
 		config?.commitPromptTemplate,
 		config?.openPrPromptTemplate,
 		config?.readyForReviewNotificationsEnabled,
@@ -668,6 +682,7 @@ export function RuntimeSettingsDialog({
 		}
 		const saved = await save({
 			selectedAgentId,
+			agentDefaults: normalizeRuntimeAgentDefaultSettings(agentDefaults),
 			agentAutonomousModeEnabled,
 			readyForReviewNotificationsEnabled,
 			commitPromptTemplate,
@@ -779,6 +794,37 @@ export function RuntimeSettingsDialog({
 						<p className="text-text-secondary text-[13px] ml-6 mt-0 mb-0">
 							Allows agents to use tools without stopping for permission. Use at your own risk.
 						</p>
+					</div>
+					<div className="rounded-lg border border-border bg-surface-0 px-4 py-3 mb-4">
+						<h6 className="text-[12px] font-semibold uppercase tracking-wider text-text-secondary m-0 mb-1">
+							Default model per agent
+						</h6>
+						<p className="text-text-secondary text-[13px] mt-0 mb-1">
+							Passed to the CLI at launch when a card names no model: task cards, the orchestrator sidebar and
+							its headless wakes. A card's own model, or the one its routing kit gave it, wins. Empty fields
+							leave it to the CLI's own config.
+						</p>
+						{displayedAgents.map((agent) => (
+							<AgentDefaultModelFields
+								key={agent.id}
+								agentId={agent.id}
+								agentLabel={agent.label}
+								settings={agentDefaults[agent.id]}
+								clineModelRecords={config?.clineModelRecords ?? []}
+								disabled={controlsDisabled}
+								onChange={(settings) =>
+									setAgentDefaults((current) => {
+										const next = { ...current };
+										if (settings) {
+											next[agent.id] = settings;
+										} else {
+											delete next[agent.id];
+										}
+										return next;
+									})
+								}
+							/>
+						))}
 					</div>
 
 					{/* ---- Git Prompts ---- */}

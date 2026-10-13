@@ -17,6 +17,7 @@ type HookSnapshot = UseRuntimeConfigResult;
 function createRuntimeConfigResponse(selectedAgentId: RuntimeConfigResponse["selectedAgentId"]): RuntimeConfigResponse {
 	return {
 		selectedAgentId,
+		agentDefaults: {},
 		selectedShortcutLabel: null,
 		agentAutonomousModeEnabled: true,
 		effectiveCommand: selectedAgentId,

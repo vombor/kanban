@@ -21,7 +21,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { RUNTIME_AGENT_CATALOG } from "../core/agent-catalog";
-import type { RuntimeAgentId } from "../core/api-contract";
+import type { RuntimeAgentId, RuntimeTaskAgentSettings } from "../core/api-contract";
 import { getClineDataDirPath } from "../state/kanban-home";
 import { getClaudeProjectTranscriptDir } from "./agent-token-usage";
 import { isClaudeWorkspaceTrusted } from "./claude-workspace-trust";
@@ -65,7 +65,8 @@ interface OrchestratorAgentProfile {
 	continuesConversationOnResume?: boolean;
 	/** The size of the agent's current session in this worktree, or null when unknown. */
 	sessionSize?: (worktreePath: string, options: AgentSessionSizeOptions) => Promise<ClineSessionSize | null>;
-	headless?: (prompt: string) => HeadlessOrchestratorCommand;
+	/** `settings`: the launch's model/effort (resolveLaunchAgentSettings), passed with the CLI's own flags. */
+	headless?: (prompt: string, settings: RuntimeTaskAgentSettings | undefined) => HeadlessOrchestratorCommand;
 	/**
 	 * The sidebar launch gets a prompt hook that takes the workspace's orchestrator inbox (`kanban hooks
 	 * orchestrator-notices`) and adds it to the user's prompt without showing it in the input box. Verified against
@@ -124,9 +125,19 @@ const PROFILES: Partial<Record<RuntimeAgentId, OrchestratorAgentProfile>> = {
 	// Ported from archive/devteam-kit:bin/orchestrator-wake.mjs@6da71597 (runOnce: `claude -p … --permission-mode auto`)
 	// and kit main cc1eefe (no headless run while an interactive Claude session in the project is live).
 	claude: {
-		headless: (prompt) => ({
+		// --model/--effort as in the interactive adapter (claude --help, 2.1.x).
+		headless: (prompt, settings) => ({
 			binary: "claude",
-			args: ["-p", prompt, "--permission-mode", "auto", "--output-format", "text"],
+			args: [
+				"-p",
+				prompt,
+				"--permission-mode",
+				"auto",
+				"--output-format",
+				"text",
+				...(settings?.modelId ? ["--model", settings.modelId] : []),
+				...(settings?.reasoningEffort ? ["--effort", settings.reasoningEffort] : []),
+			],
 		}),
 		hooksOnPromptSubmit: true,
 		trusted: async (directory) => await isClaudeWorkspaceTrusted(directory),
@@ -151,9 +162,16 @@ const PROFILES: Partial<Record<RuntimeAgentId, OrchestratorAgentProfile>> = {
 			),
 	},
 	codex: {
-		headless: (prompt) => ({
+		// `codex exec -m <model> -c model_reasoning_effort=<effort>`, as in the interactive adapter (codex exec --help).
+		headless: (prompt, settings) => ({
 			binary: "codex",
-			args: ["exec", "--dangerously-bypass-approvals-and-sandbox", prompt],
+			args: [
+				"exec",
+				"--dangerously-bypass-approvals-and-sandbox",
+				...(settings?.modelId ? ["-m", settings.modelId] : []),
+				...(settings?.reasoningEffort ? ["-c", `model_reasoning_effort=${settings.reasoningEffort}`] : []),
+				prompt,
+			],
 		}),
 		hooksOnPromptSubmit: true,
 		trusted: async (directory) => {
@@ -171,8 +189,9 @@ export function getAgentLabel(agentId: RuntimeAgentId): string {
 export function getHeadlessOrchestratorCommand(
 	agentId: RuntimeAgentId,
 	prompt: string,
+	settings?: RuntimeTaskAgentSettings,
 ): HeadlessOrchestratorCommand | null {
-	return PROFILES[agentId]?.headless?.(prompt) ?? null;
+	return PROFILES[agentId]?.headless?.(prompt, settings) ?? null;
 }
 
 export function hasHeadlessOrchestratorRunner(agentId: RuntimeAgentId): boolean {

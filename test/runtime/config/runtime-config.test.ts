@@ -7,10 +7,12 @@ import {
 	loadGlobalRuntimeConfig,
 	loadRuntimeConfig,
 	pickBestInstalledAgentIdFromDetected,
+	readRuntimeAgentDefaults,
 	saveRuntimeConfig,
 	updateGlobalRuntimeConfig,
 	updateRuntimeConfig,
 } from "../../../src/config/runtime-config";
+import { parseRuntimeConfigSaveRequest } from "../../../src/core/api-validation";
 import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
 import { createTempDir } from "../../utilities/temp-dir";
 
@@ -459,6 +461,46 @@ describe.sequential("runtime-config auto agent selection", () => {
 });
 
 describe("runtime-config and the Kanban home", () => {
+	it("stores the per-agent default models, keeps them across other saves and clears them with an empty save", async () => {
+		await withTemporaryKanbanHome(async (home) => {
+			mkdirSync(home.homePath, { recursive: true });
+			writeFileSync(
+				home.globalConfigPath,
+				JSON.stringify({ selectedAgentId: "codex", pipeline: { mode: "shadow" } }),
+			);
+			const saved = await updateGlobalRuntimeConfig(await loadGlobalRuntimeConfig(), {
+				agentDefaults: { codex: { modelId: " sol ", reasoningEffort: "high" }, kiro: { modelId: "ignored" } },
+			});
+			expect(saved.agentDefaults).toEqual({ codex: { modelId: "sol", reasoningEffort: "high" } });
+			expect(JSON.parse(readFileSync(home.globalConfigPath, "utf8")).agentDefaults).toEqual({
+				codex: { modelId: "sol", reasoningEffort: "high" },
+			});
+			expect((await loadGlobalRuntimeConfig()).agentDefaults).toEqual({
+				codex: { modelId: "sol", reasoningEffort: "high" },
+			});
+			expect(await readRuntimeAgentDefaults()).toEqual({ codex: { modelId: "sol", reasoningEffort: "high" } });
+
+			// A save that doesn't carry them keeps them.
+			await updateRuntimeConfig({ agentAutonomousModeEnabled: false });
+			expect((await loadGlobalRuntimeConfig()).agentDefaults).toEqual({
+				codex: { modelId: "sol", reasoningEffort: "high" },
+			});
+
+			const cleared = await updateRuntimeConfig({ agentDefaults: {} });
+			expect(cleared.agentDefaults).toEqual({});
+			const payload = JSON.parse(readFileSync(home.globalConfigPath, "utf8"));
+			expect(payload.agentDefaults).toBeUndefined();
+			expect(payload.pipeline).toEqual({ mode: "shadow" });
+		});
+	});
+
+	it("parses the per-agent default models through the settings save validator", () => {
+		expect(
+			parseRuntimeConfigSaveRequest({ agentDefaults: { codex: { modelId: "sol", extra: 1 } }, shortcuts: [] }),
+		).toEqual({ agentDefaults: { codex: { modelId: "sol" } } });
+		expect(() => parseRuntimeConfigSaveRequest({ agentDefaults: { codex: { modelId: 5 } } })).toThrow();
+	});
+
 	it("stamps the home marker in a fresh ~/.kanban and keeps keys it does not own", async () => {
 		await withTemporaryKanbanHome(async (home) => {
 			mkdirSync(home.homePath, { recursive: true });

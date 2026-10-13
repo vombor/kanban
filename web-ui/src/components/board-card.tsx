@@ -19,6 +19,7 @@ import { cn } from "@/components/ui/cn";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip } from "@/components/ui/tooltip";
 import type { RuntimeTaskSessionSummary } from "@/runtime/types";
+import { useAgentDefaults } from "@/stores/agent-defaults-store";
 import { useKanbanPaths } from "@/stores/kanban-paths-store";
 import { useLandingMode } from "@/stores/landing-mode-store";
 import { useSelectedAgentId } from "@/stores/selected-agent-store";
@@ -482,14 +483,16 @@ export const BoardCard = memo(function BoardCard({
 	const agentLabel = effectiveAgentId
 		? (getRuntimeAgentCatalogEntry(effectiveAgentId)?.label ?? effectiveAgentId)
 		: null;
-	// The card's own model, else the model its agent sessions last used (any CLI, read from its session files).
+	// The card's own model, else the model its agent sessions last used (any CLI, read from its session files), else
+	// the agent's default model from Kanban settings, which its launch will pass.
 	const usedModels = useTaskTokenUsage(card.id)?.models ?? NO_USED_MODELS;
-	const { label: modelLabel, usedModelsDetail } = useMemo(
-		() => describeBoardCardAgentModel(card.agentSettings, usedModels),
-		[card.agentSettings, usedModels],
+	const agentDefaults = useAgentDefaults();
+	const { label: modelLabel, detail: modelDetail } = useMemo(
+		() => describeBoardCardAgentModel(card.agentSettings, usedModels, { agentId: effectiveAgentId, agentDefaults }),
+		[card.agentSettings, usedModels, effectiveAgentId, agentDefaults],
 	);
 	const agentPillTitle = [agentLabel, modelLabel].filter(Boolean).join(" · ");
-	const agentPillTooltip = usedModelsDetail ? `${agentPillTitle}\n${usedModelsDetail}` : agentPillTitle;
+	const agentPillTooltip = modelDetail ? `${agentPillTitle}\n${modelDetail}` : agentPillTitle;
 
 	const activeDescriptionDisplay = isDescriptionExpanded ? descriptionDisplay.expanded : descriptionDisplay.collapsed;
 

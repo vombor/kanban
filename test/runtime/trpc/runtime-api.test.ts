@@ -129,9 +129,10 @@ function createSummary(overrides: Partial<RuntimeTaskSessionSummary> = {}): Runt
 	};
 }
 
-function createRuntimeConfigState(): RuntimeConfigState {
+function createRuntimeConfigState(overrides: Partial<RuntimeConfigState> = {}): RuntimeConfigState {
 	return {
 		selectedAgentId: "claude",
+		agentDefaults: {},
 		selectedShortcutLabel: null,
 		agentAutonomousModeEnabled: true,
 		readyForReviewNotificationsEnabled: true,
@@ -140,6 +141,7 @@ function createRuntimeConfigState(): RuntimeConfigState {
 		commitPromptTemplateDefault: "commit",
 		openPrPromptTemplateDefault: "pr",
 		globalConfigPath: "/tmp/global-config.json",
+		...overrides,
 	};
 }
 
@@ -293,6 +295,63 @@ describe("createRuntimeApi startTaskSession", () => {
 		);
 		expect(guardrailMocks.resolveTaskGuardrails).not.toHaveBeenCalled();
 		expect(turnCheckpointMocks.captureTaskTurnCheckpoint).not.toHaveBeenCalled();
+	});
+
+	describe("launch model: the card's own (or its kit role's) > the agent's default from Kanban settings > the CLI's", () => {
+		const agentDefaults = { claude: { modelId: "opus", reasoningEffort: "high" }, codex: { modelId: "sol" } };
+
+		async function launchSettings(input: {
+			taskId: string;
+			agentSettings?: { providerId?: string; modelId?: string; reasoningEffort?: string };
+			defaults?: RuntimeConfigState["agentDefaults"];
+		}): Promise<unknown> {
+			taskWorktreeMocks.resolveTaskCwd.mockResolvedValue("/tmp/existing-worktree");
+			const terminalManager = {
+				startTaskSession: vi.fn(async () => createSummary({ taskId: input.taskId })),
+				applyTurnCheckpoint: vi.fn(),
+			};
+			const api = createTestRuntimeApi({
+				getActiveWorkspaceId: vi.fn(() => "workspace-1"),
+				loadScopedRuntimeConfig: vi.fn(async () =>
+					createRuntimeConfigState({ agentDefaults: input.defaults ?? agentDefaults }),
+				),
+				setActiveRuntimeConfig: vi.fn(),
+				getScopedTerminalManager: vi.fn(async () => terminalManager as never),
+				resolveInteractiveShellCommand: vi.fn(),
+			});
+			const response = await api.startTaskSession(
+				{ workspaceId: "workspace-1", workspacePath: "/tmp/repo" },
+				{ taskId: input.taskId, baseRef: "main", prompt: "", agentSettings: input.agentSettings },
+			);
+			expect(response.ok).toBe(true);
+			const calls = terminalManager.startTaskSession.mock.calls as unknown as Array<[{ agentSettings?: unknown }]>;
+			return calls[0]?.[0].agentSettings;
+		}
+
+		it("keeps a card's own model with its own effort, a kit role's model on the card included", async () => {
+			expect(await launchSettings({ taskId: "task-1", agentSettings: { modelId: "sonnet" } })).toEqual({
+				modelId: "sonnet",
+			});
+		});
+
+		it("gives a card that names no model the launched agent's default", async () => {
+			expect(await launchSettings({ taskId: "task-1" })).toEqual({ modelId: "opus", reasoningEffort: "high" });
+			expect(await launchSettings({ taskId: "task-1", agentSettings: { reasoningEffort: "low" } })).toEqual({
+				modelId: "opus",
+				reasoningEffort: "low",
+			});
+		});
+
+		it("passes nothing new when the agent has no default", async () => {
+			expect(await launchSettings({ taskId: "task-1", defaults: { codex: { modelId: "sol" } } })).toBeUndefined();
+		});
+
+		it("gives the orchestrator's sidebar session the agent's default", async () => {
+			expect(await launchSettings({ taskId: "__home_agent__:workspace-1:claude" })).toEqual({
+				modelId: "opus",
+				reasoningEffort: "high",
+			});
+		});
 	});
 
 	it("passes a card session the guardrails resolved for its worktree, project and base branch", async () => {

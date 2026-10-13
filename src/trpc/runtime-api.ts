@@ -10,6 +10,7 @@ import type { RuntimeConfigState } from "../config/runtime-config";
 import { updateGlobalRuntimeConfig, updateRuntimeConfig } from "../config/runtime-config";
 import type {
 	RuntimeAgentId,
+	RuntimeClineModelRecord,
 	RuntimeConfigResponse,
 	RuntimeProcessSweepResponse,
 	RuntimeRunUpdateResponse,
@@ -24,6 +25,7 @@ import {
 	parseTaskSessionStopRequest,
 } from "../core/api-validation";
 import { isHomeAgentSessionId } from "../core/home-agent-session";
+import { resolveLaunchAgentSettings } from "../core/task-agent-settings";
 import { resolveOrchestratorGuardrails, resolveTaskGuardrails } from "../guardrails/task-guardrails";
 import { grantCoversSession } from "../isolation/grants";
 import { resolveSessionIsolation } from "../isolation/isolation-paths";
@@ -34,10 +36,11 @@ import {
 	KANBAN_SESSION_CREDENTIAL_ENV,
 	KANBAN_SESSION_WORKSPACE_ENV,
 } from "../isolation/session-identity";
+import { readClineModelRecords } from "../models/cline-model-records";
 import { readProjectShortcuts } from "../projects/project-shortcut-store";
 import { openInBrowser } from "../server/browser";
 import type { TypedInputHold } from "../server/typed-input-hold";
-import { getDebugResetTargetPaths, getProjectShortcutsPath } from "../state/kanban-home";
+import { getClineModelsSettingsPath, getDebugResetTargetPaths, getProjectShortcutsPath } from "../state/kanban-home";
 import { listWorkspaceIndexEntries, loadWorkspaceBoardById } from "../state/workspace-state";
 import { buildRuntimeConfigResponse, resolveAgentCommand } from "../terminal/agent-registry";
 import { deliverTaskInput } from "../terminal/deliver-task-input";
@@ -106,13 +109,29 @@ function describeFinishedLiveSession(taskId: string): string {
 	return `Task "${taskId}" has a live session that finished its turn (awaiting review); starting it would only reattach that session, with no new turn. To give it more work in the same conversation: kanban task send ${taskId} "<what to do>". If it was escalated over a STALLED QA round: kanban task handback --task-id ${taskId} --note "<why>" puts it back in Review for a new QA round.`;
 }
 
+/** Cline's models.json records for the settings dialog's Cline model select; none when either file can't be read. */
+async function listClineModelRecords(): Promise<RuntimeClineModelRecord[]> {
+	const dataDir = await readPipelineConfig()
+		.then(({ config }) => config.agents.cline.dataDir)
+		.catch(() => null);
+	const records = await readClineModelRecords(getClineModelsSettingsPath(dataDir)).catch(() => null);
+	return [...(records ?? new Map<string, Set<string>>())].map(([providerId, models]) => ({
+		providerId,
+		models: [...models],
+	}));
+}
+
 export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrpcContext["runtimeApi"] {
 	const buildConfigResponse = async (
 		runtimeConfig: RuntimeConfigState,
 		workspaceScope: RuntimeTrpcWorkspaceScope | null,
 	): Promise<RuntimeConfigResponse> => {
+		const clineModelRecords = await listClineModelRecords();
 		if (!workspaceScope) {
-			return buildRuntimeConfigResponse(runtimeConfig, { sessionSyncEnabled: deps.sessionSyncEnabled });
+			return {
+				...buildRuntimeConfigResponse(runtimeConfig, { sessionSyncEnabled: deps.sessionSyncEnabled }),
+				clineModelRecords,
+			};
 		}
 		// Read from the shortcut store on every load (not the cached config), so a change through the shortcut
 		// route shows at once. A store Kanban can't read shows no shortcuts (doctor reports it; it is never rewritten),
@@ -130,7 +149,7 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 		const landingMode = await readPipelineConfig()
 			.then(({ config }) => getWorkspacePipelineSettings(config, workspaceScope.workspaceId).landing.mode)
 			.catch(() => "off" as const);
-		return { ...response, landingMode };
+		return { ...response, landingMode, clineModelRecords };
 	};
 
 	return {
@@ -194,10 +213,11 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 				//   3. scopedRuntimeConfig.selectedAgentId — the workspace-level default.
 				//
 				// agentSettings (provider/model/reasoning-effort overrides for the launch):
-				//   Always taken from the card's current override object. There is no
-				//   session-level persistence for these;
-				//   if the user changes the model on the card, the next session launch
-				//   (including trash-restore) uses the updated values.
+				//   The card's current override object (where a routing kit's role model is too), else Kanban's
+				//   per-agent default for the launched agent (resolveLaunchAgentSettings), else nothing: the CLI's
+				//   own config. There is no session-level persistence for these; if the user changes the model on
+				//   the card or the default, the next session launch (including trash-restore) uses the new values.
+				//   The orchestrator's sidebar session names no model, so it runs on the default.
 				const terminalManager = await deps.getScopedTerminalManager(workspaceScope);
 				// The session manager's own reuse rule: a live session whose turn ended would be handed back unchanged.
 				if (
@@ -290,7 +310,11 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 					cols: body.cols,
 					rows: body.rows,
 					workspaceId: workspaceScope.workspaceId,
-					agentSettings: body.agentSettings,
+					agentSettings: resolveLaunchAgentSettings(
+						resolved.agentId,
+						body.agentSettings,
+						scopedRuntimeConfig.agentDefaults,
+					),
 					guardrails,
 					...(credential
 						? {

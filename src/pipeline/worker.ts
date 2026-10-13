@@ -27,8 +27,9 @@
 // server sends every workspace while `watchdog.mode` is not "off"). It acts through requests to the server
 // (`request` → `response` over IPC), never on the board or a PTY itself.
 import { getWorkspacePipelineSettings, type ParsedPipelineConfig, readPipelineConfig } from "../config/pipeline-config";
+import { readRuntimeAgentDefaults } from "../config/runtime-config";
 import type { RuntimeTaskTrashResponse } from "../core/api-contract";
-import type { EffectiveModelConfig } from "../core/effective-agent";
+import { type EffectiveModelConfig, mergeAgentDefaultModels } from "../core/effective-agent";
 import { createIssueSyncJobs, takeWorkspaceIssueWakeNotes } from "../issues/issue-job";
 import type { IssueSyncDependencies } from "../issues/issue-sync";
 import { createRoutingPolicy } from "../kits/policy";
@@ -149,7 +150,10 @@ interface WorkspaceQueue {
 async function loadDefaultAgentModels(
 	config: ParsedPipelineConfig,
 ): Promise<EffectiveModelConfig["agentDefaultModels"]> {
-	return await readAgentDefaultModels(config.config.agents.cline.dataDir);
+	return mergeAgentDefaultModels(
+		await readRuntimeAgentDefaults(),
+		await readAgentDefaultModels(config.config.agents.cline.dataDir),
+	);
 }
 
 function createDefaultFeatureRegistry(

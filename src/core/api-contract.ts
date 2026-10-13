@@ -1208,8 +1208,24 @@ export type RuntimeKanbanPaths = z.infer<typeof runtimeKanbanPathsSchema>;
 export const runtimeLandingModeSchema = z.enum(["off", "commit", "pr", "qa"]);
 export type RuntimeLandingMode = z.infer<typeof runtimeLandingModeSchema>;
 
+/**
+ * Kanban's default model per agent CLI (config.json `agentDefaults`): the settings a launch passes when the card names
+ * no model (src/core/task-agent-settings.ts resolveLaunchAgentSettings).
+ */
+export const runtimeAgentDefaultsSchema = z.partialRecord(runtimeAgentIdEnumSchema, runtimeAgentSettingsSchema);
+
+/** A provider entry of Cline's models.json with a `models` record: the models Cline offers for it (its allow list). */
+export const runtimeClineModelRecordSchema = z.object({
+	providerId: z.string(),
+	models: z.array(z.string()),
+});
+export type RuntimeClineModelRecord = z.infer<typeof runtimeClineModelRecordSchema>;
+
 export const runtimeConfigResponseSchema = z.object({
 	selectedAgentId: runtimeAgentIdSchema,
+	agentDefaults: runtimeAgentDefaultsSchema,
+	/** Cline's models.json records, for the settings dialog's Cline model select; empty when it can't be read. */
+	clineModelRecords: z.array(runtimeClineModelRecordSchema).optional(),
 	selectedShortcutLabel: z.string().nullable(),
 	agentAutonomousModeEnabled: z.boolean(),
 	debugModeEnabled: z.boolean().optional(),
@@ -1235,6 +1251,8 @@ export type RuntimeConfigResponse = z.infer<typeof runtimeConfigResponseSchema>;
 
 export const runtimeConfigSaveRequestSchema = z.object({
 	selectedAgentId: runtimeAgentIdSchema.optional(),
+	/** Replaces every agent's default; an agent left out has none. */
+	agentDefaults: runtimeAgentDefaultsSchema.optional(),
 	selectedShortcutLabel: z.string().nullable().optional(),
 	agentAutonomousModeEnabled: z.boolean().optional(),
 	// No shortcuts: they change only through the shortcut route (`shortcuts.replace`), which checks who asks; a save

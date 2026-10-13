@@ -71,6 +71,7 @@ import { useTerminalConnectionReady } from "@/runtime/use-terminal-connection-re
 import { useWorkspacePersistence } from "@/runtime/use-workspace-persistence";
 import { saveWorkspaceState } from "@/runtime/workspace-state-query";
 import { findCardSelection } from "@/state/board-state";
+import { setAgentDefaults } from "@/stores/agent-defaults-store";
 import { setCurrentWorkspaceId } from "@/stores/current-workspace-store";
 import { setKanbanPaths } from "@/stores/kanban-paths-store";
 import { setLandingMode } from "@/stores/landing-mode-store";
@@ -144,6 +145,7 @@ export default function App(): ReactElement {
 		}
 		setLandingMode(runtimeProjectConfig?.landingMode ?? null);
 		setSelectedAgentId(runtimeProjectConfig?.selectedAgentId ?? null);
+		setAgentDefaults(runtimeProjectConfig?.agentDefaults);
 	}, [runtimeProjectConfig]);
 	useTaskTokenUsagePolling(currentProjectId, isDocumentVisible);
 	useEffect(() => {

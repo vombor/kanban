@@ -77,16 +77,27 @@ vi.mock("@radix-ui/react-select", () => ({
 const resetLayoutCustomizationsMock = vi.hoisted(() => vi.fn());
 const saveConfigMock = vi.hoisted(() => vi.fn(async (_config: Record<string, unknown>) => true));
 const replaceProjectShortcutsMock = vi.hoisted(() => vi.fn(async () => []));
+const catalogMock = vi.hoisted(() => {
+	const flags = { modelOverride: "flag", effortOverride: "flag", providerOverride: "none" };
+	const entries = [
+		{ id: "cline", label: "Cline", binary: "cline", capabilities: { ...flags, providerOverride: "flag" } },
+		{ id: "claude", label: "Claude Code", binary: "claude", capabilities: flags },
+		{
+			id: "kiro",
+			label: "Kiro",
+			binary: "kiro-cli",
+			capabilities: { modelOverride: "none", effortOverride: "none", providerOverride: "none" },
+		},
+	].map((entry) => ({ ...entry, installUrl: null, autonomousArgs: [] }));
+	return { entries };
+});
+// Also the catalog of the real src/core/task-agent-settings.ts (its relative import resolves to this module).
 vi.mock("@runtime-agent-catalog", () => ({
-	getRuntimeAgentCatalogEntry: vi.fn((agentId: string) => ({
-		id: agentId,
-		installUrl: null,
-		autonomousArgs: [],
-	})),
-	getRuntimeLaunchSupportedAgentCatalog: vi.fn(() => [
-		{ id: "cline", label: "Cline", binary: "cline" },
-		{ id: "claude", label: "Claude Code", binary: "claude" },
-	]),
+	RUNTIME_AGENT_CATALOG: catalogMock.entries,
+	getRuntimeAgentCatalogEntry: vi.fn(
+		(agentId: string) => catalogMock.entries.find((entry) => entry.id === agentId) ?? null,
+	),
+	getRuntimeLaunchSupportedAgentCatalog: vi.fn(() => catalogMock.entries),
 }));
 
 vi.mock("@runtime-shortcuts", () => ({
@@ -121,6 +132,28 @@ vi.mock("@/utils/notification-permission", () => ({
 	getBrowserNotificationPermission: () => "unsupported",
 	requestBrowserNotificationPermission: vi.fn(async () => "unsupported"),
 }));
+
+function setInputValue(input: HTMLInputElement, value: string): void {
+	const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+	setter?.call(input, value);
+	input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+function setSelectValue(select: HTMLSelectElement, value: string): void {
+	const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+	setter?.call(select, value);
+	select.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+function findInput(container: ParentNode, testId: string, placeholder: string): HTMLInputElement {
+	const input = container.querySelector<HTMLInputElement>(
+		`[data-testid="${testId}"] input[placeholder="${placeholder}"]`,
+	);
+	if (!input) {
+		throw new Error(`no ${placeholder} input in ${testId}`);
+	}
+	return input;
+}
 
 function findButtonByText(container: ParentNode, text: string): HTMLButtonElement | null {
 	return (Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.trim() === text) ??
@@ -370,5 +403,102 @@ describe("RuntimeSettingsDialog", () => {
 		expect(replaceProjectShortcutsMock).toHaveBeenCalledWith("workspace-1", []);
 		expect(saveConfigMock).toHaveBeenCalledTimes(1);
 		expect(saveConfigMock.mock.calls[0]?.[0]).not.toHaveProperty("shortcuts");
+	});
+
+	describe("default model per agent", () => {
+		async function renderDialog(config: RuntimeConfigResponse = savedConfig): Promise<void> {
+			saveConfigMock.mockClear();
+			await act(async () => {
+				root.render(
+					<RuntimeSettingsDialog open={true} workspaceId={null} initialConfig={config} onOpenChange={vi.fn()} />,
+				);
+			});
+		}
+
+		it("saves a typed model and effort for an agent", async () => {
+			await renderDialog();
+			await act(async () => {
+				setInputValue(findInput(document.body, "agent-default-claude", "The CLI's own model"), " opus ");
+				setInputValue(findInput(document.body, "agent-default-claude", "The CLI's own effort"), "high");
+			});
+			await act(async () => {
+				findButtonByText(document.body, "Save")?.click();
+			});
+			expect(saveConfigMock.mock.calls[0]?.[0]).toMatchObject({
+				agentDefaults: { claude: { modelId: "opus", reasoningEffort: "high" } },
+			});
+		});
+
+		it("shows the stored defaults and clears one when its fields are emptied", async () => {
+			await renderDialog({
+				...savedConfig,
+				agentDefaults: { claude: { modelId: "opus" } },
+			} as RuntimeConfigResponse);
+			const model = findInput(document.body, "agent-default-claude", "The CLI's own model");
+			expect(model.value).toBe("opus");
+			expect(findButtonByText(document.body, "Save")?.disabled).toBe(true);
+			await act(async () => {
+				setInputValue(model, "");
+			});
+			await act(async () => {
+				findButtonByText(document.body, "Save")?.click();
+			});
+			expect(saveConfigMock.mock.calls[0]?.[0]).toMatchObject({ agentDefaults: {} });
+		});
+
+		it("disables the model of an agent that takes none at launch, with a note", async () => {
+			await renderDialog({
+				...savedConfig,
+				agents: [
+					...savedConfig.agents,
+					{ id: "kiro", label: "Kiro", binary: "kiro-cli", command: "kiro-cli", installed: false },
+				],
+			} as RuntimeConfigResponse);
+			const row = document.body.querySelector('[data-testid="agent-default-kiro"]');
+			const input = row?.querySelector<HTMLInputElement>("input");
+			expect(input?.disabled).toBe(true);
+			expect(row?.textContent).toContain("Kiro takes no model at launch");
+		});
+
+		it("offers Cline's models.json records as a select, and Other as free text", async () => {
+			await renderDialog({
+				...savedConfig,
+				clineModelRecords: [{ providerId: "lemonade", models: ["Qwen3-Coder", "GLM-4.7-Flash-GGUF"] }],
+			} as RuntimeConfigResponse);
+			const select = document.body.querySelector<HTMLSelectElement>('select[aria-label="Cline default model"]');
+			expect(select).not.toBeNull();
+			expect(Array.from(select?.options ?? []).map((option) => option.textContent)).toEqual([
+				"Cline's own default",
+				"Qwen3-Coder",
+				"GLM-4.7-Flash-GGUF",
+				"Other (type provider and model)",
+			]);
+			await act(async () => {
+				if (select) {
+					setSelectValue(select, select.options[1]?.value ?? "");
+				}
+			});
+			await act(async () => {
+				findButtonByText(document.body, "Save")?.click();
+			});
+			expect(saveConfigMock.mock.calls[0]?.[0]).toMatchObject({
+				agentDefaults: { cline: { providerId: "lemonade", modelId: "Qwen3-Coder" } },
+			});
+		});
+
+		it("shows a Cline default outside the records as Other with its provider and model", async () => {
+			await renderDialog({
+				...savedConfig,
+				agentDefaults: { cline: { providerId: "bedrock", modelId: "anthropic.claude-x" } },
+				clineModelRecords: [{ providerId: "lemonade", models: ["Qwen3-Coder"] }],
+			} as RuntimeConfigResponse);
+			expect(document.body.querySelector<HTMLSelectElement>('select[aria-label="Cline default model"]')?.value).toBe(
+				"__other__",
+			);
+			expect(findInput(document.body, "agent-default-cline", "The CLI's own provider").value).toBe("bedrock");
+			expect(findInput(document.body, "agent-default-cline", "The CLI's own model").value).toBe(
+				"anthropic.claude-x",
+			);
+		});
 	});
 });

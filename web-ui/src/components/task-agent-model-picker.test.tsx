@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { UseTaskAgentModelPickerResult } from "@/components/task-agent-model-picker";
 import type { RuntimeAgentId, RuntimeTaskAgentSettings } from "@/runtime/types";
+import { setAgentDefaults } from "@/stores/agent-defaults-store";
 
 vi.mock("@runtime-agent-catalog", () => ({
 	getRuntimeLaunchSupportedAgentCatalog: vi.fn(() => [
@@ -91,6 +92,7 @@ beforeEach(() => {
 afterEach(() => {
 	act(() => root.unmount());
 	container.remove();
+	setAgentDefaults(null);
 	vi.restoreAllMocks();
 });
 
@@ -184,6 +186,33 @@ describe("TaskAgentModelPicker – flag-driven fields", () => {
 		expect(container.querySelector('input[aria-label="Provider override"]')).toBeNull();
 		expect(container.querySelector('input[aria-label="Model override"]')).not.toBeNull();
 		expect(container.querySelector('input[aria-label="Reasoning effort override"]')).not.toBeNull();
+	});
+
+	it("shows the agent's default from Kanban settings as the placeholder of an empty field", async () => {
+		setAgentDefaults({ claude: { modelId: "opus", reasoningEffort: "high" } });
+		await renderPicker({ agentId: "claude" as RuntimeAgentId });
+		expect(container.querySelector('input[aria-label="Model override"]')?.getAttribute("placeholder")).toBe(
+			"Default: opus",
+		);
+		expect(
+			container.querySelector('input[aria-label="Reasoning effort override"]')?.getAttribute("placeholder"),
+		).toBe("Default: high");
+
+		// A card naming its own model doesn't get the default's effort.
+		act(() => root.unmount());
+		root = createRoot(container);
+		await renderPicker({ agentId: "claude" as RuntimeAgentId, agentSettings: { modelId: "sonnet" } });
+		expect(
+			container.querySelector('input[aria-label="Reasoning effort override"]')?.getAttribute("placeholder"),
+		).toBe("Effort level");
+
+		// Another agent's default doesn't apply.
+		act(() => root.unmount());
+		root = createRoot(container);
+		await renderPicker({ agentId: "gemini" as RuntimeAgentId });
+		expect(container.querySelector('input[aria-label="Model override"]')?.getAttribute("placeholder")).toBe(
+			"Model ID",
+		);
 	});
 
 	it("hides effort for gemini and every free-text field for kiro", async () => {

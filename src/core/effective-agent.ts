@@ -6,12 +6,19 @@
 //
 //   agent: the agent the card's session actually ran on (summary.agentId), else card.agentId, else the agent
 //          selected in Kanban settings.
-//   model: the card's own settings, else the session's model, else the agent's own default (for Cline, the model of
-//          providers.json's `lastUsedProvider`, which the Cline CLI uses when a card names none).
+//   model: the card's own settings, else the session's model, else the agent's default: Kanban's per-agent default
+//          (config.json `agentDefaults`, passed at launch), else the CLI's own (for Cline, the model of providers.json's
+//          `lastUsedProvider`, which the Cline CLI uses when a card names none).
 //
 // Pure: callers pass the session summary, the selected agent and the agents' default models. Nothing calls these
 // yet; the reconciler and session sync switch to them in P4-1.
-import type { RuntimeAgentId, RuntimeBoardCard, RuntimeTaskSessionSummary } from "./api-contract";
+import type {
+	RuntimeAgentId,
+	RuntimeBoardCard,
+	RuntimeTaskAgentSettings,
+	RuntimeTaskSessionSummary,
+} from "./api-contract";
+import type { RuntimeAgentDefaultSettings } from "./task-agent-settings";
 
 export type EffectiveAgentSource = "session" | "card" | "selected";
 export type EffectiveModelSource = "card" | "session" | "agent-default";
@@ -104,4 +111,24 @@ export function readClineDefaultModel(providersJson: unknown): EffectiveModel | 
 	const settings = entry && typeof entry === "object" ? (entry as { settings?: unknown }).settings : undefined;
 	const model = settings && typeof settings === "object" ? (settings as { model?: unknown }).model : undefined;
 	return typeof model === "string" && model.trim() ? { provider: lastUsedProvider, model: model.trim() } : null;
+}
+
+/**
+ * The agents' default models for `agentDefaultModels`: Kanban's per-agent defaults (the model a launch passes when a
+ * card names none) over the CLIs' own (`cliDefaults`, e.g. Cline's lastUsedProvider model).
+ */
+export function mergeAgentDefaultModels(
+	kanbanDefaults: RuntimeAgentDefaultSettings,
+	cliDefaults: EffectiveModelConfig["agentDefaultModels"],
+): EffectiveModelConfig["agentDefaultModels"] {
+	const merged: NonNullable<EffectiveModelConfig["agentDefaultModels"]> = { ...cliDefaults };
+	for (const [agentId, settings] of Object.entries(kanbanDefaults) as Array<
+		[RuntimeAgentId, RuntimeTaskAgentSettings | undefined]
+	>) {
+		const model = nonEmpty(settings?.modelId);
+		if (model) {
+			merged[agentId] = { provider: nonEmpty(settings?.providerId), model };
+		}
+	}
+	return merged;
 }

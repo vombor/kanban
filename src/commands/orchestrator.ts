@@ -5,7 +5,9 @@
 import type { Command } from "commander";
 
 import { readPipelineConfig, resolveWorkspaceWakeSettings } from "../config/pipeline-config";
+import { loadGlobalRuntimeConfig } from "../config/runtime-config";
 import { type RuntimeAgentId, runtimeAgentIdSchema } from "../core/api-contract";
+import { resolveLaunchAgentSettings } from "../core/task-agent-settings";
 import { runOrchestratorHeadless } from "../pipeline/watchdog/headless-run";
 import {
 	addWakeRequest,
@@ -150,6 +152,12 @@ export function registerOrchestratorCommand(program: Command): void {
 						workspaceId: options.workspace,
 						projectPath: options.project,
 						agentId: options.agent,
+						// No card: the agent's default model from Kanban settings, as for the sidebar session.
+						agentSettings: resolveLaunchAgentSettings(
+							options.agent,
+							undefined,
+							(await loadGlobalRuntimeConfig()).agentDefaults,
+						),
 						timeoutMin: options.timeoutMin,
 						liveSessionMin: options.liveSessionMin,
 						ignoreLive: options.ignoreLive === true,

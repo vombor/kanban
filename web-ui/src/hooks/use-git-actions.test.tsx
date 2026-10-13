@@ -81,6 +81,7 @@ function createBoard(agentId?: RuntimeAgentId): BoardData {
 function createRuntimeConfig(selectedAgentId: RuntimeConfigResponse["selectedAgentId"]): RuntimeConfigResponse {
 	return {
 		selectedAgentId,
+		agentDefaults: {},
 		selectedShortcutLabel: null,
 		agentAutonomousModeEnabled: true,
 		effectiveCommand: null,

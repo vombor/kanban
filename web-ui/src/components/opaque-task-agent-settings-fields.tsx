@@ -2,8 +2,12 @@ import type { ReactElement } from "react";
 
 import type { RuntimeTaskAgentSettings } from "@/runtime/types";
 
+/** Placeholder text per field, e.g. the agent's default from Kanban settings that applies while the field is empty. */
+export type OpaqueTaskAgentSettingsPlaceholders = Partial<Record<keyof RuntimeTaskAgentSettings, string>>;
+
 export function OpaqueTaskAgentSettingsFields({
 	agentSettings,
+	placeholders,
 	agentLabel,
 	docsUrl,
 	showProviderInput = false,
@@ -14,6 +18,7 @@ export function OpaqueTaskAgentSettingsFields({
 	onEffortChange,
 }: {
 	agentSettings: RuntimeTaskAgentSettings | undefined;
+	placeholders?: OpaqueTaskAgentSettingsPlaceholders;
 	agentLabel: string;
 	docsUrl: string | undefined;
 	showProviderInput?: boolean;
@@ -37,7 +42,7 @@ export function OpaqueTaskAgentSettingsFields({
 							type="text"
 							value={agentSettings?.providerId ?? ""}
 							onChange={(e) => onProviderChange?.(e.currentTarget.value)}
-							placeholder="Provider ID"
+							placeholder={placeholders?.providerId ?? "Provider ID"}
 							aria-label="Provider override"
 							className="w-full rounded-md border border-border bg-surface-2 px-2 py-1.5 text-[12px] text-text-primary placeholder:text-text-tertiary focus:border-border-focus focus:outline-none"
 						/>
@@ -50,7 +55,7 @@ export function OpaqueTaskAgentSettingsFields({
 							type="text"
 							value={agentSettings?.modelId ?? ""}
 							onChange={(e) => onModelChange(e.currentTarget.value)}
-							placeholder="Model ID"
+							placeholder={placeholders?.modelId ?? "Model ID"}
 							aria-label="Model override"
 							className="w-full rounded-md border border-border bg-surface-2 px-2 py-1.5 text-[12px] text-text-primary placeholder:text-text-tertiary focus:border-border-focus focus:outline-none"
 						/>
@@ -63,7 +68,7 @@ export function OpaqueTaskAgentSettingsFields({
 							type="text"
 							value={agentSettings?.reasoningEffort ?? ""}
 							onChange={(e) => onEffortChange(e.currentTarget.value)}
-							placeholder="Effort level"
+							placeholder={placeholders?.reasoningEffort ?? "Effort level"}
 							aria-label="Reasoning effort override"
 							className="w-full rounded-md border border-border bg-surface-2 px-2 py-1.5 text-[12px] text-text-primary placeholder:text-text-tertiary focus:border-border-focus focus:outline-none"
 						/>

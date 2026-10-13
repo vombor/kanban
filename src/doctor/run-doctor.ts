@@ -6,7 +6,7 @@
 import { listLegacyKitProjects, readLegacyKitConfig, readLegacyKitServices } from "../config/legacy-kit-config";
 import { readLemonadeModelListSettings } from "../config/model-lists-config";
 import { readPipelineConfig, readRawGlobalConfig } from "../config/pipeline-config";
-import { loadGlobalRuntimeConfig } from "../config/runtime-config";
+import { loadGlobalRuntimeConfig, readRuntimeAgentDefaults } from "../config/runtime-config";
 import { resolveGitHubAuth } from "../issues/issue-auth";
 import { loadKitCatalog } from "../kits/resolve-kit";
 import { resolveProjectRoots } from "../projects/project-roots";
@@ -23,6 +23,7 @@ import {
 } from "../state/kanban-home";
 import { readLiveKanbanServerLock } from "../state/kanban-server-lock";
 import { listWorkspaceIndexEntries, loadWorkspaceBoardById } from "../state/workspace-state";
+import { checkAgentDefaults } from "./agent-default-checks";
 import { checkClineBedrockKey } from "./cline-bedrock-key-checks";
 import { checkKanbanFilesUnderClineDir } from "./cline-dir-checks";
 import { checkClineModelsAllowList } from "./cline-models-allow-list-checks";
@@ -181,6 +182,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
 			fetch: options.fetch,
 		})),
 	);
+	findings.push(...checkAgentDefaults(await readRuntimeAgentDefaults()));
 	findings.push(...checkKitProjectSettings(projectContext));
 	findings.push(...checkKitRecommendedSettings(projectContext));
 	findings.push(
