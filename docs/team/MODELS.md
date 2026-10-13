@@ -121,8 +121,18 @@ preset's fallback until 2026-10-13 ([KITS.md](KITS.md#lemonade)).
 
 On 2026-10-13 (`cline + lemonade`, every model at 65536 context) `Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M` passed for
 dev (run `2026-10-13-dev-cline-q9t3z`) and qa (`2026-10-13-qa-cline-0gmwu`), and `gemma-4-E4B-it-GGUF-Q4_K_M` for qa
-(`2026-10-13-qa-cline-khuf9`; not vetted for dev); neither was vetted for plan. They are the `lemonade` preset's
-fallback and QA models, replacing Laguna-XS-2.1 and gemma-4-31B QAT, which the user removed from Lemonade.
+(`2026-10-13-qa-cline-khuf9`; not vetted for dev); neither was vetted for plan. They replaced Laguna-XS-2.1 and
+gemma-4-31B QAT, which the user removed from Lemonade, as the `lemonade` preset's fallback and QA models.
+
+Later that day `Qwen3.8-27B-GGUF-UD-Q4_K_XL` passed for dev (`2026-10-13-dev-cline-311az`) and qa
+(`2026-10-13-qa-cline-bxk8v`; not vetted for plan), and the preset took the layout the notes project found working:
+dev Qwen3.8-27B, QA and plan Muse-Glimmer-30B (passed dev and qa 2026-10-12), fallback Qwen3-Coder-30B-A3B. Two vet
+passes did not hold up in the notes project's real cards (2026-10-13):
+
+| Model | Vet | In notes |
+| --- | --- | --- |
+| gemma-4-E4B-it-GGUF-Q4_K_M | passed qa | too small for a reliable QA reviewer; no longer the preset's QA model |
+| Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M | passed dev and qa | emitted invalid JSON tool calls as a dev model on Lemonade; kept as the fallback only, not a dev pick |
 
 ## OpenAI-compatible servers (`providers.openaiCompatible`)
 

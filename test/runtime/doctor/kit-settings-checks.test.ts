@@ -30,7 +30,7 @@ const WITH_TEAM_LOCAL_ROLES = {
 	...LEMONADE_MODELS_PAYLOAD,
 	data: [
 		...LEMONADE_MODELS_PAYLOAD.data,
-		...["Muse-Glimmer-30B-GGUF-Q4_K_M", "gemma-4-E4B-it-GGUF-Q4_K_M"].map((id) => ({
+		...["Qwen3.8-27B-GGUF-UD-Q4_K_XL", "Muse-Glimmer-30B-GGUF-Q4_K_M"].map((id) => ({
 			id,
 			object: "model",
 			owned_by: "lemonade",

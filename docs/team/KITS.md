@@ -345,7 +345,7 @@ kanban kit set qa.promptNotes.dbSetup "npx prisma migrate deploy" --project /pro
 kanban kit set land.postLand '[{"paths":"^prisma/","run":"npx prisma generate"}]' --project /projects/foo
 kanban kit unset roles.dev.model --project /projects/foo       # the preset's (or kit's) dev model again
 kanban kit unset roles.fallback --project /projects/foo        # every field of the role
-kanban kit set tiers.dev.0.model Muse-Glimmer-30B-GGUF-Q4_K_M --project /projects/notes   # one tier pick (lemonade preset)
+kanban kit set tiers.dev.0.model Qwen3.8-27B-GGUF-UD-Q4_K_XL --project /projects/notes   # one tier pick (lemonade preset)
 kanban kit set qa.routes.0.model us.amazon.nova-2-lite-v1:0 --project /projects/foo # a QA route's reviewer (a user kit with routes)
 kanban kit unset qa.routes.0 --project /projects/foo           # every setting of that route entry
 kanban kit set onFail.reworkRounds 5 --project /projects/notes # refused: part of the team definition (kit team)
@@ -655,7 +655,7 @@ a role is on Cline (doctor warns otherwise).
 |---|---|---|---|---|
 | `cloud` | Codex, `bedrock` / `us.openai.gpt-6.1-sol` | Cline, `bedrock` / `us.anthropic.claude-haiku-5-5` | Cline, `bedrock` / `us.anthropic.claude-opus-5-5` | Codex, `bedrock` / `us.moonshotai.kimi-k3` |
 | `cline` | Cline, `cline-pass/glm-5.3` | Cline, `cline-pass/qwen3.8-max` | Cline, `cline-pass/minimax-m3` | Cline, `cline-pass/kimi-k3` |
-| `lemonade` | Cline, `Muse-Glimmer-30B-GGUF-Q4_K_M` | Cline, `gemma-4-E4B-it-GGUF-Q4_K_M` | Cline, the dev model | Cline, `Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M` |
+| `lemonade` | Cline, `Qwen3.8-27B-GGUF-UD-Q4_K_XL` | Cline, `Muse-Glimmer-30B-GGUF-Q4_K_M` | Cline, the QA model | Cline, `Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M` |
 
 A project on a preset can still set its own model for any role (`kanban kit set roles.<role>.*`, the value's
 source is then `project` instead of `preset:<name>`), and a tier pick where the preset has tiers.
@@ -715,19 +715,22 @@ kanban doctor /projects/<name>     # warns about unmet settings and models Cline
 `kits/presets/lemonade.json` (the models of the former `team-local` kit): the local Lemonade server
 (http://localhost:13305/api/v1, OpenAI compatible) through the Cline CLI with provider `lemonade`. No paid or cloud
 provider appears anywhere in it (`test/runtime/kits/lemonade-preset.test.ts` checks every model and agent).
-Muse-Glimmer passed `kanban models vet` for dev and QA (2026-10-12, cline 3.0.70), Qwen3-Coder-30B-A3B for dev and QA
-and gemma-4-E4B for QA (2026-10-13, at 65536 context); none was vetted for plan.
+Qwen3.8-27B passed `kanban models vet` for dev and QA (2026-10-13, at 65536 context), Muse-Glimmer for dev and QA
+(2026-10-12, cline 3.0.70) and Qwen3-Coder-30B-A3B for dev and QA (2026-10-13); none was vetted for plan. The layout is
+the one the notes project found working on 2026-10-13, so notes can run on the preset without its own role settings.
 `kanban bench calibrate` can still compare candidates on the project.
 
 | Role | Model (passed `kanban models vet`) | Why |
 |---|---|---|
-| Dev (`roles.dev`: tier `dev`), plan cards (`roles.plan`: tier `dev`, Cline `--plan`) | `Muse-Glimmer-30B-GGUF-Q4_K_M` | Meta's Muse Glimmer (Meta Superintelligence Lab, distilled from Muse Spark): a dense 30B with tool-calling + vision, 16.9 GB, 65536 context as Lemonade loads it (max 131072). Plans on the dev model need no model swap (not vetted for plan) |
-| QA (`roles.qa`) | `gemma-4-E4B-it-GGUF-Q4_K_M` | another family (google) than the dev (meta) and fallback (qwen) models, vision + tool-calling; 5.9 GB, 65536 context as Lemonade loads it (passed the vet for QA only). A card someone builds on Gemma itself gets no QA (`kit show` warns) |
-| Fallback dev model (`roles.fallback`: tier `senior`) | `Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M` | Qwen's Qwen3-Coder, a third family, neither the dev nor the QA model, so its sibling is still reviewed by Gemma. A MoE with 3B active, tool-calling, no vision, 17.4 GB, 65536 context as Lemonade loads it (max 262144) |
+| Dev (`roles.dev`: tier `dev`) | `Qwen3.8-27B-GGUF-UD-Q4_K_XL` | Qwen's Qwen3.8-27B: a dense 27B with vision + tool-calling + MTP, 17.2 GB, 65536 context as Lemonade loads it (vet runs `2026-10-13-dev-cline-311az`, `2026-10-13-qa-cline-bxk8v`). The dev tier's only pick |
+| QA (`roles.qa`), plan cards (`roles.plan`: its own model, Cline `--plan`) | `Muse-Glimmer-30B-GGUF-Q4_K_M` | Meta's Muse Glimmer (Meta Superintelligence Lab, distilled from Muse Spark): another family (meta) than the dev and fallback models (qwen), a dense 30B with tool-calling + vision, 16.9 GB, 65536 context as Lemonade loads it (max 131072). Plans on the QA model load no fourth model (not vetted for plan). A card someone builds on Muse-Glimmer itself gets no QA (`kit show` warns) |
+| Fallback dev model (`roles.fallback`: tier `senior`) | `Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M` | Qwen's Qwen3-Coder, the dev model's family but not the QA model's, so its sibling is still reviewed by Muse-Glimmer. A MoE with 3B active, tool-calling, no vision, 17.4 GB, 65536 context as Lemonade loads it (max 262144). The fallback only: as a dev model in the notes project it emitted invalid JSON tool calls on Lemonade (2026-10-13) |
 
-These are the defaults since 2026-10-13 (Qwen3-Coder replaced Laguna-XS-2.1 as the fallback and gemma-4-E4B replaced
-gemma-4-31B QAT as the QA model; Muse-Glimmer has been the dev model since 2026-10-12). The dev tier lists Qwen3-Coder as its second candidate; the preset names no
-model that the pod's Lemonade doesn't have.
+These are the defaults since 2026-10-13, following the notes project's working layout: Qwen3.8-27B replaced
+Muse-Glimmer as the dev model, Muse-Glimmer replaced gemma-4-E4B as the QA model (gemma-4-E4B passed the QA vet,
+`2026-10-13-qa-cline-khuf9`, but notes found it too small for a reliable QA reviewer) and took over plans, and
+Qwen3-Coder (the fallback since it replaced Laguna-XS-2.1 that morning) left the dev tier. The dev tier lists only
+Qwen3.8; the preset names no model that the pod's Lemonade doesn't have.
 
 - **Outage:** Lemonade down (connection refused, `/health` not `ok`) is a provider outage: recovery holds the card
   and probes `/health` every `pipeline.recovery.outage.probeEveryMin` and resumes it when Lemonade is back. After
@@ -742,7 +745,7 @@ model that the pod's Lemonade doesn't have.
 
 #### One GPU: keep dev, QA and fallback loaded
 
-The lemonade preset runs three local models at the same time: Muse-Glimmer (dev and plan), Gemma (QA) and Qwen3-Coder
+The lemonade preset runs three local models at the same time: Qwen3.8 (dev), Muse-Glimmer (QA and plan) and Qwen3-Coder
 (fallback).
 Lemonade keeps at most `max_loaded_models` LLMs resident (`/api/v1/health` `max_models.llm`, default 1). When it is
 full it evicts the least recently used one, so with one slot every dev ↔ QA switch reloads a model. Raise it to 3:
@@ -764,19 +767,19 @@ Kanban's own limit, `models.providerCapacity.lemonade.maxLoadedModels` (default 
 Above Lemonade's value, cards on different models make it reload on every request. Below it, QA cards wait for
 nothing. `kanban doctor` and `kanban kit show` read `/api/v1/health` and warn about both cases, and when
 `max_models.llm` is below the 3 models the preset runs. With Lemonade at 1 and Kanban at 1, work runs one model at a
-time: a QA card waits until no dev card runs on Muse-Glimmer, and every switch still costs a model load. Not covered yet: a
+time: a QA card waits until no dev card runs on Qwen3.8, and every switch still costs a model load. Not covered yet: a
 card a human starts by hand, and the rework stage's sibling and resume starts.
 
 **Memory budget** (`tierNotes.dev`): the three models must stay resident within 80 GB of the 96 GB the iGPU can
 address (Ryzen AI MAX+ 395, 125 GB RAM), leaving 16 GB headroom. Weights are Lemonade's sizes (`GET /api/v1/models` `size`), at the
-context the user set on every Lemonade model (2026-10-12; 2026-10-13 for Qwen3-Coder and gemma-4-E4B):
+context the user set on every Lemonade model (2026-10-12; 2026-10-13 for Qwen3.8 and Qwen3-Coder):
 
 | Model | Context | Weights |
 |---|---|---|
+| Qwen3.8-27B (UD-Q4_K_XL) | 65536 | 17.2 GB |
 | Muse-Glimmer-30B (Q4_K_M) | 65536 | 16.9 GB |
-| gemma-4-E4B (Q4_K_M) | 65536 | 5.9 GB |
 | Qwen3-Coder-30B-A3B (Q4_K_M) | 65536 | 17.4 GB |
-| **sum** | | **40.2 GB** |
+| **sum** | | **51.5 GB** |
 
 On top come each model's KV cache at that context and its compute buffers. Their sizes are not measured yet for
 these three, so check the free memory with all three loaded before raising a context. `--save-options` replaces the model's stored
@@ -786,7 +789,7 @@ before the next Cline launch. Which models are in the record is the Kanban orche
 passed `kanban models vet`); `kanban setup-provider lemonade` fills in their metadata:
 
 ```sh
-lemonade load Muse-Glimmer-30B-GGUF-Q4_K_M --ctx-size 65536 --llamacpp vulkan --save-options
+lemonade load Qwen3.8-27B-GGUF-UD-Q4_K_XL --ctx-size 65536 --llamacpp vulkan --save-options
 kanban setup-provider lemonade    # metadata of the record's models, drops a modelsSourceUrl; doctor prints it
 ```
 
@@ -804,7 +807,7 @@ ones, and `kanban doctor` warns for every project on the preset whose config lac
 
 The other local gotchas:
 
-- **Images.** The dev model (Muse-Glimmer) and the QA model (Gemma) read images, so the preset needs no
+- **Images.** The dev model (Qwen3.8) and the QA model (Muse-Glimmer) read images, so the preset needs no
   `qa.promptNotes.screenshotFallback`. The fallback (Qwen3-Coder) has no vision label in Lemonade, so a fallback
   sibling that reads a screenshot gets a no-images rejection. Recovery clears and resends an image a model rejects
   (too large or no vision).
@@ -845,9 +848,9 @@ spec's `sets`. Keep `parallel` at 1, or the command refuses the spec (one GPU):
     { "id": "B", "ref": "<commit with a known bug>", "base": "<base>", "fromCard": "<dev card id>", "expect": "FAIL" }
   ],
   "models": [
+    { "key": "muse", "agent": "cline", "provider": "lemonade", "model": "Muse-Glimmer-30B-GGUF-Q4_K_M" },
     { "key": "gemma4", "agent": "cline", "provider": "lemonade", "model": "gemma-4-E4B-it-GGUF-Q4_K_M" },
-    { "key": "devstral2", "agent": "cline", "provider": "lemonade", "model": "Devstral-Small-2-24B-Instruct-2512-GGUF-Q4_K_M" },
-    { "key": "qwen3coder", "agent": "cline", "provider": "lemonade", "model": "Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M" }
+    { "key": "devstral2", "agent": "cline", "provider": "lemonade", "model": "Devstral-Small-2-24B-Instruct-2512-GGUF-Q4_K_M" }
   ]
 }
 ```

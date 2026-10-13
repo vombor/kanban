@@ -268,14 +268,14 @@ describe("rework limits", () => {
 
 	it("team (lemonade): after its FAIL rounds a card goes to the fallback local model once, then to the orchestrator", async () => {
 		const policy = createRoutingPolicy(resolveTeamKit("lemonade"));
-		const muse = { providerId: "lemonade", modelId: "Muse-Glimmer-30B-GGUF-Q4_K_M" };
-		const dev = { ...DEV, agentSettings: muse };
+		const qwen = { providerId: "lemonade", modelId: "Qwen3.8-27B-GGUF-UD-Q4_K_XL" };
+		const dev = { ...DEV, agentSettings: qwen };
 		const fails = [failVerdict(1), failVerdict(2), failVerdict(3)];
 
 		const first = createHarness({ onFail: (input) => policy.onFail(input) });
 		await first.seed("d1111", { qaVerdicts: fails });
 		await first.tick({ review: [dev] }, [
-			{ taskId: "d1111", agentId: "cline", modelId: "Muse-Glimmer-30B-GGUF-Q4_K_M" },
+			{ taskId: "d1111", agentId: "cline", modelId: "Qwen3.8-27B-GGUF-UD-Q4_K_XL" },
 		]);
 		expect(kinds(first.actions)).toEqual(["createTask:s0001", "startTask:s0001", "blockTask:d1111"]);
 		expect(first.actions[0]).toMatchObject({

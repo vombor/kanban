@@ -4,13 +4,13 @@ import { assessLocalResidency, listKitLocalWorkingSet } from "../../../src/kits/
 import { resolveTeamKit } from "../../utilities/team-kits";
 
 const TEAM_LOCAL_SET = [
+	"Qwen3.8-27B-GGUF-UD-Q4_K_XL",
 	"Muse-Glimmer-30B-GGUF-Q4_K_M",
-	"gemma-4-E4B-it-GGUF-Q4_K_M",
 	"Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M",
 ];
 
 describe("local residency", () => {
-	it("counts the local models team (lemonade) runs at once: dev (= plan), QA and fallback", () => {
+	it("counts the local models team (lemonade) runs at once: dev, QA (= plan) and fallback", () => {
 		expect(listKitLocalWorkingSet(resolveTeamKit("lemonade"))).toEqual(TEAM_LOCAL_SET);
 		expect(listKitLocalWorkingSet(resolveTeamKit("cloud"))).toEqual([]);
 		expect(listKitLocalWorkingSet(resolveTeamKit("lemonade", { "escalate.to": "orchestrator" }))).toEqual(

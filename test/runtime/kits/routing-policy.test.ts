@@ -264,12 +264,12 @@ describe("getModelVendor", () => {
 		expect(getModelVendor("Laguna-S-2.1-GGUF-UD-Q4_K_XL")).not.toBe(getModelVendor("Qwen3.8-27B-GGUF-UD-Q4_K_XL"));
 	});
 
-	it("reads the lemonade preset's three models as three vendors (Meta, Google, Qwen)", () => {
+	it("reads the lemonade preset's dev and fallback models as Qwen and its QA model as Meta", () => {
+		expect(getModelVendor("Qwen3.8-27B-GGUF-UD-Q4_K_XL")).toBe("qwen");
+		expect(getModelVendor("Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M")).toBe("qwen");
 		expect(getModelVendor("Muse-Glimmer-30B-GGUF-Q4_K_M")).toBe("meta");
 		expect(getModelVendor("Muse-Glimmer-30B-GGUF-Q4_K_M")).toBe(
 			getModelVendor("cline-pass/muse-spark-1.3-contributor"),
 		);
-		expect(getModelVendor("gemma-4-E4B-it-GGUF-Q4_K_M")).toBe("google");
-		expect(getModelVendor("Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M")).toBe("qwen");
 	});
 });

@@ -10,8 +10,8 @@ import { loadKitCatalog } from "../../../src/kits/resolve-kit";
 import { createTempDir } from "../../utilities/temp-dir";
 import { createBoard, createCard } from "../../utilities/workspace-state-store";
 
+const QWEN = "Qwen3.8-27B-GGUF-UD-Q4_K_XL";
 const MUSE = "Muse-Glimmer-30B-GGUF-Q4_K_M";
-const GEMMA = "gemma-4-E4B-it-GGUF-Q4_K_M";
 const QWEN_CODER = "Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M";
 
 describe("doctor: Cline's models.json is the allow list", () => {
@@ -57,7 +57,7 @@ describe("doctor: Cline's models.json is the allow list", () => {
 	}
 
 	it("warns about a kit role on a Lemonade model the record doesn't list, nothing more", async () => {
-		writeModels({ [MUSE]: {}, [GEMMA]: {} });
+		writeModels({ [QWEN]: {}, [MUSE]: {} });
 		const findings = await check({ kit: "team-local" });
 		expect(findings).toEqual([
 			{
@@ -67,7 +67,7 @@ describe("doctor: Cline's models.json is the allow list", () => {
 				hint: expect.stringContaining("kanban models vet"),
 			},
 		]);
-		writeModels([MUSE, GEMMA, QWEN_CODER]);
+		writeModels([QWEN, MUSE, QWEN_CODER]);
 		expect(await check({ kit: "team-local" })).toEqual([]);
 	});
 

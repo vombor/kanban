@@ -9,9 +9,11 @@ import { getBuiltInKits, getBuiltInPresets, getDefaultKit, resolveKitLayers } fr
 import { listKitModels } from "../../../src/kits/team/bench/price-sync-job";
 import { createCardHistory, createEffectiveCard } from "../../utilities/effective-card";
 
+const QWEN = { provider: "lemonade", model: "Qwen3.8-27B-GGUF-UD-Q4_K_XL" };
 const MUSE = { provider: "lemonade", model: "Muse-Glimmer-30B-GGUF-Q4_K_M" };
 const QWEN_CODER = { provider: "lemonade", model: "Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M" };
-const GEMMA = { provider: "lemonade", model: "gemma-4-E4B-it-GGUF-Q4_K_M" };
+/** The only models the preset may name (user, 2026-10-13: served on Lemonade and vetted; issue #45). */
+const SERVED_MODELS = [QWEN.model, MUSE.model, QWEN_CODER.model];
 
 /** The team kit with the lemonade preset (what team-local was until 2026-10-12). */
 function resolveTeamLocal(overrides: Record<string, unknown> = {}) {
@@ -64,7 +66,15 @@ describe("the team kit's lemonade preset", () => {
 		expect(kit.features).toEqual(["scoreboard", "bench", "runoffs", "calibration", "tiers"]);
 	});
 
-	it("assigns new dev and plan cards to Cline on the dev tier's local model", () => {
+	it("names only the three served, vetted models, in the preset and in the resolved kit", () => {
+		const preset = getBuiltInPresets().get("lemonade");
+		for (const document of [preset, resolveTeamLocal().kit]) {
+			const named = new Set(collectModelProviders(document).map(({ model }) => model));
+			expect([...named].sort()).toEqual([...SERVED_MODELS].sort());
+		}
+	});
+
+	it("assigns new dev cards to the dev tier's local model and plan cards to the QA model", () => {
 		const { kit } = resolveTeamLocal();
 		expect(
 			createRoutingPolicy(kit).devAssignment({
@@ -75,14 +85,13 @@ describe("the team kit's lemonade preset", () => {
 			}),
 		).toEqual({
 			agentId: "cline",
-			model: MUSE,
+			model: QWEN,
 			tier: "dev",
 		});
 		expect(answerPlanAssignment(kit)).toEqual({
 			kind: "plan",
 			agentId: "cline",
 			model: MUSE,
-			tier: "dev",
 			startInPlanMode: true,
 			rules: [],
 		});
@@ -96,27 +105,27 @@ describe("the team kit's lemonade preset", () => {
 				round: 1,
 				history: createCardHistory(),
 			});
-		expect(qaFor(MUSE)).toMatchObject({ kind: "qa", agentId: "cline", model: GEMMA, route: null });
-		expect(qaFor(QWEN_CODER)).toMatchObject({ kind: "qa", model: GEMMA, route: null });
+		expect(qaFor(QWEN)).toMatchObject({ kind: "qa", agentId: "cline", model: MUSE, route: null });
+		expect(qaFor(QWEN_CODER)).toMatchObject({ kind: "qa", model: MUSE, route: null });
 	});
 
-	it("refuses QA by the dev model's own family", () => {
+	it("refuses QA by the dev model's own family: a dev card on the QA model gets none", () => {
 		const policy = createRoutingPolicy(resolveTeamLocal().kit);
 		expect(
 			policy.qaPolicy({
 				dev: createEffectiveCard({
 					agentId: "cline",
-					model: { provider: "lemonade", model: "Gemma-3-27B-it-GGUF" },
+					model: MUSE,
 				}),
 				round: 1,
 				history: createCardHistory(),
 			}),
-		).toMatchObject({ kind: "none", reason: expect.stringContaining("(google)") });
+		).toMatchObject({ kind: "none", reason: expect.stringContaining("(meta)") });
 	});
 
 	it("reworks on the same model, then hands the task to the fallback local model at once, outages included", () => {
 		const policy = createRoutingPolicy(resolveTeamLocal().kit);
-		const dev = createEffectiveCard({ agentId: "cline", model: MUSE });
+		const dev = createEffectiveCard({ agentId: "cline", model: QWEN });
 		const limits = { maxFailRounds: 3 };
 		expect(policy.onFail({ dev, cause: "fail", verdict: null, history: createCardHistory([1]), limits })).toEqual({
 			action: "rework",
@@ -140,22 +149,15 @@ describe("the team kit's lemonade preset", () => {
 		const { kit } = resolveTeamLocal();
 		const onCline = (model: { provider: string; model: string }) => ({ agentId: "cline", ...model });
 		expect(listKitRoutes(kit)).toEqual([
-			{ label: "roles.dev", combination: onCline(MUSE) },
-			{ label: "roles.qa", combination: onCline(GEMMA) },
+			{ label: "roles.dev", combination: onCline(QWEN) },
+			{ label: "roles.qa", combination: onCline(MUSE) },
 			{ label: "roles.plan", combination: onCline(MUSE) },
 			{ label: "roles.fallback", combination: onCline(QWEN_CODER) },
 		]);
-		// No text in the kit names the models it ran before 2026-10-12, or the ones it dropped on 2026-10-13.
+		// No text in the kit names the models it ran before 2026-10-12, or the ones it dropped on 2026-10-13 (gemma-4-E4B
+		// is named only in the QA notes, as the reviewer notes found too small).
 		const text = JSON.stringify(kit);
-		for (const old of [
-			"Qwen3.8-27B",
-			"Devstral-Small-2-24B",
-			"GLM",
-			"98304",
-			"Gemma-4-12B",
-			"Laguna-XS-2.1",
-			"gemma-4-31B",
-		]) {
+		for (const old of ["Devstral-Small-2-24B", "GLM", "98304", "Gemma-4-12B", "Laguna-XS-2.1", "gemma-4-31B"]) {
 			expect(text).not.toContain(old);
 		}
 	});
@@ -203,14 +205,14 @@ describe("the team kit's lemonade preset", () => {
 			config: parsePipelineConfig({}).config,
 		});
 		// The one refusal is a sample card built on the QA model itself: the kit requires a QA model of another
-		// vendor and has none for Gemma, so a card someone builds on Gemma waits in Review.
+		// vendor and has none for Muse-Glimmer, so a card someone builds on Muse-Glimmer waits in Review.
 		expect(report.warnings).toEqual([
-			expect.stringContaining("gemma-4-E4B-it-GGUF-Q4_K_M is from the dev card's vendor (google)"),
+			expect.stringContaining("Muse-Glimmer-30B-GGUF-Q4_K_M is from the dev card's vendor (meta)"),
 		]);
 		expect(report.recommendedLandingMode).toBe("qa");
 		const text = formatKitReport(report).join("\n");
 		expect(text).toContain(
-			"New dev cards (when the creator sets no agent):\n  cline on lemonade/Muse-Glimmer-30B-GGUF-Q4_K_M (tier dev)",
+			"New dev cards (when the creator sets no agent):\n  cline on lemonade/Qwen3.8-27B-GGUF-UD-Q4_K_XL (tier dev)",
 		);
 		expect(text).not.toContain("[qa.routes[");
 		expect(text).toContain("Settings this kit needs (config.json; the kit never applies them):");
