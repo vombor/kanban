@@ -37,6 +37,8 @@ const DOCTOR = {
 	kanbanVersion: "0.0.0-test",
 	// No agent binaries or sandbox probes from the test machine.
 	guardrailDeps: { isInstalled: () => false, sandboxAvailable: async () => null },
+	// No GHCR from the test machine (the pod itself is a container with a build stamp).
+	containerImageDeps: { isInContainer: () => false },
 };
 
 function find(findings: DoctorFinding[], area: DoctorFinding["area"], text: string): DoctorFinding | undefined {

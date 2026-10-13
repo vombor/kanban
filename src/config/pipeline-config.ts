@@ -15,6 +15,7 @@ import { lockedFileSystem } from "../fs/locked-file-system";
 import { getRenamedKit, type KitSelection } from "../kits/renamed-kits";
 import { setConfiguredOpenAiCompatibleProviders } from "../models/openai-compatible-providers";
 import { getKanbanGlobalConfigPath, KANBAN_HOME_MARKER_VERSION } from "../state/kanban-home";
+import { DEFAULT_KANBAN_IMAGE_CHANNEL, imageChannelSchema } from "../update/image-channel";
 import {
 	clineLemonadeContextSyncModeSchema,
 	DEFAULT_CLINE_LEMONADE_CONTEXT_SYNC,
@@ -768,6 +769,17 @@ const providersSectionSchema = z
 	.strict();
 export type ProvidersSettings = z.infer<typeof providersSectionSchema>;
 
+// The pod's container image channel (src/update/container-image.ts, docs/fork/container-lifecycle.md): the tag
+// `kanban restart update`, the restart wake and doctor compare the running image with. It must match the Quadlet
+// unit's `Image=` tag, which Kanban can't see from inside: `latest` (every fork/stack push, the default) or `stable`
+// (the last release, for a pod that runs releases). Set with `kanban config set update.imageChannel <channel>`.
+const updateSectionSchema = z
+	.object({
+		imageChannel: imageChannelSchema.default(DEFAULT_KANBAN_IMAGE_CHANNEL),
+	})
+	.strict();
+export type UpdateSettings = z.infer<typeof updateSectionSchema>;
+
 const SECTION_SCHEMAS = {
 	sessionSync: sessionSyncSectionSchema,
 	pipeline: pipelineSectionSchema,
@@ -781,6 +793,7 @@ const SECTION_SCHEMAS = {
 	isolation: isolationSectionSchema,
 	github: githubSectionSchema,
 	providers: providersSectionSchema,
+	update: updateSectionSchema,
 } as const;
 
 type SectionName = keyof typeof SECTION_SCHEMAS;

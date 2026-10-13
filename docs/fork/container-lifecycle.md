@@ -34,11 +34,16 @@ every start. An `Exec=` override still works: it replaces only the command, and 
 
 ## Quadlet
 
+The image tag is the pod's channel: `:latest` (every push to `fork/stack`, as below) or `:stable` (the last release,
+recommended for a pod that runs projects; see [Releases](#releases)). Kanban's `update.imageChannel` must name the
+same tag.
+
 ```ini
 [Container]
+# :stable for a consumer pod (Releases, below); :latest follows every fork/stack push.
 Image=ghcr.io/vombor/kanban:latest
 AutoUpdate=registry
-# Every container start pulls :latest first when the registry's digest differs from the local image (podman run
+# Every container start pulls the tag first when the registry's digest differs from the local image (podman run
 # --pull=newer; a failed pull falls back to the local image). Together with Restart=always this makes "the container
 # exited" = "update and come back" (kanban restart update, below). Quadlet's Pull= key: podman 4.6.0 and later.
 Pull=newer
@@ -84,9 +89,12 @@ permission of 2026-10-12 no longer runs in the pod; every orchestrator and every
 
 1. refuses outside a container (no `/run/.containerenv`);
 2. compares the running build (`KANBAN_IMAGE_REVISION`/`KANBAN_IMAGE_CREATED`, set from build args by CI; the same
-   values as the `org.opencontainers.image.revision`/`.created` labels) with the labels of
-   `ghcr.io/vombor/kanban:latest`, read anonymously from GHCR, and refuses when it isn't newer, the running image has
-   no stamp (a local build) or the registry can't be read;
+   values as the `org.opencontainers.image.revision`/`.created` labels) with the labels of the tag the pod follows,
+   `ghcr.io/vombor/kanban:<update.imageChannel>` (`latest` by default, `stable` for releases), read anonymously
+   from GHCR, and refuses when it isn't newer, the running image has no stamp (a local build) or the registry can't be
+   read. On `stable` it names releases: `v0.1.70-fork.8 is out (running v0.1.70-fork.7); release notes:
+   https://github.com/vombor/kanban/releases/tag/v0.1.70-fork.8`, `Already on the latest release (…)`, and a running
+   build that isn't a release (a `:latest` or branch image) is reported as one;
 3. refuses while any card is In Progress in any project (their agents stop with the container; after the restart
    restart recovery resumes them where `pipeline.recovery.mode` is `on`);
 4. runs the same restart prepare as the entrypoint's stop step for every workspace (WIP tags + restart manifest),
@@ -94,14 +102,76 @@ permission of 2026-10-12 no longer runs in the pod; every orchestrator and every
 
 `--force` skips 2 and 3 (an unreachable registry, the same image, running cards), `--dry-run` checks and prints
 what would happen without tagging, writing or stopping anything. Every request, refused or not, is logged to the
-server log and `/root/.kanban/logs/restart-update.jsonl` (who, the running build, `:latest`'s build and digest).
-After the restart the watchdog's "Kanban restarted" wake says `updated from <old build> to <new build>`, or that the
-container came back on the old build (no `Pull=newer` in the unit, or the pull failed).
+server log and `/root/.kanban/logs/restart-update.jsonl` (who, the channel, the running build, the channel tag's build
+and digest). After the restart the watchdog's "Kanban restarted" wake says `updated from <old build> to <new build>`
+(on `stable`: `updated from v0.1.70-fork.7 (…) to v0.1.70-fork.8 (…) (release notes: <link>)`), that the container
+came back on the old build (no `Pull=newer` in the unit, or the pull failed), or, on `stable`, that it came back on
+a build that isn't a release (the unit's `Image=` names another tag).
 
 Kanban can't check the unit from inside: the Quadlet file is on the host, and a rootless container's
 `/run/.containerenv` names neither the unit nor the image. So doctor doesn't warn about a unit without `Pull=newer`
 or `Restart=always`. Without `Restart=always` the update restart only stops the container (start it with
 `systemctl --user start <unit>`); without `Pull=newer` it comes back on the old image, which the wake then says.
+Doctor does check what the running image's own stamp can tell (the "Image channel" row, in a container only): a
+release build is never pushed as `:latest` and `:stable` is always a release build, so a release build with
+`update.imageChannel` `latest`, or a non-release build with `stable`, is a warning that the setting and the unit's
+tag disagree; when they agree it says whether the channel's tag has something newer ("v0.1.70-fork.8 is out (running
+v0.1.70-fork.7)" on `stable`). It can't tell `:stable` from a pinned `:0.1.70-fork.7`, and it never claims to see
+the unit.
+
+## Releases
+
+The pod is the consumer of Kanban's releases; the producer is Kanban's development, outside the pod
+([development.md](development.md), whose "Releases" section points here: the release steps and tags are kept in this
+one place). Every
+push to `fork/stack` still builds `:latest`, so nothing that follows `:latest` changes; a pod that should run only
+what was released follows `:stable` instead.
+
+### Cutting a release (producer)
+
+Run the release skill (`/release` in Claude Code, the `.clinerules/workflows/release.md` workflow;
+[RELEASE_WORKFLOW.md](../../RELEASE_WORKFLOW.md) has the details) on `fork/stack`:
+
+1. Collect the commits since the last `v*-fork.*` tag and write the user-facing `## [<version>]` section at the top
+   of `CHANGELOG.md` (publish.yml refuses a tag without one).
+2. Bump `package.json`'s `version` (`0.1.70-fork.N`) and the two `version` fields at the top of
+   `package-lock.json` by hand.
+3. Commit (`v<version> release notes`), tag `v<version>`, push `fork/stack`, then push the tag.
+
+The tag push starts two workflows:
+
+| Workflow | On the tag `v0.1.70-fork.8` |
+|---|---|
+| `publish.yml` | tests, publishes `@vombor/kanban@0.1.70-fork.8` to GitHub Packages (dist-tag `next` for a prerelease version), creates the GitHub release `v0.1.70-fork.8` with the CHANGELOG section |
+| `image.yml` | checks the tag is `v${package.json version}` of `@vombor/kanban` (an upstream tag or a mismatch fails the run and moves nothing), builds and tests, pushes `ghcr.io/vombor/kanban:0.1.70-fork.8` and moves `:stable` to it; the build is stamped with `KANBAN_IMAGE_VERSION=0.1.70-fork.8` and the label `dev.vombor.kanban.release` |
+
+The image tags per event:
+
+| Event | Tags pushed | Version stamp |
+|---|---|---|
+| push to `fork/stack` | `:sha-<short>`, `:fork-stack`, `:latest` | none |
+| push to another `fork/**` branch | `:sha-<short>`, `:<branch>` | none |
+| daily schedule | the same tags as a `fork/stack` push (a rebuild with the newest agent CLIs) | none |
+| tag `v0.1.70-fork.8` (or `gh workflow run image.yml --ref v0.1.70-fork.8`) | `:0.1.70-fork.8`, `:stable` | `0.1.70-fork.8` |
+
+The version tag is metadata-action's semver `{{version}}` form, without the `v`; Kanban names releases with it
+(`v0.1.70-fork.8`, the git tag and GitHub release). `:stable` is not rebuilt daily: a release keeps the agent CLIs it
+was built with, and the agents update themselves at runtime. Re-running `image.yml` on an older tag moves `:stable`
+back to that release.
+
+### Following releases (consumer)
+
+1. In the Quadlet file, set `Image=ghcr.io/vombor/kanban:stable`, keeping `Pull=newer` and `Restart=always` as
+   above, then `systemctl --user daemon-reload`.
+2. Tell Kanban which tag the unit follows: `kanban config set update.imageChannel stable` (the user's command;
+   `kanban config unset update.imageChannel` goes back to `latest`). Kanban can't see the unit, so this setting is
+   how `restart update`, the wake and doctor know.
+3. Move onto the release when no card is In Progress: `kanban restart update --dry-run` says what is out
+   (`v0.1.70-fork.8 is out (running …)`, with the release notes link), `kanban restart update` restarts onto it.
+   The first switch from a `:latest` build may be refused as "newer than :stable" when `fork/stack` was built after
+   the release; `--force` (or `systemctl --user restart <unit>` while no card runs) moves onto the release.
+4. `kanban doctor` then shows `Image channel stable: running v0.1.70-fork.8, the latest release`, or a warning when
+   the running image doesn't fit the setting.
 
 ## Settings (environment)
 
@@ -114,6 +184,7 @@ or `Restart=always`. Without `Restart=always` the update restart only stops the 
 | `KANBAN_RESTART_PREPARE_TIMEOUT` | `20` | seconds; as above |
 | `KANBAN_KIT_HOME` | `/root/.kanban` | where `<kit>` is |
 | `KANBAN_IMAGE_REVISION`, `KANBAN_IMAGE_CREATED` | set by the image | the image's build (commit, build time), for `kanban restart update`; don't override them |
+| `KANBAN_IMAGE_VERSION` | set by a release image | the release version (`0.1.70-fork.8`) on a `:stable`/`:<version>` image, empty on every other build; don't override it |
 | `GH_TOKEN` | unset | the user's classic PAT (scopes `repo`, `read:packages`, `write:packages`, `workflow`). gh reads it; at start the entrypoint adds the npm `${GH_TOKEN}` reference for `@vombor` to `~/.npmrc` and runs `gh auth setup-git`. Pass it as a podman secret, not `Environment=`. Agent sessions keep it (PR cards need gh), except Copilot's; see [github-auth.md](github-auth.md) |
 
 E.g. to tag the cards of more than one board before a stop:

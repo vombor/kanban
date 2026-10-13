@@ -71,7 +71,8 @@ export const USER_ONLY_COMMANDS = [
 	"isolation grant",
 	"isolation revoke",
 	"isolation approve",
-	// Only models.lists.lemonade.include: which Lemonade models Cline offers every project (src/commands/config.ts).
+	// Only models.lists.lemonade.include (which Lemonade models Cline offers every project) and update.imageChannel (the
+	// pod image tag the Quadlet follows), src/commands/config.ts.
 	"config set",
 	"config unset",
 	"plan approve",

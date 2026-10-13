@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 
+import { IMAGE_CHANNEL_KEY, setImageChannel, unsetImageChannel } from "../config/image-channel-setting";
 import { type ImportKitResult, importLegacyKitConfig } from "../config/import-kit";
 import { CONFIG_SETTABLE_KEYS, setModelListInclude, unsetModelListInclude } from "../config/model-list-include-setting";
 import { getWorkspacePipelineSettings, readPipelineConfig } from "../config/pipeline-config";
@@ -16,6 +17,23 @@ function toErrorMessage(error: unknown): string {
 function short(value: unknown, max = 100): string {
 	const text = JSON.stringify(value) ?? "(none)";
 	return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+/** The keys `kanban config set|unset` takes: the Lemonade model list, and the pod's image channel. */
+const SETTABLE_KEYS = [...CONFIG_SETTABLE_KEYS, IMAGE_CHANNEL_KEY];
+
+async function setConfigKey(key: string, values: string[]) {
+	if (key !== IMAGE_CHANNEL_KEY) {
+		return await setModelListInclude(key, values);
+	}
+	if (values.length !== 1) {
+		throw new Error(`${IMAGE_CHANNEL_KEY} takes one value: latest or stable`);
+	}
+	return await setImageChannel(values[0] ?? "");
+}
+
+async function unsetConfigKey(key: string) {
+	return key === IMAGE_CHANNEL_KEY ? await unsetImageChannel() : await unsetModelListInclude(key);
 }
 
 function formatImportResult(result: ImportKitResult): string[] {
@@ -99,17 +117,17 @@ export function registerConfigCommand(program: Command): void {
 			}
 		});
 
-	const keys = CONFIG_SETTABLE_KEYS.join(", ");
+	const keys = SETTABLE_KEYS.join(", ");
 	config
 		.command("set")
 		.description(
-			`Set a config.json key. Only ${keys}: the Lemonade models Kanban's model-lists route lists (Cline offers its models.json record instead, curated by the user). The models stay installed on Lemonade.`,
+			`Set a config.json key. Only ${keys}: the Lemonade models Kanban's model-lists route lists (Cline offers its models.json record instead, curated by the user; the models stay installed on Lemonade), or the tag of ghcr.io/vombor/kanban the pod's Quadlet unit follows (latest or stable).`,
 		)
 		.argument("<key>", `One of ${keys}.`)
-		.argument("<values...>", "The model ids.")
+		.argument("<values...>", "The model ids, or the image channel (latest, stable).")
 		.action(async (key: string, values: string[]) => {
 			try {
-				const result = await setModelListInclude(key, values);
+				const result = await setConfigKey(key, values);
 				process.stdout.write(
 					`${result.key}: ${JSON.stringify(result.from)} -> ${JSON.stringify(result.to)}\nWritten to ${result.configPath}. ${result.next}\n`,
 				);
@@ -120,11 +138,13 @@ export function registerConfigCommand(program: Command): void {
 		});
 	config
 		.command("unset")
-		.description(`Remove a config.json key set with \`kanban config set\` (${keys}): every model is offered again.`)
+		.description(
+			`Remove a config.json key set with \`kanban config set\` (${keys}): every model is offered again, or the pod follows latest again.`,
+		)
 		.argument("<key>", `One of ${keys}.`)
 		.action(async (key: string) => {
 			try {
-				const result = await unsetModelListInclude(key);
+				const result = await unsetConfigKey(key);
 				process.stdout.write(
 					`${result.key}: ${JSON.stringify(result.from)} -> (unset)\nWritten to ${result.configPath}. ${result.next}\n`,
 				);

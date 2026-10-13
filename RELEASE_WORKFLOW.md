@@ -17,8 +17,12 @@ This repository uses these GitHub Actions workflows for quality gates, publishin
     the workflow fails at its first step without it.
 - `.github/workflows/image.yml`
   - Runs on pushes to `fork/**` and daily; builds and pushes the dev-container image `ghcr.io/vombor/kanban`
-    (next to the npm package of the same name; it was `ghcr.io/vombor/kanban-dev` until 2026-10-12). It publishes no npm
-    package.
+    (`:sha-<short>`, `:<branch>`, and `:latest` from `fork/stack`; next to the npm package of the same name; it was
+    `ghcr.io/vombor/kanban-dev` until 2026-10-12). It publishes no npm package.
+  - Also runs on the same version tags as `publish.yml`: it checks the tag is `v${package.json version}` of
+    `@vombor/kanban`, then pushes `:<version>` (e.g. `:0.1.70-fork.8`, no `v`) and moves `:stable` to it, stamped
+    with the version (`KANBAN_IMAGE_VERSION`, label `dev.vombor.kanban.release`). A release never moves `:latest`.
+    A pod that runs releases follows `:stable` (docs/fork/container-lifecycle.md, "Releases").
 
 ## Contributor workflow
 

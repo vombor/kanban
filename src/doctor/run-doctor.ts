@@ -29,6 +29,7 @@ import { checkKanbanFilesUnderClineDir } from "./cline-dir-checks";
 import { checkClineModelsAllowList } from "./cline-models-allow-list-checks";
 import { checkClineLemonadeModels } from "./cline-models-checks";
 import { checkClinePassKey } from "./cline-pass-key-checks";
+import { type ContainerImageCheckDeps, checkContainerImageChannel } from "./container-image-checks";
 import { createDeepCheckDeps, type DeepCheckDeps, runDeepChecks } from "./deep-checks";
 import {
 	checkHome,
@@ -75,6 +76,8 @@ export interface DoctorOptions {
 	issueDeps?: IssueCheckDeps;
 	/** Test hook: the project shortcut rows' home and base branch. */
 	shortcutDeps?: ProjectShortcutCheckDeps;
+	/** Test hook: the image channel row's container check, running build and registry (GHCR). */
+	containerImageDeps?: ContainerImageCheckDeps;
 }
 
 export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
@@ -183,6 +186,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
 		})),
 	);
 	findings.push(...checkAgentDefaults(await readRuntimeAgentDefaults()));
+	findings.push(...(await checkContainerImageChannel(config.update.imageChannel, options.containerImageDeps)));
 	findings.push(...checkKitProjectSettings(projectContext));
 	findings.push(...checkKitRecommendedSettings(projectContext));
 	findings.push(

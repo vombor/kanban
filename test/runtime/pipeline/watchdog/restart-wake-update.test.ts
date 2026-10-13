@@ -24,10 +24,10 @@ const manifest: RestartManifest = {
 	cards: [],
 };
 
-function item(runningBuild: RestartWakeItemInput["runningBuild"]): string {
+function item(runningBuild: RestartWakeItemInput["runningBuild"], from: RestartManifest = manifest): string {
 	return buildRestartWakeItem({
 		serverStartedAt: START,
-		stop: describePreviousStop(manifest, START, PREVIOUS_START),
+		stop: describePreviousStop(from, START, PREVIOUS_START),
 		runningBuild,
 		recoveryNotRunning: null,
 		passRan: true,
@@ -59,6 +59,31 @@ describe("the restart wake after an update restart", () => {
 		expect(item(OLD)).toContain(
 			"but this server still runs aaaaaaa (built 2026-10-11 06:20Z): the container started without the newer image (bbbbbbb (built 2026-10-12 06:20Z)), so check the Quadlet unit's Pull=newer",
 		);
+	});
+
+	it("on the stable channel names the releases and links the new one's notes", () => {
+		const r7 = { ...OLD, version: "0.1.70-fork.7" };
+		const r8 = { ...NEW, version: "0.1.70-fork.8" };
+		const stable: RestartManifest = { ...manifest, update: { from: r7, to: r8, channel: "stable" } };
+		expect(item({ ...r8, digest: null }, stable)).toContain(
+			"updated from v0.1.70-fork.7 (aaaaaaa, built 2026-10-11 06:20Z) to v0.1.70-fork.8 (bbbbbbb, built 2026-10-12 06:20Z) (release notes: https://github.com/vombor/kanban/releases/tag/v0.1.70-fork.8);",
+		);
+		expect(item(null, stable)).toContain(
+			"to v0.1.70-fork.8 (bbbbbbb, built 2026-10-12 06:20Z) (the registry's :stable then) (release notes: https://github.com/vombor/kanban/releases/tag/v0.1.70-fork.8)",
+		);
+		// Back on a build that isn't a release although the pod follows :stable: the unit's Image= is still another tag.
+		expect(item({ ...NEW, created: "2026-10-12T07:00:00.000Z", digest: null }, stable)).toContain(
+			"to bbbbbbb (built 2026-10-12 07:00Z), which is not a release build although Kanban follows :stable, so check the Quadlet unit's Image= tag",
+		);
+		// The channel survives the watchdog state.
+		const parsed = watchdogWorkspaceStateSchema.parse({
+			restartWake: {
+				serverStartedAt: START,
+				firstSeenAt: new Date(START).toISOString(),
+				stop: describePreviousStop(stable, START, PREVIOUS_START),
+			},
+		});
+		expect(parsed.restartWake?.stop?.update?.channel).toBe("stable");
 	});
 
 	it("keeps the update in the watchdog state", () => {

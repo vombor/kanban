@@ -3,13 +3,16 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
 	compareImageBuilds,
+	describeChannelRelease,
 	describeImageBuild,
 	fetchLatestImageBuild,
+	getChannelImageRef,
+	getImageReleaseUrl,
 	isRunningInContainer,
 	readRunningImageBuild,
 } from "../../../src/update/container-image";
 
-const OLD = { revision: "aaaaaaa1111", created: "2026-10-11T06:20:00.000Z", digest: null };
+const OLD = { revision: "aaaaaaa1111", created: "2026-10-11T06:20:00.000Z", version: null, digest: null };
 const NEW = { revision: "bbbbbbb2222", created: "2026-10-12T06:20:00.000Z", digest: "sha256:new" };
 
 describe("container image builds", () => {
@@ -19,6 +22,41 @@ describe("container image builds", () => {
 		);
 		expect(readRunningImageBuild({ KANBAN_IMAGE_REVISION: " ", KANBAN_IMAGE_CREATED: "" })).toBeNull();
 		expect(readRunningImageBuild({})).toBeNull();
+	});
+
+	it("reads a release build's version, without a leading v, and only with a build stamp", () => {
+		const env = { KANBAN_IMAGE_REVISION: OLD.revision, KANBAN_IMAGE_CREATED: OLD.created };
+		expect(readRunningImageBuild({ ...env, KANBAN_IMAGE_VERSION: "0.1.70-fork.8" })?.version).toBe("0.1.70-fork.8");
+		expect(readRunningImageBuild({ ...env, KANBAN_IMAGE_VERSION: "v0.1.70-fork.8" })?.version).toBe("0.1.70-fork.8");
+		expect(readRunningImageBuild({ ...env, KANBAN_IMAGE_VERSION: "" })?.version).toBeNull();
+		expect(readRunningImageBuild({ KANBAN_IMAGE_VERSION: "0.1.70-fork.8" })).toBeNull();
+	});
+
+	it("names releases by version and links their GitHub release", () => {
+		const release = { ...OLD, version: "0.1.70-fork.8" };
+		expect(describeImageBuild(release)).toBe("v0.1.70-fork.8 (aaaaaaa, built 2026-10-11 06:20Z)");
+		expect(getImageReleaseUrl(release)).toBe("https://github.com/vombor/kanban/releases/tag/v0.1.70-fork.8");
+		expect(getImageReleaseUrl(OLD)).toBeNull();
+		expect(getChannelImageRef("stable")).toBe("ghcr.io/vombor/kanban:stable");
+	});
+
+	it("describes :stable against the running build by release; nothing on latest", () => {
+		const r7 = { ...OLD, version: "0.1.70-fork.7" };
+		const r8 = { ...NEW, version: "0.1.70-fork.8" };
+		expect(describeChannelRelease("latest", OLD, NEW)).toBeNull();
+		expect(describeChannelRelease("stable", r7, r8)).toBe("v0.1.70-fork.8 is out (running v0.1.70-fork.7)");
+		expect(describeChannelRelease("stable", OLD, r8)).toBe(
+			"v0.1.70-fork.8 is out (running a non-release build aaaaaaa (built 2026-10-11 06:20Z))",
+		);
+		expect(describeChannelRelease("stable", { ...r8, digest: null }, r8)).toBe(
+			"running v0.1.70-fork.8, the latest release",
+		);
+		expect(describeChannelRelease("stable", { ...r8, created: OLD.created }, r8)).toContain(
+			"is another build of v0.1.70-fork.8",
+		);
+		expect(describeChannelRelease("stable", r7, NEW)).toContain(
+			"ghcr.io/vombor/kanban:stable carries no release version",
+		);
 	});
 
 	it("tells a newer, the same, an older and an unstamped running build apart", () => {
@@ -87,10 +125,47 @@ describe("fetchLatestImageBuild", () => {
 		expect(await fetchLatestImageBuild({ fetch: fetchFake, architecture: "amd64" })).toEqual({
 			revision: NEW.revision,
 			created: NEW.created,
+			version: null,
 			digest: "sha256:index",
 		});
 		expect(calls.find((call) => call.url.endsWith("/manifests/latest"))?.auth).toBe("Bearer anon");
 		expect(calls.find((call) => call.url.startsWith("https://storage.example"))?.auth).toBeNull();
+	});
+
+	it("reads the channel's tag and a release build's version label", async () => {
+		const urls: string[] = [];
+		const fetchFake = vi.fn(async (url: string) => {
+			urls.push(url);
+			if (url.includes("/token")) {
+				return new Response(JSON.stringify({ token: "anon" }));
+			}
+			if (url.endsWith("/manifests/stable")) {
+				return new Response(JSON.stringify({ config: { digest: "sha256:cfg" } }), {
+					headers: { "docker-content-digest": "sha256:stable" },
+				});
+			}
+			if (url.endsWith("/blobs/sha256:cfg")) {
+				return new Response(
+					JSON.stringify({
+						config: {
+							Labels: {
+								"org.opencontainers.image.revision": NEW.revision,
+								"org.opencontainers.image.created": NEW.created,
+								"dev.vombor.kanban.release": "0.1.70-fork.8",
+							},
+						},
+					}),
+				);
+			}
+			return new Response("not found", { status: 404 });
+		});
+		expect(await fetchLatestImageBuild({ fetch: fetchFake, channel: "stable" })).toEqual({
+			revision: NEW.revision,
+			created: NEW.created,
+			version: "0.1.70-fork.8",
+			digest: "sha256:stable",
+		});
+		expect(urls.some((url) => url.endsWith("/manifests/latest"))).toBe(false);
 	});
 
 	it("fails on an HTTP error or a missing platform", async () => {

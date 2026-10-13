@@ -1,5 +1,11 @@
 # Builds the fork and publishes the dev-container image to GHCR:
-#   ghcr.io/<owner>/kanban:sha-<short>, :<branch> (e.g. fork-stack) and :latest (from LATEST_BRANCH only).
+#   a push to fork/**:      ghcr.io/<owner>/kanban:sha-<short>, :<branch> (e.g. fork-stack) and :latest (LATEST_BRANCH
+#                           only; the daily schedule rebuilds it too);
+#   a version tag v<X.Y.Z[-pre]> (a release, RELEASE_WORKFLOW.md): :<version> without the v (e.g. :0.1.70-fork.8, the
+#                           semver {{version}} form) and :stable, moved to it. A release never touches :latest or :sha-*.
+# The producer's dev pushes keep :latest moving; a consumer pod follows :stable (docs/fork/container-lifecycle.md) and
+# sets update.imageChannel to match. A release build carries its version (build arg KANBAN_IMAGE_VERSION and the label
+# dev.vombor.kanban.release, the same value), so a pod can tell which release it runs; other builds have it empty.
 # The container sits next to the npm package @vombor/kanban (GitHub Packages keeps a container and an npm package of
 # the same name apart); until 2026-10-12 it was ghcr.io/<owner>/kanban-dev, which is no longer pushed.
 # The pod pulls the image; nothing is built from source on the host.
@@ -12,6 +18,7 @@ name: image
 on:
   push:
     branches: ["fork/**"]
+    tags: ["v*"]
   schedule:
     - cron: "17 6 * * *"   # daily, 06:17 UTC
   workflow_dispatch:
@@ -39,6 +46,32 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'schedule' && env.LATEST_BRANCH || github.ref }}
+
+      # A release is a fork version tag that matches package.json (publish.yml checks the same): an upstream tag or a
+      # mismatch fails here, so :stable never moves to it. Empty for every other build.
+      - name: Resolve the release
+        id: release
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [ "$REF_TYPE" != "tag" ] || [ "$EVENT" = "schedule" ]; then
+            echo "version=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::tag '$TAG' must match vX.Y.Z (with optional prerelease suffix, e.g. v0.1.70-fork.8)"
+            exit 1
+          fi
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          if [ "$name" != "@vombor/kanban" ] || [ "$TAG" != "v$version" ]; then
+            echo "::error::tag '$TAG' is not a fork release (package.json: $name $version)"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Release: $TAG" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/setup-node@v4
         with:
@@ -81,10 +114,15 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE }}
+          # latest=false: :latest only ever comes from the raw rule below, never from a release tag.
+          flavor: |
+            latest=false
           tags: |
-            type=sha
+            type=sha,enable=${{ steps.release.outputs.version == '' }}
             type=ref,event=branch
             type=raw,value=latest,enable=${{ github.event_name == 'schedule' || github.ref == format('refs/heads/{0}', env.LATEST_BRANCH) }}
+            type=semver,pattern={{version}},enable=${{ steps.release.outputs.version != '' }}
+            type=raw,value=stable,enable=${{ steps.release.outputs.version != '' }}
 
       - uses: docker/build-push-action@v6
         with:
@@ -95,10 +133,14 @@ jobs:
           labels: |
             ${{ steps.meta.outputs.labels }}
             dev.vombor.agent-clis=${{ steps.clis.outputs.list }}
-          # The image's build stamp for `kanban restart update`: the same values as the revision/created labels.
+            dev.vombor.kanban.release=${{ steps.release.outputs.version }}
+          # The image's build stamp for `kanban restart update`: the same values as the revision/created labels and
+          # the release label (src/update/container-image.ts reads the env of the running image and the labels of the
+          # registry's tag).
           build-args: |
             AGENT_CLIS=${{ steps.clis.outputs.list }}
             KANBAN_IMAGE_REVISION=${{ github.sha }}
             KANBAN_IMAGE_CREATED=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+            KANBAN_IMAGE_VERSION=${{ steps.release.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

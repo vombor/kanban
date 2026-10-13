@@ -121,7 +121,7 @@ git tag v<version>
 
 ### 8. Push
 
-Push the commit to the release branch (the fork releases from `fork/stack`), then the tag. Pushing the tag starts `publish.yml`: it runs the tests, publishes `@vombor/kanban` to GitHub Packages (`next` for a prerelease version, `latest` otherwise) and creates the GitHub release, all with the repo secret `GH_PAT` (docs/fork/github-auth.md).
+Push the commit to the release branch (the fork releases from `fork/stack`), then the tag. Pushing the tag starts `publish.yml`: it runs the tests, publishes `@vombor/kanban` to GitHub Packages (`next` for a prerelease version, `latest` otherwise) and creates the GitHub release, all with the repo secret `GH_PAT` (docs/fork/github-auth.md). It also starts `image.yml`, which pushes the container image `ghcr.io/vombor/kanban:<version>` (no `v`) and moves `:stable` to it; pods that follow `:stable` update with `kanban restart update` (docs/fork/container-lifecycle.md, "Releases").
 
 ```bash
 git push origin <branch>
@@ -130,10 +130,11 @@ git push origin v<version>
 
 ### 9. Follow the publish run
 
-The tag push already started it. Only to re-run it for an existing tag: `gh workflow run publish.yml -f tag=v<version>`.
+The tag push already started both. Only to re-run them for an existing tag: `gh workflow run publish.yml -f tag=v<version>` and `gh workflow run image.yml --ref v<version>` (the image run on the tag pushes `:<version>` and moves `:stable` again).
 
-Show the link to the workflow run:
+Show the links to the workflow runs (the npm package and release, and the image):
 
 ```bash
 gh run list --workflow=publish.yml --limit=1 --json url --jq '.[0].url'
+gh run list --workflow=image.yml --limit=1 --json url --jq '.[0].url'
 ```

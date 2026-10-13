@@ -27,6 +27,7 @@ import { resolveCardRole } from "../core/card-role";
 import { lockedFileSystem } from "../fs/locked-file-system";
 import { getRestartManifestPath, getRestartRecoverRequestPath, getServerStartRecordPath } from "../state/kanban-home";
 import { containerImageBuildSchema } from "../update/container-image";
+import { imageChannelSchema } from "../update/image-channel";
 import type { PipelineSessionView } from "./engine";
 
 const restartManifestCardSchema = z
@@ -47,12 +48,14 @@ export const RESTART_MANIFEST_SOURCES = ["prepare", "periodic", "shutdown"] as c
 export type RestartManifestSource = (typeof RESTART_MANIFEST_SOURCES)[number];
 
 /**
- * Why `kanban restart update` restarted: the running image build and the registry's `:latest` it asked for (either
- * null when unknown, e.g. a `--force` without a reachable registry). The restart wake says "updated from … to …".
+ * Why `kanban restart update` restarted: the running image build and the registry's build of the channel's tag it
+ * asked for (either null when unknown, e.g. a `--force` without a reachable registry), and that channel (`update.
+ * imageChannel`; missing in a manifest written before channels: `latest`). The restart wake says "updated from … to …".
  */
 export const restartManifestUpdateSchema = z.object({
 	from: containerImageBuildSchema.nullable(),
 	to: containerImageBuildSchema.nullable(),
+	channel: imageChannelSchema.optional(),
 });
 export type RestartManifestUpdate = z.infer<typeof restartManifestUpdateSchema>;
 

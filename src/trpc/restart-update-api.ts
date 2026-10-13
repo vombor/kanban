@@ -1,5 +1,6 @@
 // The runtime side of `kanban restart update` (docs/fork/container-lifecycle.md, "Updating from inside"): restarts the
-// pod's container onto the registry's newer `:latest`. Kanban can't pull an image from inside its container, so it
+// pod's container onto the registry's newer build of its channel's tag (`update.imageChannel`: `:latest` by default,
+// `:stable` for a pod that runs releases, where the answer names them: "v0.1.70-fork.8 is out (running …)"). Kanban can't pull an image from inside its container, so it
 // does the part only it can: it checks, runs the restart prepare the image entrypoint runs on a stop (WIP tags +
 // restart manifest, with the update recorded for the restart wake), shuts the server down gracefully and exits with
 // KANBAN_UPDATE_RESTART_EXIT_CODE. The entrypoint passes that status on, the container exits, and the Quadlet unit's
@@ -8,7 +9,7 @@
 // Every decision is here, never in the CLI: the caller (cli-scope.ts's decideKanbanOrchestratorCaller with the strict
 // lookup: the user's, apart from the orchestrator of `providers.setupWorkspaceId` where it is registered; any other
 // orchestrator, every card and an unidentified caller are refused), running in a container (/run/.containerenv), a newer image
-// (the running build's stamp against `:latest`'s labels) and no card In Progress; `force` skips the last two. Every
+// (the running build's stamp against the channel tag's labels) and no card In Progress; `force` skips the last two. Every
 // request, refused or not, goes to the server log and `<home>/logs/restart-update.jsonl`.
 import { appendFile, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -30,23 +31,25 @@ import { getKanbanLogsPath } from "../state/kanban-home";
 import {
 	type ContainerImageBuild,
 	compareImageBuilds,
+	describeChannelRelease,
 	describeImageBuild,
 	fetchLatestImageBuild,
+	getChannelImageRef,
+	getImageRelease,
+	getImageReleaseUrl,
 	isRunningInContainer,
-	KANBAN_CONTAINER_IMAGE_REGISTRY,
-	KANBAN_CONTAINER_IMAGE_REPOSITORY,
-	KANBAN_CONTAINER_IMAGE_TAG,
 	KANBAN_IMAGE_CREATED_ENV,
 	KANBAN_IMAGE_REVISION_ENV,
+	KANBAN_IMAGE_VERSION_ENV,
 	readRunningImageBuild,
 } from "../update/container-image";
+import type { KanbanImageChannel } from "../update/image-channel";
 import type { RestartUpdateResponse, RuntimeRestartUpdateApi } from "./restart-update-contract";
 
 /** EX_TEMPFAIL: "restart me". The entrypoint logs it as an update restart and exits with it. */
 export const KANBAN_UPDATE_RESTART_EXIT_CODE = 75;
 
 const RESTART_UPDATE_COMMAND = "restart update";
-const IMAGE_REF = `${KANBAN_CONTAINER_IMAGE_REGISTRY}/${KANBAN_CONTAINER_IMAGE_REPOSITORY}:${KANBAN_CONTAINER_IMAGE_TAG}`;
 
 export interface RestartUpdateLogEntry {
 	at: string;
@@ -55,6 +58,7 @@ export interface RestartUpdateLogEntry {
 	message: string;
 	force: boolean;
 	dryRun: boolean;
+	channel: KanbanImageChannel;
 	from: ContainerImageBuild | null;
 	to: ContainerImageBuild | null;
 	inProgress: string[];
@@ -73,8 +77,10 @@ export interface CreateRestartUpdateApiDependencies {
 	/** `providers.setupWorkspaceId`; tests inject it. */
 	readSetupWorkspaceId?: () => Promise<string>;
 	isInContainer?: () => boolean;
+	/** `update.imageChannel`: the tag the pod's Quadlet unit follows. */
+	readImageChannel?: () => Promise<KanbanImageChannel>;
 	readRunningBuild?: () => ContainerImageBuild | null;
-	fetchLatestBuild?: () => Promise<ContainerImageBuild>;
+	fetchLatestBuild?: (channel: KanbanImageChannel) => Promise<ContainerImageBuild>;
 	/** What restart recovery does for an In Progress card of the workspace after the restart. */
 	describeRecovery?: (workspaceId: string) => Promise<string>;
 	prepareWorkspace?: (input: PrepareWorkspaceRestartInput) => Promise<number>;
@@ -109,8 +115,10 @@ export function createRestartUpdateApi(deps: CreateRestartUpdateApiDependencies)
 	const readSetupWorkspaceId =
 		deps.readSetupWorkspaceId ?? (async () => (await readPipelineConfig()).config.providers.setupWorkspaceId);
 	const isInContainer = deps.isInContainer ?? (() => isRunningInContainer());
+	const readImageChannel =
+		deps.readImageChannel ?? (async () => (await readPipelineConfig()).config.update.imageChannel);
 	const readRunningBuild = deps.readRunningBuild ?? (() => readRunningImageBuild());
-	const fetchLatestBuild = deps.fetchLatestBuild ?? (() => fetchLatestImageBuild());
+	const fetchLatestBuild = deps.fetchLatestBuild ?? ((channel) => fetchLatestImageBuild({ channel }));
 	const describeRecovery = deps.describeRecovery ?? describeRecoveryFromConfig;
 	const prepareWorkspace = deps.prepareWorkspace ?? prepareWorkspaceRestart;
 	const appendLog = deps.appendLog ?? appendRestartUpdateLog;
@@ -137,6 +145,7 @@ export function createRestartUpdateApi(deps: CreateRestartUpdateApiDependencies)
 			let from: ContainerImageBuild | null = null;
 			let to: ContainerImageBuild | null = null;
 			let inProgress: string[] = [];
+			let channel: KanbanImageChannel = "latest";
 			const finish = async (
 				status: RestartUpdateResponse["status"],
 				message: string,
@@ -151,6 +160,7 @@ export function createRestartUpdateApi(deps: CreateRestartUpdateApiDependencies)
 					message,
 					force: request.force,
 					dryRun: request.dryRun,
+					channel,
 					from,
 					to,
 					inProgress,
@@ -184,36 +194,56 @@ export function createRestartUpdateApi(deps: CreateRestartUpdateApiDependencies)
 				);
 			}
 
+			channel = await readImageChannel().catch(() => channel);
+			const imageRef = getChannelImageRef(channel);
 			from = readRunningBuild();
 			try {
-				to = await fetchLatestBuild();
+				to = await fetchLatestBuild(channel);
 			} catch (error) {
 				if (!request.force) {
 					return await finish(
 						"refused",
-						`Could not read ${IMAGE_REF} from the registry (${toErrorMessage(error)}), so there is no telling whether a newer image exists; --force restarts anyway.`,
+						`Could not read ${imageRef} from the registry (${toErrorMessage(error)}), so there is no telling whether a newer image exists; --force restarts anyway.`,
 					);
 				}
-				lines.push(`could not read ${IMAGE_REF} (${toErrorMessage(error)}); --force restarts anyway`);
+				lines.push(`could not read ${imageRef} (${toErrorMessage(error)}); --force restarts anyway`);
 			}
 			const fromText = describeImageBuild(from);
 			const toText = to ? `${describeImageBuild(to)}${to.digest ? `, ${to.digest}` : ""}` : "an unknown build";
-			lines.push(`running: ${fromText}`, `${IMAGE_REF}: ${toText}`);
+			lines.push(`running: ${fromText}`, `${imageRef}: ${toText}`);
+			const release = to ? describeChannelRelease(channel, from, to) : null;
+			// Linked only when the channel holds another release than the one running.
+			const releaseUrl = getImageRelease(to) !== getImageRelease(from) ? getImageReleaseUrl(to) : null;
+			if (release) {
+				lines.push(releaseUrl ? `${release}; release notes: ${releaseUrl}` : release);
+			}
+			if (channel === "stable" && from && !getImageRelease(from)) {
+				lines.push(
+					`the running image is not a release build (no ${KANBAN_IMAGE_VERSION_ENV}): a :latest or branch image, although update.imageChannel is stable`,
+				);
+			}
 			if (to && !request.force) {
 				const check = compareImageBuilds(from, to);
 				if (check.kind === "current") {
-					return await finish("refused", `Already on the latest image (${fromText}): nothing to update.`);
+					return await finish(
+						"refused",
+						channel === "stable" && getImageRelease(to)
+							? `Already on the latest release (${fromText}): nothing to update.`
+							: `Already on the latest image (${fromText}): nothing to update.`,
+					);
 				}
 				if (check.kind === "older") {
 					return await finish(
 						"refused",
-						`${IMAGE_REF} (${describeImageBuild(to)}) is older than the running image (${fromText}); --force restarts onto it anyway.`,
+						channel === "stable" && !getImageRelease(from)
+							? `The running image is a non-release build (${fromText}) newer than ${imageRef} (${describeImageBuild(to)}); --force restarts onto the release anyway.`
+							: `${imageRef} (${describeImageBuild(to)}) is older than the running image (${fromText}); --force restarts onto it anyway.`,
 					);
 				}
 				if (check.kind === "unknown_running") {
 					return await finish(
 						"refused",
-						`The running image has no build stamp (${KANBAN_IMAGE_REVISION_ENV}/${KANBAN_IMAGE_CREATED_ENV}: not an image CI built), so there is no telling whether ${IMAGE_REF} is newer; --force restarts anyway.`,
+						`The running image has no build stamp (${KANBAN_IMAGE_REVISION_ENV}/${KANBAN_IMAGE_CREATED_ENV}: not an image CI built), so there is no telling whether ${imageRef} is newer; --force restarts anyway.`,
 					);
 				}
 			}
@@ -239,7 +269,7 @@ export function createRestartUpdateApi(deps: CreateRestartUpdateApiDependencies)
 				}
 			}
 
-			const update: RestartManifestUpdate = { from, to };
+			const update: RestartManifestUpdate = { from, to, channel };
 			const targets = await deps.listWorkspaces();
 			for (const target of targets) {
 				const print = (line: string) => lines.push(line);

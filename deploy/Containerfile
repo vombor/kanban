@@ -87,12 +87,16 @@ LABEL io.containers.autoupdate=registry
 LABEL org.opencontainers.image.source=https://github.com/vombor/kanban
 # The image's own build, for `kanban restart update` (src/update/container-image.ts): CI passes the commit and
 # docker/metadata-action's created time, the same values as the org.opencontainers.image.revision/.created labels, so
-# Kanban compares its env with the labels of the registry's :latest. Last, so a new build only changes this layer's
-# metadata. Unset in a local build: `restart update` then needs --force.
+# Kanban compares its env with the labels of the registry's tag it follows (update.imageChannel: :latest or :stable).
+# KANBAN_IMAGE_VERSION is the release version (package.json's, e.g. 0.1.70-fork.8) on a release build only, the same
+# value as CI's dev.vombor.kanban.release label; empty in every other build. Last, so a new build only changes this
+# layer's metadata. Unset in a local build: `restart update` then needs --force.
 ARG KANBAN_IMAGE_REVISION=""
 ARG KANBAN_IMAGE_CREATED=""
+ARG KANBAN_IMAGE_VERSION=""
 ENV KANBAN_IMAGE_REVISION=$KANBAN_IMAGE_REVISION \
-    KANBAN_IMAGE_CREATED=$KANBAN_IMAGE_CREATED
+    KANBAN_IMAGE_CREATED=$KANBAN_IMAGE_CREATED \
+    KANBAN_IMAGE_VERSION=$KANBAN_IMAGE_VERSION
 ENTRYPOINT ["/usr/local/bin/kanban-entrypoint"]
 
 CMD ["kanban", "--port", "3485", "--no-open", "--no-passcode", "--skip-shutdown-cleanup"]

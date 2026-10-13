@@ -60,6 +60,7 @@ function harness(overrides: Partial<CreateRestartUpdateApiDependencies> & { inPr
 		requestExit,
 		readSetupWorkspaceId: async () => KANBAN,
 		isInContainer: () => true,
+		readImageChannel: async () => "latest",
 		readRunningBuild: () => OLD,
 		fetchLatestBuild: async () => NEW,
 		describeRecovery: async () => "restart recovery resumes it",
@@ -164,13 +165,14 @@ describe("restart.update", () => {
 		);
 		expect(response.lines).toContain("kanban-2uge: wrote the manifest");
 		expect(prepared.map((input) => [input.target.workspaceId, input.dryRun, input.update])).toEqual([
-			[KANBAN, false, { from: OLD, to: NEW }],
-			["foo", false, { from: OLD, to: NEW }],
+			[KANBAN, false, { from: OLD, to: NEW, channel: "latest" }],
+			["foo", false, { from: OLD, to: NEW, channel: "latest" }],
 		]);
 		expect(logEntries).toEqual([
 			expect.objectContaining({
 				status: "restarting",
 				caller: "the orchestrator of kanban-2uge",
+				channel: "latest",
 				from: OLD,
 				to: NEW,
 			}),
@@ -183,6 +185,71 @@ describe("restart.update", () => {
 		expect(KANBAN_UPDATE_RESTART_EXIT_CODE).toBe(75);
 		// A second request while it restarts is refused.
 		expect((await api.update({ kind: "user" }, request({ force: true }))).message).toContain("already under way");
+	});
+
+	it("on the stable channel reads :stable and names the releases, with the release notes link", async () => {
+		vi.useFakeTimers();
+		const RELEASE_7 = { ...OLD, version: "0.1.70-fork.7" };
+		const RELEASE_8 = { ...NEW, version: "0.1.70-fork.8" };
+		const asked: string[] = [];
+		const { api, prepared } = harness({
+			readImageChannel: async () => "stable",
+			readRunningBuild: () => RELEASE_7,
+			fetchLatestBuild: async (channel) => {
+				asked.push(channel);
+				return RELEASE_8;
+			},
+		});
+		const response = await api.update({ kind: "user" }, request({ dryRun: true }));
+		expect(asked).toEqual(["stable"]);
+		expect(response.status).toBe("dry_run");
+		expect(response.lines).toContain("running: v0.1.70-fork.7 (aaaaaaa, built 2026-10-11 06:20Z)");
+		expect(response.lines).toContain(
+			"ghcr.io/vombor/kanban:stable: v0.1.70-fork.8 (bbbbbbb, built 2026-10-12 06:20Z), sha256:new",
+		);
+		expect(response.lines).toContain(
+			"v0.1.70-fork.8 is out (running v0.1.70-fork.7); release notes: https://github.com/vombor/kanban/releases/tag/v0.1.70-fork.8",
+		);
+		expect(response.message).toContain("Would restart the container from v0.1.70-fork.7 (aaaaaaa");
+		expect(prepared[0]?.update).toEqual({ from: RELEASE_7, to: RELEASE_8, channel: "stable" });
+	});
+
+	it("on stable says the running image is the latest release, or reports a non-release build", async () => {
+		const RELEASE_8 = { ...NEW, version: "0.1.70-fork.8" };
+		const current = harness({
+			readImageChannel: async () => "stable",
+			readRunningBuild: () => ({ ...RELEASE_8, digest: null }),
+			fetchLatestBuild: async () => RELEASE_8,
+		});
+		const same = await current.api.update({ kind: "user" }, request());
+		expect(same.status).toBe("refused");
+		expect(same.message).toBe(
+			"Already on the latest release (v0.1.70-fork.8 (bbbbbbb, built 2026-10-12 06:20Z)): nothing to update.",
+		);
+		expect(same.lines).toContain("running v0.1.70-fork.8, the latest release");
+
+		// A fork/stack build from before the release: the release is newer, and the running build is named as a non-release.
+		const branch = harness({ readImageChannel: async () => "stable", fetchLatestBuild: async () => RELEASE_8 });
+		const older = await branch.api.update({ kind: "user" }, request({ dryRun: true }));
+		expect(older.status).toBe("dry_run");
+		expect(older.lines).toContain(
+			"v0.1.70-fork.8 is out (running a non-release build aaaaaaa (built 2026-10-11 06:20Z)); release notes: https://github.com/vombor/kanban/releases/tag/v0.1.70-fork.8",
+		);
+		expect(older.lines).toContain(
+			"the running image is not a release build (no KANBAN_IMAGE_VERSION): a :latest or branch image, although update.imageChannel is stable",
+		);
+
+		// A fork/stack build after the release: refused as newer than :stable, --force goes onto the release.
+		const ahead = harness({
+			readImageChannel: async () => "stable",
+			readRunningBuild: () => ({ ...NEW, created: "2026-10-13T06:20:00.000Z" }),
+			fetchLatestBuild: async () => RELEASE_8,
+		});
+		const refused = await ahead.api.update({ kind: "user" }, request());
+		expect(refused.status).toBe("refused");
+		expect(refused.message).toContain(
+			"The running image is a non-release build (bbbbbbb (built 2026-10-13 06:20Z)) newer than ghcr.io/vombor/kanban:stable",
+		);
 	});
 
 	it("a dry run checks and prepares in dry-run mode, and stops nothing", async () => {

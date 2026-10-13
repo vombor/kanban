@@ -104,6 +104,17 @@ env $(env | sed -n -e 's/^\(KANBAN_[A-Z0-9_]*\)=.*/-u \1/p' -e 's/^\(GIT_[A-Z0-9
    it again on the new image), or `systemctl --user restart <unit>` on the host. After the restart the watchdog's
    "Kanban restarted" wake tells every orchestrator which build it came back on.
 
+That is the `:latest` channel. A pod that should run only releases follows `:stable` instead
+(`update.imageChannel: stable`).
+
+## Releases
+
+A release is cut here, outside the pod, with the release skill (`/release`, [RELEASE_WORKFLOW.md](../../RELEASE_WORKFLOW.md)):
+a `## [<version>]` section in `CHANGELOG.md`, the version bump in `package.json` and `package-lock.json`, a commit
+on `fork/stack` and the tag `v<version>`. The tag push publishes `@vombor/kanban` and the GitHub release
+(`publish.yml`) and pushes the image `:<version>` and `:stable` (`image.yml`). The tags per event, and how a
+consumer pod follows `:stable`, are in [container-lifecycle.md](container-lifecycle.md#releases).
+
 ## How project orchestrators reach the dev session
 
 Through GitHub issues on `vombor/kanban`. An orchestrator in the pod that hits a Kanban bug or needs a Kanban

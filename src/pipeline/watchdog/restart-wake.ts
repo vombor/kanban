@@ -11,7 +11,13 @@
 // (`restartWake` in watchdog-state.json), so a worker restart within the same server start sends nothing again.
 import { readFile } from "node:fs/promises";
 
-import { type ContainerImageBuild, describeImageBuild, isSameImageBuild } from "../../update/container-image";
+import {
+	type ContainerImageBuild,
+	describeImageBuild,
+	getImageRelease,
+	getImageReleaseUrl,
+	isSameImageBuild,
+} from "../../update/container-image";
 import type { PipelineDecisionRecord } from "../decision-log";
 import { isManifestForStart, type RestartManifest, type RestartManifestUpdate } from "../restart-recovery";
 
@@ -27,7 +33,7 @@ export interface RestartStop {
 	kind: "clean" | "planned" | "unclean";
 	/** The manifest's time: the stop (clean/planned), or the last periodic write before an unclean stop. */
 	at: string | null;
-	/** A planned stop by `kanban restart update`: the build it ran and the `:latest` it asked for. */
+	/** A planned stop by `kanban restart update`: the build it ran and the channel tag's build it asked for. */
 	update?: RestartManifestUpdate | null;
 }
 
@@ -180,13 +186,16 @@ function formatTime(at: number | string): string {
 
 /**
  * An update restart's line: "updated from <old> to <new>" by the build this server runs, or, when it still runs the old
- * build, that the container came back without pulling (the unit's Pull=newer is the only thing that pulls).
+ * build, that the container came back without pulling (the unit's Pull=newer is the only thing that pulls). On the
+ * `stable` channel the builds lead with their releases ("updated from v0.1.70-fork.7 (…) to v0.1.70-fork.8 (…)"), the
+ * new release's notes are linked, and a server that came back on a non-release build says so.
  */
 function formatUpdate(
 	update: RestartManifestUpdate,
 	at: string | null,
 	runningBuild: ContainerImageBuild | null,
 ): string {
+	const channel = update.channel ?? "latest";
 	const when = `kanban restart update at ${formatTime(at ?? 0)}`;
 	const from = describeImageBuild(update.from);
 	if (runningBuild && update.from && isSameImageBuild(runningBuild, update.from)) {
@@ -194,8 +203,17 @@ function formatUpdate(
 	}
 	const to = runningBuild
 		? describeImageBuild(runningBuild)
-		: `${describeImageBuild(update.to)} (the registry's :latest then)`;
-	return `the restart was an update (${when}): updated from ${from} to ${to}`;
+		: `${describeImageBuild(update.to)} (the registry's :${channel} then)`;
+	const line = `the restart was an update (${when}): updated from ${from} to ${to}`;
+	if (channel !== "stable") {
+		return line;
+	}
+	const now = runningBuild ?? update.to;
+	if (runningBuild && !getImageRelease(runningBuild)) {
+		return `${line}, which is not a release build although Kanban follows :stable, so check the Quadlet unit's Image= tag`;
+	}
+	const notes = getImageReleaseUrl(now);
+	return notes ? `${line} (release notes: ${notes})` : line;
 }
 
 function formatStop(stop: RestartStop, runningBuild: ContainerImageBuild | null): string {
