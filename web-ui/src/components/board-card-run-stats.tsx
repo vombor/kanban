@@ -11,9 +11,9 @@ import { useInterval } from "@/utils/react-use";
 export const RUNNING_TIME_TICK_MS = 1_000;
 
 /**
- * The right end of an In Progress, Review or Done card's agent row: its token count and its agent's running time,
- * "48k tok · 12m" (Done: the final totals), kept on one line while the agent pill truncates. Nothing until either is
- * known. The time ticks only while the agent runs.
+ * The right end of an In Progress, Review or Done card's agent row: its tokens in and out and its agent's running
+ * time, "1.2M↓ 48k↑ · 12m" (Done: the final totals), kept on one line while the agent pill truncates. Nothing until
+ * either is known. The time ticks only while the agent runs.
  */
 export function BoardCardRunStats({
 	taskId,

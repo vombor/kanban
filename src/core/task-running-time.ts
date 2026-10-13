@@ -1,4 +1,4 @@
-// How long a card's agent has worked (user request 2026-10-12: "48k tok · 12m" on the board card). It is the time the
+// How long a card's agent has worked (user request 2026-10-12: "1.2M↓ 48k↑ · 12m" on the board card). It is the time the
 // card's session summary spent in `running`, summed over every turn of every run: Review, idle and interrupted time
 // don't count, nor does the time a card waited in Backlog. Kanban kept no such total before (the summary only knew
 // when its current state began, task-history.jsonl only logs Done and delete), so the session manager's updateSummary

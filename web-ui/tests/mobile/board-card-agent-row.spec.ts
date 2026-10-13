@@ -192,13 +192,19 @@ for (const profile of ["phone", "desktop"] as const) {
 			await expect(row.getByTestId("board-card-task-id")).toHaveCount(0);
 			// The agent row: the live token count and running time right-justified beside the pill, growing while it runs.
 			const stats = row.getByTestId("board-card-run-stats");
-			await expect(stats).toHaveText(/^\d+(\.\d)?k tok·\d+(s|m)$/u, { timeout: 30_000 });
+			// Tokens in and out apart, always the tight form "1.2M↓ 48k↑ · 12m", on one line.
+			await expect(stats).toHaveText(/^\d+(\.\d)?k↓ \d+(\.\d)?k?↑·\d+(s|m)$/u, { timeout: 30_000 });
+			await expect(stats.getByTestId("board-card-token-usage")).toHaveAttribute(
+				"aria-label",
+				/^\d+(\.\d)?k tokens in, \d+(\.\d)?k? tokens out$/u,
+			);
 			await expectOneLine(pill, stats);
 			await expectContentInside(pill);
 			await expectRightJustified(stats, row);
-			await expectOneLine(stats.getByTestId("board-card-token-usage"), stats.getByTestId("board-card-running-time"));
+			await expectOneLine(stats.getByTestId("board-card-tokens-in"), stats.getByTestId("board-card-tokens-out"));
+			await expectOneLine(stats.getByTestId("board-card-tokens-out"), stats.getByTestId("board-card-running-time"));
 			const readTokens = async () =>
-				Number.parseFloat((await stats.getByTestId("board-card-token-usage").textContent()) ?? "");
+				Number.parseFloat((await stats.getByTestId("board-card-tokens-in").textContent()) ?? "");
 			const before = await readTokens();
 			await expect.poll(readTokens, { timeout: 20_000 }).toBeGreaterThan(before);
 			await testInfo.attach("running card", { body: await running.screenshot(), contentType: "image/png" });

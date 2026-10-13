@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BoardCardRunStats } from "@/components/board-card-run-stats";
 import { describeRunningTime } from "@/components/board-card-running-time";
+import { describeTokenUsage, getTokenUsageInOut } from "@/components/board-card-token-usage";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import { mergeTaskTokenUsage, setTaskTokenUsage } from "@/stores/task-token-usage-store";
@@ -68,18 +69,35 @@ describe("BoardCardRunStats", () => {
 	};
 	const text = (testId: string) => container.querySelector(`[data-testid="${testId}"]`)?.textContent ?? null;
 
-	it("shows the total with the cache included and follows pushed counts", async () => {
-		setTaskTokenUsage([{ taskId: "7ad4d", input: 1_000, output: 20_000, cacheRead: 1_150_000, cacheWrite: 30_000 }]);
+	it("shows tokens in (cache included) and out apart, with an accessible label, and follows pushed counts", async () => {
+		setTaskTokenUsage([{ taskId: "7ad4d", input: 1_000, output: 48_000, cacheRead: 1_150_000, cacheWrite: 30_000 }]);
 		await render(undefined);
-		expect(text("board-card-token-usage")).toBe("1.2M tok");
+		expect(text("board-card-token-usage")).toBe("1.2M↓ 48k↑");
+		expect(text("board-card-tokens-in")).toBe("1.2M↓");
+		expect(text("board-card-tokens-out")).toBe("48k↑");
+		const usage = container.querySelector('[data-testid="board-card-token-usage"]');
+		expect(usage?.getAttribute("aria-label")).toBe("1.2M tokens in, 48k tokens out");
+		expect(usage?.textContent).not.toMatch(/tok/u);
 		expect(text("board-card-running-time")).toBeNull();
 
 		await act(async () => {
 			mergeTaskTokenUsage([
-				{ taskId: "7ad4d", input: 1_000, output: 20_000, cacheRead: 2_150_000, cacheWrite: 30_000 },
+				{ taskId: "7ad4d", input: 1_000, output: 52_000, cacheRead: 2_150_000, cacheWrite: 30_000 },
 			]);
 		});
-		expect(text("board-card-token-usage")).toBe("2.2M tok");
+		expect(text("board-card-token-usage")).toBe("2.2M↓ 52k↑");
+	});
+
+	it("keeps the full split in the tooltip and says that in includes the cache", () => {
+		const usage = { taskId: "7ad4d", input: 1_000, output: 48_000, cacheRead: 1_150_000, cacheWrite: 30_000 };
+		expect(getTokenUsageInOut(usage)).toEqual({ in: 1_181_000, out: 48_000 });
+		expect(describeTokenUsage(usage, getTokenUsageInOut(usage))).toBe(
+			[
+				"1,181,000 tokens in · 48,000 tokens out over this card's agent sessions",
+				"In includes the cache: input 1,000 · cache read 1,150,000 · cache write 30,000",
+				"Out: output 48,000",
+			].join("\n"),
+		);
 	});
 
 	it("ticks a running card's time and holds a finished one", async () => {

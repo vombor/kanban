@@ -941,7 +941,7 @@ describe("BoardCard", () => {
 		expect(pill?.textContent).toBe("Cline · gpt-x");
 		expect(pill?.getAttribute("title")).toBe("Cline · gpt-x");
 		expect(Array.from(row?.children ?? [])).toEqual([pill, stats]);
-		expect(stats?.textContent).toBe("1.2M tok");
+		expect(stats?.textContent).toBe("1.2M↓ 20k↑");
 		expect(row?.className).toContain("items-center");
 		expect(row?.className).not.toContain("flex-wrap");
 		// The stats stay on one line at the right end; only the pill truncates.
@@ -1044,7 +1044,7 @@ describe("BoardCard", () => {
 
 			const stats = runStatsOf("c41d0");
 			expect(stats?.parentElement).toBe(metaRowOf("c41d0"));
-			expect(stats?.textContent).toBe("48k tok·12m");
+			expect(stats?.textContent).toBe("42k↓ 6k↑·12m");
 			expect(stats?.textContent).not.toMatch(/\$|cost/iu);
 
 			// The time follows the running agent.
@@ -1088,7 +1088,7 @@ describe("BoardCard", () => {
 			</>,
 		);
 
-		expect(runStatsOf("d51e1")?.textContent).toBe("1.2M tok·1h 05m");
+		expect(runStatsOf("d51e1")?.textContent).toBe("1.2M↓ 2k↑·1h 05m");
 		expect(runStatsOf("e61f2")?.textContent).toBe("45s");
 		expect(runStatsOf("e61f2")?.querySelector('[data-testid="board-card-token-usage"]')).toBeNull();
 		// Never on a Backlog card: its agent row keeps the prerequisites only.
