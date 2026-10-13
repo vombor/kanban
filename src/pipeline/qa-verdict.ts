@@ -18,6 +18,18 @@ export type QaVerdictValue = z.infer<typeof qaVerdictValueSchema>;
 // all never drops `visual.status: "blocked"`, which turns a PASS into STALLED.
 const scoreSchema = z.number().nullable().optional().catch(null);
 
+const checksBaseSchema = z.enum(["fails", "passes", "not_run"]);
+
+/** One answer for a failed scripted-checks step (issue #41); a field that doesn't fit is null, never the entry. */
+const checksAnswerSchema = z
+	.object({
+		step: z.string().optional().catch(undefined),
+		reproduced: z.boolean().nullable().optional().catch(null),
+		base: checksBaseSchema.nullable().optional().catch(null),
+		evidence: z.unknown().optional(),
+	})
+	.loose();
+
 /** Lenient on purpose: only `verdict` is required. Everything else is recorded as far as it is usable. */
 const qaVerdictFileSchema = z
 	.object({
@@ -48,8 +60,17 @@ const qaVerdictFileSchema = z
 			.catch(null),
 		notes: z.unknown().optional(),
 		log: z.unknown().optional(),
+		checks: z.array(z.unknown()).optional().catch([]),
 	})
 	.loose();
+
+/** QA's answer for one failed step of the scripted checks (the checks report asks for it on a FAIL). */
+export interface QaChecksAnswer {
+	step: string;
+	reproduced: boolean | null;
+	base: z.infer<typeof checksBaseSchema> | null;
+	evidence: string;
+}
 
 export interface QaVerdict {
 	verdict: QaVerdictValue;
@@ -59,7 +80,15 @@ export interface QaVerdict {
 	notes: string;
 	/** Markdown bullets for the QA log. */
 	log: string;
+	/** One answer per failed checks step; none when QA gave none (and in verdicts made before issue #41). */
+	checks?: QaChecksAnswer[];
 }
+
+/**
+ * Why a verdict can't be recorded yet: no file, an unusable one, or a PASS that doesn't answer for the failed checks
+ * steps (`incomplete`, qa-checks-verdict.ts). Each is nudged, then recorded STALLED.
+ */
+export type QaVerdictUnusable = Exclude<QaVerdictRead, { kind: "ok" }> | { kind: "incomplete"; error: string };
 
 export type QaVerdictRead =
 	| { kind: "missing" }
@@ -75,6 +104,23 @@ function toText(value: unknown): string {
 		return value.map((entry) => toText(entry)).join("\n");
 	}
 	return value === undefined || value === null ? "" : String(value);
+}
+
+function normalizeChecksAnswers(entries: unknown[]): QaChecksAnswer[] {
+	return entries.flatMap((entry) => {
+		const parsed = checksAnswerSchema.safeParse(entry);
+		if (!parsed.success || !parsed.data.step?.trim()) {
+			return [];
+		}
+		return [
+			{
+				step: parsed.data.step.trim(),
+				reproduced: parsed.data.reproduced ?? null,
+				base: parsed.data.base ?? null,
+				evidence: toText(parsed.data.evidence).trim(),
+			},
+		];
+	});
 }
 
 function normalizeVerdict(parsed: z.infer<typeof qaVerdictFileSchema>): QaVerdict {
@@ -94,6 +140,7 @@ function normalizeVerdict(parsed: z.infer<typeof qaVerdictFileSchema>): QaVerdic
 		},
 		notes: toText(parsed.notes),
 		log: toText(parsed.log),
+		checks: normalizeChecksAnswers(parsed.checks ?? []),
 	};
 }
 
@@ -136,16 +183,14 @@ export function buildQaVerdictFixHint(file: string, error: string): string {
 }
 
 /** The nudge for a QA card that stopped without a usable verdict. */
-export function buildQaVerdictNudge(
-	outboxDir: string,
-	read: Exclude<QaVerdictRead, { kind: "ok" }>,
-	kanbanHome: string,
-): string {
+export function buildQaVerdictNudge(outboxDir: string, read: QaVerdictUnusable, kanbanHome: string): string {
 	const file = getQaVerdictPath(outboxDir);
 	const ask =
 		read.kind === "invalid"
 			? buildQaVerdictFixHint(file, read.error)
-			: `Your review isn't finished: write ${file} exactly as step 6 says (valid JSON with verdict, scores, blocking, visual, notes, log).`;
+			: read.kind === "incomplete"
+				? `${file} is not accepted: ${read.error}. Add the "checks" key as the SCRIPTED CHECKS section says, or change the verdict.`
+				: `Your review isn't finished: write ${file} exactly as step 6 says (valid JSON with verdict, scores, blocking, visual, notes, log).`;
 	return `${ask} Then reply with the one-line summary. Don't run kanban commands or touch ${kanbanHome}.`;
 }
 
@@ -158,6 +203,7 @@ export function createStalledQaVerdict(reason: string): QaVerdict {
 		visual: { status: "n/a", artifacts: [], consoleErrors: 0 },
 		notes: reason,
 		log: `- ${reason} (the pipeline recorded STALLED).`,
+		checks: [],
 	};
 }
 

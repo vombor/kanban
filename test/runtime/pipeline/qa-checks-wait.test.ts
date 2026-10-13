@@ -165,7 +165,14 @@ describe("QA gate: QA waits for the scripted checks", () => {
 		expect(prompt).toContain("    out 79\nA failed step is not blocking by itself");
 		expect(prompt).not.toContain("    out 19\n");
 		expect(prompt).toContain("compare against main (step 2)");
-		expect(readQaGateEntry((await harness.store.load("foo")).cards.qa001)?.checks).toBe("FAIL");
+		expect(prompt).toContain(
+			'Add one more key to verdict.json: "checks", a list with one entry per failed step (test): {"step": "<name>", "reproduced": true|false, "base": "fails"|"passes"|"not_run"',
+		);
+		expect(prompt).toContain("A PASS without these entries is not landed.");
+		expect(readQaGateEntry((await harness.store.load("foo")).cards.qa001)).toMatchObject({
+			checks: "FAIL",
+			checksFailedSteps: ["test"],
+		});
 	});
 
 	it("reports a checker ERROR as checks that did not run", async () => {

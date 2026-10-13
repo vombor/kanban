@@ -108,6 +108,12 @@ dev card stops ─▶ Review (settled) ─▶ snapshot refs/kanban/snapshots/<id
   wait and stops the old run, so the stale snapshot never gets QA. A project without checks, or a snapshot whose
   package.json has none of the check scripts, gets its QA card right away. Why: QA used to start at the same moment
   the checks were queued, never saw them, and foo 27549 landed with only a checks ERROR.
+- **A PASS answers for a checks FAIL.** When the checks FAILed, the report asks QA to reproduce each failed step
+  (harness problems aside) on the snapshot and the base, and to add a `"checks"` entry per step to verdict.json
+  (`step`, `reproduced`, `base`: fails/passes/not_run, `evidence`). A PASS lands only when every failed step is
+  answered with evidence and either did not reproduce or fails on the base too. A PASS without that is nudged like an
+  unusable verdict, then recorded STALLED. A PASS where QA reproduced a step that passes on the base is recorded as a
+  FAIL. Why: notes 5bdde landed on a PASS whose QA agent had never run the failing tests (issue #41).
 - **Two QA pools.** Queued QA cards start oldest first. A cloud QA card waits for one of the `pipeline.qa.slots` (2)
   cloud slots, counted over every project. A QA card on a local provider (Lemonade) takes no slot: it waits only for
   that provider's `models.providerCapacity.<provider>.maxLoadedModels`, counted over every project's In Progress

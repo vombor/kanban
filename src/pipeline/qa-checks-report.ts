@@ -9,8 +9,13 @@
 //
 // The wait is the dev card's `qaChecksWait` entry in pipeline-state.json (`{ snapshot, since }`); a new snapshot
 // starts a new wait, and the checks runner stops a run on an older snapshot of the card (checks.ts).
+//
+// New (issue #41, notes 5bdde 2026-10-12: a PASS whose QA agent never ran the failing tests landed): for a FAIL the
+// report asks QA for a "checks" answer per failed step in verdict.json, and the gate lands a PASS only when each one
+// shows the step didn't reproduce or fails on the base too (qa-checks-verdict.ts).
 import { CHECKS_VERSION, type StoredCheckStep, type StoredChecksResult } from "./checks";
 import type { PipelineCardState } from "./pipeline-state";
+import { QA_VERDICT_FILENAME } from "./qa-verdict";
 
 export interface QaChecksWaitEntry {
 	snapshot: string;
@@ -128,6 +133,19 @@ export function describeQaChecksOutcome(outcome: QaChecksOutcome): string | null
 	return outcome === "unknown" ? "checks recorded without details" : `checks ${outcome}`;
 }
 
+/**
+ * The failed steps of a FAIL that a PASS must answer for (issue #41): failed or timed out, and not a harness problem
+ * (the checker's environment, which the report already names as such). The QA gate entry keeps the same list.
+ */
+export function listBlockingFailedSteps(checks: StoredChecksResult | null): string[] {
+	if (checks?.verdict !== "FAIL") {
+		return [];
+	}
+	return checks.steps
+		.filter((step) => (step.status === "fail" || step.status === "timeout") && !step.harness)
+		.map((step) => step.name);
+}
+
 function formatSeconds(ms: number | null): string {
 	return ms === null ? "" : ` in ${Math.max(0, Math.round(ms / 1000))}s`;
 }
@@ -195,6 +213,13 @@ export function buildQaChecksReport(input: {
 		lines.push(
 			`A failed step is not blocking by itself: reproduce it in your scratch copy and compare against ${input.baseRef} (step 2) before you call it a blocking issue.`,
 		);
+		const failed = listBlockingFailedSteps(checks);
+		if (failed.length > 0) {
+			lines.push(
+				`Add one more key to ${QA_VERDICT_FILENAME}: "checks", a list with one entry per failed step (${failed.join(", ")}): {"step": "<name>", "reproduced": true|false, "base": "fails"|"passes"|"not_run", "evidence": "<what you ran on the snapshot and on ${input.baseRef}, and what it showed>"}.`,
+				`A PASS is accepted only when every failed step is listed with its evidence and either did not reproduce ("reproduced": false) or fails on ${input.baseRef} too ("base": "fails"). A step that fails on the snapshot and passes on ${input.baseRef} is a blocking issue. A PASS without these entries is not landed.`,
+			);
+		}
 	} else if (checks.verdict === "PASS") {
 		lines.push("You may rely on these results in step 2 instead of running the same scripts again.");
 	}

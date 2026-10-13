@@ -40,8 +40,29 @@ describe("QA verdict.json", () => {
 				visual: { status: "ok", artifacts: ["report.txt"], consoleErrors: 1 },
 				notes: "one blocker",
 				log: "- blocker\n- concern",
+				checks: [],
 			},
 		});
+	});
+
+	it("reads the checks answers field by field and drops entries without a step (issue #41)", () => {
+		const read = parseQaVerdictText(
+			JSON.stringify({
+				verdict: "PASS",
+				checks: [
+					{ step: " test ", reproduced: false, base: "passes", evidence: ["npm test", "77/77"] },
+					{ step: "lint", reproduced: "no", base: "maybe" },
+					{ reproduced: true },
+					"test",
+				],
+			}),
+		);
+		expect(read.kind === "ok" ? read.verdict.checks : null).toEqual([
+			{ step: "test", reproduced: false, base: "passes", evidence: "npm test\n77/77" },
+			{ step: "lint", reproduced: null, base: null, evidence: "" },
+		]);
+		const notAList = parseQaVerdictText(JSON.stringify({ verdict: "PASS", checks: "fine" }));
+		expect(notAList.kind === "ok" ? notAList.verdict.checks : null).toEqual([]);
 	});
 
 	it("keeps visual blocked when another visual field is malformed", () => {
@@ -87,6 +108,15 @@ describe("QA verdict.json", () => {
 	it("nudges with the reason, and records a PASS with visual blocked as STALLED", () => {
 		expect(buildQaVerdictNudge("/out/qa001", { kind: "invalid", error: "invalid JSON (x)" }, "~/.kanban")).toBe(
 			'/out/qa001/verdict.json exists but is not usable: invalid JSON (x). Rewrite it as valid JSON (escape newlines inside strings as \\n, or make "log" an array of strings). Then reply with the one-line summary. Don\'t run kanban commands or touch ~/.kanban.',
+		);
+		expect(
+			buildQaVerdictNudge(
+				"/out/qa001",
+				{ kind: "incomplete", error: "the PASS doesn't answer for test" },
+				"~/.kanban",
+			),
+		).toBe(
+			"/out/qa001/verdict.json is not accepted: the PASS doesn't answer for test. Add the \"checks\" key as the SCRIPTED CHECKS section says, or change the verdict. Then reply with the one-line summary. Don't run kanban commands or touch ~/.kanban.",
 		);
 		expect(buildQaVerdictNudge("/out/qa001", { kind: "missing" }, "~/.kanban")).toContain(
 			"Your review isn't finished: write /out/qa001/verdict.json exactly as step 6 says",

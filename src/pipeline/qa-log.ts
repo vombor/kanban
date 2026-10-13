@@ -114,6 +114,10 @@ export function formatQaLogSection(input: QaLogSectionInput): string {
 		scores
 			? `- Scores: spec/correctness/tests/ux/code/process = ${SCORE_KEYS.map((key) => scores[key] ?? "–").join("/")}`
 			: "- Scores: n/a",
+		...(verdict.checks ?? []).map(
+			(answer) =>
+				`- Checks step ${answer.step}: reproduced ${answer.reproduced ?? "?"}, on the base ${answer.base ?? "?"}${answer.evidence ? `; ${answer.evidence.replace(/\s+/g, " ").slice(0, 300)}` : ""}`,
+		),
 		...(input.pipelineNote ? [`- Pipeline: ${input.pipelineNote}`] : []),
 		`- Reviewer: ${input.reviewer.agentId} on ${describeModel(input.reviewer.model)}, QA card ${input.reviewer.qaTaskId}; ingested by Kanban from ${input.verdictPath}`,
 	].join("\n");

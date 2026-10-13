@@ -56,6 +56,9 @@
 // written is still ingested. Everything held acts on the first tick after the resume.
 // New since the legacy kit (user's choice "D", 2026-10-07): the QA card is created only once the scripted checks of
 // its snapshot have finished, or after `checksWaitMin`, and its prompt gets their report (qa-checks-report.ts).
+// New (issue #41): a PASS on a snapshot whose checks FAILed lands only when its verdict.json answers for each failed
+// step (`checksFailedSteps` on the entry, judgePassAgainstChecks in qa-checks-verdict.ts): one that doesn't is nudged
+// like an unusable verdict, then recorded STALLED; one where QA reproduced a step that passes on the base is a FAIL.
 import { randomUUID } from "node:crypto";
 import { cp, mkdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -113,10 +116,12 @@ import {
 	buildQaChecksReport,
 	decideQaChecks,
 	describeQaChecksOutcome,
+	listBlockingFailedSteps,
 	type QaChecksOutcome,
 	readQaChecksWait,
 	toQaChecksOutcome,
 } from "./qa-checks-report";
+import { judgePassAgainstChecks } from "./qa-checks-verdict";
 import { type AppendQaLog, countQaLogRounds, formatQaLogSection, getPreviousQaRounds, readQaLog } from "./qa-log";
 import type { QaPreviewController } from "./qa-preview";
 import { buildQaCardTitle, buildQaPrompt, buildQaRequirements } from "./qa-prompt";
@@ -127,6 +132,7 @@ import {
 	getQaVerdictPath,
 	type QaVerdict,
 	type QaVerdictRead,
+	type QaVerdictUnusable,
 } from "./qa-verdict";
 import { type RecoveryFlowState, readRecoveryFlow } from "./recovery";
 import type { AgentRunError } from "./recovery-detect";
@@ -165,6 +171,8 @@ export const qaGateEntrySchema = z.object({
 	supersededAt: z.number().nullable().default(null),
 	/** The scripted checks the QA prompt reported (`timed_out`: QA started without them); null: no checks. */
 	checks: z.enum(["PASS", "FAIL", "ERROR", "timed_out", "unknown"]).nullable().default(null),
+	/** The failed checks steps a PASS must answer for (listBlockingFailedSteps); empty for entries made before #41. */
+	checksFailedSteps: z.array(z.string()).optional(),
 });
 export type QaGateEntry = z.infer<typeof qaGateEntrySchema>;
 
@@ -876,6 +884,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			trashed: false,
 			supersededAt: null,
 			checks: checksOutcome,
+			checksFailedSteps: checks.kind === "finished" ? listBlockingFailedSteps(checks.checks) : [],
 		};
 		await deps.store.update(workspaceId, (current) => {
 			// The wait is over; a later QA of the same snapshot (a redone turn) waits afresh if it has to.
@@ -919,8 +928,22 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 	): Promise<string> => {
 		const workspaceId = context.snapshot.workspaceId;
 		const ruled = applyQaVerdictRules(fileVerdict);
-		const verdict = ruled.verdict;
-		const note = [pipelineNote, ruled.changed].filter(Boolean).join("; ") || null;
+		// The last guard for every path that records without a nudge (a dead or silent QA card): a PASS that doesn't
+		// answer for the failed checks steps is never recorded as a PASS.
+		const judged = judgePassAgainstChecks(ruled.verdict, entry.checksFailedSteps ?? [], entry.baseRef);
+		const verdict =
+			judged.kind === "contradicted"
+				? judged.verdict
+				: judged.kind === "incomplete"
+					? createStalledQaVerdict(`QA agent's ${judged.error}`)
+					: ruled.verdict;
+		const checksChange =
+			judged.kind === "contradicted"
+				? judged.changed
+				: judged.kind === "incomplete"
+					? "PASS without an answer for the failed checks → recorded as STALLED"
+					: null;
+		const note = [pipelineNote, ruled.changed, checksChange].filter(Boolean).join("; ") || null;
 		const artifactsDir = join(artifactsPathOf(workspaceId), entry.reviewsTaskId, `r${entry.round}`);
 		// State first: a worker that dies halfway through never records the same verdict twice.
 		const at = context.now;
@@ -1087,11 +1110,24 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		if (entry.status === "ingested") {
 			return entry.trashed ? null : await trashQaCard(context, qaTaskId);
 		}
-		const read = await deps.readVerdict(entry.outboxDir);
-		if (read.kind === "ok") {
-			const recorded = await recordVerdict(context, qaTaskId, entry, read.verdict, null);
+		const fileRead = await deps.readVerdict(entry.outboxDir);
+		const judged =
+			fileRead.kind === "ok"
+				? judgePassAgainstChecks(
+						applyQaVerdictRules(fileRead.verdict).verdict,
+						entry.checksFailedSteps ?? [],
+						entry.baseRef,
+					)
+				: null;
+		if (fileRead.kind === "ok" && judged?.kind !== "incomplete") {
+			const recorded = await recordVerdict(context, qaTaskId, entry, fileRead.verdict, null);
 			return `${recorded}; ${await trashQaCard(context, qaTaskId)}`;
 		}
+		// A PASS that doesn't answer for the failed checks is nudged like an unusable file (issue #41).
+		const read: QaVerdictUnusable =
+			fileRead.kind === "ok"
+				? { kind: "incomplete", error: judged?.kind === "incomplete" ? judged.error : "" }
+				: fileRead;
 		const seenAt = entry.reviewSeenAt ?? context.now;
 		if (entry.reviewSeenAt === null) {
 			await updateQaEntry(workspaceId, qaTaskId, { reviewSeenAt: seenAt });
@@ -1129,7 +1165,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			});
 			if (sent.ok) {
 				await updateQaEntry(workspaceId, qaTaskId, { nudges, reviewSeenAt: null });
-				return `no usable verdict.json${read.kind === "invalid" ? ` (${read.error})` : ""}; nudged (${nudges}/${context.qa.maxNudges})`;
+				return `no usable verdict.json${read.kind === "missing" ? "" : ` (${read.error})`}; nudged (${nudges}/${context.qa.maxNudges})`;
 			}
 			// An undelivered nudge is the harness's failure too: never a STALLED with nudges left (issue #24).
 			deps.log(`qa-ingest ${qaTaskId}: nudge ${nudges} not delivered (${sent.error}); replacing the QA card`);
@@ -1141,7 +1177,9 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		const reason =
 			read.kind === "invalid"
 				? `QA agent stopped with an unusable verdict.json (${read.error})`
-				: "QA agent stopped without a verdict.json";
+				: read.kind === "incomplete"
+					? `QA agent stopped on a PASS that wasn't accepted: ${read.error}`
+					: "QA agent stopped without a verdict.json";
 		const recorded = await recordVerdict(
 			context,
 			qaTaskId,

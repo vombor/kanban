@@ -898,6 +898,117 @@ describe("QA gate", () => {
 		expect(record).toMatchObject({ verdict: "STALLED", notes: expect.stringContaining("unusable verdict.json") });
 	});
 
+	describe("a PASS on a snapshot whose scripted checks failed (issue #41)", () => {
+		/** The QA card was created on a checks FAIL whose `test` step failed. */
+		const failChecks = async (harness: ReturnType<typeof createPipelineWorkerHarness>) => {
+			await harness.store.update("foo", (state) => {
+				const qa = state.cards.qa001 ?? {};
+				const gate = readQaGateEntry(qa);
+				return {
+					...state,
+					cards: {
+						...state.cards,
+						qa001: { ...qa, qaGate: { ...gate, checks: "FAIL", checksFailedSteps: ["test"] } },
+					},
+				};
+			});
+		};
+		const answered = (answer: Partial<NonNullable<QaVerdict["checks"]>[number]>) =>
+			createVerdict({
+				checks: [{ step: "test", reproduced: false, base: "passes", evidence: "npm test 5x: 77/77", ...answer }],
+			});
+
+		it("nudges a PASS that doesn't answer for the failed step, and lands it once it does", async () => {
+			const harness = createHarness({
+				config: { pipeline: { qa: { maxNudges: 1, verdictGraceSec: 20 } }, workspaces: { foo: QA_WORKSPACE } },
+			});
+			await startQa(harness);
+			await failChecks(harness);
+			harness.setVerdict("/tmp/kanban-qa-out/qa001", { kind: "ok", verdict: createVerdict() });
+
+			await send(harness, qaInReview);
+			expect(harness.actions).toEqual([]);
+			harness.setNow(T0 + 21_000);
+			await send(harness, qaInReview);
+			expect(harness.actions).toMatchObject([{ kind: "deliverInput", taskId: "qa001" }]);
+			const nudge = harness.actions[0];
+			expect(nudge?.kind === "deliverInput" ? nudge.text : "").toContain(
+				"/tmp/kanban-qa-out/qa001/verdict.json is not accepted: the PASS doesn't answer for the failed scripted checks step(s) test",
+			);
+			expect(readQaVerdictRecords((await harness.store.load("foo")).cards.d1111)).toEqual([]);
+
+			harness.actions.length = 0;
+			harness.setVerdict("/tmp/kanban-qa-out/qa001", { kind: "ok", verdict: answered({}) });
+			await send(harness, qaInReview);
+			await send(harness, qaInReview);
+			expect(kinds(harness.actions)).toEqual(["finishTask:qa001", "finishTask:d1111"]);
+			expect(readFileSync(harness.qaLogPath("foo"), "utf8")).toContain(
+				"- Checks step test: reproduced false, on the base passes; npm test 5x: 77/77",
+			);
+		});
+
+		it("accepts a failure that fails on the base too, and never lands a PASS still without an answer", async () => {
+			const preExisting = createHarness({ config: { workspaces: { foo: QA_WORKSPACE } } });
+			await startQa(preExisting);
+			await failChecks(preExisting);
+			preExisting.setVerdict("/tmp/kanban-qa-out/qa001", {
+				kind: "ok",
+				verdict: answered({ reproduced: true, base: "fails" }),
+			});
+			await send(preExisting, qaInReview);
+			await send(preExisting, qaInReview);
+			expect(kinds(preExisting.actions)).toEqual(["finishTask:qa001", "finishTask:d1111"]);
+
+			const harness = createHarness({
+				config: { pipeline: { qa: { maxNudges: 0, verdictGraceSec: 0 } }, workspaces: { foo: QA_WORKSPACE } },
+			});
+			await startQa(harness);
+			await failChecks(harness);
+			// An entry without evidence doesn't count either.
+			harness.setVerdict("/tmp/kanban-qa-out/qa001", { kind: "ok", verdict: answered({ evidence: "" }) });
+			await send(harness, qaInReview);
+			await send(harness, qaInReview);
+			expect(kinds(harness.actions)).not.toContain("finishTask:d1111");
+			const [record] = readQaVerdictRecords((await harness.store.load("foo")).cards.d1111);
+			expect(record).toMatchObject({ verdict: "STALLED", notes: expect.stringContaining("wasn't accepted") });
+		});
+
+		it("records a PASS whose QA reproduced the failure and saw the base pass as a FAIL", async () => {
+			const harness = createHarness({ config: { workspaces: { foo: QA_WORKSPACE } } });
+			await startQa(harness);
+			await failChecks(harness);
+			harness.setVerdict("/tmp/kanban-qa-out/qa001", {
+				kind: "ok",
+				verdict: answered({ reproduced: true, base: "passes", evidence: "fails here, passes on main" }),
+			});
+			await send(harness, qaInReview);
+			await send(harness, qaInReview);
+			expect(kinds(harness.actions)).not.toContain("finishTask:d1111");
+			const [record] = readQaVerdictRecords((await harness.store.load("foo")).cards.d1111);
+			expect(record).toMatchObject({
+				verdict: "FAIL",
+				blocking: [expect.stringContaining("scripted checks step test fails on the snapshot and passes on main")],
+			});
+			expect(readFileSync(harness.qaLogPath("foo"), "utf8")).toContain("→ recorded as FAIL");
+		});
+
+		it("a QA card made before issue #41 (no failed steps on its entry) lands its PASS as before", async () => {
+			const old = createHarness({ config: { workspaces: { foo: QA_WORKSPACE } } });
+			await startQa(old);
+			await old.store.update("foo", (state) => {
+				const qa = state.cards.qa001 ?? {};
+				return {
+					...state,
+					cards: { ...state.cards, qa001: { ...qa, qaGate: { ...readQaGateEntry(qa), checks: "FAIL" } } },
+				};
+			});
+			old.setVerdict("/tmp/kanban-qa-out/qa001", { kind: "ok", verdict: createVerdict() });
+			await send(old, qaInReview);
+			await send(old, qaInReview);
+			expect(kinds(old.actions)).toEqual(["finishTask:qa001", "finishTask:d1111"]);
+		});
+	});
+
 	it("re-QAs the snapshot after a handback of a STALLED escalated to the orchestrator (notes f423d, issue #16)", async () => {
 		const harness = createHarness({
 			config: { pipeline: { qa: { maxNudges: 1, verdictGraceSec: 20 } }, workspaces: { foo: QA_WORKSPACE } },
