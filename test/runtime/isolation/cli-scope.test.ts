@@ -267,6 +267,17 @@ describe("applyCliSessionScope", () => {
 				expect(await run(asRole("orchestrator"))).toBeNull();
 				expect(await run(noServer, {})).toBeNull();
 			}
+			// The display name (issue #43) the same way; the server's route checks again.
+			const rename = async (createClient: () => unknown, env: NodeJS.ProcessEnv = SESSION_ENV) =>
+				await applyCliSessionScope({
+					commandPath: "project rename",
+					options: {},
+					createClient: createClient as never,
+					env,
+				});
+			expect(await rename(asRole("card"))).toContain("changes the project's display name");
+			expect(await rename(asRole("orchestrator"))).toBeNull();
+			expect(await rename(noServer, {})).toBeNull();
 			// Reading them is anyone's on the project.
 			expect(
 				await applyCliSessionScope({

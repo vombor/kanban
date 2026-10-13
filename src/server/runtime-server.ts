@@ -71,6 +71,7 @@ import { createOrchestratorInboxApi } from "../trpc/orchestrator-inbox-api";
 import { createPipelinePauseApi } from "../trpc/pipeline-pause-api";
 import { createPipelineResubmitApi } from "../trpc/pipeline-resubmit-api";
 import { createPlansApi } from "../trpc/plans-api";
+import { createProjectNameApi } from "../trpc/project-name-api";
 import { createProjectsApi } from "../trpc/projects-api";
 import { createProviderCapacityApi } from "../trpc/provider-capacity-api";
 import { createProviderSetupApi } from "../trpc/provider-setup-api";
@@ -517,6 +518,10 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		requestSnapshot: (workspaceId) => deps.requestPipelineSnapshot?.(workspaceId),
 		broadcastProjects: (workspaceId) => void deps.runtimeStateHub.broadcastRuntimeProjectsUpdated(workspaceId),
 	});
+	const projectNameApi = createProjectNameApi({
+		log: isolation.log,
+		broadcastProjects: (workspaceId) => void deps.runtimeStateHub.broadcastRuntimeProjectsUpdated(workspaceId),
+	});
 	// Shortcut runs that ask for a port, and the proxy the browser reaches those ports through (shortcut-ports.ts).
 	const shortcutPorts = createShortcutPortRegistry();
 	const handleShortcutPortProxyRequest = createShortcutPortProxyHandler({
@@ -649,6 +654,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			pipelineResubmitApi,
 			providerCapacityApi,
 			pipelinePauseApi,
+			projectNameApi,
 			getPipelineCardStages: deps.runtimeStateHub.getPipelineCardStages,
 			shortcutsApi,
 			githubApi,

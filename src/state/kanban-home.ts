@@ -563,6 +563,11 @@ export function getShortcutHistoryPath(workspaceId: string, homePath = getKanban
 	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), "shortcut-history.jsonl");
 }
 
+/** Every change of a project's display name (`workspaces.<id>.name`, src/projects/project-display-name.ts); data dir too. */
+export function getProjectNameHistoryPath(workspaceId: string, homePath = getKanbanHomePath()): string {
+	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), "project-name-history.jsonl");
+}
+
 /**
  * Project isolation's files for one workspace (src/isolation/): `isolation.jsonl` logs every refused or reported
  * reach of its sessions, grants and grant uses; `messages.jsonl` is its side of the orchestrator messages.

@@ -8,6 +8,7 @@ import type {
 	RuntimeProjectTaskCounts,
 	RuntimeWorkspaceStateResponse,
 } from "../core/api-contract";
+import { readShowableProjectDisplayName } from "../projects/project-display-name";
 import {
 	listWorkspaceIndexEntries,
 	loadWorkspaceBoardById,
@@ -199,12 +200,14 @@ function toProjectSummary(project: {
 	workspaceId: string;
 	repoPath: string;
 	taskCounts: RuntimeProjectTaskCounts;
+	/** The stored display name (`workspaces.<id>.name`); shown only when it fits the name rule. */
+	displayName?: string | null;
 	orchestratorWait?: RuntimeOrchestratorWait | null;
 	pipelinePaused?: boolean;
 }): RuntimeProjectSummary {
 	const normalized = project.repoPath.replaceAll("\\", "/").replace(/\/+$/g, "");
 	const segments = normalized.split("/").filter((segment) => segment.length > 0);
-	const name = segments[segments.length - 1] ?? normalized;
+	const name = readShowableProjectDisplayName(project.displayName) ?? segments[segments.length - 1] ?? normalized;
 	return {
 		id: project.workspaceId,
 		path: project.repoPath,
@@ -424,6 +427,9 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 					workspaceId: project.workspaceId,
 					repoPath: project.repoPath,
 					taskCounts,
+					displayName: pipelineConfig
+						? getWorkspacePipelineSettings(pipelineConfig, project.workspaceId).name
+						: null,
 					orchestratorWait: wait ? { kind: wait.kind, since: wait.since } : null,
 					pipelinePaused: pipelineConfig
 						? getWorkspacePipelineSettings(pipelineConfig, project.workspaceId).pipeline.paused

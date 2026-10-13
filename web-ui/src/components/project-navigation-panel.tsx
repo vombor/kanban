@@ -4,6 +4,7 @@ import { KanbanAgentHeader } from "@/components/kanban-agent-header";
 import { OrchestratorWaitBadge } from "@/components/orchestrator-wait-badge";
 import { ProjectActionsMenu } from "@/components/project-actions-menu";
 import { ProjectSwitcher } from "@/components/project-switcher";
+import { RenameProjectDialog } from "@/components/rename-project-dialog";
 import { HEADER_ROW_HEIGHT_CLASS } from "@/components/shared/header-row";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
@@ -67,6 +68,7 @@ export function ProjectNavigationPanel({
 	const queuedNotices = useOrchestratorNoticeCount(currentProjectId);
 
 	const [pendingProjectRemoval, setPendingProjectRemoval] = useState<RuntimeProjectSummary | null>(null);
+	const [pendingProjectRename, setPendingProjectRename] = useState<RuntimeProjectSummary | null>(null);
 	const isProjectRemovalPending = pendingProjectRemoval !== null && removingProjectId === pendingProjectRemoval.id;
 	const pendingProjectTaskCount = pendingProjectRemoval
 		? pendingProjectRemoval.taskCounts.backlog +
@@ -299,6 +301,7 @@ export function ProjectNavigationPanel({
 					<ProjectActionsMenu
 						isRemoving={removingProjectId === currentProject.id}
 						disabled={removingProjectId !== null && removingProjectId !== currentProject.id}
+						onRename={() => setPendingProjectRename(currentProject)}
 						onRemove={() => setPendingProjectRemoval(currentProject)}
 					/>
 				) : null}
@@ -337,6 +340,7 @@ export function ProjectNavigationPanel({
 					</div>
 				)}
 			</div>
+			<RenameProjectDialog project={pendingProjectRename} onClose={() => setPendingProjectRename(null)} />
 			<AlertDialog
 				open={pendingProjectRemoval !== null}
 				onOpenChange={(open) => {

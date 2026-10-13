@@ -1,3 +1,5 @@
+import { basename } from "node:path";
+
 import type { Command } from "commander";
 
 import { readPipelineConfig } from "../config/pipeline-config";
@@ -5,14 +7,17 @@ import { setKanbanRuntimePort } from "../core/runtime-endpoint";
 import { formatKitSelection } from "../kits/renamed-kits";
 import { type AddProjectResult, addProject } from "../projects/project-add";
 import { type CreateProjectResult, createProject, DEFAULT_INITIAL_BRANCH } from "../projects/project-create";
+import { PROJECT_DISPLAY_NAME_MAX_LENGTH } from "../projects/project-display-name";
 import { resolveProjectInputPath } from "../projects/project-path";
 import { type ProjectRenameIdResult, runProjectIdRename } from "../projects/project-rename-id";
 import { syncProjectSections } from "../projects/project-sections";
 import { formatUnlinkIgnoredResults, runProjectUnlinkIgnored } from "../projects/project-unlink-ignored";
 import { createProcProcessTableReader, isProcessTableSupported } from "../server/process-table";
+import type { ProjectNameResponse } from "../trpc/project-name-api";
 import { loadWorktreeLinkRule } from "../workspace/worktree-link-rule";
 import { parseLandingMode, parsePresetOption, parseSetAssignments } from "./kit";
 import { createTerminalKitPrompt } from "./project-kit-prompt";
+import { createRuntimeTrpcClient } from "./runtime-trpc-client";
 import { resolveWorkspaceTarget } from "./workspace-target";
 
 function toErrorMessage(error: unknown): string {
@@ -315,6 +320,51 @@ export function registerProjectCommand(program: Command): void {
 				}
 			},
 		);
+
+	project
+		.command("rename")
+		.description(
+			"Set the project's display name (workspaces.<id>.name: the project list, doctor and the scoreboard show it instead of the directory name). Only the user and the project's own orchestrator; the workspace id stays (that is rename-id). Goes through the running server.",
+		)
+		.argument("<path>", "Project path or workspace id (. for the project containing the current directory).")
+		.argument(
+			"[name]",
+			`The new name: one line of at most ${PROJECT_DISPLAY_NAME_MAX_LENGTH} letters, digits, spaces and . _ - ' & ( ) +.`,
+		)
+		.option("--clear", "Drop the display name: the directory name is shown again.")
+		.option("--json", "Print the result as JSON.")
+		.action(async (path: string, name: string | undefined, options: { clear?: boolean; json?: boolean }) => {
+			try {
+				if ((name === undefined) === (options.clear !== true)) {
+					throw new Error("Give either a new name or --clear.");
+				}
+				const target = await resolveWorkspaceTarget(path === "." ? undefined : path, { allowUnregistered: false });
+				let response: ProjectNameResponse;
+				try {
+					response = await createRuntimeTrpcClient(target.workspaceId).projectName.set.mutate({
+						name: options.clear ? null : (name ?? null),
+					});
+				} catch (error) {
+					throw new Error(
+						`the running Kanban server didn't answer (${toErrorMessage(error)}); a project's name changes only through it, because it checks who is asking`,
+					);
+				}
+				if (!response.ok) {
+					throw new Error(response.error ?? "refused");
+				}
+				const shown =
+					response.name ??
+					`its directory name (${target.repoPath ? basename(target.repoPath) : target.workspaceId})`;
+				process.stdout.write(
+					options.json
+						? `${JSON.stringify({ workspaceId: target.workspaceId, ...response }, null, 2)}\n`
+						: `${response.changed ? "Renamed" : "Unchanged"}: ${target.workspaceId} is shown as ${shown}${response.changed ? ` (was ${response.previous ?? "its directory name"})` : ""}.\n`,
+				);
+			} catch (error) {
+				process.stderr.write(`Project rename failed: ${toErrorMessage(error)}\n`);
+				process.exitCode = 1;
+			}
+		});
 
 	project
 		.command("sync")

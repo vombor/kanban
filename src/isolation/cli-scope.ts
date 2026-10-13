@@ -95,7 +95,8 @@ function planApprovalRefusal(taskId: string | undefined): string {
  * the project's kit and `kit set|unset` change its settings on it (the server checks the caller again, also for
  * another project's orchestrator, src/trpc/kit-settings-api.ts), and
  * `shortcut add|remove` its top-bar shortcuts (src/trpc/shortcuts-api.ts checks again), and `pipeline pause|resume`
- * its QA pipeline (src/trpc/pipeline-pause-api.ts checks again).
+ * its QA pipeline (src/trpc/pipeline-pause-api.ts checks again), and `project rename` its display name
+ * (src/trpc/project-name-api.ts checks again).
  */
 export const ORCHESTRATOR_OR_USER_COMMANDS = [
 	"issues sync",
@@ -105,6 +106,7 @@ export const ORCHESTRATOR_OR_USER_COMMANDS = [
 	"models vet",
 	"pipeline pause",
 	"pipeline resume",
+	"project rename",
 	"shortcut add",
 	"shortcut remove",
 ] as const;
@@ -115,13 +117,15 @@ function orchestratorOrUserRefusal(commandPath: string): string {
 			? "uses the user's GitHub login"
 			: commandPath === "models vet"
 				? "starts a smoke-test card on another agent and model"
-				: commandPath.startsWith("shortcut ")
-					? "changes the project's shortcuts"
-					: commandPath.startsWith("pipeline ")
-						? "pauses or resumes the project's QA pipeline"
-						: commandPath === "kit apply"
-							? "switches the project's routing kit"
-							: "changes the project's settings on its kit (models, project facts)";
+				: commandPath === "project rename"
+					? "changes the project's display name"
+					: commandPath.startsWith("shortcut ")
+						? "changes the project's shortcuts"
+						: commandPath.startsWith("pipeline ")
+							? "pauses or resumes the project's QA pipeline"
+							: commandPath === "kit apply"
+								? "switches the project's routing kit"
+								: "changes the project's settings on its kit (models, project facts)";
 	return `\`kanban ${commandPath}\` ${why}, so only the user or the project's orchestrator runs it, never a card session. Tell your orchestrator what you need.`;
 }
 

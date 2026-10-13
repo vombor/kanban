@@ -203,6 +203,7 @@ import {
 	planPreviewResponseSchema,
 	type RuntimePlansApi,
 } from "./plans-api";
+import { projectNameRequestSchema, projectNameResponseSchema, type RuntimeProjectNameApi } from "./project-name-api";
 import {
 	providerCapacityRequestSchema,
 	providerCapacityResponseSchema,
@@ -276,6 +277,8 @@ export interface RuntimeTrpcContext {
 	providerCapacityApi?: RuntimeProviderCapacityApi;
 	/** `kanban pipeline pause|resume` (src/trpc/pipeline-pause-api.ts); absent = not available. */
 	pipelinePauseApi?: RuntimePipelinePauseApi;
+	/** `kanban project rename` and the project menu's Rename (src/trpc/project-name-api.ts); absent = not available. */
+	projectNameApi?: RuntimeProjectNameApi;
 	/**
 	 * The pipeline worker's card stages of a workspace as the state hub keeps them for its board (src/pipeline/card-stage.ts),
 	 * for `kanban pipeline status`; absent = not available.
@@ -1018,6 +1021,29 @@ export const runtimeAppRouter = t.router({
 					};
 				}
 				return await ctx.restartUpdateApi.update(await readStrictCaller(ctx), input);
+			}),
+	}),
+	// The project's display name (src/trpc/project-name-api.ts): the user's and that project's orchestrator's.
+	projectName: t.router({
+		set: workspaceProcedure
+			.input(projectNameRequestSchema)
+			.output(projectNameResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.projectNameApi) {
+					return {
+						ok: false,
+						name: null,
+						previous: null,
+						changed: false,
+						error: "Renaming a project is not available here.",
+					};
+				}
+				// In every isolation mode: a session without its credential is traced to its process tree.
+				return await ctx.projectNameApi.setName({
+					caller: await readStrictCaller(ctx),
+					workspaceId: ctx.workspaceScope.workspaceId,
+					request: input,
+				});
 			}),
 	}),
 	// A Review dev card snapshotted again and sent to the QA gate (src/trpc/pipeline-resubmit-api.ts), and the

@@ -13,9 +13,29 @@ vi.mock("@/resize/layout-customizations", () => ({
 	useLayoutResetEffect: () => {},
 }));
 
-// The add-project dialog and the queued-notices badge talk to the runtime here.
+const { setProjectName } = vi.hoisted(() => ({
+	setProjectName: vi.fn(
+		async (_input: {
+			name: string | null;
+		}): Promise<{
+			ok: boolean;
+			name: string | null;
+			previous: string | null;
+			changed: boolean;
+			error?: string;
+		}> => ({
+			ok: true,
+			name: "Renamed",
+			previous: null,
+			changed: true,
+		}),
+	),
+}));
+
+// The add-project dialog, the queued-notices badge and the Rename dialog talk to the runtime here.
 vi.mock("@/runtime/trpc-client", () => ({
 	getRuntimeTrpcClient: (workspaceId: string | null) => ({
+		projectName: { set: { mutate: setProjectName } },
 		orchestratorInbox: {
 			status: { query: async () => ({ pending: workspaceId === "alpha" ? 2 : 0, oldestAt: null }) },
 		},
@@ -422,5 +442,60 @@ describe("ProjectNavigationPanel width persistence", () => {
 			getButtonByText(document.body, "Remove Project").click();
 		});
 		expect(onRemoveProject).toHaveBeenCalledWith("project-1");
+	});
+
+	it("renames the selected project from the project actions menu, and shows the server's refusal", async () => {
+		renderPanel();
+		const openRename = async () => {
+			const actions = container.querySelector<HTMLButtonElement>('button[aria-label="Project actions"]');
+			await act(async () => {
+				actions?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+			});
+			const renameItem = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(
+				(item) => item.textContent === "Rename",
+			);
+			await act(async () => {
+				renameItem?.click();
+			});
+			return document.body.querySelector<HTMLInputElement>("#rename-project-name-input");
+		};
+		const typeName = async (input: HTMLInputElement, value: string) => {
+			await act(async () => {
+				Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
+				input.dispatchEvent(new Event("input", { bubbles: true }));
+			});
+		};
+
+		const input = await openRename();
+		if (!input) {
+			throw new Error("the Rename dialog did not open");
+		}
+		expect(input.value).toBe("Kanban");
+		expect(input.placeholder).toBe("kanban");
+		await typeName(input, " Renamed ");
+		await act(async () => {
+			getButtonByText(document.body, "Rename").click();
+		});
+		expect(setProjectName).toHaveBeenCalledWith({ name: "Renamed" });
+		expect(document.body.querySelector("#rename-project-name-input")).toBeNull();
+
+		setProjectName.mockResolvedValueOnce({
+			ok: false,
+			name: null,
+			previous: null,
+			changed: false,
+			error: "A project name is one line of letters.",
+		});
+		const again = await openRename();
+		if (!again) {
+			throw new Error("the Rename dialog did not open");
+		}
+		await typeName(again, "");
+		await act(async () => {
+			getButtonByText(document.body, "Rename").click();
+		});
+		expect(setProjectName).toHaveBeenLastCalledWith({ name: null });
+		expect(document.body.querySelector('[role="alert"]')?.textContent).toContain("one line of letters");
+		expect(document.body.querySelector("#rename-project-name-input")).not.toBeNull();
 	});
 });

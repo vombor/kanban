@@ -195,6 +195,12 @@ refuses without a newer image or while cards are In Progress (`--force`), runs r
   `<home>/backups/home-migrate-<ts>/`. `--dry-run` lists every file it would copy, keep or replace. The rest of
   `run/` stays behind (a home moved by hand has no start record: recovery takes a manifest at most 24 h old). Rename the old home (`<old home>.migrated-<ts>`) and move it out of `~/.cline` once no rollback
   needs it. Rollback: stop Kanban and point `KANBAN_HOME` at the renamed old home.
+- **Rename a project** (its display name, `workspaces.<id>.name`, issue #43; Kanban running, the user or the
+  project's own orchestrator): `kanban project rename <path|id> "<name>"` (`--clear` shows the directory name again), or
+  the project menu's Rename in the browser. The project list, doctor and the scoreboard show it; the workspace id, the
+  directory and every link stay. A name is one line of at most 40 letters, digits, spaces and `. _ - ' & ( ) +`,
+  because the project list reaches every client; a hand-edited name outside that rule is listed as the directory
+  name. Changes are logged in `data/<ws>/project-name-history.jsonl`.
 - **Rename a project's workspace id** (Kanban stopped, in a restart window; the user's step, refused from every agent
   session): stop the pod (its stop hook runs `kanban restart prepare` as usual), then in a one-off container on the
   same volumes run `kanban project rename-id <old> <new> --dry-run`, check the list, and run it without `--dry-run`.
