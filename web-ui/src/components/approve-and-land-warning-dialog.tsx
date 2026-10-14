@@ -15,7 +15,7 @@ import {
 import type { RuntimePipelineCardStage } from "@/runtime/types";
 
 /**
- * Asked before Approve & land while the pipeline still checks or QAs the card (issue #30: foo's 8c28e was landed by
+ * Asked before Approve & land while the pipeline still checks or QAs the card (issue #30: a card was landed by
  * hand while its checks ran, because the card looked idle). It warns, it doesn't block: Land anyway lands as before.
  * Cancel is focused, so Enter or Escape leaves the card to the pipeline.
  */

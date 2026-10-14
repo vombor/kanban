@@ -21,8 +21,8 @@ RUN apt-get update && \
 
 # GitHub CLI from GitHub's apt repository (https://cli.github.com/packages). No token or gh config in the image.
 # Either pass the user's classic PAT as GH_TOKEN (a podman secret, docs/fork/github-auth.md: gh reads it natively, and
-# kanban-entrypoint adds the npm ${GH_TOKEN} reference and gh's git credential helper), or run `gh auth login` once in
-# the container; its config lives in /root/.config/gh on the persistent /root volume.
+# explicit `kanban setup` adds the npm token reference and gh's git credential helper), or run `gh auth login` once.
+# Authentication, agent config, projects and Kanban state are per-instance mounts, never image contents.
 RUN mkdir -p -m 755 /etc/apt/keyrings && \
     curl -fsSL -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
       https://cli.github.com/packages/githubcli-archive-keyring.gpg && \
@@ -34,7 +34,7 @@ RUN mkdir -p -m 755 /etc/apt/keyrings && \
     rm -rf /var/lib/apt/lists/*
 
 ARG AGENT_CLIS="npm @anthropic-ai/claude-code @github/copilot @openai/codex cline @factory/cli"
-RUN npm install -g --no-fund $AGENT_CLIS
+RUN npm install -g --prefix=/usr/local --no-fund $AGENT_CLIS && npm cache clean --force
 
 # cline 3.x (verified on 3.0.68) puts its Bedrock prompt-cache checkpoint on the last *user* message; in agent
 # loops tool results are role "tool", so only the first prompt got cached (opus 10/06: 13K of 275K per turn,
@@ -48,18 +48,27 @@ RUN node /tmp/patch-cline-bedrock-cache.mjs /usr/local/lib/node_modules/cline/bi
     rm /tmp/patch-cline-bedrock-cache.mjs
 
 COPY kanban.tgz /tmp/kanban.tgz
-RUN npm install -g --no-fund /tmp/kanban.tgz && rm /tmp/kanban.tgz
+RUN npm install -g --prefix=/usr/local --no-fund /tmp/kanban.tgz && rm /tmp/kanban.tgz && npm cache clean --force
 
 # No self-updates inside the container: the image build is the only update path (daily scheduled build).
 #  KANBAN_NO_AUTO_UPDATE: Kanban would npm-install a newer @vombor/kanban from GitHub Packages over the image's build
 #   (with GH_TOKEN set it can read the registry).
 #  CLINE_NO_AUTO_UPDATE: cline 3.x background updates restart its hub daemon under live sessions.
 #  DISABLE_AUTOUPDATER: Claude Code.
-# droid (@factory/cli) keeps its own updater: not seen breaking a session yet, so it stays on (its switch would be
-# FACTORY_DROID_AUTO_UPDATE_ENABLED=false, read from its binary, untested).
+# Copilot's documented switch and Droid's CLI switch also keep the image's installed versions.
 ENV KANBAN_NO_AUTO_UPDATE=1 \
+    KANBAN_UPDATE_MODE=image \
     CLINE_NO_AUTO_UPDATE=1 \
-    DISABLE_AUTOUPDATER=1
+    DISABLE_AUTOUPDATER=1 \
+    COPILOT_AUTO_UPDATE=false \
+    FACTORY_DROID_AUTO_UPDATE_ENABLED=false
+
+# Build packages as root, execute them as node. Fresh instances have an empty projects directory and no registered
+# projects. Bind mount permissions remain the deployment's responsibility. Agent/user files use HOME; Kanban-owned
+# state uses KANBAN_HOME/--home, defaulting to $HOME/.kanban in the entrypoint and canonical runtime resolver.
+RUN mkdir -p /projects && chown node:node /projects
+ENV HOME=/home/node
+USER node
 
 WORKDIR /projects
 
@@ -67,17 +76,16 @@ EXPOSE 3485
 EXPOSE 3600
 
 # Container lifecycle (docs/fork/container-lifecycle.md): kanban-entrypoint runs the CMD (or a quadlet Exec=
-# override) as its child. Every start launches `kit boot` from the persistent /root/.kanban in the background;
+# override) as its child. Start/pre-stop hooks are explicit per-instance configuration;
 # every stop (podman stop, systemctl stop/restart, podman auto-update, host shutdown) first runs
-# `kit prepare-restart` (at most KANBAN_PRESTOP_TIMEOUT s, default 45) and `kanban restart prepare` (at most
+# the pre-stop hook (at most KANBAN_PRESTOP_TIMEOUT s, default 45) and `kanban restart prepare` (at most
 # KANBAN_RESTART_PREPARE_TIMEOUT s, default 20), then passes the signal on to Kanban
 # (which gives itself up to 10 s more). It replaces node's docker-entrypoint.sh, which only prefixes `node` when the
 # command is a flag or not on PATH.
 # An image cannot set a stop timeout, and podman stop's default of 10 s would SIGKILL mid-hook: run the container
 # with StopTimeout=90 in the quadlet (`podman run --stop-timeout 90`), and give the systemd unit more than that
 # (TimeoutStopSec=120; its default is 90 s).
-COPY kanban-entrypoint.sh /usr/local/bin/kanban-entrypoint
-RUN chmod 755 /usr/local/bin/kanban-entrypoint
+COPY --chmod=755 kanban-entrypoint.sh /usr/local/bin/kanban-entrypoint
 STOPSIGNAL SIGTERM
 # podman auto-update picks up containers with this label; podman copies image labels into the container's.
 # It still needs the container to run under a systemd unit (quadlet), and a fully qualified image name.

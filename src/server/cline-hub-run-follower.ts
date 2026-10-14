@@ -1,5 +1,5 @@
 // Ends a Cline card's run in Cline's shared hub when the card's TUI is gone without the card being finished (issue
-// #28): the TUI process exited (foo QA 33288: exit 0 mid-`run_commands`, its run waited on a hook for the gone TUI
+// #28): the TUI process exited (exit 0 mid-`run_commands`, its run waited on a hook for the gone TUI
 // for 10 h), or it died with the previous server (restart: `markOrphanedSessionsInterrupted`). Done, task delete and
 // project removal end the worktree's runs themselves (prepareTaskProcessReap), before the worktree is deleted.
 //

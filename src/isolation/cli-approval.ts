@@ -11,7 +11,7 @@ export type ApprovalOutcome = { ok: true; result: string | null } | { ok: false;
 export interface CompleteApprovalInput {
 	client: Pick<RuntimeTrpcClient, "isolation">;
 	approvalId: string;
-	/** What waits, for the instructions ("The grant", "kanban project add /projects/foo"). */
+	/** What waits, for the instructions ("The grant", "kanban project add <project-path>"). */
 	what: string;
 	/** Asks for the code; null when there is no terminal to ask on (then this polls). */
 	readCode?: (() => Promise<string | null>) | null;

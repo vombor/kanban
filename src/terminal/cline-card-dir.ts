@@ -2,7 +2,7 @@
 // guard policy), and Cline 3.x runs the scripts it finds in the session's workspace `.cline/hooks`. A project that
 // git-ignores `.cline/` gets it mirrored into every task worktree as a symlink to the main checkout's directory
 // (task-worktree.ts), so every card of the project shared one hooks dir and the card launched last wrote everyone's
-// hooks: foo 4189a's writes were judged against 6f756's worktree (10/07). Before a Cline launch writes its hooks, a
+// hooks: one card's writes were judged against another's worktree. Before a Cline launch writes its hooks, a
 // mirrored `.cline` becomes a real directory of the card: its other entries stay links to the shared ones, and
 // `hooks`/`rules` hold links to the user's own files only, so Kanban's files there are the card's.
 import { lstat, mkdir, readdir, readFile, realpath, symlink, unlink } from "node:fs/promises";

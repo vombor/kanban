@@ -47,7 +47,7 @@ export function toUiRelative(rootPath: string, absolutePath: string): string {
 
 /**
  * Produce a short display label for the server root breadcrumb.
- * For Windows paths like "C:/foo" it returns "C:/"; otherwise "/".
+ * For Windows paths like "C:/example" it returns "C:/"; otherwise "/".
  */
 export function serverRootLabel(rootPath: string): string {
 	const normalized = normalizeServerPath(rootPath);

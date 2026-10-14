@@ -1,14 +1,8 @@
-// Who may run `kanban setup-provider` (KANBAN_ORCHESTRATOR_OR_USER_COMMANDS in src/isolation/cli-scope.ts): the user,
-// and the orchestrator of `providers.setupWorkspaceId` only where that project is registered, decided by the server's
-// route with the strict caller (src/trpc/provider-setup-api.ts).
 import { describe, expect, it, vi } from "vitest";
-
-import { parsePipelineConfig } from "../../../src/config/pipeline-config";
-import { decideKanbanOrchestratorCaller } from "../../../src/isolation/cli-scope";
+import { migrateLegacyConfigKeys, parsePipelineConfig } from "../../../src/config/pipeline-config";
+import { decideUserInstanceCaller, USER_INSTANCE_COMMANDS } from "../../../src/isolation/cli-scope";
 import type { RuntimeCaller } from "../../../src/isolation/session-identity";
 import { createProviderSetupApi } from "../../../src/trpc/provider-setup-api";
-
-const KANBAN = "kanban-2uge";
 
 function session(workspaceId: string, role: "orchestrator" | "card", via: "credential" | "process" = "credential") {
 	return {
@@ -24,79 +18,49 @@ function session(workspaceId: string, role: "orchestrator" | "card", via: "crede
 	} satisfies RuntimeCaller;
 }
 
-describe("decideKanbanOrchestratorCaller", () => {
-	it("allows the user and the setup workspace's orchestrator, refuses everyone else with who may run it", () => {
-		expect(decideKanbanOrchestratorCaller({ kind: "user" }, KANBAN)).toEqual({ allowed: true });
-		expect(decideKanbanOrchestratorCaller(session(KANBAN, "orchestrator"), KANBAN)).toEqual({ allowed: true });
-		// Its headless wake or a credential-less call traced to its process tree is the same orchestrator.
-		expect(decideKanbanOrchestratorCaller(session(KANBAN, "orchestrator", "process"), KANBAN)).toEqual({
-			allowed: true,
-		});
-		const refused: RuntimeCaller[] = [
-			session("foo", "orchestrator"),
-			session(KANBAN, "card"),
-			session("foo", "card", "process"),
-			{ kind: "unknown", reason: "no session above the caller" },
+describe("user-only instance administration", () => {
+	it("starts without any projects or privileged project and ignores legacy privileges while preserving providers", () => {
+		const fresh = parsePipelineConfig({}).config;
+		expect(fresh.workspaces).toEqual({});
+		expect(fresh.providers).toEqual({ openaiCompatible: {} });
+		const raw = {
+			providers: {
+				setupWorkspaceId: "first-project",
+				openaiCompatible: { custom: { name: "Custom", baseUrl: "http://example.test/v1", local: true } },
+			},
+		};
+		expect(parsePipelineConfig(raw).config.providers).not.toHaveProperty("setupWorkspaceId");
+		expect(parsePipelineConfig(raw).config.providers.openaiCompatible.custom?.name).toBe("Custom");
+		const migrated = migrateLegacyConfigKeys(raw);
+		expect(migrated.migrated).toContain("providers.setupWorkspaceId");
+		expect(migrated.config.providers).toEqual({ openaiCompatible: raw.providers.openaiCompatible });
+	});
+
+	it("refuses every project's orchestrator and card, including the first project, for every administrative command", async () => {
+		const log = vi.fn(async () => {});
+		const api = createProviderSetupApi({ log });
+		const callers: RuntimeCaller[] = [
+			session("first-project", "orchestrator"),
+			session("another-project", "orchestrator", "process"),
+			session("first-project", "card"),
+			session("another-project", "card", "process"),
+			{ kind: "unknown", reason: "the caller lookup failed" },
 		];
-		for (const caller of refused) {
-			const decision = decideKanbanOrchestratorCaller(caller, KANBAN);
-			expect(decision.allowed).toBe(false);
-			expect(decision.allowed ? null : decision.message).toContain(
-				"only the user runs it (apart from the orchestrator of workspace kanban-2uge, where that project is registered)",
-			);
-		}
-		const other = decideKanbanOrchestratorCaller(session("foo", "orchestrator"), KANBAN);
-		expect(other.allowed ? null : other.message).toContain("the orchestrator of foo can't");
-	});
-
-	it("follows the configured workspace", () => {
-		expect(parsePipelineConfig({}).config.providers.setupWorkspaceId).toBe(KANBAN);
-		expect(parsePipelineConfig({ providers: { setupWorkspaceId: "k2" } }).config.providers.setupWorkspaceId).toBe(
-			"k2",
-		);
-		expect(decideKanbanOrchestratorCaller(session(KANBAN, "orchestrator"), "k2").allowed).toBe(false);
-		expect(decideKanbanOrchestratorCaller(session("k2", "orchestrator"), "k2").allowed).toBe(true);
-	});
-});
-
-describe("providers.authorizeSetup", () => {
-	it("answers from the configured workspace and logs a refusal on both sides", async () => {
-		const log = vi.fn(async () => {});
-		const api = createProviderSetupApi({ log, readSetupWorkspaceId: async () => KANBAN });
-		expect(await api.authorize({ kind: "user" })).toEqual({ allowed: true, message: null });
-		expect(await api.authorize(session(KANBAN, "orchestrator"))).toEqual({ allowed: true, message: null });
-		expect(log).not.toHaveBeenCalled();
-
-		const refused = await api.authorize(session("foo", "card", "process"));
-		expect(refused.allowed).toBe(false);
-		expect(refused.message).toContain("card t1 of foo can't");
-		expect(log).toHaveBeenCalledWith(
-			[KANBAN, "foo"],
-			expect.objectContaining({ kind: "refused", action: "providers.authorizeSetup", taskId: "t1", from: "foo" }),
-		);
-		expect((await api.authorize({ kind: "unknown", reason: "the caller lookup failed" })).allowed).toBe(false);
-	});
-
-	it("allows only the user where the setup workspace is not registered (Kanban developed outside the pod)", async () => {
-		// The pod registers foo and notes, not kanban-2uge: every session there belongs to one of them, so no session
-		// carries the setup workspace's id, and every orchestrator and card is refused for both commands.
-		const log = vi.fn(async () => {});
-		const api = createProviderSetupApi({ log, readSetupWorkspaceId: async () => KANBAN });
-		for (const command of ["setup-provider", "restart update"]) {
+		for (const command of USER_INSTANCE_COMMANDS) {
+			expect(decideUserInstanceCaller({ kind: "user" }, command)).toEqual({ allowed: true });
 			expect(await api.authorize({ kind: "user" }, command)).toEqual({ allowed: true, message: null });
-			const sessions: RuntimeCaller[] = [
-				session("foo", "orchestrator"),
-				session("notes", "orchestrator", "process"),
-				session("foo", "card"),
-				session("notes", "card", "process"),
-				{ kind: "unknown", reason: "no session above the caller" },
-			];
-			for (const caller of sessions) {
+			for (const caller of callers) {
+				expect(decideUserInstanceCaller(caller, command).allowed).toBe(false);
 				const answer = await api.authorize(caller, command);
 				expect(answer.allowed).toBe(false);
 				expect(answer.message).toContain("only the user runs it");
+				expect(answer.message).not.toContain("apart from");
 			}
 		}
-		expect(log).toHaveBeenCalledTimes(10);
+		expect(log).toHaveBeenCalledWith(
+			["first-project"],
+			expect.objectContaining({ action: "providers.authorizeSetup", from: "first-project", to: null }),
+		);
+		expect(log).toHaveBeenCalledTimes(USER_INSTANCE_COMMANDS.length * callers.length);
 	});
 });

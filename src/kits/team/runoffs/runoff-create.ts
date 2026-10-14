@@ -2,7 +2,7 @@
 // for runoffs.json. The runoffs feature then holds each card's PASS and decides (runoffs-feature.ts).
 //
 // Before the port the orchestrator did this by hand: N cards with the same prompt and base (a `bench/pre-runoff-…`
-// tag), each pinned to a model, and a hand-written runoffs.json entry (data/foo/runoffs.json, 10/06 tier-3 and
+// tag), each pinned to a model, and a hand-written runoffs.json entry (data/<ws>/runoffs.json, 10/06 tier-3 and
 // tier-2 runoffs).
 import type { RuntimeAgentId, RuntimeTaskAgentSettings } from "../../../core/api-contract";
 import { runtimeAgentIdSchema } from "../../../core/api-contract";

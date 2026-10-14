@@ -1,6 +1,6 @@
 // Writes that survive a crash. A temp file renamed over the target is atomic for readers, but without an fsync the
 // rename can reach the disk before the data: after a power loss, OOM kill of the pod or host crash the target comes
-// back 0 bytes (notes' pipeline-state.json at the unclean stop of 2026-10-11 ~17:14Z, issue #36). So the temp file's
+// back 0 bytes (pipeline-state.json at the unclean stop of 2026-10-11 ~17:14Z, issue #36). So the temp file's
 // data is synced before the rename, and the directory after it, so the rename itself is on disk too.
 import { open, rename } from "node:fs/promises";
 import { dirname } from "node:path";

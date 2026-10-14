@@ -9,6 +9,7 @@ import { areRuntimeProjectShortcutsEqual } from "@runtime-shortcuts";
 import { normalizeRuntimeAgentDefaultSettings, type RuntimeAgentDefaultSettings } from "@runtime-task-agent-settings";
 import {
 	Bell,
+	BrainCircuit,
 	Check,
 	ChevronDown,
 	Circle,
@@ -20,7 +21,6 @@ import {
 	Palette,
 	Plus,
 	Settings,
-	SlidersHorizontal,
 	X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -88,14 +88,14 @@ export type RuntimeSettingsSection = "shortcuts";
 
 const SETTINGS_AGENT_ORDER: readonly RuntimeAgentId[] = ["cline", "claude", "codex", "droid", "kiro"];
 
-type SettingsNavId = "general" | "git-prompts" | "notifications" | "appearance" | "github" | "project";
+type SettingsNavId = "agents" | "git-prompts" | "notifications" | "appearance" | "github" | "project";
 
 const SETTINGS_NAV_ITEMS: ReadonlyArray<{
 	id: SettingsNavId;
 	label: string;
 	icon: React.ReactNode;
 }> = [
-	{ id: "general", label: "General", icon: <SlidersHorizontal size={16} /> },
+	{ id: "agents", label: "Agents", icon: <BrainCircuit size={16} /> },
 	{ id: "git-prompts", label: "Git Prompts", icon: <GitCommit size={16} /> },
 	{ id: "notifications", label: "Notifications", icon: <Bell size={16} /> },
 	{ id: "appearance", label: "Appearance", icon: <Palette size={16} /> },
@@ -380,7 +380,7 @@ export function RuntimeSettingsDialog({
 	const shortcutRowRefs = useRef<Array<HTMLDivElement | null>>([]);
 	const bodyRef = useRef<HTMLDivElement>(null);
 	const isScrollingProgrammatically = useRef(false);
-	const [activeSection, setActiveSection] = useState<SettingsNavId>("general");
+	const [activeSection, setActiveSection] = useState<SettingsNavId>("agents");
 	const controlsDisabled = isLoading || isSaving || config === null;
 	const commitPromptTemplateDefault = config?.commitPromptTemplateDefault ?? "";
 	const openPrPromptTemplateDefault = config?.openPrPromptTemplateDefault ?? "";
@@ -428,6 +428,7 @@ export function RuntimeSettingsDialog({
 		}));
 	}, [agentAutonomousModeEnabled, config?.agents]);
 	const displayedAgents = useMemo(() => supportedAgents, [supportedAgents]);
+	const activeAgent = displayedAgents.find((agent) => agent.id === selectedAgentId);
 	const navItems = SETTINGS_NAV_ITEMS;
 	const configuredAgentId = config?.selectedAgentId ?? null;
 	const firstInstalledAgentId = displayedAgents.find((agent) => agent.installed)?.id;
@@ -586,7 +587,7 @@ export function RuntimeSettingsDialog({
 		if (!body) return;
 		const headings = body.querySelectorAll<HTMLElement>("[data-settings-section]");
 		const bodyRect = body.getBoundingClientRect();
-		let current: SettingsNavId = "general";
+		let current: SettingsNavId = "agents";
 
 		for (const heading of headings) {
 			const rect = heading.getBoundingClientRect();
@@ -749,15 +750,18 @@ export function RuntimeSettingsDialog({
 					onScroll={handleBodyScroll}
 					className="px-5 pb-5 overflow-y-auto overscroll-contain flex-1 min-h-0 bg-surface-1"
 				>
-					{/* ---- General ---- */}
-					<div data-settings-section="general" />
+					{/* ---- Agents ---- */}
+					<div data-settings-section="agents" />
 					<div className="sticky top-0 -mx-5 px-5 pt-4 pb-2 bg-surface-1 z-10">
 						<h2 className="flex items-center gap-2 text-base font-semibold text-text-primary m-0">
-							<SlidersHorizontal size={16} className="text-text-secondary" />
-							General
+							<BrainCircuit size={16} className="text-text-secondary" />
+							Agents
 						</h2>
 					</div>
-					<div className="rounded-lg border border-border bg-surface-0 px-4 py-3 mb-4">
+					<div
+						className="rounded-lg border border-border bg-surface-0 px-4 py-3 mb-4"
+						data-testid="runtime-settings-agents"
+					>
 						<h6 className="text-[12px] font-semibold uppercase tracking-wider text-text-secondary m-0 mb-1">
 							Agent
 						</h6>
@@ -794,37 +798,37 @@ export function RuntimeSettingsDialog({
 						<p className="text-text-secondary text-[13px] ml-6 mt-0 mb-0">
 							Allows agents to use tools without stopping for permission. Use at your own risk.
 						</p>
-					</div>
-					<div className="rounded-lg border border-border bg-surface-0 px-4 py-3 mb-4">
-						<h6 className="text-[12px] font-semibold uppercase tracking-wider text-text-secondary m-0 mb-1">
-							Default model per agent
-						</h6>
-						<p className="text-text-secondary text-[13px] mt-0 mb-1">
-							Passed to the CLI at launch when a card names no model: task cards, the orchestrator sidebar and
-							its headless wakes. A card's own model, or the one its routing kit gave it, wins. Empty fields
-							leave it to the CLI's own config.
-						</p>
-						{displayedAgents.map((agent) => (
-							<AgentDefaultModelFields
-								key={agent.id}
-								agentId={agent.id}
-								agentLabel={agent.label}
-								settings={agentDefaults[agent.id]}
-								clineModelRecords={config?.clineModelRecords ?? []}
-								disabled={controlsDisabled}
-								onChange={(settings) =>
-									setAgentDefaults((current) => {
-										const next = { ...current };
-										if (settings) {
-											next[agent.id] = settings;
-										} else {
-											delete next[agent.id];
-										}
-										return next;
-									})
-								}
-							/>
-						))}
+						<div className="mt-3 border-t border-border pt-3">
+							<h6 className="text-[12px] font-semibold uppercase tracking-wider text-text-secondary m-0 mb-1">
+								Default model
+							</h6>
+							<p className="text-text-secondary text-[13px] mt-0 mb-1">
+								Used at launch when a task or orchestrator names no model. A card's own model, including its
+								routing kit's assignment, wins. Choose the CLI's own default to use its configuration.
+							</p>
+							{activeAgent ? (
+								<AgentDefaultModelFields
+									key={activeAgent.id}
+									agentId={activeAgent.id}
+									agentLabel={activeAgent.label}
+									settings={agentDefaults[activeAgent.id]}
+									clineModelRecords={config?.clineModelRecords ?? []}
+									workspaceId={workspaceId}
+									disabled={controlsDisabled}
+									onChange={(settings) =>
+										setAgentDefaults((current) => {
+											const next = { ...current };
+											if (settings) {
+												next[activeAgent.id] = settings;
+											} else {
+												delete next[activeAgent.id];
+											}
+											return next;
+										})
+									}
+								/>
+							) : null}
+						</div>
 					</div>
 
 					{/* ---- Git Prompts ---- */}

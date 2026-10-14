@@ -128,7 +128,8 @@ jobs:
         with:
           context: deploy
           file: deploy/Containerfile
-          push: true
+          push: false
+          load: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: |
             ${{ steps.meta.outputs.labels }}
@@ -144,3 +145,18 @@ jobs:
             KANBAN_IMAGE_VERSION=${{ steps.release.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Validate the bare non-root image
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          image=$(printf '%s\n' "$TAGS" | head -n 1)
+          node scripts/container-smoke.mjs docker "$image"
+
+      - name: Publish the validated image
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          while IFS= read -r tag; do
+            if [ -n "$tag" ]; then docker push "$tag"; fi
+          done <<< "$TAGS"

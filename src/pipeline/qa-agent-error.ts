@@ -1,10 +1,10 @@
 // A QA card whose run ended on the QA agent's own error (issue #12): no verdict, because the reviewer's model or
 // provider failed, not because the dev card did. The QA gate doesn't nudge it (a nudge resends the conversation that
-// keeps failing: foo QA ebeb2's 8000 px screenshot, 2026-10-09), it replaces it with a fresh QA card for the same
+// keeps failing: an 8000 px screenshot, 2026-10-09), it replaces it with a fresh QA card for the same
 // snapshot up to QA_AGENT_ERROR_RETRIES times, then records a STALLED that carries the error (`qaAgentError`),
 // which the rework stage escalates to the orchestrator instead of asking the kit's onFail (a takeover of the dev
 // card onto `escalate.to` punished the dev card for the harness). A context overflow is one too (`context_overflow`,
-// issue #26: notes c92da/9e059 ended on "Context size has been exceeded.", got two verdict nudges into the overflowing
+// issue #26: QA sessions ended on "Context size has been exceeded.", got two verdict nudges into the overflowing
 // conversation, then a STALLED that escalated their dev cards).
 import type { PipelineSessionView } from "./engine";
 import type { PipelineCardState } from "./pipeline-state";
@@ -24,7 +24,7 @@ export interface QaAgentErrorRecord {
 	/**
 	 * `silent_stall`: its Cline session made no progress for recovery's `hungMin` (the QA gate's replaceSilentQaCards).
 	 * `process_exited`: its agent process was gone when the gate would nudge it, so a nudge has nothing to type into
-	 * (foo 33288, 2026-10-10: the Cline TUI exited mid tool call, issue #24). `nudge_undelivered`: a nudge failed.
+	 * (2026-10-10: the Cline TUI exited mid tool call, issue #24). `nudge_undelivered`: a nudge failed.
 	 */
 	kind: AgentRunError["kind"] | "agent_error" | "silent_stall" | "process_exited" | "nudge_undelivered";
 	text: string;

@@ -1,5 +1,5 @@
 // Who moved each card to Done or deleted it, and what that did (`<home>/data/<workspaceId>/task-history.jsonl`).
-// At the 2026-10-07 restart two of foo's QA cards ended in Done with nothing in any log saying who moved them; every
+// At the 2026-10-07 restart two QA cards ended in Done with nothing in any log saying who moved them; every
 // Done move now leaves one line here, written by its one implementation (src/server/task-trash-workflow.ts), and so
 // does every delete (the `workspace.deleteWorktree` route, prune-done). Read with `kanban task history [<id>]`.
 import { appendFile, mkdir, readFile } from "node:fs/promises";

@@ -1,6 +1,6 @@
 // The projects roots (`projects.roots` in config.json, schema in src/config/pipeline-config.ts): every project Kanban
 // creates (New project), clones or opens (Open folder, `kanban project add`) must be strictly inside one of them. In
-// the container that is `/projects`, the projects volume; /root holds config, the Kanban home and task worktrees.
+// the container that is `/projects`, the projects volume; KANBAN_HOME holds Kanban state and task worktrees.
 // Worktree creation never goes through this check, and a task worktree (anything under the Kanban home's worktree
 // roots) is refused here even inside a root: it is never a project, whoever asks. Already registered projects
 // outside a root keep working (doctor warns). This module is the one check; the browser only pre-validates names.

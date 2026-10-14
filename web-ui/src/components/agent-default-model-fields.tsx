@@ -1,110 +1,25 @@
-// One agent's default model in the settings dialog (config.json `agentDefaults`): the model, and where the CLI takes
-// them, the provider and reasoning effort a launch passes when a card names no model (resolveLaunchAgentSettings).
-// Values are free text passed verbatim; Kanban keeps no model list. For Cline, whose own models.json records are its
-// allow list, the model is a select of those records, with "Other" for a provider Cline knows without a record.
+// The selected agent's install-specific defaults. Options come from that CLI/configuration, never routing policy.
 import { getRuntimeAgentCatalogEntry } from "@runtime-agent-catalog";
-import { useMemo, useState } from "react";
-
+import { useId } from "react";
 import { patchAgentSettings } from "@/components/task-agent-settings-state";
 import { NativeSelect } from "@/components/ui/native-select";
-import type { RuntimeAgentId, RuntimeClineModelRecord, RuntimeTaskAgentSettings } from "@/runtime/types";
+import { fetchAgentSettingsOptions } from "@/runtime/runtime-config-query";
+import type {
+	AgentModelOption,
+	RuntimeAgentId,
+	RuntimeClineModelRecord,
+	RuntimeTaskAgentSettings,
+} from "@/runtime/types";
+import { useAsync } from "@/utils/react-use";
 
-const INPUT_CLASS_NAME =
-	"w-full rounded-md border border-border bg-surface-2 px-2 py-1.5 text-[12px] text-text-primary placeholder:text-text-tertiary focus:border-border-focus focus:outline-none disabled:opacity-40";
-const OTHER_MODEL_VALUE = "__other__";
-const RECORD_VALUE_SEPARATOR = "\u001f";
+const SEPARATOR = "\u001f";
+const modelValue = (model: Pick<AgentModelOption, "providerId" | "modelId">) =>
+	`${model.providerId ?? ""}${SEPARATOR}${model.modelId}`;
 
-type AgentSettingsField = keyof RuntimeTaskAgentSettings;
-
-function toRecordValue(providerId: string, modelId: string): string {
-	return `${providerId}${RECORD_VALUE_SEPARATOR}${modelId}`;
-}
-
-function isInRecords(
-	records: readonly RuntimeClineModelRecord[],
-	settings: RuntimeTaskAgentSettings | undefined,
-): boolean {
-	const { providerId, modelId } = settings ?? {};
-	return Boolean(
-		providerId &&
-			modelId &&
-			records.some((record) => record.providerId === providerId && record.models.includes(modelId)),
-	);
-}
-
-function TextField({
-	label,
-	value,
-	placeholder,
-	disabled,
-	onChange,
-}: {
-	label: string;
-	value: string;
-	placeholder: string;
-	disabled: boolean;
-	onChange: (value: string) => void;
-}): React.ReactElement {
-	return (
-		<label className="min-w-0 block">
-			<span className="text-[11px] text-text-secondary block mb-1">{label}</span>
-			<input
-				type="text"
-				value={value}
-				onChange={(event) => onChange(event.currentTarget.value)}
-				placeholder={placeholder}
-				disabled={disabled}
-				className={INPUT_CLASS_NAME}
-			/>
-		</label>
-	);
-}
-
-function ClineModelRecordSelect({
-	agentLabel,
-	records,
-	settings,
-	showOther,
-	disabled,
-	onSelect,
-}: {
-	agentLabel: string;
-	records: readonly RuntimeClineModelRecord[];
-	settings: RuntimeTaskAgentSettings | undefined;
-	showOther: boolean;
-	disabled: boolean;
-	onSelect: (value: string) => void;
-}): React.ReactElement {
-	const selectedValue = showOther
-		? OTHER_MODEL_VALUE
-		: settings?.providerId && settings.modelId
-			? toRecordValue(settings.providerId, settings.modelId)
-			: "";
-	return (
-		<div className="min-w-0">
-			<span className="text-[11px] text-text-secondary block mb-1">Model</span>
-			<NativeSelect
-				size="sm"
-				fill
-				value={selectedValue}
-				disabled={disabled}
-				aria-label={`${agentLabel} default model`}
-				onChange={(event) => onSelect(event.currentTarget.value)}
-			>
-				<option value="">Cline's own default</option>
-				{records.map((record) => (
-					<optgroup key={record.providerId} label={record.providerId}>
-						{record.models.map((model) => (
-							<option key={model} value={toRecordValue(record.providerId, model)}>
-								{model}
-							</option>
-						))}
-					</optgroup>
-				))}
-				<option value={OTHER_MODEL_VALUE}>Other (type provider and model)</option>
-			</NativeSelect>
-		</div>
-	);
+function withStoredOption(options: Array<{ value: string; label: string }>, value: string | undefined) {
+	return value && !options.some((option) => option.value === value)
+		? [...options, { value, label: `${value} (saved default)` }]
+		: options;
 }
 
 export function AgentDefaultModelFields({
@@ -112,14 +27,15 @@ export function AgentDefaultModelFields({
 	agentLabel,
 	settings,
 	clineModelRecords,
+	workspaceId = null,
 	disabled,
 	onChange,
 }: {
 	agentId: RuntimeAgentId;
 	agentLabel: string;
 	settings: RuntimeTaskAgentSettings | undefined;
-	/** Cline's models.json records; only Cline's fields use them. */
 	clineModelRecords: readonly RuntimeClineModelRecord[];
+	workspaceId?: string | null;
 	disabled: boolean;
 	onChange: (settings: RuntimeTaskAgentSettings | undefined) => void;
 }): React.ReactElement {
@@ -127,113 +43,166 @@ export function AgentDefaultModelFields({
 	const takesModel = (capabilities?.modelOverride ?? "none") !== "none";
 	const takesEffort = (capabilities?.effortOverride ?? "none") !== "none";
 	const takesProvider = (capabilities?.providerOverride ?? "none") !== "none";
-	const records = useMemo(
-		() => (agentId === "cline" ? clineModelRecords.filter((record) => record.models.length > 0) : []),
-		[agentId, clineModelRecords],
+	const fieldId = useId();
+	const discovery = useAsync(
+		async () => (takesModel ? await fetchAgentSettingsOptions(workspaceId, agentId) : null),
+		[agentId, workspaceId, takesModel],
 	);
-	const [otherChosen, setOtherChosen] = useState(false);
-	const usesRecordSelect = takesModel && records.length > 0;
-	const showOther =
-		usesRecordSelect && (otherChosen || (Boolean(settings?.modelId) && !isInRecords(records, settings)));
-
-	const setField = (field: AgentSettingsField, rawValue: string) => {
-		const value = rawValue.trim();
+	const fallbackModels: AgentModelOption[] =
+		agentId === "cline"
+			? clineModelRecords.flatMap((record) =>
+					record.models.map((modelId) => ({
+						providerId: record.providerId,
+						modelId,
+						label: modelId,
+						reasoningEfforts: [],
+					})),
+				)
+			: [];
+	const available = discovery.value?.models.length ? discovery.value.models : fallbackModels;
+	const models = available.filter(
+		(model) => !settings?.providerId || !model.providerId || model.providerId === settings.providerId,
+	);
+	const selected = settings?.modelId
+		? models.find(
+				(model) =>
+					model.modelId === settings.modelId && (!settings.providerId || model.providerId === settings.providerId),
+			)
+		: undefined;
+	const selectedValue = settings?.modelId
+		? modelValue(selected ?? { modelId: settings.modelId, providerId: settings.providerId })
+		: "";
+	const modelOptions = models.map((model) => ({
+		value: modelValue(model),
+		label: model.providerId && !settings?.providerId ? `${model.providerId} · ${model.label}` : model.label,
+	}));
+	const displayedModels =
+		settings?.modelId && !selected
+			? [...modelOptions, { value: selectedValue, label: `${settings.modelId} (saved default)` }]
+			: modelOptions;
+	const providerOptions = withStoredOption(
+		[
+			...new Map(
+				[
+					...(discovery.value?.providers ?? []),
+					...fallbackModels.flatMap((model) =>
+						model.providerId ? [{ value: model.providerId, label: model.providerId }] : [],
+					),
+				].map((option) => [option.value, option]),
+			).values(),
+		],
+		settings?.providerId,
+	);
+	const effortOptions = withStoredOption(
+		selected ? selected.reasoningEfforts.map((value) => ({ value, label: value })) : (discovery.value?.efforts ?? []),
+		settings?.reasoningEffort,
+	);
+	const setField = (field: keyof RuntimeTaskAgentSettings, value: string) =>
 		onChange(
 			patchAgentSettings(
 				settings,
 				(next) => {
-					if (value) {
-						next[field] = value;
-					} else {
-						delete next[field];
-					}
+					if (value) next[field] = value;
+					else delete next[field];
+					if (field === "providerId" && value !== settings?.providerId) delete next.modelId;
+				},
+				false,
+			),
+		);
+	const selectModel = (value: string) => {
+		const [providerId = "", modelId = ""] = value.split(SEPARATOR);
+		onChange(
+			patchAgentSettings(
+				settings,
+				(next) => {
+					if (modelId) next.modelId = modelId;
+					else delete next.modelId;
+					if (providerId && takesProvider) next.providerId = providerId;
 				},
 				false,
 			),
 		);
 	};
-	const selectRecord = (value: string) => {
-		setOtherChosen(value === OTHER_MODEL_VALUE);
-		if (value === OTHER_MODEL_VALUE) {
-			return;
-		}
-		const [providerId = "", modelId = ""] = value ? value.split(RECORD_VALUE_SEPARATOR) : [];
-		onChange(
-			patchAgentSettings(
-				settings,
-				(next) => {
-					delete next.providerId;
-					delete next.modelId;
-					if (providerId && modelId) {
-						next.providerId = providerId;
-						next.modelId = modelId;
-					}
-				},
-				false,
-			),
-		);
-	};
-
+	const loading = discovery.loading && available.length === 0;
 	return (
-		<div className="py-2 border-t border-border first:border-t-0" data-testid={`agent-default-${agentId}`}>
-			<p className="text-[13px] text-text-primary m-0 mb-1">{agentLabel}</p>
-			{takesModel ? (
-				<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-					{usesRecordSelect ? (
-						<ClineModelRecordSelect
-							agentLabel={agentLabel}
-							records={records}
-							settings={settings}
-							showOther={showOther}
-							disabled={disabled}
-							onSelect={selectRecord}
-						/>
-					) : null}
-					{takesProvider && (!usesRecordSelect || showOther) ? (
-						<TextField
-							label="Provider"
+		<div className="pt-2" data-testid={`agent-default-${agentId}`}>
+			<p className="text-[13px] text-text-primary m-0 mb-2">{agentLabel}</p>
+			<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+				{takesProvider ? (
+					<label htmlFor={`${fieldId}-provider`} className="min-w-0 block">
+						<span className="text-[11px] text-text-secondary block mb-1">Provider</span>
+						<NativeSelect
+							id={`${fieldId}-provider`}
+							size="sm"
+							fill
+							aria-label={`${agentLabel} default provider`}
 							value={settings?.providerId ?? ""}
-							placeholder="The CLI's own provider"
-							disabled={disabled}
-							onChange={(value) => setField("providerId", value)}
-						/>
-					) : null}
-					{!usesRecordSelect || showOther ? (
-						<TextField
-							label={usesRecordSelect ? "Model ID" : "Model"}
-							value={settings?.modelId ?? ""}
-							placeholder="The CLI's own model"
-							disabled={disabled}
-							onChange={(value) => setField("modelId", value)}
-						/>
-					) : null}
-					{takesEffort ? (
-						<TextField
-							label="Reasoning effort"
-							value={settings?.reasoningEffort ?? ""}
-							placeholder="The CLI's own effort"
-							disabled={disabled}
-							onChange={(value) => setField("reasoningEffort", value)}
-						/>
-					) : null}
-				</div>
-			) : (
-				<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-					<label className="min-w-0 block">
-						<span className="text-[11px] text-text-secondary block mb-1">Model</span>
-						<input
-							type="text"
-							value=""
-							disabled
-							aria-label={`${agentLabel} default model`}
-							placeholder="Not available"
-							className={INPUT_CLASS_NAME}
-						/>
+							disabled={disabled || loading}
+							onChange={(event) => setField("providerId", event.currentTarget.value)}
+						>
+							<option value="">CLI's own provider</option>
+							{providerOptions.map((option) => (
+								<option key={option.value} value={option.value}>
+									{option.label}
+								</option>
+							))}
+						</NativeSelect>
 					</label>
-					<p className="text-text-secondary text-[12px] m-0 self-end pb-1.5">
-						{agentLabel} takes no model at launch: set it in its own config.
-					</p>
-				</div>
+				) : null}
+				<label htmlFor={`${fieldId}-model`} className="min-w-0 block">
+					<span className="text-[11px] text-text-secondary block mb-1">Model</span>
+					<NativeSelect
+						id={`${fieldId}-model`}
+						size="sm"
+						fill
+						aria-label={`${agentLabel} default model`}
+						value={selectedValue}
+						disabled={disabled || loading || !takesModel}
+						onChange={(event) => selectModel(event.currentTarget.value)}
+					>
+						<option value="">{takesModel ? "CLI's own model" : "Configured in the CLI"}</option>
+						{displayedModels.map((option) => (
+							<option key={option.value} value={option.value}>
+								{option.label}
+							</option>
+						))}
+					</NativeSelect>
+				</label>
+				{takesEffort && takesModel ? (
+					<label htmlFor={`${fieldId}-effort`} className="min-w-0 block">
+						<span className="text-[11px] text-text-secondary block mb-1">Reasoning effort</span>
+						<NativeSelect
+							id={`${fieldId}-effort`}
+							size="sm"
+							fill
+							aria-label={`${agentLabel} default reasoning effort`}
+							value={settings?.reasoningEffort ?? ""}
+							disabled={disabled || loading}
+							onChange={(event) => setField("reasoningEffort", event.currentTarget.value)}
+						>
+							<option value="">CLI's own effort</option>
+							{effortOptions.map((option) => (
+								<option key={option.value} value={option.value}>
+									{option.label}
+								</option>
+							))}
+						</NativeSelect>
+					</label>
+				) : null}
+			</div>
+			{!takesModel ? (
+				<p className="text-text-secondary text-[12px] mt-2 mb-0">
+					{agentLabel} takes no model at launch: set it in its own config.
+				</p>
+			) : (
+				<p className="text-text-secondary text-[11px] mt-2 mb-0">
+					{discovery.loading
+						? "Loading this agent's choices…"
+						: (discovery.value?.error ??
+							(discovery.error
+								? "Could not load this agent's choices. Its saved default is kept."
+								: discovery.value?.source))}
+				</p>
 			)}
 		</div>
 	);

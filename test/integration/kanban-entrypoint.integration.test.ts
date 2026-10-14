@@ -51,6 +51,7 @@ function startEntrypoint(args: string[], env: Record<string, string | undefined>
 	);
 	const childEnv = Object.entries({
 		...baseEnv,
+		HOME: tempDir.path,
 		PATH: `${binDir}:${process.env.PATH ?? ""}`,
 		KANBAN_KIT_HOME: kitHome,
 		KANBAN_RESTART_PREPARE_HOOK: "",
@@ -329,12 +330,15 @@ while :; do sleep 0.05; done
 		expect(readEvents()).toEqual(["override ran", "child ready", "hook ran", "child got TERM"]);
 	});
 
-	it("defaults to `kit boot`, `kit prepare-restart` and `kanban restart prepare`, logging to the kit's logs dir", async () => {
+	it("uses explicit hooks and KANBAN_HOME for logs, without discovering a legacy kit", async () => {
 		writeFakeKit();
 		writeFakeKanban();
 		mkdirSync(join(kitHome, "logs"));
 		const entry = startEntrypoint(["sh", childScript, "--port", "3485", "--no-open"], {
 			KANBAN_RESTART_PREPARE_HOOK: undefined,
+			KANBAN_HOME: kitHome,
+			KANBAN_START_HOOK: `"${join(kitHome, "bin/kit")}" boot`,
+			KANBAN_PRESTOP_HOOK: `"${join(kitHome, "bin/kit")}" prepare-restart`,
 		});
 		await waitForEvent("kit boot");
 		await waitForEvent("child ready");
@@ -346,7 +350,7 @@ while :; do sleep 0.05; done
 		expect(readEvents().filter((event) => event !== "kit boot")).toEqual([
 			"child ready",
 			"kit prepare-restart",
-			"kanban restart prepare port=3485 home=",
+			`kanban restart prepare port=3485 home=${kitHome}`,
 			"child got TERM",
 		]);
 		const log = readFileSync(join(kitHome, "logs", "kanban-entrypoint.log"), "utf8");
@@ -358,9 +362,36 @@ while :; do sleep 0.05; done
 		expect(log).toContain("restart prepare done");
 	});
 
+	it("ignores kit files and KANBAN_KIT_HOME unless hooks are explicitly configured", async () => {
+		writeFakeKit();
+		const entry = startEntrypoint(["sh", childScript]);
+		await waitForEvent("child ready");
+		entry.process.kill("SIGTERM");
+		expect(await entry.exited).toBe(7);
+		expect(readEvents()).toEqual(["child ready", "child got TERM"]);
+	});
+
+	it.each([undefined, "~/custom-home"])(
+		"resolves Kanban home from HOME or a user-entered tilde (%s)",
+		async (home) => {
+			writeFakeKanban();
+			const entry = startEntrypoint(["sh", childScript], {
+				KANBAN_HOME: home,
+				KANBAN_RESTART_PREPARE_HOOK: undefined,
+			});
+			await waitForEvent("child ready");
+			entry.process.kill("SIGTERM");
+			expect(await entry.exited).toBe(7);
+			expect(readEvents()).toContain(
+				`kanban restart prepare port= home=${join(tempDir.path, home ? "custom-home" : ".kanban")}`,
+			);
+		},
+	);
+
 	it("passes --port=/--home from the command to restart prepare", async () => {
 		writeFakeKanban();
 		const entry = startEntrypoint(["sh", childScript, "--port=4000", "--home", "/srv/kanban-home"], {
+			KANBAN_HOME: join(tempDir.path, "other-home"),
 			KANBAN_START_HOOK: "",
 			KANBAN_PRESTOP_HOOK: "",
 			KANBAN_RESTART_PREPARE_HOOK: "kanban restart prepare",
@@ -400,7 +431,7 @@ while :; do sleep 0.05; done
 		expect(readEvents()).toEqual([
 			"child ready",
 			"hook ran",
-			expect.stringMatching(/^kanban restart prepare port=\d+ home=$/u),
+			expect.stringMatching(/^kanban restart prepare port=\d+ home=.+\/\.kanban$/u),
 			"child got TERM",
 		]);
 		expect(entry.stderr()).toContain(logLine);
@@ -421,7 +452,11 @@ while :; do sleep 0.05; done
 
 		expect(await entry.exited).toBe(7);
 		expect(Date.now() - signalledAt).toBeLessThan(5_000);
-		expect(readEvents()).toEqual(["child ready", "kanban restart prepare port= home=", "child got TERM"]);
+		expect(readEvents()).toEqual([
+			"child ready",
+			`kanban restart prepare port= home=${join(tempDir.path, ".kanban")}`,
+			"child got TERM",
+		]);
 		expect(entry.stderr()).toContain("restart prepare timed out after 1s");
 	});
 
@@ -518,25 +553,18 @@ echo "child quit" >> "$EVENTS"
 			return result.stdout.split("\n").filter(Boolean);
 		}
 
-		it("adds the npm reference once, keeps the user's lines, sets git's helper, and writes the token nowhere", async () => {
+		it("never bootstraps authentication on startup, even with a token", async () => {
 			writeFileSync(join(home, ".npmrc"), `save-exact=true\n//registry.npmjs.org/:_authToken=\${NPM_TOKEN}`);
 
 			const first = await runOnce({ GH_TOKEN: token });
 			await runOnce({ GH_TOKEN: token });
 
-			const npmrc = readFileSync(join(home, ".npmrc"), "utf8").split("\n").filter(Boolean);
-			expect(npmrc).toEqual([
-				"save-exact=true",
-				`//registry.npmjs.org/:_authToken=\${NPM_TOKEN}`,
-				"@vombor:registry=https://npm.pkg.github.com",
-				`//npm.pkg.github.com/:_authToken=\${GH_TOKEN}`,
-			]);
-			expect(credentialHelpers()).toEqual(["!gh auth git-credential"]);
-			expect(readEvents()).toEqual([
-				"gh auth setup-git --hostname github.com",
-				"gh auth setup-git --hostname github.com",
-			]);
-			expect(first.stderr()).toContain("npm auth for @vombor:");
+			expect(readFileSync(join(home, ".npmrc"), "utf8")).toBe(
+				`save-exact=true\n//registry.npmjs.org/:_authToken=\${NPM_TOKEN}`,
+			);
+			expect(credentialHelpers()).toEqual([]);
+			expect(readEvents()).toEqual([]);
+			expect(first.stderr()).not.toContain("auth for");
 			for (const [path, content] of readAllFiles(tempDir.path)) {
 				expect(content.includes(token), path).toBe(false);
 			}
@@ -554,7 +582,7 @@ echo "child quit" >> "$EVENTS"
 
 			expect(readFileSync(join(home, ".npmrc"), "utf8")).toBe(original);
 			expect(readdirSync(home).filter((name) => name.includes("kanban-entrypoint"))).toEqual([]);
-			expect(entry.stderr()).toContain("awk failed");
+			expect(entry.stderr()).not.toContain("auth for");
 		});
 
 		it("leaves a user's own auth line for GitHub Packages alone", async () => {
@@ -562,9 +590,7 @@ echo "child quit" >> "$EVENTS"
 
 			await runOnce({ GH_TOKEN: token });
 
-			expect(readFileSync(join(home, ".npmrc"), "utf8")).toBe(
-				`//npm.pkg.github.com/:_authToken=\${MY_OWN_TOKEN}\n@vombor:registry=https://npm.pkg.github.com\n`,
-			);
+			expect(readFileSync(join(home, ".npmrc"), "utf8")).toBe(`//npm.pkg.github.com/:_authToken=\${MY_OWN_TOKEN}\n`);
 		});
 
 		it("doesn't print the token under set -x", () => {
@@ -584,7 +610,7 @@ echo "child quit" >> "$EVENTS"
 				encoding: "utf8",
 			});
 			expect(traced.status).toBe(0);
-			expect(traced.stderr).toContain("setup_npm_github_auth");
+			expect(traced.stderr).not.toContain("setup_npm_github_auth");
 			expect(traced.stderr).not.toContain(token);
 		});
 

@@ -7,9 +7,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
 	applyCliSessionScope,
-	KANBAN_ORCHESTRATOR_OR_USER_COMMANDS,
 	MACHINE_WIDE_COMMANDS,
 	matchesCommandPath,
+	USER_INSTANCE_COMMANDS,
 } from "../../../src/isolation/cli-scope";
 import { KANBAN_SESSION_CREDENTIAL_ENV, KANBAN_SESSION_WORKSPACE_ENV } from "../../../src/isolation/session-identity";
 import { getKanbanGlobalConfigPath } from "../../../src/state/kanban-home";
@@ -165,7 +165,7 @@ describe("applyCliSessionScope", () => {
 			expect(await run(unreachable, SESSION_ENV)).toContain("could not be reached");
 			expect(await run(unreachable, {}, () => true)).toContain("could not be asked who calls");
 			expect(await run(unreachable, {})).toBeNull();
-			// Other commands never ask.
+			// Explicit instance setup asks too; read-only commands never ask.
 			const other = vi.fn(down);
 			expect(
 				await applyCliSessionScope({
@@ -175,7 +175,7 @@ describe("applyCliSessionScope", () => {
 					env: {},
 				}),
 			).toBeNull();
-			expect(other).not.toHaveBeenCalled();
+			expect(other).toHaveBeenCalledWith({ command: "setup" });
 		});
 	});
 
@@ -183,7 +183,7 @@ describe("applyCliSessionScope", () => {
 		await withTemporaryKanbanHome(async () => {
 			const query = vi.fn(async () => ({ allowed: false, message: "restart update refused" }));
 			const createClient = () => ({ providers: { authorizeSetup: { query } } });
-			expect(KANBAN_ORCHESTRATOR_OR_USER_COMMANDS).toContain("restart update");
+			expect(USER_INSTANCE_COMMANDS).toContain("restart update");
 			expect(
 				await applyCliSessionScope({
 					commandPath: "restart update",

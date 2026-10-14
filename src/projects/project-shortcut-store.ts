@@ -5,7 +5,7 @@
 // src/projects/project-shortcuts.ts), which decides who may.
 //
 // The first read of a project with no store imports the shortcuts of that file once: the
-// committed copy on the base branch, else (a project that git-ignores `.cline/`, like foo) the main checkout's
+// committed copy on the base branch, else (a project that git-ignores `.cline/`) the main checkout's
 // working-tree copy, which the old code read; never a card's worktree. It logs the import to the shortcut history
 // and writes the store even when there was nothing to import: from then on the repo copy is ignored (doctor reports
 // one that still has shortcuts, src/doctor/project-shortcut-checks.ts).

@@ -4,8 +4,13 @@
 import type { inferRouterInputs, inferRouterOutputs } from "@trpc/server";
 import { initTRPC, TRPCError } from "@trpc/server";
 import { z } from "zod";
-
+import {
+	type AgentSettingsOptions,
+	agentSettingsOptionsRequestSchema,
+	agentSettingsOptionsSchema,
+} from "../core/agent-settings-options";
 import type {
+	RuntimeAgentId,
 	RuntimeConfigResponse,
 	RuntimeConfigSaveRequest,
 	RuntimeDebugResetAllStateResponse,
@@ -285,6 +290,7 @@ export interface RuntimeTrpcContext {
 	 */
 	getPipelineCardStages?: (workspaceId: string) => RuntimePipelineCardStage[];
 	runtimeApi: {
+		getAgentSettingsOptions: (agentId: RuntimeAgentId) => Promise<AgentSettingsOptions>;
 		loadConfig: (scope: RuntimeTrpcWorkspaceScope | null) => Promise<RuntimeConfigResponse>;
 		saveConfig: (
 			scope: RuntimeTrpcWorkspaceScope | null,
@@ -535,6 +541,13 @@ const gitSyncActionInputSchema = z.object({
 
 export const runtimeAppRouter = t.router({
 	runtime: t.router({
+		getAgentSettingsOptions: t.procedure
+			.input(agentSettingsOptionsRequestSchema)
+			.output(agentSettingsOptionsSchema)
+			.query(async ({ ctx, input }) => {
+				await assertMachineAction(ctx, "runtime.getAgentSettingsOptions");
+				return await ctx.runtimeApi.getAgentSettingsOptions(input.agentId);
+			}),
 		getConfig: t.procedure.output(runtimeConfigResponseSchema).query(async ({ ctx }) => {
 			return await ctx.runtimeApi.loadConfig(ctx.workspaceScope);
 		}),
@@ -992,7 +1005,7 @@ export const runtimeAppRouter = t.router({
 			}),
 	}),
 	// `kanban setup-provider` asks before it writes a provider's Cline settings: the user's and the Kanban project's
-	// orchestrator's (KANBAN_ORCHESTRATOR_OR_USER_COMMANDS in src/isolation/cli-scope.ts).
+	// user's (USER_INSTANCE_COMMANDS in src/isolation/cli-scope.ts); no project has administrative privileges.
 	providers: t.router({
 		authorizeSetup: t.procedure
 			.input(providerSetupAuthorizeRequestSchema)

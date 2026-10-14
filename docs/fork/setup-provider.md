@@ -37,17 +37,16 @@ gone, without aliases.
 
 ## Who may run it
 
-The user. Kanban is developed outside the pod ([development.md](development.md)), so setting up a provider is a
-pod-level job and the user's alone; an orchestrator that needs one tells the user. Every agent session is refused
-with a message saying who may run it. The rule still lets through the orchestrator of `providers.setupWorkspaceId`
-(default `kanban-2uge`), but that workspace is no longer registered in the pod, so no session there carries its id. The rule is `KANBAN_ORCHESTRATOR_OR_USER_COMMANDS` /
-`decideKanbanOrchestratorCaller()` in `src/isolation/cli-scope.ts`, in every isolation mode, off included.
+The user, in every instance and isolation mode. Every project's orchestrator and every card is refused; there is
+no privileged workspace, including the first one created. The rule is `USER_INSTANCE_COMMANDS` /
+`decideUserInstanceCaller()` in `src/isolation/cli-scope.ts`. The removed `providers.setupWorkspaceId` is ignored
+and doctor can remove it. An orchestrator that needs a provider tells the user.
 
 The CLI checks this before the command runs (cli.ts's preAction), and it asks the running server
 (`providers.authorizeSetup`, `src/trpc/provider-setup-api.ts`), in a session or not. The server decides with the strict
 caller lookup, as `kit set` does: a session's credential counts only from its own process tree, a process without one is
 traced through `/proc` to the session above it (so a card that drops its credential is still that card), and an
-unidentified caller is refused. Refusals go to `isolation.jsonl` of both workspaces. Without an answer from the server
+unidentified caller is refused. Refusals go to the calling workspace's `isolation.jsonl`. Without an answer from the server
 only a process with no session credential goes ahead, and only while no Kanban server is live on the home (or the
 default home): no agent session outlives its server, so that is the user. A server too old to have the route must be
 restarted first.

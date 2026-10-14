@@ -1,6 +1,6 @@
 // The project's environment for a scripted checks run (kit project facts `checks.*`, kit-schema.ts `kitChecksSchema`).
 // A snapshot export has no git-ignored files, so a database project's tests failed there on every run ("Environment
-// variable not found: DATABASE_URL", notes f423d, issue #16, 2026-10-09). The project names what the run needs:
+// variable not found: DATABASE_URL", issue #16). The project names what the run needs:
 //
 // - `envFile`: a file in the card's worktree (`.env`), copied into the export at the same path and loaded into every
 //   step's env. Its `KANBAN_*` and secret-token variables are not loaded (checks.ts strips both).

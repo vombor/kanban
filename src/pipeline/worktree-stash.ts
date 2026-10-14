@@ -1,4 +1,4 @@
-// Stash entries a card's worktree made (issue #22: notes' 248ae ran `git stash -u && git checkout --detach main &&
+// Stash entries a card's worktree made (issue #22: a card ran `git stash -u && git checkout --detach main &&
 // git stash pop`, the pop conflicted, and the agent left a clean worktree on main with all its work in the stash;
 // the submission stage then called the empty snapshot "the agent likely never ran").
 //

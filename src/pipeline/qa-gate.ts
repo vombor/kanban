@@ -29,11 +29,11 @@
 // - no QA while the dev card's session is still running (dc6e70d/9091f4b: QA of a half-done card);
 // - QA slots machine-wide, oldest first (ddbc9ae); a queued QA card waits while its dev card is In Progress again
 //   instead of starting on the old snapshot (afea137, bfb20); a QA card running past `timeoutMin` frees its slot;
-// New since the legacy kit (issue #18, foo 2026-10-09): a queued QA card that finds every slot taken is recorded once
+// New since the legacy kit (issue #18): a queued QA card that finds every slot taken is recorded once
 // per change (other projects counted, never named), a slot freed in one workspace re-evaluates the others waiting
 // for one (takeSlotWakes), and a running QA card whose Cline session is silent for recovery's `hungMin` is replaced
 // like one that ended on its own error (replaceSilentQaCards), since recovery never touches QA cards. Since the
-// user's decision of 2026-10-09 the pools are separate: local QA cards (notes' Lemonade QA had taken a slot foo's
+// user's decision of 2026-10-09 the pools are separate: local QA cards (Lemonade QA had taken a slot cloud QA
 // Bedrock QA needed) count only against their provider's capacity, cloud QA only against the slots, each pool with
 // its own wait record and cross-project wake.
 // - wait `verdictGraceSec` for verdict.json before nudging (8495ed2: c1e30 reached Review 0.55 s before its
@@ -41,7 +41,7 @@
 // - a PASS with visual QA blocked is STALLED (QA v4); scratch servers stopped after ingest (66797d9);
 // - a QA card queued or running for a turn recovery has since resent (the dev card's `recoverySentAt` is newer than
 //   the QA card) is superseded: never started, or stopped, and moved to Done unlanded with no verdict; the dev card's
-//   next settled Review gets a new snapshot and a new QA card (foo 27549, 2026-10-07: QA started on the snapshot of
+//   next settled Review gets a new snapshot and a new QA card (2026-10-07: QA started on the snapshot of
 //   the turn recovery had redone);
 // - no QA card is created or started while the snapshot says `pidPressure` (pumpQa's pid-pressure hold: zombies
 //   filling pids.max wiped a board, 10/05), logged once per hold; ingest and PASS landing go on.
@@ -357,7 +357,7 @@ export function readQaVerdictRecords(entry: PipelineCardState | undefined): QaVe
  * The dev card's recorded PASS whose land is pending: the newest verdict is a PASS for `snapshot` (default: the
  * entry's current one) that actOnPasses hasn't acted on yet (no `qaPass` names its QA card). Ingest and land are
  * seconds apart (the Done workflow writes `qaPass` once it answers), and the QA card no longer counts once ingested
- * (findRunningQaCard), so in between this is the only sign the card is moving (foo 666f0, 2026-10-11). Once acted on
+ * (findRunningQaCard), so in between this is the only sign the card is moving. Once acted on
  * the PASS is landed (Done), held, stale, or a conflict for the rework stage (`qaPass.landing`).
  */
 export function readPendingQaPass(
@@ -1448,7 +1448,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 
 	/**
 	 * A running QA card whose Cline session has made no progress for recovery's `hungMin` (evaluateClineSilentStall:
-	 * foo 7ab30, 2026-10-09, sat 18 min on a "Command was aborted" tool result, holding its QA slot) can't be nudged
+	 * a card sat 18 min on a "Command was aborted" tool result, holding its QA slot) can't be nudged
 	 * into its dead turn and recovery doesn't touch QA cards: a verdict it wrote first is recorded, otherwise it is
 	 * replaced like a QA card that ended on its own error (replaceAfterAgentError: a fresh QA card for the same
 	 * snapshot, then a STALLED for the orchestrator), whether or not its slot was freed after `timeoutMin`. A shell tool
@@ -1470,7 +1470,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			const entry = readQaGateEntry(state.cards[card.id]);
 			const session = sessions.get(card.id);
 			// A slot freed after `timeoutMin` (`timedOutAt`) is slot accounting only: the card still runs, so it is still
-			// replaced when it goes silent (notes' 3d45a and 9ef37 ran 65-100 min on 2026-10-11, their slots long freed).
+			// replaced when it goes silent (local QA cards ran 65-100 min with their cloud slots long freed).
 			if (!entry || entry.status !== "running" || !session?.live || session.state !== "running") {
 				continue;
 			}

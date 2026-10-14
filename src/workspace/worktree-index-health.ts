@@ -1,5 +1,5 @@
 // A worktree whose git index git can't read. Git writes the index with a lock file and a rename but without an fsync
-// by default, so an unclean stop of the pod can leave it 0 bytes (notes' 45610, 2026-10-11 ~17:14Z, issue #36):
+// by default, so an unclean stop of the pod can leave it 0 bytes (2026-10-11 ~17:14Z, issue #36):
 // every git command in that worktree then fails ("index file smaller than expected"), the agent's included. The
 // working tree is untouched, so the index can be rebuilt from HEAD (`git read-tree HEAD`, which never reads the old
 // index); what was only staged becomes unstaged or untracked again, nothing on disk is lost.

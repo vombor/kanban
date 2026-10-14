@@ -3,7 +3,7 @@
 // - checks-state.json → pipeline-state.json: the entries of the cards still open (recovery, rework and the QA gate
 //   read the legacy key names; the first load already imported the whole file once, so only those can be newer);
 // - runoffs.json → data/<id>/runoffs.json (same format, decided groups too);
-// - the scoreboard (foo's `bench/scoreboard.jsonl`) → data/<id>/scoreboard.jsonl, without duplicates;
+// - the scoreboard (legacy `bench/scoreboard.jsonl`) → data/<id>/scoreboard.jsonl, without duplicates;
 // - qa-log.md → data/<id>/qa-log.md while Kanban has none: the QA gate numbers a card's rounds from it.
 // It only reads the legacy files and is safe to run again. It refuses while the legacy autoland still owns the
 // workspace (both would write the same state) and unless the workspace is on landing `qa` in shadow: after the

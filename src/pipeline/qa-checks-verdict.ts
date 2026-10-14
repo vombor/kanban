@@ -1,6 +1,6 @@
 // A QA PASS on a snapshot whose scripted checks FAILed must answer for each failed step (issue #41). The checks
 // report (qa-checks-report.ts) asks QA to reproduce every failed step and compare it with the base, and to say what
-// it found in verdict.json's "checks" key. Before this nothing looked at the answer: notes' 5bdde (2026-10-12) landed
+// it found in verdict.json's "checks" key. Before this nothing looked at the answer: a card (2026-10-12) landed
 // on a PASS whose QA agent had run only lint and typecheck while the checks' `test` step had failed.
 //
 // A PASS is accepted when every failed step has an entry with evidence that either did not reproduce or fails on the

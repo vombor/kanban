@@ -558,7 +558,7 @@ export function detectAutoUpdateInstallation(options: {
 }
 
 function isAutoUpdateDisabled(env: NodeJS.ProcessEnv): boolean {
-	if (env.KANBAN_NO_AUTO_UPDATE === "1") {
+	if (env.KANBAN_NO_AUTO_UPDATE === "1" || env.KANBAN_UPDATE_MODE === "image") {
 		return true;
 	}
 	if (env.NODE_ENV === "test" || env.VITEST === "true") {
@@ -674,6 +674,15 @@ export function runPendingAutoUpdateOnShutdown(options?: {
 }
 
 export async function runOnDemandUpdate(options: OnDemandUpdateOptions): Promise<OnDemandUpdateResult> {
+	if ((options.env ?? process.env).KANBAN_UPDATE_MODE === "image") {
+		return {
+			status: "unsupported_installation",
+			currentVersion: options.currentVersion,
+			latestVersion: null,
+			packageManager: UpdatePackageManager.UNKNOWN,
+			message: "This installation is managed by its container image. Use kanban restart update to update it.",
+		};
+	}
 	const entrypointArg = options.argv?.[1] ?? process.argv[1];
 	if (!entrypointArg) {
 		return {

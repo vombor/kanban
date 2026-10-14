@@ -1,6 +1,8 @@
 // `kanban doctor`'s GitHub auth rows (docs/fork/github-auth.md): whether the container's PAT (GH_TOKEN) is there for
 // gh, git and npm, and which credential Copilot runs on. Copilot launches keep Kanban's env, and Copilot takes
 // COPILOT_GITHUB_TOKEN, else GH_TOKEN/GITHUB_TOKEN, else its own login. Never prints a token.
+
+import { getGitHubConfigDir } from "../setup/github-auth-setup";
 import { isCopilotSignedIn } from "../terminal/agent-run-signals";
 import { isBinaryAvailableOnPath } from "../terminal/command-discovery";
 import type { DoctorFinding } from "./doctor-report";
@@ -24,12 +26,12 @@ export async function checkGitHubAuth(
 			? {
 					level: "info",
 					area: AREA,
-					message: `${tokenVar} is set: gh, git over https (gh's credential helper) and npm for @vombor use the PAT`,
+					message: `${tokenVar} is set: gh can use the PAT; kanban setup configures npm and git authentication`,
 				}
 			: {
 					level: "info",
 					area: AREA,
-					message: "no GH_TOKEN: gh uses its own login (/root/.config/gh), npm can't install @vombor packages",
+					message: `no GH_TOKEN: gh uses its own login (${getGitHubConfigDir(deps.env)}), npm needs its own registry authentication`,
 					hint: "docs/fork/github-auth.md",
 				},
 	);

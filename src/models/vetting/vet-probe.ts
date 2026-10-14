@@ -14,7 +14,7 @@
 //
 // A turn that ends on a provider or transport error says nothing about the model (issue #25, 2026-10-10: five runs
 // got only Lemonade's "No model loaded: <model>" after another project's card evicted the model, two a "Context size
-// has been exceeded." from an instance shared with notes' QA): a context overflow, and any error notice Cline shows in
+// has been exceeded." from an instance shared with QA): a context overflow, and any error notice Cline shows in
 // place of a reply (`displayError`: "No model loaded", "Response stream ended without a finish reason."), are
 // `harness` too, so the run is inconclusive, never a rejection. A rejected request (a validation error over a
 // malformed tool call in the history) stays the model's.

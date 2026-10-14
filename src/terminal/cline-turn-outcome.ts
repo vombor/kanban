@@ -101,7 +101,7 @@ export interface ClineTurnEndInput {
 const NO_IMAGES_PATTERN =
 	/(doesn't|does not|do not) support (the )?image|image (input|field)s? (is |are )?not supported/i;
 // A request-size rejection of an image the model does accept: the image stays in history and poisons the
-// conversation the same way (issue #12, foo QA ebeb2 10/09: a full-page screenshot over 8000 px, "messages.1.
+// conversation the same way (issue #12: a full-page screenshot over 8000 px, "messages.1.
 // content.86.image.source.base64.data: At least one of the image dimensions exceed max allowed size: 8000 pixels").
 // Anthropic/Bedrock also say "image exceeds 5 MB maximum" and "... max allowed size for many-image requests: 2000
 // pixels"; OpenAI-compatible servers say "image is too large".
@@ -110,7 +110,7 @@ const IMAGE_TOO_LARGE_PATTERN =
 
 // A provider/transport error shown as the whole final assistant text (a2cbb 10/06 20:29Z: "The operation timed
 // out.", session idle, no STATUS line, no hook event, so the card sat In Progress for 80 min).
-// A context overflow from a local server (issue #26, notes c92da/9e059 2026-10-10: Cline's whole reply was "Context
+// A context overflow from a local server (issue #26: Cline's whole reply was "Context
 // size has been exceeded." for llama.cpp's exceed_context_size_error, "the request exceeds the available context
 // size"), which the cloud providers' wordings in recovery-detect.ts didn't cover.
 export const CLINE_CONTEXT_OVERFLOW_PATTERN =

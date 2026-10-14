@@ -1,4 +1,4 @@
-// A dev card whose settled Review has nothing to submit: its snapshot equals its base (issue #14, notes b2d5b
+// A dev card whose settled Review has nothing to submit: its snapshot equals its base (issue #14,
 // 2026-10-09: the scaffold was already on main, the agent saw that and ended its turn; the card sat in Review with no
 // QA, no Done and no alert, and its linked Backlog card never started).
 //

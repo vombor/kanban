@@ -6,7 +6,7 @@
 //
 // State (moved or rewritten): every path named after the id (getWorkspaceIdKeyedPaths: workspaces/<id>, data/<id>,
 // backups/boards/<id>, the QA preview pid, the orchestrator lock), the index entry, config.json `workspaces.<id>` and
-// `providers.setupWorkspaceId` (the removed `orchestrator.wake.target` is deleted), the home-agent session ids (`__home_agent__:<id>:<agent>`, in every
+// (removed cross-project privileges and wake targets are deleted), the home-agent session ids (`__home_agent__:<id>:<agent>`, in every
 // workspace's sessions.json), every workspace's messages.jsonl (replies look the original up by `toWorkspaceId`),
 // calibration specs' `workspace`, the `[<id>]` tags of its headless orchestrator queue (a run drops lines tagged with
 // another id), the `workspaceId`/`taskId` of its orchestrator inbox's silent wakes (handed out only to their own
@@ -26,8 +26,8 @@ import { dirname, join, relative, resolve } from "node:path";
 import { z } from "zod";
 
 import {
-	DEFAULT_PROVIDER_SETUP_WORKSPACE_ID,
 	migrateLegacyConfigKeys,
+	readLegacyProviderSetupWorkspaceId,
 	readLegacyWakeTarget,
 	updatePipelineConfigFile,
 } from "../config/pipeline-config";
@@ -375,11 +375,6 @@ function getConfigPath(homePath: string): string {
 	return resolveKanbanHomeLayout(homePath, { honorWorktreesEnv: false }).globalConfigPath;
 }
 
-function readProviderSetupWorkspaceId(config: Record<string, unknown>): string {
-	const value = isObject(config.providers) ? config.providers.setupWorkspaceId : undefined;
-	return typeof value === "string" && value ? value : DEFAULT_PROVIDER_SETUP_WORKSPACE_ID;
-}
-
 const rewriteConfig: Rewriter = async ({ homePath, fromId, toId, apply }) => {
 	const configPath = getConfigPath(homePath);
 	const config = readJson(configPath);
@@ -390,10 +385,8 @@ const rewriteConfig: Rewriter = async ({ homePath, fromId, toId, apply }) => {
 	if (isObject(config.workspaces) && fromId in config.workspaces) {
 		details.push(`workspaces.${fromId} → workspaces.${toId}`);
 	}
-	// The Kanban project's id for `kanban setup-provider` (its default included, so the renamed project keeps it).
-	const renamesSetupWorkspace = readProviderSetupWorkspaceId(config) === fromId;
-	if (renamesSetupWorkspace) {
-		details.push(`providers.setupWorkspaceId ${fromId} → ${toId}`);
+	if (readLegacyProviderSetupWorkspaceId(config) !== undefined) {
+		details.push("removed providers.setupWorkspaceId (no project has administrative privileges)");
 	}
 	// The removed machine-wide wake target is deleted (as doctor --fix does), never renamed: every workspace wakes
 	// its own orchestrator now (docs/fork/watchdog-isolation.md).
@@ -409,10 +402,7 @@ const rewriteConfig: Rewriter = async ({ homePath, fromId, toId, apply }) => {
 			if (isObject(next.workspaces) && fromId in next.workspaces) {
 				next.workspaces = renameKey(next.workspaces, fromId, toId);
 			}
-			if (renamesSetupWorkspace) {
-				next.providers = { ...(isObject(next.providers) ? next.providers : {}), setupWorkspaceId: toId };
-			}
-			return readLegacyWakeTarget(next) === undefined ? next : migrateLegacyConfigKeys(next).config;
+			return migrateLegacyConfigKeys(next).config;
 		}, configPath);
 	}
 	return [{ file: relative(homePath, configPath), detail: details.join("; ") }];

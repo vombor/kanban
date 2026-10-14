@@ -293,8 +293,8 @@ const pipelineSectionSchema = z
 				resumeGapSec: z.number().nonnegative().default(20),
 				// After a nudge, how long the agent gets to pick it up before the card is decided on again.
 				nudgeCheckSec: z.number().positive().default(120),
-				// A running Cline card whose session file shows no progress this long gets a nudge (a silent stall, foo
-				// 10/07). 8 min clears every normal step: the longest tool call in foo's session files took 195 s
+				// A running Cline card whose session file shows no progress this long gets a nudge (a silent stall).
+				// 8 min cleared the observed normal steps: the longest measured tool call took 195 s
 				// (team_await_runs) and run_commands returns after about 32 s.
 				stallNudgeMin: z.number().positive().default(8),
 				outage: z
@@ -407,7 +407,7 @@ const orchestratorSectionSchema = z
 				// waits unread before it is typed.
 				quietMin: z.number().positive().default(ORCHESTRATOR_WAKE_DEFAULTS.quietMin),
 				// Removed: one workspace whose sidebar got every workspace's wakes (legacy kit `wakeTarget`). It broke
-				// project isolation (foo's stalls were typed into kanban-2uge's sidebar, 10/07). Still parsed, so an old
+				// project isolation (one workspace's stalls reached another's sidebar). Still parsed, so an old
 				// config.json keeps its other wake settings, but dropped here: nothing reads it, migrateLegacyConfigKeys()
 				// removes it from the file and doctor warns until then.
 				target: z.string().nullable().optional(),
@@ -570,6 +570,11 @@ export function readLegacyWakeTarget(config: Record<string, unknown>): unknown {
 	return wake && "target" in wake ? wake.target : undefined;
 }
 
+/** A removed project-level administrative privilege, ignored even before doctor --fix removes it. */
+export function readLegacyProviderSetupWorkspaceId(config: Record<string, unknown>): unknown {
+	return asRecord(config.providers)?.setupWorkspaceId;
+}
+
 /**
  * The removed provider's keys (`models.lists.localai`, `models.providerCapacity.localai`) in a raw config.json, as
  * dotted keys (empty when absent).
@@ -632,6 +637,11 @@ export function migrateLegacyConfigKeys(config: Record<string, unknown>): {
 		const { target: _removed, ...wake } = asRecord(orchestrator.wake) ?? {};
 		next = { ...next, orchestrator: { ...orchestrator, wake } };
 		migrated.push("orchestrator.wake.target");
+	}
+	if (readLegacyProviderSetupWorkspaceId(config) !== undefined) {
+		const { setupWorkspaceId: _removed, ...providers } = asRecord(config.providers) ?? {};
+		next = { ...next, providers };
+		migrated.push("providers.setupWorkspaceId");
 	}
 	const removedProviderKeys = readRemovedModelProviderKeys(config);
 	if (removedProviderKeys.length > 0) {
@@ -734,7 +744,7 @@ export type GuardrailsSettings = z.infer<typeof guardrailsSectionSchema>;
 // Where Kanban projects live (src/projects/project-roots.ts). A new, cloned or opened ("Open folder",
 // `kanban project add`) project must be strictly inside one of `roots` (never a root itself), after realpath. null
 // = the built-in default: $KANBAN_PROJECTS_ROOTS (path-list separated), else `/projects` in a container (the
-// projects volume; /root holds config, the Kanban home and worktrees), else the user's home directory. Task
+// projects volume; KANBAN_HOME holds Kanban state and worktrees), else the user's home directory. Task
 // worktrees are not projects and are never checked. Registered projects outside keep working; doctor warns.
 const projectsSectionSchema = z
 	.object({
@@ -771,18 +781,16 @@ const githubSectionSchema = z
 	.strict();
 export type GitHubSettings = z.infer<typeof githubSectionSchema>;
 
-/** The Kanban project's own workspace on this machine (the vombor/kanban checkout). */
-export const DEFAULT_PROVIDER_SETUP_WORKSPACE_ID = "kanban-2uge";
-
-// Model providers' Cline settings (`kanban setup-provider`, src/setup/cline-provider-setup.ts). Besides the user, only
-// the orchestrator of `setupWorkspaceId` (the Kanban project's own) may run the command (src/isolation/cli-scope.ts).
+// Model providers' Cline settings (`kanban setup-provider`, src/setup/cline-provider-setup.ts), user-only.
 // `openaiCompatible`: the OpenAI-compatible servers the command also sets up (openai-compatible-providers-config.ts).
 const providersSectionSchema = z
 	.object({
-		setupWorkspaceId: z.string().min(1).default(DEFAULT_PROVIDER_SETUP_WORKSPACE_ID),
+		// Compatibility read only. It never appears in the resolved config or grants a project's agent privileges.
+		setupWorkspaceId: z.unknown().optional(),
 		openaiCompatible: openAiCompatibleProvidersSchema,
 	})
-	.strict();
+	.strict()
+	.transform(({ openaiCompatible }) => ({ openaiCompatible }));
 export type ProvidersSettings = z.infer<typeof providersSectionSchema>;
 
 // The pod's container image channel (src/update/container-image.ts, docs/fork/container-lifecycle.md): the tag

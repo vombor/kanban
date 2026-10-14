@@ -858,7 +858,7 @@ function decideInProgress(input: RecoveryCardInput): RecoveryDecision {
 
 /**
  * A running session that has written no session file of its own for `stallNudgeMin` (the `no_session` stall): its
- * TUI never took the prompt, e.g. Cline's sign-in screen (issue #9, foo QA card ab61f 2026-10-08). It escalates at
+ * TUI never took the prompt, e.g. Cline's sign-in screen (issue #9). It escalates at
  * once, without a nudge: the screen takes typed text as input and starts a Cline account sign-in, and a restart opens
  * the same screen until the user fixes Cline's settings.
  */
@@ -880,7 +880,7 @@ function decideNoSession(input: RecoveryCardInput): RecoveryDecision {
 
 /**
  * A running session whose Cline file shows no progress for `stallNudgeMin` (evaluateClineSilentStall): a nudge, as
- * many as the nudge budget allows, then an escalation. A step cut off mid-call gets told so (foo 2026-10-07: four
+ * many as the nudge budget allows, then an escalation. A step cut off mid-call gets told so (2026-10-07: four
  * cards sat 15 min on a tool_use with no result until a human typed "continue"). The clock restarts at every nudge
  * (`recoverySentAt`), so each further nudge needs another `stallNudgeMin` of silence. A shell tool whose command
  * still runs (`runningTool`: a long test run or build writes nothing to the session) is never stalled. A model
@@ -1044,7 +1044,7 @@ export function recoveryHoldReason(entry: Record<string, unknown> | undefined): 
  * Why a Review card's turn is one recovery is redoing, or null: recovery typed into it (a nudge, a provider-error
  * retry, /clear + the card prompt; `recoverySentAt`) or resumed it after a restart less than `nudgeCheckMs` ago,
  * and the session has shown no activity since. That Review is the turn recovery just resent, so the submission stage
- * and the QA gate skip it (foo 27549, 2026-10-07: QA was queued on the snapshot of a turn recovery resent in the same
+ * and the QA gate skip it (2026-10-07: QA was queued on the snapshot of a turn recovery resent in the same
  * evaluation, then started on that snapshot once the redone turn ended). After `nudgeCheckMs` recovery decides on
  * the card again.
  */

@@ -2,7 +2,7 @@
 //
 // Every Cline card's run lives in the one hub daemon, not in the card's TUI. When the TUI goes (Done, a dead
 // session), the run doesn't: it keeps waiting on a capability request (a hook such as `hook.afterTool`) addressed
-// to the TUI client that is gone, and the hub heartbeats it forever (foo QA 33288, session 1791628989887_naxx0,
+// to the TUI client that is gone, and the hub heartbeats it forever (a QA session,
 // 2026-10-10: TUI gone at 10:44:43Z, `run.start` still pending 10 h later; issue #28). The process reaper never
 // signals the hub (it serves every card), so the run is ended through the hub's own command, `run.abort`.
 //

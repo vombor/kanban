@@ -43,18 +43,18 @@ function getWindowsExecutableCandidates(binary: string): string[] {
 // unavailable for task-agent startup. That keeps behavior predictable and aligned with the
 // environment the Kanban process already has, instead of silently relying on hidden shell
 // side effects.
-export function isBinaryAvailableOnPath(binary: string): boolean {
+export function resolveBinaryOnPath(binary: string): string | null {
 	const trimmed = binary.trim();
 	if (!trimmed) {
-		return false;
+		return null;
 	}
 	if (trimmed.includes("/") || trimmed.includes("\\")) {
-		return canAccessPath(trimmed);
+		return canAccessPath(trimmed) ? trimmed : null;
 	}
 
 	const pathEntries = (process.env.PATH ?? "").split(delimiter).filter(Boolean);
 	if (pathEntries.length === 0) {
-		return false;
+		return null;
 	}
 
 	if (process.platform === "win32") {
@@ -62,17 +62,21 @@ export function isBinaryAvailableOnPath(binary: string): boolean {
 		for (const entry of pathEntries) {
 			for (const candidate of candidates) {
 				if (canAccessPath(join(entry, candidate))) {
-					return true;
+					return join(entry, candidate);
 				}
 			}
 		}
-		return false;
+		return null;
 	}
 
 	for (const entry of pathEntries) {
 		if (canAccessPath(join(entry, trimmed))) {
-			return true;
+			return join(entry, trimmed);
 		}
 	}
-	return false;
+	return null;
+}
+
+export function isBinaryAvailableOnPath(binary: string): boolean {
+	return resolveBinaryOnPath(binary) !== null;
 }

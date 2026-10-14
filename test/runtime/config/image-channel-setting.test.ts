@@ -35,7 +35,6 @@ describe("update.imageChannel", () => {
 					throw new Error("no workspaces");
 				},
 				requestExit: () => {},
-				readSetupWorkspaceId: async () => "kanban-2uge",
 				isInContainer: () => true,
 				readRunningBuild: () => BUILD,
 				fetchLatestBuild: async (channel) => {

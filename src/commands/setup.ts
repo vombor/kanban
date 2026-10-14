@@ -91,7 +91,7 @@ export function registerSetupCommand(program: Command): void {
 	program
 		.command("setup")
 		.description(
-			"Set up this machine for Kanban: quiet npm, a check that Cline cards can reach Bedrock, Cline's Lemonade model list, the kanban section of ~/.claude/CLAUDE.md, and Claude Code / Codex trust for every project. Only adds what is missing.",
+			"Set up this instance for Kanban: npm settings and GitHub npm/git authentication, a check that Cline cards can reach Bedrock, Cline's Lemonade model list, the kanban section of ~/.claude/CLAUDE.md, and Claude Code / Codex trust for registered projects. Only adds what is missing.",
 		)
 		.option("--dry-run", "Print what would change; write nothing.")
 		.option("--origin <url>", "Kanban server origin agent CLIs should call (default: the running server).")

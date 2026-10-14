@@ -68,7 +68,14 @@ const HOOKS_DIR = "hooks";
 // Directories that are home state. Every top-level file is home state too (config.json is merged, not
 // copied), and so is data/ (getDataDirName); other top-level directories (run/, backups/, ...) are runtime output
 // and are not copied, except the server start record (getServerStartRecordRelativePath).
-const MIGRATED_DIRS = [KANBAN_HOME_WORKSPACES_DIR, HOOKS_DIR, KANBAN_TRASHED_TASK_PATCHES_DIR_NAME];
+const MIGRATED_DIRS = [
+	KANBAN_HOME_WORKSPACES_DIR,
+	HOOKS_DIR,
+	KANBAN_TRASHED_TASK_PATCHES_DIR_NAME,
+	"kits",
+	"secrets",
+	"vendor",
+];
 // Lock files, pid files (a calibration runner's lock) and half-written temp files belong to the process that made them.
 const TRANSIENT_ENTRY_PATTERN = /\.(?:lock|tmp|pid)$/u;
 // Cards in these columns are not running and will not be resumed on restart.

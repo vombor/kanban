@@ -3,7 +3,7 @@
 // runs on:
 //   - legacy model keys become their `roles.*` keys (`dev.agent` → `roles.dev.agent`);
 //   - role models and facts stay project settings;
-//   - team keys the kit already has with the same value are dropped (foo's `escalate.requireApproval: false` once
+//   - team keys the kit already has with the same value are dropped (`escalate.requireApproval: false` once
 //     team.json's fallback needs no approval);
 //   - the other team keys go into a new user kit (`$KANBAN_HOME/kits/<into>.json`: the project's kit with them
 //     applied), and the workspace is switched to it.

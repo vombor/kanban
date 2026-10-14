@@ -303,7 +303,13 @@ describe("kanban doctor --deep", () => {
 			ssh: "OpenSSH_9.9p1",
 		};
 		return {
-			env: { KANBAN_NO_AUTO_UPDATE: "1", CLINE_NO_AUTO_UPDATE: "1", DISABLE_AUTOUPDATER: "1" },
+			env: {
+				KANBAN_NO_AUTO_UPDATE: "1",
+				CLINE_NO_AUTO_UPDATE: "1",
+				DISABLE_AUTOUPDATER: "1",
+				COPILOT_AUTO_UPDATE: "false",
+				FACTORY_DROID_AUTO_UPDATE_ENABLED: "false",
+			},
 			isOnPath: (binary) => binary in versions,
 			readVersion: async (binary) => versions[binary] ?? null,
 			readClineProviders: async () => ({ providers: { bedrock: { settings: { apiKey: "k" } } } }),

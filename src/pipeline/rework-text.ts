@@ -66,7 +66,7 @@ export function readBlockingBullets(section: string): string[] {
 /**
  * The line that tells a worktree behind its base to bring the base in first (a3f076e: c1e30/de30c 10/05, QA
  * compared against a newer base and read the card as deleting everything that landed since). The work goes into a
- * WIP commit that is rebased, never into the stash: a conflicting `git stash pop` left notes' 248ae with a clean
+ * WIP commit that is rebased, never into the stash: a conflicting `git stash pop` left a card with a clean
  * worktree on the base and all its work in the stash (issue #22), while a stopped rebase leaves conflict markers in
  * the files, and the final mixed reset turns the work back into worktree changes, as the rework text asks.
  */

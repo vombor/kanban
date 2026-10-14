@@ -4,7 +4,7 @@
 //
 // - The core resolves, the kit decides. Every card goes to the kit as an EffectiveCard whose agent comes from
 //   resolveEffectiveAgent() (the agent the session ran on, else card.agentId, else the selected agent), never the
-//   literal card.agentId, and nothing here compares an agent id to a constant. On kanban-2uge the legacy kit
+//   literal card.agentId, and nothing here compares an agent id to a constant. The legacy kit previously
 //   treated unpinned cards that ran on Claude as Cline dev cards and QA'd and landed them.
 // - Only landing mode `qa` turns the pipeline on for a workspace. Landing `off`, `commit` or `pr` (and every
 //   workspace without a config entry: `off` on the `default` kit) is never evaluated: no git probe, no kit

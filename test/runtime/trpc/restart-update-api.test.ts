@@ -58,7 +58,6 @@ function harness(overrides: Partial<CreateRestartUpdateApiDependencies> & { inPr
 		],
 		loadState: async (target) => boardWith(target.workspaceId === "foo" ? (overrides.inProgress ?? []) : []),
 		requestExit,
-		readSetupWorkspaceId: async () => KANBAN,
 		isInContainer: () => true,
 		readImageChannel: async () => "latest",
 		readRunningBuild: () => OLD,
@@ -93,6 +92,7 @@ describe("restart.update", () => {
 		const { api, logEntries, isolationLog, requestExit, prepared } = harness();
 		const callers: RuntimeCaller[] = [
 			session(KANBAN, "card"),
+			session(KANBAN, "orchestrator"),
 			session("foo", "orchestrator"),
 			{ kind: "unknown", reason: "no session above the caller" },
 		];
@@ -103,11 +103,11 @@ describe("restart.update", () => {
 			expect(response.message).toContain("only the user runs it");
 		}
 		expect(isolationLog).toHaveBeenCalledWith(
-			[KANBAN, "foo"],
+			["foo"],
 			expect.objectContaining({ kind: "refused", action: "restart.update", from: "foo" }),
 		);
-		expect(logEntries.map((entry) => entry.status)).toEqual(["refused", "refused", "refused"]);
-		expect(logEntries[1]?.caller).toBe("the orchestrator of foo");
+		expect(logEntries.map((entry) => entry.status)).toEqual(["refused", "refused", "refused", "refused"]);
+		expect(logEntries[2]?.caller).toBe("the orchestrator of foo");
 		expect(prepared).toEqual([]);
 		expect(requestExit).not.toHaveBeenCalled();
 	});
@@ -142,13 +142,13 @@ describe("restart.update", () => {
 
 	it("refuses while a card is In Progress; --force restarts and says what happens to it", async () => {
 		const blocked = harness({ inProgress: ["c1", "c2"] });
-		const response = await blocked.api.update(session(KANBAN, "orchestrator"), request());
+		const response = await blocked.api.update({ kind: "user" }, request());
 		expect(response.status).toBe("refused");
 		expect(response.message).toContain("Cards are In Progress (foo/c1, foo/c2)");
 		expect(blocked.logEntries[0]?.inProgress).toEqual(["foo/c1", "foo/c2"]);
 		expect(blocked.prepared).toEqual([]);
 
-		const forced = await blocked.api.update(session(KANBAN, "orchestrator"), request({ force: true }));
+		const forced = await blocked.api.update({ kind: "user" }, request({ force: true }));
 		expect(forced.status).toBe("restarting");
 		expect(forced.lines).toContain(
 			"In Progress in foo: c1, c2 (stops with the container; restart recovery resumes it)",
@@ -158,7 +158,7 @@ describe("restart.update", () => {
 	it("runs restart prepare with the update in every workspace, answers, then exits with 75", async () => {
 		vi.useFakeTimers();
 		const { api, prepared, requestExit, logEntries, warn } = harness();
-		const response = await api.update(session(KANBAN, "orchestrator"), request());
+		const response = await api.update({ kind: "user" }, request());
 		expect(response.status).toBe("restarting");
 		expect(response.message).toContain(
 			"Restarting the container from aaaaaaa (built 2026-10-11 06:20Z) to bbbbbbb (built 2026-10-12 06:20Z), sha256:new",
@@ -171,13 +171,13 @@ describe("restart.update", () => {
 		expect(logEntries).toEqual([
 			expect.objectContaining({
 				status: "restarting",
-				caller: "the orchestrator of kanban-2uge",
+				caller: "the user",
 				channel: "latest",
 				from: OLD,
 				to: NEW,
 			}),
 		]);
-		expect(warn).toHaveBeenCalledWith(expect.stringContaining("[kanban] restart update (the orchestrator of"));
+		expect(warn).toHaveBeenCalledWith(expect.stringContaining("[kanban] restart update (the user"));
 		// The answer goes out first; the shutdown starts after the delay.
 		expect(requestExit).not.toHaveBeenCalled();
 		vi.advanceTimersByTime(50);

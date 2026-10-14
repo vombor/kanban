@@ -1,5 +1,5 @@
 // One scoreboard line per QA verdict (or pipeline outcome) for a dev card, appended to the workspace's
-// `data/<id>/scoreboard.jsonl`. The format is the legacy kit's, so foo's existing scoreboard keeps reading the same:
+// `data/<id>/scoreboard.jsonl`. The format is the legacy kit's, so an existing scoreboard keeps reading the same:
 // `"source":"qa"` lines are QA rounds; any other source (the legacy kit wrote "autoland", Kanban's pipeline writes
 // "pipeline") is an outcome QA can't see (CONFLICT, ESCALATED, AGENT_ERROR, HUMAN_APPROVED).
 //

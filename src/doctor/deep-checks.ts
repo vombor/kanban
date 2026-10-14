@@ -60,7 +60,13 @@ export function createDeepCheckDeps(config: PipelineConfig): DeepCheckDeps {
 }
 
 // The image sets these so nothing updates itself under running cards; the image build is the update path.
-const NO_SELF_UPDATE_ENV = ["KANBAN_NO_AUTO_UPDATE", "CLINE_NO_AUTO_UPDATE", "DISABLE_AUTOUPDATER"];
+const NO_SELF_UPDATE_ENV = [
+	["KANBAN_NO_AUTO_UPDATE", "1"],
+	["CLINE_NO_AUTO_UPDATE", "1"],
+	["DISABLE_AUTOUPDATER", "1"],
+	["COPILOT_AUTO_UPDATE", "false"],
+	["FACTORY_DROID_AUTO_UPDATE_ENABLED", "false"],
+] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -75,10 +81,10 @@ export async function runDeepChecks(
 	deps: DeepCheckDeps,
 ): Promise<DoctorFinding[]> {
 	const findings: DoctorFinding[] = [];
-	for (const name of NO_SELF_UPDATE_ENV) {
+	for (const [name, expected] of NO_SELF_UPDATE_ENV) {
 		findings.push(
-			deps.env[name] === "1"
-				? { level: "pass", area: "deep", message: `env ${name}=1` }
+			deps.env[name] === expected
+				? { level: "pass", area: "deep", message: `env ${name}=${expected}` }
 				: {
 						level: "warn",
 						area: "deep",

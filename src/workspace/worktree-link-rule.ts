@@ -2,11 +2,11 @@
 // none of the checkout's ignored files, so Kanban links them in (task-worktree.ts) to save every card an install and
 // its local config. A link shares one file or directory between the checkout and every card, so only what cards
 // read is safe to link: a card that writes through a link writes the main checkout's copy and every other card's.
-// foo's cards shared `prisma/dev.db`, `prisma/test.db`, `.next` and `server/dist` that way (2026-10-09, sol 7c059,
+// Cards shared `prisma/dev.db`, `prisma/test.db`, `.next` and `server/dist` that way (2026-10-09, sol 7c059,
 // f3b47, f0ba7 replaced the test-database link before their tests ran reliably). Installed packages aren't linked
 // either: `npm ci` in a card deletes every entry of its `node_modules` through the link before it replaces the link
 // with a directory of its own, so each card's install emptied the main checkout's `tools/preview/node_modules`
-// (foo, 25 cards on 2026-10-10 from 09:42Z; the card's own install looked fine).
+// (25 cards on 2026-10-10 from 09:42Z; the card's own install looked fine).
 //
 // The rule: every ignored path is linked unless it matches the default exclude list below or the project's
 // `worktrees.symlinkIgnored.exclude` (a kit project fact); the project's `include` links a default-excluded path

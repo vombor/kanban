@@ -8,6 +8,7 @@ import { TRPCError } from "@trpc/server";
 import { getWorkspacePipelineSettings, parsePipelineConfig, readPipelineConfig } from "../config/pipeline-config";
 import type { RuntimeConfigState } from "../config/runtime-config";
 import { updateGlobalRuntimeConfig, updateRuntimeConfig } from "../config/runtime-config";
+import type { AgentSettingsOptions } from "../core/agent-settings-options";
 import type {
 	RuntimeAgentId,
 	RuntimeClineModelRecord,
@@ -50,6 +51,7 @@ import { captureTaskTurnCheckpoint } from "../workspace/turn-checkpoints";
 import type { RuntimeTrpcContext, RuntimeTrpcWorkspaceScope } from "./app-router";
 
 export interface CreateRuntimeApiDependencies {
+	getAgentSettingsOptions?: (agentId: RuntimeAgentId) => Promise<AgentSettingsOptions>;
 	getActiveWorkspaceId: () => string | null;
 	getActiveRuntimeConfig?: () => RuntimeConfigState;
 	loadScopedRuntimeConfig: (scope: RuntimeTrpcWorkspaceScope) => Promise<RuntimeConfigState>;
@@ -103,7 +105,7 @@ async function resolveExistingTaskCwdOrEnsure(options: {
 
 /**
  * Why a start that needs a new turn (`requireNewTurn`) is refused: the task's live session has finished its turn, so
- * startTaskSession would hand it back unchanged and the agent would do nothing (notes f423d, issue #16).
+ * startTaskSession would hand it back unchanged and the agent would do nothing (issue #16).
  */
 function describeFinishedLiveSession(taskId: string): string {
 	return `Task "${taskId}" has a live session that finished its turn (awaiting review); starting it would only reattach that session, with no new turn. To give it more work in the same conversation: kanban task send ${taskId} "<what to do>". If it was escalated over a STALLED QA round: kanban task handback --task-id ${taskId} --note "<why>" puts it back in Review for a new QA round.`;
@@ -153,6 +155,8 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 	};
 
 	return {
+		getAgentSettingsOptions: async (agentId: RuntimeAgentId): Promise<AgentSettingsOptions> =>
+			(await deps.getAgentSettingsOptions?.(agentId)) ?? { models: [], providers: [], efforts: [], source: agentId },
 		loadConfig: async (workspaceScope) => {
 			const activeRuntimeConfig = deps.getActiveRuntimeConfig?.();
 			if (!workspaceScope && !activeRuntimeConfig) {

@@ -1478,7 +1478,7 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 		// Recovery resent the turn (a nudge, a retry, /clear + the card prompt, a restart resume) and the session has
 		// shown no activity since: this Review is the turn before the redo, so it is neither "returned unchanged" nor a
 		// new trigger. Recovery runs first in the same evaluation and the entry is read after it, so a nudge sent in
-		// this sweep counts (foo 552ba/64a2d, 2026-10-08: escalated 11-15 ms after an image nudge, #4).
+		// this sweep counts (2026-10-08: cards escalated 11-15 ms after an image nudge, #4).
 		const { context } = scope;
 		if (recoveryRedoReason(entry, scope.session, context.now, context.recoveryNudgeCheckMs)) {
 			return;

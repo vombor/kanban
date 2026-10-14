@@ -310,7 +310,7 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 
 	// Everything that runs per managed workspace (the pipeline worker with restart recovery, the restart manifest writer,
 	// session sync, the summary persister) only sees a project once its manager is loaded. Before this ran at startup,
-	// a project nobody opened stayed unseen: notes' orphaned cards waited 1 h 48 min for their resume (issue #29).
+	// a project nobody opened stayed unseen: orphaned cards waited 1 h 48 min for their resume (issue #29).
 	// A missing or broken project is left to the stream resolver, which reports or prunes it.
 	const loadRegisteredWorkspaces = async (): Promise<string[]> => {
 		const loaded: string[] = [];

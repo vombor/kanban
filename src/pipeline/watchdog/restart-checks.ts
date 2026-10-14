@@ -2,7 +2,7 @@
 // a restart. Fixing a dead QA card is the gate's (qa-gate.ts: describeDeadQaCard, then it reads any verdict,
 // supersedes the card and queues a new one for the same snapshot within its slots and PID pressure), so this only
 // reports that the automatic fix didn't happen. It runs on every watchdog tick, so the first ticks after a Kanban
-// start see it, not the generic "Review with no QA card" stall `stall.reviewMin` later (foo's 6f756 and 8d024 waited
+// start see it, not the generic "Review with no QA card" stall `stall.reviewMin` later (two orphaned cards waited
 // 11–14 min with a dead QA card after the 2026-10-07 23:02:56Z restart).
 //
 // For a dev card in Review, the newest QA card the gate made for it (`qaGate.reviewsTaskId`), > `restartGraceMin`:

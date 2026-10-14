@@ -366,7 +366,7 @@ export async function exportSnapshotToDir(repoPath: string, snapshot: string, di
 		return outcome;
 	});
 	// Decide only after both have closed: tar's close often comes before git's, whose code was then still unset
-	// ("exit null/0" on every foo export, 2026-10-07).
+	// ("exit null/0" on every snapshot export, 2026-10-07).
 	const [archiveOutcome, untarOutcome] = await Promise.all([archiveDone, untarDone]);
 	const problems = [
 		describeExportProcess("git archive", archiveOutcome),

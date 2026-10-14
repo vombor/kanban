@@ -404,6 +404,18 @@ export function checkLegacyConfigKeys(
 			},
 		});
 	}
+	if (migrated.includes("providers.setupWorkspaceId")) {
+		findings.push({
+			level: "warn",
+			area: "home",
+			message: `${configPath} has the removed "providers.setupWorkspaceId"; it is ignored. No project has administrative privileges: instance setup and container updates are user-only`,
+			hint: "kanban doctor --fix removes it",
+			fix: async () => {
+				await updatePipelineConfigFile((config) => migrateLegacyConfigKeys(config).config, configPath);
+				return ["removed providers.setupWorkspaceId"];
+			},
+		});
+	}
 	if (migrated.includes("orchestrator.wake.target")) {
 		const value = JSON.stringify(readLegacyWakeTarget(rawConfig));
 		findings.push({

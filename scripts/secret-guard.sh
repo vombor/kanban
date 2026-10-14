@@ -22,7 +22,7 @@
 #   exec scripts/secret-guard.sh "$@"
 # Bypass deliberately: SECRET_GUARD=off git push ...
 [ "${SECRET_GUARD:-on}" = "off" ] && exit 0
-H="${HOME:-/root}"
+H="${HOME:?HOME must be set for the secret guard}"
 KH="${KANBAN_HOME:-$H/.kanban}"
 known=()
 while IFS= read -r v; do [ ${#v} -ge 16 ] && known+=("$v"); done < <(

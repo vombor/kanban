@@ -1,6 +1,6 @@
 // `kanban setup-provider [<provider>]`: writes one model provider's Cline settings (the providers and what each writes:
 // src/setup/cline-provider-setup.ts); with no provider it lists them and whether each is in sync (the doctor rows'
-// answer). It is the user's to run (KANBAN_ORCHESTRATOR_OR_USER_COMMANDS in src/isolation/cli-scope.ts, asked of the
+// answer). It is the user's to run (USER_INSTANCE_COMMANDS in src/isolation/cli-scope.ts, asked of the
 // server before this runs; docs/fork/development.md); `kanban setup` and doctor only print it.
 import type { Command } from "commander";
 

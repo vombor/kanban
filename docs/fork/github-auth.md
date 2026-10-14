@@ -19,13 +19,13 @@ Create a **classic** PAT (Settings → Developer settings → Personal access to
 
 | Who | How |
 |---|---|
-| gh | reads `GH_TOKEN` itself, ahead of its stored login in `/root/.config/gh` |
-| git over https | `kanban-entrypoint` runs `gh auth setup-git`: gh is git's credential helper for github.com (lines in the global git config on `/root`) |
-| npm install / publish of `@vombor/*` | `kanban-entrypoint` adds `@vombor:registry=https://npm.pkg.github.com` and `//npm.pkg.github.com/:_authToken=${GH_TOKEN}` to `~/.npmrc` (or `$NPM_CONFIG_USERCONFIG`). The file holds only the reference: npm expands it when it reads the file |
+| gh | reads `GH_TOKEN` itself, ahead of its stored login (`GH_CONFIG_DIR`, XDG config dir, else `~/.config/gh` on Linux) |
+| git over https | explicit `kanban setup` configures a missing gh credential helper for github.com in the user's global git config; existing helpers are kept |
+| npm install / publish of `@vombor/*` | explicit `kanban setup` adds `@vombor:registry=https://npm.pkg.github.com` and `//npm.pkg.github.com/:_authToken=${GH_TOKEN}` to `~/.npmrc` (or `$NPM_CONFIG_USERCONFIG`). The file holds only the reference: npm expands it when it reads the file |
 | Kanban's update check | reads the same `.npmrc` line (else `GH_TOKEN`); without a token it checks nothing, quietly |
 | CI publish (`publish.yml`) | `NODE_AUTH_TOKEN: ${{ secrets.GH_PAT }}` for `npm publish`, and the GitHub release |
 | GHCR push (`image.yml`) | `docker/login-action` with `secrets.GH_PAT` |
-| Agent sessions (Claude, Codex, Cline, Copilot, ...) | keep `GH_TOKEN`: PR-mode cards need gh, and `/root/.config/gh` is readable by them anyway (Copilot itself runs on `COPILOT_GITHUB_TOKEN`, see below) |
+| Agent sessions (Claude, Codex, Cline, Copilot, ...) | keep `GH_TOKEN`: PR-mode cards need gh (Copilot itself runs on `COPILOT_GITHUB_TOKEN`, see below) |
 | Pipeline checks (`src/pipeline/checks.ts`) | never see it: `GH_TOKEN`, `GITHUB_TOKEN`, `COPILOT_GITHUB_TOKEN`, `AWS_BEARER_TOKEN_BEDROCK` and `CLINE_API_KEY` are removed, so a project's tests can't read them |
 | `scripts/secret-guard.sh` | counts the values of `GH_TOKEN` / `GITHUB_TOKEN` / `COPILOT_GITHUB_TOKEN` / `AWS_BEARER_TOKEN_BEDROCK` / `CLINE_API_KEY` as known secrets and blocks a push that adds one |
 
@@ -48,9 +48,9 @@ The ClinePass key `CLINE_API_KEY` (Cline's subscription provider `cline-pass`) t
 `kanban setup-provider cline-pass` stores it in `providers.json`, and doctor warns when it isn't stored or differs
 ([cline-pass-auth.md](cline-pass-auth.md)).
 
-The entrypoint changes nothing when neither variable is set (gh then uses its login in `/root/.config/gh`). It never
-prints the token, also not under `set -x`, and never writes it to a file. Its `.npmrc` edit is idempotent and keeps
-the user's other lines; an auth line for `npm.pkg.github.com` with some other value is the user's and is left alone.
+The entrypoint never writes authentication settings, even when a token is set. `kanban setup --dry-run` plans the
+explicit bootstrap; `kanban setup` applies it without printing or storing the token. Its `.npmrc` edit is idempotent
+and keeps the user's other values, including custom auth lines. These tool-owned files stay outside `KANBAN_HOME`.
 
 ### Copilot is the exception
 
@@ -86,8 +86,8 @@ Secret=copilot_github_token,type=env,target=COPILOT_GITHUB_TOKEN
 ```
 
 Without a quadlet: `podman run --secret gh_pat,type=env,target=GH_TOKEN
---secret copilot_github_token,type=env,target=COPILOT_GITHUB_TOKEN ...`. Restart the container so the entrypoint
-sets up npm and git and Copilot cards get their token. Without the Copilot line, Copilot takes the PAT over its
+--secret copilot_github_token,type=env,target=COPILOT_GITHUB_TOKEN ...`. Restart the container so its processes get
+the tokens, then run `kanban setup --dry-run` and `kanban setup` as the user to configure npm/git. Without the Copilot line, Copilot takes the PAT over its
 `copilot login` (doctor warns).
 
 ### Repository secret

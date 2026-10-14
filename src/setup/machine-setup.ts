@@ -16,6 +16,7 @@ import { type LemonadeModelListSettings, readLemonadeModelListSettings } from ".
 import type { PipelineConfig } from "../config/pipeline-config";
 import { renameDurably, writeFileSynced } from "../fs/durable-file";
 import { getClineModelsSettingsPath, getClineProvidersSettingsPath } from "../state/kanban-home";
+import { KANBAN_PACKAGE_REGISTRY } from "../update/kanban-package";
 import {
 	CLAUDE_MD_SECTION,
 	getClaudeConfigDirPath,
@@ -31,9 +32,16 @@ import {
 import { formatApplyLemonadeModelsHint } from "./cline-lemonade-apply";
 import { hasLemonadeModelsChanges, planClineLemonadeModels } from "./cline-lemonade-models";
 import { planClineModelsSource } from "./cline-models-source";
+import { githubTokenVariable, planGitHubGitAuth } from "./github-auth-setup";
 import { readManagedSectionStatus, writeManagedSection } from "./managed-section";
 
-export type SetupStepId = "npmrc" | "cline-providers" | "cline-models-source" | "cline-lemonade-models" | "claude-md";
+export type SetupStepId =
+	| "npmrc"
+	| "github-git"
+	| "cline-providers"
+	| "cline-models-source"
+	| "cline-lemonade-models"
+	| "claude-md";
 
 /**
  * `ok`: nothing to do. `change`: `apply` would write. `manual`: something to do that Kanban doesn't write (the
@@ -85,7 +93,10 @@ export function getMachineSetupPaths(
 	clineDataDir: string | null = null,
 ): MachineSetupPaths {
 	return {
-		npmrc: env.NPM_CONFIG_USERCONFIG?.trim() || join(homedir(), ".npmrc"),
+		npmrc:
+			env.NPM_CONFIG_USERCONFIG?.trim() ||
+			env.npm_config_userconfig?.trim() ||
+			join(env.HOME?.trim() || homedir(), ".npmrc"),
 		clineProviders: getClineProvidersSettingsPath(clineDataDir),
 		clineModels: getClineModelsSettingsPath(clineDataDir),
 		claudeDir: getClaudeConfigDirPath(env),
@@ -134,31 +145,68 @@ const NPMRC_SETTINGS: ReadonlyArray<readonly [string, string]> = [
 	["fund", "false"],
 ];
 
-export async function planNpmrc(paths: MachineSetupPaths): Promise<SetupStepPlan> {
+export async function planNpmrc(paths: MachineSetupPaths, env: NodeJS.ProcessEnv = {}): Promise<SetupStepPlan> {
+	const tokenVar = githubTokenVariable(env);
+	const registryHost = new URL(KANBAN_PACKAGE_REGISTRY).host;
+	const authKey = `//${registryHost}/:_authToken`;
+	const settings: ReadonlyArray<readonly [string, string]> = [
+		...NPMRC_SETTINGS,
+		...(tokenVar
+			? [
+					["@vombor:registry", KANBAN_PACKAGE_REGISTRY] as const,
+					[`//${registryHost}/:_authToken`, `\${${tokenVar}}`] as const,
+				]
+			: []),
+	];
+	const missingSettings = (text: string) => {
+		const keys = new Set(
+			text.split("\n").flatMap((line) => {
+				const match = /^\s*([^#;\s][^=]*?)\s*=/u.exec(line);
+				return match?.[1] ? [match[1].trim()] : [];
+			}),
+		);
+		return settings.filter(([key]) => !keys.has(key)).map(([key, value]) => `${key}=${value}`);
+	};
+	const refreshReference = (text: string) =>
+		!tokenVar
+			? text
+			: text
+					.split("\n")
+					.map((line) => {
+						const match = /^\s*([^#;\s][^=]*?)\s*=\s*(.*?)\s*$/u.exec(line);
+						return match?.[1]?.trim() === authKey && /^\$\{(?:GH_TOKEN|GITHUB_TOKEN)\}$/u.test(match[2] ?? "")
+							? `${authKey}=\${${tokenVar}}`
+							: line;
+					})
+					.join("\n");
 	const text = (await readTextOrNull(paths.npmrc)) ?? "";
-	const keys = new Set(
-		text
-			.split("\n")
-			.map((line) => /^\s*([\w-]+)\s*=/u.exec(line)?.[1])
-			.filter((key): key is string => Boolean(key)),
-	);
-	const missing = NPMRC_SETTINGS.filter(([key]) => !keys.has(key)).map(([key, value]) => `${key}=${value}`);
-	if (missing.length === 0) {
-		return { id: "npmrc", target: paths.npmrc, status: "ok", details: ["quiet npm settings present"] };
+	const missing = missingSettings(text);
+	const refreshed = refreshReference(text);
+	if (missing.length === 0 && refreshed === text) {
+		return { id: "npmrc", target: paths.npmrc, status: "ok", details: ["npm setup settings present"] };
 	}
 	return {
 		id: "npmrc",
 		target: paths.npmrc,
 		status: "change",
-		details: [`add ${missing.join(", ")} (existing settings are kept)`],
+		details: [
+			...(missing.length ? [`add ${missing.join(", ")} (existing settings are kept)`] : []),
+			...(refreshed !== text ? [`refresh the npm GitHub token reference to ${tokenVar} (no key stored)`] : []),
+		],
 		apply: async () => {
 			const current = (await readTextOrNull(paths.npmrc)) ?? "";
-			const separator = current && !current.endsWith("\n") ? "\n" : "";
+			const stillMissing = missingSettings(current);
+			const refreshedCurrent = refreshReference(current);
+			if (stillMissing.length === 0 && refreshedCurrent === current) return ["npm setup settings present"];
+			const separator = refreshedCurrent && !refreshedCurrent.endsWith("\n") ? "\n" : "";
 			await writeFileKeepingMode(
 				paths.npmrc,
-				`${current}${separator}# kanban setup: quiet npm\n${missing.join("\n")}\n`,
+				stillMissing.length
+					? `${refreshedCurrent}${separator}# kanban setup: quiet npm\n${stillMissing.join("\n")}\n`
+					: refreshedCurrent,
+				0o600,
 			);
-			return [`added ${missing.join(", ")}`];
+			return ["npm setup settings applied (user values and literal token references kept)"];
 		},
 	};
 }
@@ -293,7 +341,8 @@ export async function planMachineSetup(options: MachineSetupOptions): Promise<Se
 	const env = options.env ?? process.env;
 	const paths = { ...getMachineSetupPaths(env, options.config.agents.cline.dataDir), ...options.paths };
 	const steps: Array<{ id: SetupStepId; target: string; plan: () => Promise<SetupStepPlan> }> = [
-		{ id: "npmrc", target: paths.npmrc, plan: () => planNpmrc(paths) },
+		{ id: "npmrc", target: paths.npmrc, plan: () => planNpmrc(paths, env) },
+		{ id: "github-git", target: "user git credential configuration", plan: () => planGitHubGitAuth(env) },
 		{
 			id: "cline-providers",
 			target: paths.clineProviders,

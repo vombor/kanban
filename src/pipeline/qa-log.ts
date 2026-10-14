@@ -5,7 +5,7 @@
 //
 // Ported from archive/devteam-kit:qa/qa-card.cjs@6da71597 (previousRounds, the round count) and
 // services/kanban-autoland.mjs@6da71597 (ingestQaOnce: the section layout). The verdict heading stays
-// `## Claude QA <dev>` whoever reviewed: foo's existing log, its round numbers and the legacy kit's parsers use it.
+// `## Claude QA <dev>` whoever reviewed: existing logs, their round numbers and the legacy kit's parsers use it.
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 

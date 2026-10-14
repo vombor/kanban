@@ -408,6 +408,10 @@ describe("kanban home migrate", () => {
 
 				expect(result.executed).toBe(true);
 				expect(readJson(join(targetHome, "copilot-providers.json"))).toEqual({ providers: [{ id: "x" }] });
+				expect(readFileSync(join(targetHome, "kits", "custom.json"), "utf8")).toBe("user kit");
+				expect(readFileSync(join(targetHome, "secrets", "github-app.json"), "utf8")).toBe("fixture private state");
+				expect(statSync(join(targetHome, "secrets", "github-app.json")).mode & 0o777).toBe(0o600);
+				expect(readFileSync(join(targetHome, "vendor", "browser", "runtime"), "utf8")).toBe("fixture browser");
 				expect(existsSync(join(targetHome, "server.lock"))).toBe(false);
 				expect(statSync(join(targetHome, "hooks", "claude", "settings.json")).mode & 0o777).toBe(0o600);
 				expect(lstatSync(join(targetHome, "hooks", "claude", "current")).isSymbolicLink()).toBe(true);
@@ -427,6 +431,11 @@ describe("kanban home migrate", () => {
 					seedLegacyHome(userHomePath);
 					const { legacyHome } = getHomes(userHomePath);
 					writeJson(join(legacyHome, "copilot-providers.json"), { providers: [{ id: "x" }] });
+					for (const directory of ["kits", "secrets", "vendor/browser"])
+						mkdirSync(join(legacyHome, directory), { recursive: true });
+					writeFileSync(join(legacyHome, "kits", "custom.json"), "user kit");
+					writeFileSync(join(legacyHome, "secrets", "github-app.json"), "fixture private state", { mode: 0o600 });
+					writeFileSync(join(legacyHome, "vendor", "browser", "runtime"), "fixture browser");
 					writeFileSync(join(legacyHome, "server.lock"), "", "utf8");
 					mkdirSync(join(legacyHome, "run"), { recursive: true });
 					chmodSync(join(legacyHome, "hooks", "claude", "settings.json"), 0o600);

@@ -33,7 +33,7 @@ const ACTION_NAMES: Record<string, string> = {
 	"cli task unlink": "unlink tasks",
 };
 
-/** `create a task in project foo`: the refused action and the project it was refused in. */
+/** The refused action and the project it was refused in. */
 export function describeIsolationAction(action: string, workspaceId: string): string {
 	const known = ACTION_NAMES[action.trim()];
 	if (known) {

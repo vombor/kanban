@@ -4,14 +4,14 @@ The pod runs project work only; Kanban itself is developed outside it, and how a
 is in [development.md](development.md).
 
 The dev-pod image (`ghcr.io/vombor/kanban`, built from `deploy/Containerfile` by `.github/workflows/image.yml`)
-starts Kanban through `deploy/kanban-entrypoint.sh` (`/usr/local/bin/kanban-entrypoint`), which ties the dev-team
-kit on the persistent volume (`/root/.kanban`) to the container's start and stop:
+starts Kanban as `node` through `deploy/kanban-entrypoint.sh` (`/usr/local/bin/kanban-entrypoint`). Product/install
+ownership and existing-instance migration are described in [instance-configuration.md](instance-configuration.md).
+The entrypoint owns lifecycle only:
 
-- **Every start** launches `/root/.kanban/bin/kit boot` in the background (wait for Kanban, then start the kit
-  services). Kanban never waits for it.
+- **Every start** launches an explicitly configured `KANBAN_START_HOOK` in the background. With no hook it starts
+  Kanban directly; it never discovers or starts a kit just because one exists.
 - **Every stop** (`podman stop`, `systemctl stop/restart`, `podman auto-update`, host shutdown: all of them send
-  SIGTERM) first runs `/root/.kanban/bin/kit prepare-restart` (tags the WIP of every running card and writes the
-  restart manifest, so autoland resumes exactly those cards afterwards), for at most 45 s, then `kanban restart
+  SIGTERM) first runs an explicitly configured `KANBAN_PRESTOP_HOOK`, for at most 45 s, then `kanban restart
   prepare` (the runtime's WIP tags and restart manifest for every workspace, with the server's start time), for
   at most 20 s. Both run while Kanban is still up. Then it passes the signal on to Kanban (which shuts down within
   10 s) and exits with Kanban's exit status.
@@ -19,7 +19,7 @@ kit on the persistent volume (`/root/.kanban`) to the container's start and stop
   down and exits with status 75. The entrypoint runs no pre-stop step for an exit it didn't signal, logs
   `exit 75: Kanban asked for an update restart` and exits with 75, so the container exits and systemd starts it again.
 
-A missing kit or `kanban`, a failing step, a step that runs past its timeout or a Kanban that is already down
+A missing `kanban`, a failing step, a step that runs past its timeout or a Kanban that is already down
 never blocks or aborts the stop: the entrypoint logs one line for it and goes on. A second SIGTERM/SIGINT cuts the
 running step short, skips the rest and is passed on at once.
 
@@ -47,16 +47,18 @@ AutoUpdate=registry
 # --pull=newer; a failed pull falls back to the local image). Together with Restart=always this makes "the container
 # exited" = "update and come back" (kanban restart update, below). Quadlet's Pull= key: podman 4.6.0 and later.
 Pull=newer
-# podman stop's default (10 s) would SIGKILL Kanban while the pre-stop steps run: 45 s kit + 20 s restart prepare +
+# podman stop's default (10 s) would SIGKILL Kanban while the pre-stop steps run: 45 s hook + 20 s restart prepare +
 # 10 s Kanban + margin.
 StopTimeout=90
 RunInit=true
 # The user's classic PAT as GH_TOKEN, from a podman secret (docs/fork/github-auth.md).
 Secret=gh_pat,type=env,target=GH_TOKEN
-# No Exec= needed: the image's command plus the entrypoint start the kit. Remove the old
-# `Exec=/bin/sh -c '( /root/.kanban/bin/kit boot ... & ); exec kanban ...'` override from docs/RUNBOOK.md
-# (harmless if left: kit boot is idempotent, but it runs twice).
-# Volumes, ports, Network=, etc. unchanged.
+# No Exec= needed. Select Kanban state independently from agent/user HOME.
+Environment=KANBAN_HOME=/var/lib/kanban
+# Mount your own state, user home and projects with permissions appropriate for node (uid 1000).
+Volume=<state-root>:/var/lib/kanban
+Volume=<user-home>:/home/node
+Volume=<projects-root>:/projects
 
 [Service]
 # systemd's own stop timeout (default 90 s) must be longer than StopTimeout, or systemd kills the unit first.
@@ -82,10 +84,8 @@ updates containers that run under a systemd unit (quadlet does that) with a full
 ## Updating from inside (`kanban restart update`)
 
 Kanban can't pull an image from inside its container, but with the unit's `Pull=newer` and `Restart=always` it
-doesn't have to: it only has to exit. `kanban restart update` is the user's (since 2026-10-13 Kanban is developed outside
-the pod, [development.md](development.md), so the Kanban project's orchestrator that had the user's standing
-permission of 2026-10-12 no longer runs in the pod; every orchestrator and every card is refused, the server's
-`restart.update` route decides with the strict caller):
+doesn't have to: it only has to exit. `kanban restart update` is user-only. Every project's orchestrator and every
+card is refused; no project has special privileges. The server's `restart.update` route uses the strict caller:
 
 1. refuses outside a container (no `/run/.containerenv`);
 2. compares the running build (`KANBAN_IMAGE_REVISION`/`KANBAN_IMAGE_CREATED`, set from build args by CI; the same
@@ -102,7 +102,7 @@ permission of 2026-10-12 no longer runs in the pod; every orchestrator and every
 
 `--force` skips 2 and 3 (an unreachable registry, the same image, running cards), `--dry-run` checks and prints
 what would happen without tagging, writing or stopping anything. Every request, refused or not, is logged to the
-server log and `/root/.kanban/logs/restart-update.jsonl` (who, the channel, the running build, the channel tag's build
+server log and `<KANBAN_HOME>/logs/restart-update.jsonl` (who, the channel, the running build, the channel tag's build
 and digest). After the restart the watchdog's "Kanban restarted" wake says `updated from <old build> to <new build>`
 (on `stable`: `updated from v0.1.70-fork.7 (…) to v0.1.70-fork.8 (…) (release notes: <link>)`), that the container
 came back on the old build (no `Pull=newer` in the unit, or the pull failed), or, on `stable`, that it came back on
@@ -156,7 +156,7 @@ The image tags per event:
 
 The version tag is metadata-action's semver `{{version}}` form, without the `v`; Kanban names releases with it
 (`v0.1.70-fork.8`, the git tag and GitHub release). `:stable` is not rebuilt daily: a release keeps the agent CLIs it
-was built with, and the agents update themselves at runtime. Re-running `image.yml` on an older tag moves `:stable`
+was built with; agent self-updates are disabled at runtime. Re-running `image.yml` on an older tag moves `:stable`
 back to that release.
 
 ### Following releases (consumer)
@@ -177,19 +177,21 @@ back to that release.
 
 | Variable | Default | |
 |---|---|---|
-| `KANBAN_START_HOOK` | `<kit>/bin/kit boot` if executable | `sh -c` command run detached at start; empty = none |
-| `KANBAN_PRESTOP_HOOK` | `<kit>/bin/kit prepare-restart` if executable | `sh -c` command run on SIGTERM/SIGINT; empty = none |
+| `KANBAN_START_HOOK` | unset | explicit `sh -c` command run detached at start; empty = none |
+| `KANBAN_PRESTOP_HOOK` | unset | explicit `sh -c` command run on SIGTERM/SIGINT; empty = none |
 | `KANBAN_PRESTOP_TIMEOUT` | `45` | seconds; the hook's process group is killed after it |
 | `KANBAN_RESTART_PREPARE_HOOK` | `kanban restart prepare` if `kanban` is on PATH | `sh -c` command run after the pre-stop hook; empty = none |
 | `KANBAN_RESTART_PREPARE_TIMEOUT` | `20` | seconds; as above |
-| `KANBAN_KIT_HOME` | `/root/.kanban` | where `<kit>` is |
+| `KANBAN_HOME` | `$HOME/.kanban` | Kanban-owned state; the command's `--home` overrides it; also used for lifecycle logs |
+| `KANBAN_UPDATE_MODE` | `image` in the image | global package replacement disabled; update through the image |
 | `KANBAN_IMAGE_REVISION`, `KANBAN_IMAGE_CREATED` | set by the image | the image's build (commit, build time), for `kanban restart update`; don't override them |
 | `KANBAN_IMAGE_VERSION` | set by a release image | the release version (`0.1.70-fork.8`) on a `:stable`/`:<version>` image, empty on every other build; don't override it |
-| `GH_TOKEN` | unset | the user's classic PAT (scopes `repo`, `read:packages`, `write:packages`, `workflow`). gh reads it; at start the entrypoint adds the npm `${GH_TOKEN}` reference for `@vombor` to `~/.npmrc` and runs `gh auth setup-git`. Pass it as a podman secret, not `Environment=`. Agent sessions keep it (PR cards need gh), except Copilot's; see [github-auth.md](github-auth.md) |
+| `GH_TOKEN` | unset | the user's classic PAT. gh reads it; explicit `kanban setup` configures npm/git. Pass it as a podman secret, not `Environment=`. See [github-auth.md](github-auth.md) |
 
-E.g. to tag the cards of more than one board before a stop:
-`Environment="KANBAN_PRESTOP_HOOK=/root/.kanban/bin/kit prepare-restart --project foo; /root/.kanban/bin/kit prepare-restart --project notes"`
-(`kit prepare-restart` alone covers one project: the one for its cwd, else the first in kit.config.json).
+An instance that deliberately retains a legacy kit can set explicit hooks, for example
+`Environment='KANBAN_START_HOOK="$KANBAN_HOME/bin/kit" boot'` and
+`Environment='KANBAN_PRESTOP_HOOK="$KANBAN_HOME/bin/kit" prepare-restart'`.
+The built-in restart prepare already covers all registered projects; none is singled out.
 
 ## Verify
 
@@ -197,9 +199,8 @@ E.g. to tag the cards of more than one board before a stop:
 podman logs --since 10m <container> 2>&1 | grep kanban-entrypoint
 ```
 
-After a start: `start hook (detached): '/root/.kanban/bin/kit boot'` and `started pid <n>: kanban ...`. After a
+After a start: `started pid <n>: kanban ...`, plus `start hook (detached)` only when one was configured. After a
 stop (`podman logs` still works on the stopped container): `SIGTERM: pre-stop ...`, `pre-stop hook done` (or
 `timed out` / `failed`), `restart prepare done` (or `timed out` / `failed` / `skipped`), `forwarding SIGTERM`, `pid <n> exited with status ...`; after `kanban restart update` also `exit 75: Kanban asked for an update restart`. The same lines plus the hooks'
-output are in `/root/.kanban/logs/kanban-entrypoint.log`, which survives the container being replaced (auto-update);
-`kit boot` also writes `/root/.kanban/logs/kit-boot.log`. `podman inspect <container> --format
+output are in `<KANBAN_HOME>/logs/kanban-entrypoint.log` when that directory exists and is writable. `podman inspect <container> --format
 '{{.Config.StopTimeout}}'` should print 90.

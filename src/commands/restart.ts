@@ -13,7 +13,7 @@
 //            :latest or :stable, then named by release): the server checks, runs the same prepare
 //            with the update in the manifest, shuts down and exits with 75, and the Quadlet unit's Restart=always and
 //            Pull=newer bring it back on the new image (src/trpc/restart-update-api.ts decides everything; it is the
-//            user's, KANBAN_ORCHESTRATOR_OR_USER_COMMANDS in cli-scope.ts).
+//            user's, USER_INSTANCE_COMMANDS in cli-scope.ts).
 //
 // Ported from archive/devteam-kit:bin/prepare-restart.mjs@6da71597 and bin/recover-restart.mjs@6da71597. Restart
 // recovery acts only with `pipeline.recovery.mode: "on"` (src/pipeline/recovery-stage.ts); until the cutover the

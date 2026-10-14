@@ -15,7 +15,7 @@ export const CONTINUE_PROMPT =
 export const RESTART_WIP_NOTE =
 	"NOTE (Kanban): Kanban restarted while you were working on this card, so your previous session was lost. Your work in progress is still in this worktree: run git status and git diff first, review what is there, and continue from it. Do not start over or discard it.";
 
-// kit main a2b4695 (kanban-2uge, 10/07): the launch prompt of a resume that continues the conversation. The card
+// Legacy kit main a2b4695: the launch prompt of a resume that continues the conversation. The card
 // prompt there would hand the agent its whole task again as a new turn, inviting it to redo finished work.
 export const RESTART_RESUME_NOTE =
 	"NOTE (orchestrator): you were resumed after a container/Kanban restart that ended your previous session. Pick up where you left off (check git status and git diff if unsure what you already did), finish the card, and end with a STATUS line.";

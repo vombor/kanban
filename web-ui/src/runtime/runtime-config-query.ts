@@ -3,6 +3,8 @@
 // on state orchestration instead of transport plumbing.
 import { getRuntimeTrpcClient } from "@/runtime/trpc-client";
 import type {
+	AgentSettingsOptions,
+	RuntimeAgentId,
 	RuntimeConfigResponse,
 	RuntimeConfigSaveRequest,
 	RuntimeDebugResetAllStateResponse,
@@ -15,6 +17,13 @@ import type {
 export async function fetchRuntimeConfig(workspaceId: string | null): Promise<RuntimeConfigResponse> {
 	const trpcClient = getRuntimeTrpcClient(workspaceId);
 	return await trpcClient.runtime.getConfig.query();
+}
+
+export async function fetchAgentSettingsOptions(
+	workspaceId: string | null,
+	agentId: RuntimeAgentId,
+): Promise<AgentSettingsOptions> {
+	return await getRuntimeTrpcClient(workspaceId).runtime.getAgentSettingsOptions.query({ agentId });
 }
 
 export async function saveRuntimeConfig(

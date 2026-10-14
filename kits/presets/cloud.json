@@ -7,7 +7,7 @@
 			"agent": "codex",
 			"provider": "bedrock",
 			"model": "us.openai.gpt-6.1-sol",
-			"note": "every dev card: GPT-6.1 Sol on Codex (user 2026-10-12; won runoff tier3-multiregion and both mai-vs-sol runoffs on foo)"
+			"note": "every dev card: GPT-6.1 Sol on Codex; this preset is selected explicitly per project"
 		},
 		"qa": {
 			"agent": "cline",

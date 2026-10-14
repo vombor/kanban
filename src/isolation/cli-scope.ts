@@ -7,7 +7,7 @@
 // config decide, without grants. A guard against ordinary use, not a sandbox: a process that drops its env gets past
 // it, which is why the runtime also traces credential-less calls to the session's process tree. With isolation off
 // everywhere nothing is scoped (the CLI behaves as before); only the user-only commands stay refused, and the Kanban
-// orchestrator's commands (KANBAN_ORCHESTRATOR_OR_USER_COMMANDS) are asked of the server, in a session or not. Outside a
+// instance administration commands (USER_INSTANCE_COMMANDS) are asked of the server, in a session or not. Outside a
 // session, `kanban project add|create` waits for the console-code approval while some workspace is in `enforce`.
 
 import type { RuntimeTrpcClient } from "../commands/runtime-trpc-client";
@@ -132,9 +132,7 @@ function orchestratorOrUserRefusal(commandPath: string): string {
 
 /**
  * Commands that are the user's, whatever the isolation mode (docs/fork/development.md: Kanban is developed outside the
- * pod, so these pod-level jobs are the user's alone). The rule still lets through the orchestrator of
- * `providers.setupWorkspaceId` (default kanban-2uge; its sidebar session or headless wake), which matters only in a
- * Kanban where that project is registered: elsewhere no session has that workspace id, so only the user passes.
+ * pod, so these instance-level jobs are the user's alone). No project has administrative privileges.
  * `setup-provider` writes a model provider's settings into Cline's files, which every project's Cline cards use, and
  * `restart update` restarts the pod's container onto a newer image, which stops every project's agents (the server's
  * `restart.update` route checks the caller again, src/trpc/restart-update-api.ts). Every other orchestrator and every
@@ -142,43 +140,37 @@ function orchestratorOrUserRefusal(commandPath: string): string {
  * the strict caller lookup: a session without its credential is traced to its process tree, an unidentified caller is
  * refused), outside a session too, since a card that drops its credential looks like the user from here.
  */
-export const KANBAN_ORCHESTRATOR_OR_USER_COMMANDS = ["setup-provider", "restart update"] as const;
+export const USER_INSTANCE_COMMANDS = ["setup", "setup-provider", "restart update"] as const;
 
-export type KanbanOrchestratorCallerDecision = { allowed: true } | { allowed: false; message: string };
+export type UserInstanceCallerDecision = { allowed: true } | { allowed: false; message: string };
 
-function kanbanOrchestratorOrUserRefusal(commandPath: string, kanbanWorkspaceId: string, who: string): string {
+function userInstanceCommandRefusal(commandPath: string, who: string): string {
 	const [why, ask] =
 		commandPath === "restart update"
 			? [
 					"restarts the pod's container onto a newer image, which stops every project's agents",
 					"that an update is due",
 				]
-			: [
-					"writes model providers' settings into Cline's files, which every project's Cline cards use",
-					"which provider needs setting up",
-				];
-	return `\`kanban ${commandPath}\` ${why}, so only the user runs it (apart from the orchestrator of workspace ${kanbanWorkspaceId}, where that project is registered); ${who} can't. Tell your orchestrator or the user ${ask}.`;
+			: commandPath === "setup"
+				? ["changes this instance's user and agent configuration", "which setup is needed"]
+				: [
+						"writes model providers' settings into Cline's files, which every project's Cline cards use",
+						"which provider needs setting up",
+					];
+	return `\`kanban ${commandPath}\` ${why}, so only the user runs it; ${who} can't. Tell the user ${ask}.`;
 }
 
-/** The one rule for KANBAN_ORCHESTRATOR_OR_USER_COMMANDS, asked by the server's route with the strict caller. */
-export function decideKanbanOrchestratorCaller(
+/** Instance administration is user-only, in every isolation mode and for every project. */
+export function decideUserInstanceCaller(
 	caller: RuntimeCaller,
-	kanbanWorkspaceId: string,
-	commandPath: string = KANBAN_ORCHESTRATOR_OR_USER_COMMANDS[0],
-): KanbanOrchestratorCallerDecision {
+	commandPath: string = "setup-provider",
+): UserInstanceCallerDecision {
 	if (caller.kind === "user") {
-		return { allowed: true };
-	}
-	if (
-		caller.kind === "session" &&
-		caller.session.role === "orchestrator" &&
-		caller.session.workspaceId === kanbanWorkspaceId
-	) {
 		return { allowed: true };
 	}
 	return {
 		allowed: false,
-		message: kanbanOrchestratorOrUserRefusal(commandPath, kanbanWorkspaceId, describeCaller(caller)),
+		message: userInstanceCommandRefusal(commandPath, describeCaller(caller)),
 	};
 }
 
@@ -188,18 +180,18 @@ function isLiveServerOnHome(): boolean {
 }
 
 /**
- * Asks the running server whether this process may run a KANBAN_ORCHESTRATOR_OR_USER_COMMANDS command. Without an
+ * Asks the running server whether this process may run a USER_INSTANCE_COMMANDS command. Without an
  * answer only a process with no session credential and no live Kanban server goes ahead: no agent session outlives its
  * server, so that is the user. Returns the refusal, or null.
  */
-async function requireKanbanOrchestratorOrUser(input: {
+async function requireUserInstanceCaller(input: {
 	commandPath: string;
 	env: NodeJS.ProcessEnv;
 	createClient: () => Pick<RuntimeTrpcClient, "providers">;
 	isServerRunning: () => boolean;
 	timeoutMs?: number;
 }): Promise<string | null> {
-	const command = KANBAN_ORCHESTRATOR_OR_USER_COMMANDS.find((entry) => matchesCommandPath(input.commandPath, [entry]));
+	const command = USER_INSTANCE_COMMANDS.find((entry) => matchesCommandPath(input.commandPath, [entry]));
 	const answer = await Promise.race([
 		Promise.resolve()
 			.then(() => input.createClient().providers.authorizeSetup.query({ command }))
@@ -404,8 +396,8 @@ export async function applyCliSessionScope(input: {
 	if (input.commandPath === "hooks" || input.commandPath.startsWith("hooks ")) {
 		return null;
 	}
-	if (matchesCommandPath(input.commandPath, KANBAN_ORCHESTRATOR_OR_USER_COMMANDS)) {
-		const refusal = await requireKanbanOrchestratorOrUser({
+	if (matchesCommandPath(input.commandPath, USER_INSTANCE_COMMANDS)) {
+		const refusal = await requireUserInstanceCaller({
 			commandPath: input.commandPath,
 			env,
 			createClient: input.createClient,

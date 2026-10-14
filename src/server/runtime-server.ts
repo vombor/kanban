@@ -29,6 +29,7 @@ import { getSharedGitHubAppTokenSource } from "../github-app/installation-tokens
 import { createIsolationService, type IsolationService } from "../isolation/isolation-service";
 import { createMessageNoticeQueue } from "../isolation/message-notices";
 import { applyIssueSync } from "../issues/issue-apply";
+import { createAgentOptionsLoader } from "../models/agent-options";
 import { readAgentDefaultModels } from "../models/cline-providers";
 import type { PipelineActionRequest, PipelineActionResult } from "../pipeline/actions";
 import type { PipelineEventMap } from "../pipeline/events";
@@ -411,6 +412,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 	});
 	orchestratorInbox.start();
 	const runtimeApi = createRuntimeApi({
+		getAgentSettingsOptions: createAgentOptionsLoader(),
 		typedInputHold,
 		getActiveWorkspaceId: deps.workspaceRegistry.getActiveWorkspaceId,
 		getActiveRuntimeConfig: deps.workspaceRegistry.getActiveRuntimeConfig,

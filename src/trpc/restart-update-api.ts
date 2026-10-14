@@ -6,8 +6,8 @@
 // KANBAN_UPDATE_RESTART_EXIT_CODE. The entrypoint passes that status on, the container exits, and the Quadlet unit's
 // `Restart=always` starts it again, where `Pull=newer` pulls the newer image first.
 //
-// Every decision is here, never in the CLI: the caller (cli-scope.ts's decideKanbanOrchestratorCaller with the strict
-// lookup: the user's, apart from the orchestrator of `providers.setupWorkspaceId` where it is registered; any other
+// Every decision is here, never in the CLI: the caller (cli-scope.ts's decideUserInstanceCaller with the strict
+// lookup: only the user; every
 // orchestrator, every card and an unidentified caller are refused), running in a container (/run/.containerenv), a newer image
 // (the running build's stamp against the channel tag's labels) and no card In Progress; `force` skips the last two. Every
 // request, refused or not, goes to the server log and `<home>/logs/restart-update.jsonl`.
@@ -16,7 +16,7 @@ import { dirname, join } from "node:path";
 
 import { getWorkspacePipelineSettings, readPipelineConfig } from "../config/pipeline-config";
 import type { RuntimeWorkspaceStateResponse } from "../core/api-contract";
-import { decideKanbanOrchestratorCaller } from "../isolation/cli-scope";
+import { decideUserInstanceCaller } from "../isolation/cli-scope";
 import type { IsolationService } from "../isolation/isolation-service";
 import { describeCaller } from "../isolation/session-identity";
 import { getRecoveryScope } from "../pipeline/engine";
@@ -74,8 +74,6 @@ export interface CreateRestartUpdateApiDependencies {
 	loadState: (target: RestartPrepareTarget) => Promise<RuntimeWorkspaceStateResponse>;
 	/** Shuts the server down gracefully and exits with the code (cli.ts's shutdown handlers). */
 	requestExit: (exitCode: number) => void;
-	/** `providers.setupWorkspaceId`; tests inject it. */
-	readSetupWorkspaceId?: () => Promise<string>;
 	isInContainer?: () => boolean;
 	/** `update.imageChannel`: the tag the pod's Quadlet unit follows. */
 	readImageChannel?: () => Promise<KanbanImageChannel>;
@@ -112,8 +110,6 @@ function toErrorMessage(error: unknown): string {
 }
 
 export function createRestartUpdateApi(deps: CreateRestartUpdateApiDependencies): RuntimeRestartUpdateApi {
-	const readSetupWorkspaceId =
-		deps.readSetupWorkspaceId ?? (async () => (await readPipelineConfig()).config.providers.setupWorkspaceId);
 	const isInContainer = deps.isInContainer ?? (() => isRunningInContainer());
 	const readImageChannel =
 		deps.readImageChannel ?? (async () => (await readPipelineConfig()).config.update.imageChannel);
@@ -170,15 +166,14 @@ export function createRestartUpdateApi(deps: CreateRestartUpdateApiDependencies)
 				return { status, message, lines };
 			};
 
-			const kanbanWorkspaceId = await readSetupWorkspaceId();
-			const decision = decideKanbanOrchestratorCaller(caller, kanbanWorkspaceId, RESTART_UPDATE_COMMAND);
+			const decision = decideUserInstanceCaller(caller, RESTART_UPDATE_COMMAND);
 			if (!decision.allowed) {
 				const fromWorkspaceId = caller.kind === "session" ? caller.session.workspaceId : null;
-				await deps.log([kanbanWorkspaceId, fromWorkspaceId], {
+				await deps.log([fromWorkspaceId], {
 					kind: "refused",
 					taskId: caller.kind === "session" ? caller.session.taskId : null,
 					from: fromWorkspaceId,
-					to: kanbanWorkspaceId,
+					to: null,
 					action: "restart.update",
 					detail: `restart update is the user's (${who})`,
 				});

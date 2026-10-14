@@ -59,7 +59,7 @@ export interface LegacyKitProject {
 	/**
 	 * On only where the project's own entry says `true`. Since K-1 (legacy kit lib/config.cjs@92101ca, after the
 	 * archive cut) a project never inherits them from the top level; before it every project did, which is how
-	 * kanban-2uge got foo's QA routing on 2026-10-06 (plan §4.0).
+	 * one workspace inherited another's QA routing on 2026-10-06 (plan §4.0).
 	 */
 	toggles: Record<LegacyKitProjectToggle, boolean>;
 }
@@ -122,7 +122,7 @@ const LEGACY_KIT_PROJECT_FILE_DEFAULTS: Record<Exclude<keyof LegacyKitProjectFil
 };
 
 /**
- * Where the legacy kit keeps a project's files: the project entry's own value (foo's `scoreboard` is
+ * Where the legacy kit keeps a project's files: the project entry's own value (a legacy `scoreboard` may be
  * `<dataDir>/bench/scoreboard.jsonl`), else the kit's default, with `<kitHome>`, `<dataRoot>`, `<dataDir>`,
  * `<workspaceId>` and `~` filled in. A workspace the kit doesn't list gets the defaults. Ported from
  * archive/devteam-kit:lib/config.cjs@a2b4695 (PROJECT_DEFAULTS, resolveProject, fill).

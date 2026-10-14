@@ -1,4 +1,4 @@
-// Doctor row: files an unclean stop of the pod can leave damaged (issue #36: notes' pipeline-state.json and card
+// Doctor row: files an unclean stop of the pod can leave damaged (issue #36: pipeline-state.json and card
 // 45610's git index came back 0 bytes after the stop of 2026-10-11 ~17:14Z). Read-only: the pipeline replaces a
 // damaged state file on its next write and restart recovery rebuilds an orphan's index after its WIP tag, so the row
 // only says where that hasn't happened yet. An index is never rebuilt by `--fix`: a running card may be using it.

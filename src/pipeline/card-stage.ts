@@ -1,6 +1,6 @@
 // The board's pipeline card stages (issue #30): where the pipeline is with each dev card of a landing-`qa` board,
 // short enough for a badge on a phone. A Review card used to look idle while its checks ran for ten minutes, and the
-// user took it for stuck and used Approve & land, which skipped QA (foo 8c28e, 2026-10-11).
+// user took it for stuck and used Approve & land, which skipped QA (2026-10-11).
 //
 // Nothing here decides anything: it reads what the stages already decided and keep. The engine's outcome for each
 // Review card in the worker's last evaluation (engine.ts `onCardOutcome`: settling, escalated, the snapshot it

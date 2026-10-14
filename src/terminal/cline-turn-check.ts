@@ -76,13 +76,13 @@ export function describeClineTurnEnd(decision: EndedClineTurn): string {
 }
 
 /**
- * Why a card whose Kanban session is "running" makes no progress in its Cline session file (foo 2026-10-07 22:15Z:
+ * Why a card whose Kanban session is "running" makes no progress in its Cline session file (2026-10-07 22:15Z:
  * four cards sat 15 min on a tool_use whose result never came, while their TUIs repainted):
  *   - `interrupted_tool`: the last message is the agent's tool call and no result followed (the step was cut off);
  *   - `no_status_reply`: the last message is a final reply with no STATUS line (nor any other turn end);
  *   - `untouched`: the agent owes the reply (the last message is the prompt or a tool result, or there is none);
  *   - `no_session`: Cline wrote no session file for this run at all: its TUI never took the prompt, e.g. it sits on
- *     Cline's sign-in screen (issue #9, foo QA card ab61f 2026-10-08: no Bedrock key stored in providers.json).
+ *     Cline's sign-in screen (issue #9: no Bedrock key stored in providers.json).
  *     Typing into it doesn't help: the sign-in screen takes the text as input and starts a Cline account sign-in.
  * A pending question to the user (an ask tool) is no stall. `status` is the session file's own (`running` / `idle`): an `untouched` session still "running" is a model
  * request in flight, which recovery's hung-request check (Esc, `hungMin`) owns.

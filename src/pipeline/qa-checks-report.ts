@@ -4,13 +4,13 @@
 // while the checks run. A workspace without checks, or a snapshot whose package.json has none of the check scripts,
 // gets its QA card right away and no report, as before.
 //
-// Before this, checks were queued with the QA card and QA ran without them: foo 27549 landed with only a checks
+// Before this, checks were queued with the QA card and QA ran without them: a card landed with only a checks
 // ERROR (the export race fixed in 6c8248ca), and the only test gate was the QA agent.
 //
 // The wait is the dev card's `qaChecksWait` entry in pipeline-state.json (`{ snapshot, since }`); a new snapshot
 // starts a new wait, and the checks runner stops a run on an older snapshot of the card (checks.ts).
 //
-// New (issue #41, notes 5bdde 2026-10-12: a PASS whose QA agent never ran the failing tests landed): for a FAIL the
+// New (issue #41: a PASS whose QA agent never ran the failing tests landed): for a FAIL the
 // report asks QA for a "checks" answer per failed step in verdict.json, and the gate lands a PASS only when each one
 // shows the step didn't reproduce or fails on the base too (qa-checks-verdict.ts).
 import { CHECKS_VERSION, type StoredCheckStep, type StoredChecksResult } from "./checks";

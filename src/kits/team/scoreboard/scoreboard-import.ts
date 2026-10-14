@@ -1,5 +1,5 @@
 // The cutover's copy of the legacy kit's scoreboard.jsonl into the team kit's `data/<id>/scoreboard.jsonl`
-// (`kanban pipeline import-legacy`, P5-2; plan §2.4: foo's `bench/scoreboard.jsonl` moves up one level). Same line
+// (`kanban pipeline import-legacy`, P5-2; plan §2.4: legacy `bench/scoreboard.jsonl` moves up one level). Same line
 // format (scoreboard-line.ts). A legacy line already in the file (the same JSON) is not added again, so importing
 // twice adds nothing. The legacy lines go first: they are older, and parseScoreboard keeps the last line of a
 // (card, round, …) key, so a newer Kanban line for the same round still wins.

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
 	clearPendingUpdateNotification,
@@ -27,6 +27,27 @@ afterEach(() => {
 		log: () => {},
 	});
 	clearPendingUpdateNotification();
+});
+
+it("never replaces an image-managed product with an npm install, even for an explicit update", async () => {
+	const fetchLatestVersion = vi.fn(async () => "99.0.0");
+	const runUpdateCommand = vi.fn(() => 0);
+	const spawnUpdate = vi.fn();
+	const options = {
+		currentVersion: "1.0.0",
+		env: { KANBAN_UPDATE_MODE: "image" },
+		fetchLatestVersion,
+		runUpdateCommand,
+		spawnUpdate,
+	};
+	expect(await runOnDemandUpdate(options)).toMatchObject({
+		status: "unsupported_installation",
+		message: expect.stringContaining("kanban restart update"),
+	});
+	await runAutoUpdateCheck(options);
+	expect(fetchLatestVersion).not.toHaveBeenCalled();
+	expect(runUpdateCommand).not.toHaveBeenCalled();
+	expect(spawnUpdate).not.toHaveBeenCalled();
 });
 
 describe("compareVersions", () => {

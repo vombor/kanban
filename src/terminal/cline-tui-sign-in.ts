@@ -1,6 +1,6 @@
 // Whether Cline's interactive TUI starts a card's prompt or opens its sign-in screen ("Welcome to Cline / Connect a
 // model provider to get started"). There it takes no prompt, writes no session file and turns typed input into a
-// Cline account sign-in (`user.auth_started`), while Kanban sees a "running" session (issue #9, foo QA card ab61f,
+// Cline account sign-in (`user.auth_started`), while Kanban sees a "running" session (issue #9,
 // 2026-10-08). Kanban passes no `-k`, so the TUI decides on providers.json alone.
 //
 // cline 3.0.69's TUI check (`ps`/`Cp` in the bundled CLI, verified with real TUI runs in a throwaway
