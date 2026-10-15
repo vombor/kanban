@@ -18,9 +18,9 @@ import { useProjectRoots } from "@/hooks/use-project-roots";
 type AddProjectMode = "open" | "clone" | "new";
 
 const MODES: ReadonlyArray<{ id: AddProjectMode; label: string; icon: ReactElement }> = [
-	{ id: "open", label: "Open folder", icon: <Search size={12} /> },
-	{ id: "clone", label: "Clone from URL", icon: <GitBranch size={12} /> },
 	{ id: "new", label: "New project", icon: <FolderPlus size={12} /> },
+	{ id: "clone", label: "Clone from URL", icon: <GitBranch size={12} /> },
+	{ id: "open", label: "Open folder", icon: <Search size={12} /> },
 ];
 
 export interface AddProjectDialogProps {

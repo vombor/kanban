@@ -10,12 +10,12 @@ import { useIsMobile } from "@/hooks/use-is-mobile";
 export function ProjectActionsMenu({
 	isRemoving,
 	disabled,
-	onRename,
+	onEdit,
 	onRemove,
 }: {
 	isRemoving: boolean;
 	disabled: boolean;
-	onRename: () => void;
+	onEdit: () => void;
 	onRemove: () => void;
 }): React.ReactElement {
 	const isMobile = useIsMobile();
@@ -43,9 +43,9 @@ export function ProjectActionsMenu({
 				>
 					<DropdownMenu.Item
 						className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-[13px] text-text-primary cursor-pointer outline-none data-[highlighted]:bg-surface-3"
-						onSelect={onRename}
+						onSelect={onEdit}
 					>
-						Rename
+						Edit
 					</DropdownMenu.Item>
 					<DropdownMenu.Item
 						className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-[13px] text-status-red cursor-pointer outline-none data-[highlighted]:bg-surface-3"

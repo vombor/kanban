@@ -35,6 +35,7 @@ import type { PipelineActionRequest, PipelineActionResult } from "../pipeline/ac
 import type { PipelineEventMap } from "../pipeline/events";
 import { preserveTaskWork } from "../pipeline/hold";
 import type { WatchdogActionRequest } from "../pipeline/watchdog/actions";
+import { createProjectSecretsApi } from "../secrets/project-secrets-api";
 import {
 	checkRateLimit,
 	clearRateLimit,
@@ -525,6 +526,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		log: isolation.log,
 		broadcastProjects: (workspaceId) => void deps.runtimeStateHub.broadcastRuntimeProjectsUpdated(workspaceId),
 	});
+	const projectSecretsApi = createProjectSecretsApi();
 	// Shortcut runs that ask for a port, and the proxy the browser reaches those ports through (shortcut-ports.ts).
 	const shortcutPorts = createShortcutPortRegistry();
 	const handleShortcutPortProxyRequest = createShortcutPortProxyHandler({
@@ -660,6 +662,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			providerCapacityApi,
 			pipelinePauseApi,
 			projectNameApi,
+			projectSecretsApi,
 			getPipelineCardStages: deps.runtimeStateHub.getPipelineCardStages,
 			shortcutsApi,
 			githubApi,

@@ -17,8 +17,9 @@ import { AgentTerminalPanel } from "@/components/detail-panels/agent-terminal-pa
 import { GitHistoryView } from "@/components/git-history-view";
 import { KanbanBoard } from "@/components/kanban-board";
 import { LandOrDiscardDialog } from "@/components/land-or-discard-dialog";
+import { ProjectEditDialog } from "@/components/project-edit-dialog";
 import { ProjectNavigationPanel } from "@/components/project-navigation-panel";
-import { RuntimeSettingsDialog, type RuntimeSettingsSection } from "@/components/runtime-settings-dialog";
+import { RuntimeSettingsDialog } from "@/components/runtime-settings-dialog";
 import { StartupOnboardingDialog } from "@/components/startup-onboarding-dialog";
 import { TaskCreateDialog } from "@/components/task-create-dialog";
 import { TaskInlineCreateCard } from "@/components/task-inline-create-card";
@@ -92,7 +93,7 @@ export default function App(): ReactElement {
 	const [sessions, setSessions] = useState<Record<string, RuntimeTaskSessionSummary>>({});
 	const [canPersistWorkspaceState, setCanPersistWorkspaceState] = useState(false);
 	const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-	const [settingsInitialSection, setSettingsInitialSection] = useState<RuntimeSettingsSection | null>(null);
+	const [scriptProjectId, setScriptProjectId] = useState<string | null>(null);
 	const [isClearTrashDialogOpen, setIsClearTrashDialogOpen] = useState(false);
 	const [isGitHistoryOpen, setIsGitHistoryOpen] = useState(false);
 	const [pendingTaskStartAfterEditId, setPendingTaskStartAfterEditId] = useState<string | null>(null);
@@ -542,8 +543,7 @@ export default function App(): ReactElement {
 		[navigationProjectPath, workspacePath],
 	);
 
-	const handleOpenSettings = useCallback((section?: RuntimeSettingsSection) => {
-		setSettingsInitialSection(section ?? null);
+	const handleOpenSettings = useCallback(() => {
 		setIsSettingsOpen(true);
 	}, []);
 	const handleToggleGitHistory = useCallback(() => {
@@ -857,6 +857,7 @@ export default function App(): ReactElement {
 							isTerminalOpen={selectedCard ? isDetailTerminalOpen : showHomeBottomTerminal}
 							isTerminalLoading={selectedCard ? isDetailTerminalStarting : isHomeTerminalStarting}
 							onOpenSettings={handleOpenSettings}
+							onEditProject={currentProjectId ? () => setScriptProjectId(currentProjectId) : undefined}
 							showDebugButton={debugModeEnabled}
 							onOpenDebugDialog={debugModeEnabled ? handleOpenDebugDialog : undefined}
 							shortcuts={shortcuts}
@@ -1049,16 +1050,16 @@ export default function App(): ReactElement {
 							) : null}
 						</div>
 					</div>
+					<ProjectEditDialog
+						project={projects.find((project) => project.id === scriptProjectId) ?? null}
+						onClose={() => setScriptProjectId(null)}
+					/>
 					<RuntimeSettingsDialog
 						open={isSettingsOpen}
 						workspaceId={settingsWorkspaceId}
 						initialConfig={settingsRuntimeProjectConfig}
-						initialSection={settingsInitialSection}
 						onOpenChange={(nextOpen) => {
 							setIsSettingsOpen(nextOpen);
-							if (!nextOpen) {
-								setSettingsInitialSection(null);
-							}
 						}}
 						onSaved={() => {
 							refreshRuntimeProjectConfig();

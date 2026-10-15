@@ -3,8 +3,8 @@ import { type MouseEvent as ReactMouseEvent, type ReactNode, useCallback, useEff
 import { KanbanAgentHeader } from "@/components/kanban-agent-header";
 import { OrchestratorWaitBadge } from "@/components/orchestrator-wait-badge";
 import { ProjectActionsMenu } from "@/components/project-actions-menu";
+import { ProjectEditDialog } from "@/components/project-edit-dialog";
 import { ProjectSwitcher } from "@/components/project-switcher";
-import { RenameProjectDialog } from "@/components/rename-project-dialog";
 import { HEADER_ROW_HEIGHT_CLASS } from "@/components/shared/header-row";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
@@ -301,7 +301,7 @@ export function ProjectNavigationPanel({
 					<ProjectActionsMenu
 						isRemoving={removingProjectId === currentProject.id}
 						disabled={removingProjectId !== null && removingProjectId !== currentProject.id}
-						onRename={() => setPendingProjectRename(currentProject)}
+						onEdit={() => setPendingProjectRename(currentProject)}
 						onRemove={() => setPendingProjectRemoval(currentProject)}
 					/>
 				) : null}
@@ -340,7 +340,7 @@ export function ProjectNavigationPanel({
 					</div>
 				)}
 			</div>
-			<RenameProjectDialog project={pendingProjectRename} onClose={() => setPendingProjectRename(null)} />
+			<ProjectEditDialog project={pendingProjectRename} onClose={() => setPendingProjectRename(null)} />
 			<AlertDialog
 				open={pendingProjectRemoval !== null}
 				onOpenChange={(open) => {

@@ -16,6 +16,8 @@ if (nodeSentryDsn) {
 		environment: nodeSentryEnvironment,
 		release: `kanban@${appVersion}`,
 		sendDefaultPii: false,
+		// Settings can contain credentials. No HTTP request body belongs in error telemetry.
+		integrations: [Sentry.requestDataIntegration({ include: { data: false } })],
 		initialScope: {
 			tags: {
 				app: "kanban",

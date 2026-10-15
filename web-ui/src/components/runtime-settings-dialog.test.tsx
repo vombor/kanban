@@ -382,7 +382,7 @@ describe("RuntimeSettingsDialog", () => {
 		expect(document.documentElement.getAttribute("data-theme")).toBe("graphite");
 	});
 
-	it("saves shortcut edits through the shortcut route, not the settings save", async () => {
+	it("leaves project scripts to Edit Project and saves only global settings", async () => {
 		saveConfigMock.mockClear();
 		replaceProjectShortcutsMock.mockClear();
 		await act(async () => {
@@ -395,14 +395,16 @@ describe("RuntimeSettingsDialog", () => {
 				/>,
 			);
 		});
+		expect(document.body.textContent).toContain("Global Settings");
+		expect(findButtonByAriaLabel(document.body, "Remove shortcut Run")).toBeNull();
 		await act(async () => {
-			findButtonByAriaLabel(document.body, "Remove shortcut Run")?.click();
+			findButtonByAriaLabel(document.body, "Enable bypass permissions flag")?.click();
 		});
 		await act(async () => {
 			findButtonByText(document.body, "Save")?.click();
 		});
 
-		expect(replaceProjectShortcutsMock).toHaveBeenCalledWith("workspace-1", []);
+		expect(replaceProjectShortcutsMock).not.toHaveBeenCalled();
 		expect(saveConfigMock).toHaveBeenCalledTimes(1);
 		expect(saveConfigMock.mock.calls[0]?.[0]).not.toHaveProperty("shortcuts");
 	});

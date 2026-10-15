@@ -13,10 +13,12 @@ const trpc = vi.hoisted(() => ({
 	listDirectoryContents: vi.fn(),
 	pickDirectory: vi.fn(),
 	kits: vi.fn(),
+	setSecrets: vi.fn(),
 }));
 
 vi.mock("@/runtime/trpc-client", () => ({
 	getRuntimeTrpcClient: () => ({
+		projectSecrets: { set: { mutate: trpc.setSecrets } },
 		projects: {
 			roots: { query: trpc.roots },
 			checkName: { query: trpc.checkName },
@@ -114,6 +116,7 @@ describe("AddProjectDialog", () => {
 		trpc.roots.mockResolvedValue({ roots: ["/projects"] });
 		trpc.kits.mockResolvedValue(KITS);
 		trpc.checkName.mockResolvedValue(nameCheck({}));
+		trpc.setSecrets.mockResolvedValue({ secrets: [] });
 		trpc.listDirectoryContents.mockResolvedValue({
 			ok: true,
 			currentPath: "/projects",
@@ -205,10 +208,10 @@ describe("AddProjectDialog", () => {
 		await click(button("New project"));
 	}
 
-	it("offers Open folder, Clone from URL and New project, starting on Open folder", async () => {
+	it("offers New project, Clone from URL and Open folder, starting on Open folder", async () => {
 		await renderDialog();
 		const tabs = Array.from(body().querySelectorAll('[role="tab"]')).map((tab) => tab.textContent);
-		expect(tabs).toEqual(["Open folder", "Clone from URL", "New project"]);
+		expect(tabs).toEqual(["New project", "Clone from URL", "Open folder"]);
 		expect(body().querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("Open folder");
 	});
 
@@ -272,6 +275,40 @@ describe("AddProjectDialog", () => {
 	});
 
 	describe("New project", () => {
+		it("saves secrets under the created project's identity and retries without creating twice", async () => {
+			trpc.create.mockResolvedValue({ ok: true, project: PROJECT, notes: [] });
+			trpc.setSecrets.mockRejectedValueOnce(new Error("private-value must not be echoed"));
+			await openNewProject();
+			await type(byLabel("Project name"), "My App");
+			await flush(PROJECT_NAME_CHECK_DEBOUNCE_MS);
+			await click(button("Next"));
+			await click(button("Add secret"));
+			await type(byLabel("Secret 1 name"), "DATABASE_URL");
+			await type(byLabel("Secret 1 value"), "private-value");
+			expect(byLabel<HTMLInputElement>("Secret 1 value").type).toBe("password");
+			await click(button("Create Project"));
+			expect(trpc.create).toHaveBeenCalledOnce();
+			expect(trpc.setSecrets).toHaveBeenCalledWith({ secrets: [{ name: "DATABASE_URL", value: "private-value" }] });
+			expect(body().querySelector('[role="alert"]')?.textContent).toContain("project was created");
+			expect(body().textContent).not.toContain("private-value");
+			expect(onProjectAdded).not.toHaveBeenCalled();
+			await click(button("Create Project"));
+			expect(trpc.create).toHaveBeenCalledOnce();
+			expect(onProjectAdded).toHaveBeenCalledWith("p1");
+		});
+		it("keeps details when going back and validates secrets before creating", async () => {
+			await openNewProject();
+			await type(byLabel("Project name"), "My App");
+			await flush(PROJECT_NAME_CHECK_DEBOUNCE_MS);
+			await click(button("Next"));
+			await click(button("Add secret"));
+			await type(byLabel("Secret 1 name"), "invalid-name");
+			await click(button("Create Project"));
+			expect(trpc.create).not.toHaveBeenCalled();
+			expect(body().querySelector('[role="alert"]')?.textContent).toContain("unique environment-variable names");
+			await click(button("Back"));
+			expect(byLabel<HTMLInputElement>("Project name").value).toBe("My App");
+		});
 		it("defaults the directory to the slugified name, branch main, initial commit on", async () => {
 			await openNewProject();
 			await type(byLabel("Project name"), "My App!");
@@ -280,17 +317,17 @@ describe("AddProjectDialog", () => {
 			expect(byLabel("Initial commit").getAttribute("data-state")).toBe("checked");
 		});
 
-		it("disables Create while the check is pending, then enables it when the name is available", async () => {
+		it("disables Next while the check is pending, then enables it when the name is available", async () => {
 			await openNewProject();
 			await type(byLabel("Project name"), "My App");
 			expect(status()?.dataset.status).toBe("checking");
-			expect(button("Create Project").disabled).toBe(true);
+			expect(button("Next").disabled).toBe(true);
 
 			await flush(PROJECT_NAME_CHECK_DEBOUNCE_MS);
 			expect(trpc.checkName).toHaveBeenCalledWith({ root: "/projects", name: "my-app" });
 			expect(status()?.dataset.status).toBe("available");
 			expect(status()?.textContent).toContain("/projects/my-app is available");
-			expect(button("Create Project").disabled).toBe(false);
+			expect(button("Next").disabled).toBe(false);
 		});
 
 		it("checks only the last name typed (debounced)", async () => {
@@ -310,7 +347,7 @@ describe("AddProjectDialog", () => {
 			await flush(PROJECT_NAME_CHECK_DEBOUNCE_MS);
 			expect(status()?.dataset.status).toBe("exists");
 			expect(status()?.textContent).toContain('git repository. Use "Open folder"');
-			expect(button("Create Project").disabled).toBe(true);
+			expect(button("Next").disabled).toBe(true);
 		});
 
 		it("blocks an existing non-empty directory and allows an empty one", async () => {
@@ -319,13 +356,13 @@ describe("AddProjectDialog", () => {
 			await type(byLabel("Project name"), "notes");
 			await flush(PROJECT_NAME_CHECK_DEBOUNCE_MS);
 			expect(status()?.textContent).toContain("already exists and is not empty");
-			expect(button("Create Project").disabled).toBe(true);
+			expect(button("Next").disabled).toBe(true);
 
 			trpc.checkName.mockResolvedValueOnce(nameCheck({ exists: true, isEmpty: true }));
 			await type(byLabel("New project directory name"), "empty");
 			await flush(PROJECT_NAME_CHECK_DEBOUNCE_MS);
 			expect(status()?.dataset.status).toBe("exists-empty");
-			expect(button("Create Project").disabled).toBe(false);
+			expect(button("Next").disabled).toBe(false);
 		});
 
 		it("refuses invalid names locally without asking the server", async () => {
@@ -340,11 +377,11 @@ describe("AddProjectDialog", () => {
 				await flush(PROJECT_NAME_CHECK_DEBOUNCE_MS);
 				expect(status()?.dataset.status, name).toBe("invalid");
 				expect(status()?.textContent).toContain(message);
-				expect(button("Create Project").disabled).toBe(true);
+				expect(button("Next").disabled).toBe(true);
 			}
 			expect(trpc.checkName).not.toHaveBeenCalled();
 			await type(byLabel("New project directory name"), "");
-			expect(button("Create Project").disabled).toBe(true);
+			expect(button("Next").disabled).toBe(true);
 		});
 
 		it("creates the project with the chosen options and closes", async () => {
@@ -354,6 +391,10 @@ describe("AddProjectDialog", () => {
 			await type(byLabel("Initial branch"), "trunk");
 			await click(byLabel("Initial commit"));
 			await flush(PROJECT_NAME_CHECK_DEBOUNCE_MS);
+			await click(button("Next"));
+			expect(trpc.create).not.toHaveBeenCalled();
+			expect(body().textContent).toContain("2 of 2 · Secrets");
+			expect(body().querySelector('[aria-label="Script shortcuts"]')).toBeNull();
 			await click(button("Create Project"));
 			expect(trpc.create).toHaveBeenCalledWith({
 				path: "/projects/my-app",
@@ -377,6 +418,7 @@ describe("AddProjectDialog", () => {
 			await type(byLabel("Project name"), "My App");
 			await flush(PROJECT_NAME_CHECK_DEBOUNCE_MS);
 			expect(status()?.dataset.status).toBe("available");
+			await click(button("Next"));
 			await click(button("Create Project"));
 			expect(body().querySelector('[role="alert"]')?.textContent).toContain("already exists and is not empty");
 			expect(onProjectAdded).not.toHaveBeenCalled();
@@ -491,6 +533,7 @@ describe("AddProjectDialog", () => {
 			);
 			await type(byLabel("Project name"), "My App");
 			await flush(PROJECT_NAME_CHECK_DEBOUNCE_MS);
+			await click(button("Next"));
 			await click(button("Create Project"));
 			expect(trpc.create).toHaveBeenCalledWith(expect.objectContaining({ kit: "team", preset: "cloud" }));
 
@@ -517,13 +560,14 @@ describe("AddProjectDialog", () => {
 			await type(byLabel("Project name"), "My App");
 			await flush(PROJECT_NAME_CHECK_DEBOUNCE_MS);
 			expect(body().textContent).toContain("Pick the dev and qa agents of the custom team.");
-			expect(button("Create Project").disabled).toBe(true);
+			expect(button("Next").disabled).toBe(true);
 			await choose(byLabel<HTMLSelectElement>("dev agent"), "codex");
 			await type(byLabel("dev provider"), "bedrock");
 			await type(byLabel("dev model"), "gpt-sol");
 			expect(body().textContent).toContain("Pick the qa agent of the custom team.");
 			await choose(byLabel<HTMLSelectElement>("qa agent"), "claude");
-			expect(button("Create Project").disabled).toBe(false);
+			expect(button("Next").disabled).toBe(false);
+			await click(button("Next"));
 			await click(button("Create Project"));
 			expect(trpc.create).toHaveBeenCalledWith(
 				expect.objectContaining({

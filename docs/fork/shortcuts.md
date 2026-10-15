@@ -12,11 +12,12 @@ checkout's copy directly. Since the user runs a shortcut's command with a click,
 the user runs unseen. So:
 
 - The store's only writer is the shortcut route (`shortcuts.add|remove|replace`, `src/trpc/shortcuts-api.ts`). It
-  allows the user and the project's own orchestrator, and refuses everyone else (see below). The settings dialog
+  allows the user and the project's own orchestrator, and refuses everyone else (see below). **Edit Project**
   saves its list through `shortcuts.replace` and the top bar's "add shortcut" through `shortcuts.add`; the user's
   browser counts as the user. `runtime.saveConfig` (the other settings) drops any shortcuts it is sent.
-- The browser, the settings dialog and `kanban shortcut list` read the store. The dialog's "Project" line shows the
-  store's path.
+- The browser, **Edit Project** and `kanban shortcut list` read the store. Open the project's menu → **Edit**, or
+  the script runner's management button, to edit labels, commands and icons. Global Settings contains installation
+  settings; project scripts live alongside the project's display name and secret metadata.
 - The store moves with the project's data dir, so `kanban project rename-id` keeps it.
 - A store Kanban can't parse is never overwritten: the board shows no shortcuts, a change through the route is
   refused with the reason, and doctor fails the row until you fix or remove the file.

@@ -36,6 +36,11 @@ const { setProjectName } = vi.hoisted(() => ({
 vi.mock("@/runtime/trpc-client", () => ({
 	getRuntimeTrpcClient: (workspaceId: string | null) => ({
 		projectName: { set: { mutate: setProjectName } },
+		shortcuts: {
+			list: { query: async () => ({ shortcuts: [] }) },
+			replace: { mutate: async () => ({ ok: true, shortcuts: [] }) },
+		},
+		projectSecrets: { list: { query: async () => ({ secrets: [] }) } },
 		orchestratorInbox: {
 			status: { query: async () => ({ pending: workspaceId === "alpha" ? 2 : 0, oldestAt: null }) },
 		},
@@ -452,12 +457,12 @@ describe("ProjectNavigationPanel width persistence", () => {
 				actions?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
 			});
 			const renameItem = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(
-				(item) => item.textContent === "Rename",
+				(item) => item.textContent === "Edit",
 			);
 			await act(async () => {
 				renameItem?.click();
 			});
-			return document.body.querySelector<HTMLInputElement>("#rename-project-name-input");
+			return document.body.querySelector<HTMLInputElement>("#edit-project-name-input");
 		};
 		const typeName = async (input: HTMLInputElement, value: string) => {
 			await act(async () => {
@@ -474,10 +479,10 @@ describe("ProjectNavigationPanel width persistence", () => {
 		expect(input.placeholder).toBe("kanban");
 		await typeName(input, " Renamed ");
 		await act(async () => {
-			getButtonByText(document.body, "Rename").click();
+			getButtonByText(document.body, "Save").click();
 		});
 		expect(setProjectName).toHaveBeenCalledWith({ name: "Renamed" });
-		expect(document.body.querySelector("#rename-project-name-input")).toBeNull();
+		expect(document.body.querySelector("#edit-project-name-input")).toBeNull();
 
 		setProjectName.mockResolvedValueOnce({
 			ok: false,
@@ -492,10 +497,10 @@ describe("ProjectNavigationPanel width persistence", () => {
 		}
 		await typeName(again, "");
 		await act(async () => {
-			getButtonByText(document.body, "Rename").click();
+			getButtonByText(document.body, "Save").click();
 		});
 		expect(setProjectName).toHaveBeenLastCalledWith({ name: null });
 		expect(document.body.querySelector('[role="alert"]')?.textContent).toContain("one line of letters");
-		expect(document.body.querySelector("#rename-project-name-input")).not.toBeNull();
+		expect(document.body.querySelector("#edit-project-name-input")).not.toBeNull();
 	});
 });

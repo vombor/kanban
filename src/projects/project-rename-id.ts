@@ -34,6 +34,7 @@ import {
 import { HOME_AGENT_SESSION_PREFIX, isHomeAgentSessionIdForWorkspace } from "../core/home-agent-session";
 import { getKanbanRuntimeOrigin } from "../core/runtime-endpoint";
 import { lockedFileSystem } from "../fs/locked-file-system";
+import { createProjectSecretVault } from "../secrets/project-secret-vault";
 import {
 	getCalibrationPaths,
 	getIsolationWorkspacePaths,
@@ -44,6 +45,7 @@ import {
 	getKanbanWorkspaceIndexPath,
 	getKanbanWorkspacesRootPath,
 	getProjectRenameJournalPath,
+	getProjectSecretsPath,
 	getReservedDataDirNames,
 	getRestartRecoverRequestPath,
 	getWatchdogWorkspacePaths,
@@ -81,6 +83,7 @@ const stepSchema = z.discriminatedUnion("kind", [
 			"restart-requests",
 			"orchestrator-queue",
 			"orchestrator-inbox",
+			"project-secrets",
 			"config",
 			"index",
 		]),
@@ -492,6 +495,15 @@ const rewriteIndex: Rewriter = async ({ homePath, fromId, toId, repoPath, apply 
 	];
 };
 
+const rewriteProjectSecrets: Rewriter = async ({ homePath, fromId, toId, apply }) => {
+	const target = getProjectSecretsPath(toId, homePath);
+	if (apply) {
+		if (!existsSync(target)) return [];
+		await createProjectSecretVault({ homePath }).rebind(fromId, toId);
+	} else if (!existsSync(target) && !existsSync(getProjectSecretsPath(fromId, homePath))) return [];
+	return [{ file: relative(homePath, target), detail: "Rebind encrypted project secrets to the new workspace id" }];
+};
+
 const REWRITERS: Record<RewriteTarget, Rewriter> = {
 	sessions: rewriteSessions,
 	messages: rewriteMessages,
@@ -499,6 +511,7 @@ const REWRITERS: Record<RewriteTarget, Rewriter> = {
 	"restart-requests": rewriteRestartRequests,
 	"orchestrator-queue": rewriteOrchestratorQueue,
 	"orchestrator-inbox": rewriteOrchestratorInbox,
+	"project-secrets": rewriteProjectSecrets,
 	config: rewriteConfig,
 	// Last: until it runs, the old id is the registered one.
 	index: rewriteIndex,

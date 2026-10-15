@@ -210,6 +210,12 @@ import {
 } from "./plans-api";
 import { projectNameRequestSchema, projectNameResponseSchema, type RuntimeProjectNameApi } from "./project-name-api";
 import {
+	projectSecretsMetadataSchema,
+	projectSecretsRemoveSchema,
+	projectSecretsWriteSchema,
+	type RuntimeProjectSecretsApi,
+} from "./project-secrets-contract";
+import {
 	providerCapacityRequestSchema,
 	providerCapacityResponseSchema,
 	type RuntimeProviderCapacityApi,
@@ -242,6 +248,7 @@ export interface RuntimeTrpcWorkspaceScope {
 }
 
 export interface RuntimeTrpcContext {
+	projectSecretsApi?: RuntimeProjectSecretsApi;
 	requestedWorkspaceId: string | null;
 	workspaceScope: RuntimeTrpcWorkspaceScope | null;
 	/**
@@ -540,6 +547,40 @@ const gitSyncActionInputSchema = z.object({
 });
 
 export const runtimeAppRouter = t.router({
+	projectSecrets: t.router({
+		list: workspaceProcedure.output(projectSecretsMetadataSchema).query(async ({ ctx }) =>
+			ctx.projectSecretsApi
+				? await ctx.projectSecretsApi.list({
+						caller: await readStrictCaller(ctx),
+						workspaceId: ctx.workspaceScope.workspaceId,
+					})
+				: { secrets: [] },
+		),
+		set: workspaceProcedure
+			.input(projectSecretsWriteSchema)
+			.output(projectSecretsMetadataSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.projectSecretsApi)
+					throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Project secrets are unavailable." });
+				return await ctx.projectSecretsApi.set({
+					caller: await readStrictCaller(ctx),
+					workspaceId: ctx.workspaceScope.workspaceId,
+					secrets: input.secrets,
+				});
+			}),
+		remove: workspaceProcedure
+			.input(projectSecretsRemoveSchema)
+			.output(projectSecretsMetadataSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.projectSecretsApi)
+					throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Project secrets are unavailable." });
+				return await ctx.projectSecretsApi.remove({
+					caller: await readStrictCaller(ctx),
+					workspaceId: ctx.workspaceScope.workspaceId,
+					name: input.name,
+				});
+			}),
+	}),
 	runtime: t.router({
 		getAgentSettingsOptions: t.procedure
 			.input(agentSettingsOptionsRequestSchema)

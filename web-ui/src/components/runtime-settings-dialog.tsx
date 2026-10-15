@@ -1,11 +1,9 @@
 // Settings dialog composition for Kanban.
 // Generic app settings. Every agent, Cline included, is a CLI configured by its own tooling.
 import * as RadixCheckbox from "@radix-ui/react-checkbox";
-import * as RadixPopover from "@radix-ui/react-popover";
 import * as RadixSelect from "@radix-ui/react-select";
 import * as RadixSwitch from "@radix-ui/react-switch";
 import { getRuntimeAgentCatalogEntry, getRuntimeLaunchSupportedAgentCatalog } from "@runtime-agent-catalog";
-import { areRuntimeProjectShortcutsEqual } from "@runtime-shortcuts";
 import { normalizeRuntimeAgentDefaultSettings, type RuntimeAgentDefaultSettings } from "@runtime-task-agent-settings";
 import {
 	Bell,
@@ -15,24 +13,14 @@ import {
 	Circle,
 	CircleDot,
 	ExternalLink,
-	FolderOpen,
 	GitCommit,
 	Github,
 	Palette,
-	Plus,
 	Settings,
-	X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentDefaultModelFields } from "@/components/agent-default-model-fields";
 import { GitHubAppSettingsSection } from "@/components/github-app-settings-section";
-import {
-	getRuntimeShortcutIconComponent,
-	getRuntimeShortcutPickerOption,
-	RUNTIME_SHORTCUT_ICON_OPTIONS,
-	type RuntimeShortcutIconOption,
-	type RuntimeShortcutPickerIconId,
-} from "@/components/shared/runtime-shortcut-icons";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
 import { Dialog, DialogFooter, DialogHeader } from "@/components/ui/dialog";
@@ -40,8 +28,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { TASK_GIT_BASE_REF_PROMPT_VARIABLE, type TaskGitAction } from "@/git-actions/build-task-git-action-prompt";
 import { previewThemeId, readStoredThemeId, saveThemeId, THEME_GROUPS, THEMES, type ThemeId } from "@/hooks/use-theme";
 import { useLayoutCustomizations } from "@/resize/layout-customizations";
-import { openFileOnHost, replaceProjectShortcuts } from "@/runtime/runtime-config-query";
-import type { RuntimeAgentId, RuntimeConfigResponse, RuntimeProjectShortcut } from "@/runtime/types";
+import type { RuntimeAgentId, RuntimeConfigResponse } from "@/runtime/types";
 import { useRuntimeConfig } from "@/runtime/use-runtime-config";
 import {
 	getOrchestratorWaitNotificationsEnabled,
@@ -52,7 +39,6 @@ import {
 	getBrowserNotificationPermission,
 	requestBrowserNotificationPermission,
 } from "@/utils/notification-permission";
-import { formatPathForDisplay } from "@/utils/path-display";
 import { useUnmount, useWindowEvent } from "@/utils/react-use";
 
 interface RuntimeSettingsAgentRowModel {
@@ -84,11 +70,9 @@ const GIT_PROMPT_VARIANT_OPTIONS: Array<{ value: TaskGitAction; label: string }>
 	{ value: "pr", label: "Make PR" },
 ];
 
-export type RuntimeSettingsSection = "shortcuts";
-
 const SETTINGS_AGENT_ORDER: readonly RuntimeAgentId[] = ["cline", "claude", "codex", "droid", "kiro"];
 
-type SettingsNavId = "agents" | "git-prompts" | "notifications" | "appearance" | "github" | "project";
+type SettingsNavId = "agents" | "git-prompts" | "notifications" | "appearance" | "github";
 
 const SETTINGS_NAV_ITEMS: ReadonlyArray<{
 	id: SettingsNavId;
@@ -100,39 +84,13 @@ const SETTINGS_NAV_ITEMS: ReadonlyArray<{
 	{ id: "notifications", label: "Notifications", icon: <Bell size={16} /> },
 	{ id: "appearance", label: "Appearance", icon: <Palette size={16} /> },
 	{ id: "github", label: "GitHub App", icon: <Github size={16} /> },
-	{ id: "project", label: "Project", icon: <FolderOpen size={16} /> },
 ];
-
-function getShortcutIconOption(icon: string | undefined): RuntimeShortcutIconOption {
-	return getRuntimeShortcutPickerOption(icon);
-}
-
-function ShortcutIconComponent({ icon, size = 14 }: { icon: string | undefined; size?: number }): React.ReactElement {
-	const Component = getRuntimeShortcutIconComponent(icon);
-	return <Component size={size} />;
-}
 
 function formatNotificationPermissionStatus(permission: BrowserNotificationPermission): string {
 	if (permission === "default") {
 		return "not requested yet";
 	}
 	return permission;
-}
-
-function getNextShortcutLabel(shortcuts: RuntimeProjectShortcut[], baseLabel: string): string {
-	const normalizedTakenLabels = new Set(
-		shortcuts.map((shortcut) => shortcut.label.trim().toLowerCase()).filter((label) => label.length > 0),
-	);
-	const normalizedBaseLabel = baseLabel.trim().toLowerCase();
-	if (!normalizedTakenLabels.has(normalizedBaseLabel)) {
-		return baseLabel;
-	}
-
-	let suffix = 2;
-	while (normalizedTakenLabels.has(`${normalizedBaseLabel} ${suffix}`)) {
-		suffix += 1;
-	}
-	return `${baseLabel} ${suffix}`;
 }
 
 function AgentRow({
@@ -248,64 +206,6 @@ function InlineUtilityButton({
 	);
 }
 
-function ShortcutIconPicker({
-	value,
-	onSelect,
-}: {
-	value: string | undefined;
-	onSelect: (icon: RuntimeShortcutPickerIconId) => void;
-}): React.ReactElement {
-	const [open, setOpen] = useState(false);
-	const selectedOption = getShortcutIconOption(value);
-
-	return (
-		<RadixPopover.Root open={open} onOpenChange={setOpen}>
-			<RadixPopover.Trigger asChild>
-				<button
-					type="button"
-					aria-label={`Shortcut icon: ${selectedOption.label}`}
-					className="inline-flex items-center gap-1 h-7 px-1.5 rounded-md border border-border bg-surface-2 text-text-primary hover:bg-surface-3"
-				>
-					<ShortcutIconComponent icon={value} size={14} />
-					<ChevronDown size={12} />
-				</button>
-			</RadixPopover.Trigger>
-			<RadixPopover.Portal>
-				<RadixPopover.Content
-					side="bottom"
-					align="start"
-					sideOffset={4}
-					className="z-50 rounded-md border border-border bg-surface-2 p-1 shadow-lg"
-					style={{ animation: "kb-tooltip-show 100ms ease" }}
-				>
-					<div className="flex gap-0.5">
-						{RUNTIME_SHORTCUT_ICON_OPTIONS.map((option) => {
-							const IconComponent = getRuntimeShortcutIconComponent(option.value);
-							return (
-								<button
-									key={option.value}
-									type="button"
-									aria-label={option.label}
-									className={cn(
-										"p-1.5 rounded hover:bg-surface-3",
-										selectedOption.value === option.value && "bg-surface-3",
-									)}
-									onClick={() => {
-										onSelect(option.value);
-										setOpen(false);
-									}}
-								>
-									<IconComponent size={14} />
-								</button>
-							);
-						})}
-					</div>
-				</RadixPopover.Content>
-			</RadixPopover.Portal>
-		</RadixPopover.Root>
-	);
-}
-
 function SettingsNav({
 	items,
 	activeId,
@@ -343,14 +243,12 @@ export function RuntimeSettingsDialog({
 	initialConfig = null,
 	onOpenChange,
 	onSaved,
-	initialSection,
 }: {
 	open: boolean;
 	workspaceId: string | null;
 	initialConfig?: RuntimeConfigResponse | null;
 	onOpenChange: (open: boolean) => void;
 	onSaved?: () => void;
-	initialSection?: RuntimeSettingsSection | null;
 }): React.ReactElement {
 	const { config, isLoading, isSaving, save } = useRuntimeConfig(open, workspaceId, initialConfig);
 	const { resetLayoutCustomizations } = useLayoutCustomizations();
@@ -368,16 +266,12 @@ export function RuntimeSettingsDialog({
 		getOrchestratorWaitNotificationsEnabled,
 	);
 	const [notificationPermission, setNotificationPermission] = useState<BrowserNotificationPermission>("unsupported");
-	const [shortcuts, setShortcuts] = useState<RuntimeProjectShortcut[]>([]);
 	const [commitPromptTemplate, setCommitPromptTemplate] = useState("");
 	const [openPrPromptTemplate, setOpenPrPromptTemplate] = useState("");
 	const [selectedPromptVariant, setSelectedPromptVariant] = useState<TaskGitAction>("commit");
 	const [copiedVariableToken, setCopiedVariableToken] = useState<string | null>(null);
 	const [saveError, setSaveError] = useState<string | null>(null);
-	const [pendingShortcutScrollIndex, setPendingShortcutScrollIndex] = useState<number | null>(null);
 	const copiedVariableResetTimerRef = useRef<number | null>(null);
-	const shortcutsSectionRef = useRef<HTMLHeadingElement | null>(null);
-	const shortcutRowRefs = useRef<Array<HTMLDivElement | null>>([]);
 	const bodyRef = useRef<HTMLDivElement>(null);
 	const isScrollingProgrammatically = useRef(false);
 	const [activeSection, setActiveSection] = useState<SettingsNavId>("agents");
@@ -437,7 +331,6 @@ export function RuntimeSettingsDialog({
 	const initialAgentDefaults = config?.agentDefaults;
 	const initialAgentAutonomousModeEnabled = config?.agentAutonomousModeEnabled ?? true;
 	const initialReadyForReviewNotificationsEnabled = config?.readyForReviewNotificationsEnabled ?? true;
-	const initialShortcuts = config?.shortcuts ?? [];
 	const initialCommitPromptTemplate = config?.commitPromptTemplate ?? "";
 	const initialOpenPrPromptTemplate = config?.openPrPromptTemplate ?? "";
 	const hasUnsavedChanges = useMemo(() => {
@@ -465,9 +358,6 @@ export function RuntimeSettingsDialog({
 		if (orchestratorWaitNotificationsEnabled !== initialOrchestratorWaitNotificationsEnabled) {
 			return true;
 		}
-		if (!areRuntimeProjectShortcutsEqual(shortcuts, initialShortcuts)) {
-			return true;
-		}
 		if (
 			normalizeTemplateForComparison(commitPromptTemplate) !==
 			normalizeTemplateForComparison(initialCommitPromptTemplate)
@@ -490,14 +380,12 @@ export function RuntimeSettingsDialog({
 		initialOpenPrPromptTemplate,
 		initialReadyForReviewNotificationsEnabled,
 		initialSelectedAgentId,
-		initialShortcuts,
 		initialThemeId,
 		initialOrchestratorWaitNotificationsEnabled,
 		openPrPromptTemplate,
 		orchestratorWaitNotificationsEnabled,
 		readyForReviewNotificationsEnabled,
 		selectedAgentId,
-		shortcuts,
 	]);
 
 	useEffect(() => {
@@ -508,7 +396,6 @@ export function RuntimeSettingsDialog({
 		setAgentDefaults(config?.agentDefaults ?? {});
 		setAgentAutonomousModeEnabled(config?.agentAutonomousModeEnabled ?? true);
 		setReadyForReviewNotificationsEnabled(config?.readyForReviewNotificationsEnabled ?? true);
-		setShortcuts(config?.shortcuts ?? []);
 		setCommitPromptTemplate(config?.commitPromptTemplate ?? "");
 		setOpenPrPromptTemplate(config?.openPrPromptTemplate ?? "");
 		setSaveError(null);
@@ -519,7 +406,6 @@ export function RuntimeSettingsDialog({
 		config?.openPrPromptTemplate,
 		config?.readyForReviewNotificationsEnabled,
 		config?.selectedAgentId,
-		config?.shortcuts,
 		fallbackAgentId,
 		open,
 	]);
@@ -543,36 +429,6 @@ export function RuntimeSettingsDialog({
 		refreshNotificationPermission();
 	}, [open, refreshNotificationPermission]);
 	useWindowEvent("focus", open ? refreshNotificationPermission : null);
-
-	useEffect(() => {
-		if (!open || initialSection !== "shortcuts") {
-			return;
-		}
-		const timeout = window.setTimeout(() => {
-			shortcutsSectionRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
-		}, 500);
-		return () => {
-			window.clearTimeout(timeout);
-		};
-	}, [initialSection, open]);
-
-	useEffect(() => {
-		if (pendingShortcutScrollIndex === null) {
-			return;
-		}
-		const frame = window.requestAnimationFrame(() => {
-			const target = shortcutRowRefs.current[pendingShortcutScrollIndex] ?? null;
-			if (target) {
-				target.scrollIntoView({ block: "nearest", behavior: "smooth" });
-				const firstInput = target.querySelector("input");
-				firstInput?.focus();
-				setPendingShortcutScrollIndex(null);
-			}
-		});
-		return () => {
-			window.cancelAnimationFrame(frame);
-		};
-	}, [pendingShortcutScrollIndex, shortcuts]);
 
 	useUnmount(() => {
 		if (copiedVariableResetTimerRef.current !== null) {
@@ -668,19 +524,6 @@ export function RuntimeSettingsDialog({
 			const nextPermission = await requestBrowserNotificationPermission();
 			setNotificationPermission(nextPermission);
 		}
-		// Shortcuts go through the shortcut route (it checks who asks), not the settings save.
-		if (!areRuntimeProjectShortcutsEqual(shortcuts, initialShortcuts)) {
-			if (!workspaceId) {
-				setSaveError("Select a project to save its shortcuts.");
-				return;
-			}
-			try {
-				await replaceProjectShortcuts(workspaceId, shortcuts);
-			} catch (error) {
-				setSaveError(`Could not save shortcuts: ${error instanceof Error ? error.message : String(error)}`);
-				return;
-			}
-		}
 		const saved = await save({
 			selectedAgentId,
 			agentDefaults: normalizeRuntimeAgentDefaultSettings(agentDefaults),
@@ -712,17 +555,6 @@ export function RuntimeSettingsDialog({
 		})();
 	};
 
-	const handleOpenFilePath = useCallback(
-		(filePath: string) => {
-			setSaveError(null);
-			void openFileOnHost(workspaceId, filePath).catch((error) => {
-				const message = error instanceof Error ? error.message : String(error);
-				setSaveError(`Could not open file on host: ${message}`);
-			});
-		},
-		[workspaceId],
-	);
-
 	const handleDialogOpenChange = useCallback(
 		(nextOpen: boolean) => {
 			if (!nextOpen) {
@@ -742,7 +574,7 @@ export function RuntimeSettingsDialog({
 
 	return (
 		<Dialog open={open} onOpenChange={handleDialogOpenChange} contentClassName="!max-w-[780px]">
-			<DialogHeader title="Settings" icon={<Settings size={16} />} />
+			<DialogHeader title="Global Settings" icon={<Settings size={16} />} />
 			<div className="flex h-[min(480px,60vh)]">
 				<SettingsNav items={navItems} activeId={activeSection} onSelect={handleNavSelect} />
 				<div
@@ -1057,119 +889,6 @@ export function RuntimeSettingsDialog({
 						</h2>
 					</div>
 					<GitHubAppSettingsSection enabled={open} />
-					<div data-settings-section="project" />
-					<div className="sticky top-0 -mx-5 px-5 pt-4 pb-2 bg-surface-1 z-10">
-						<h2 className="flex items-center gap-2 text-base font-semibold text-text-primary m-0">
-							<FolderOpen size={16} className="text-text-secondary" />
-							Project
-						</h2>
-					</div>
-					<p
-						className="text-text-secondary font-mono text-xs m-0 mb-3 break-all"
-						style={{ cursor: config?.projectConfigPath ? "pointer" : undefined }}
-						onClick={() => {
-							if (config?.projectConfigPath) {
-								handleOpenFilePath(config.projectConfigPath);
-							}
-						}}
-					>
-						{config?.projectConfigPath
-							? formatPathForDisplay(config.projectConfigPath)
-							: (config?.kanbanPaths.projectConfigDisplayPath ?? null)}
-						{config?.projectConfigPath ? <ExternalLink size={12} className="inline ml-1.5 align-middle" /> : null}
-					</p>
-					<div className="rounded-lg border border-border bg-surface-0 px-4 py-3 mb-4">
-						<div className="flex items-center justify-between mb-2">
-							<h6
-								ref={shortcutsSectionRef}
-								className="text-[12px] font-semibold uppercase tracking-wider text-text-secondary m-0"
-							>
-								Script shortcuts
-							</h6>
-							<Button
-								variant="ghost"
-								size="sm"
-								icon={<Plus size={14} />}
-								onClick={() => {
-									setShortcuts((current) => {
-										const nextLabel = getNextShortcutLabel(current, "Run");
-										setPendingShortcutScrollIndex(current.length);
-										return [
-											...current,
-											{
-												label: nextLabel,
-												command: "",
-												icon: "play",
-											},
-										];
-									});
-								}}
-								disabled={controlsDisabled}
-							>
-								Add
-							</Button>
-						</div>
-
-						{shortcuts.map((shortcut, shortcutIndex) => (
-							<div
-								key={shortcutIndex}
-								ref={(node) => {
-									shortcutRowRefs.current[shortcutIndex] = node;
-								}}
-								className="grid gap-2 mb-1"
-								style={{
-									gridTemplateColumns: "max-content 1fr 2fr auto",
-								}}
-							>
-								<ShortcutIconPicker
-									value={shortcut.icon}
-									onSelect={(icon) =>
-										setShortcuts((current) =>
-											current.map((item, itemIndex) =>
-												itemIndex === shortcutIndex ? { ...item, icon } : item,
-											),
-										)
-									}
-								/>
-								<input
-									value={shortcut.label}
-									onChange={(event) =>
-										setShortcuts((current) =>
-											current.map((item, itemIndex) =>
-												itemIndex === shortcutIndex ? { ...item, label: event.target.value } : item,
-											),
-										)
-									}
-									placeholder="Label"
-									className="h-7 w-full rounded-md border border-border bg-surface-2 px-2 text-xs text-text-primary placeholder:text-text-tertiary focus:border-border-focus focus:outline-none"
-								/>
-								<input
-									value={shortcut.command}
-									onChange={(event) =>
-										setShortcuts((current) =>
-											current.map((item, itemIndex) =>
-												itemIndex === shortcutIndex ? { ...item, command: event.target.value } : item,
-											),
-										)
-									}
-									placeholder="Command"
-									className="h-7 w-full rounded-md border border-border bg-surface-2 px-2 text-xs text-text-primary placeholder:text-text-tertiary focus:border-border-focus focus:outline-none"
-								/>
-								<Button
-									variant="ghost"
-									size="sm"
-									icon={<X size={14} />}
-									aria-label={`Remove shortcut ${shortcut.label}`}
-									onClick={() =>
-										setShortcuts((current) => current.filter((_, itemIndex) => itemIndex !== shortcutIndex))
-									}
-								/>
-							</div>
-						))}
-						{shortcuts.length === 0 ? (
-							<p className="text-text-secondary text-[13px]">No shortcuts configured.</p>
-						) : null}
-					</div>
 
 					{saveError ? (
 						<div className="flex gap-2 rounded-md border border-status-red/30 bg-status-red/5 p-3 text-[13px]">

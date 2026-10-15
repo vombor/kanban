@@ -41,7 +41,6 @@ import {
 import { formatPathForDisplay } from "@/utils/path-display";
 import { isMacPlatform } from "@/utils/platform";
 
-type SettingsSection = "shortcuts";
 type CreateShortcutResult = { ok: boolean; message?: string };
 
 const MOBILE_TOUCH_TARGET = "min-w-[44px] min-h-[44px]";
@@ -300,6 +299,7 @@ export function TopBar({
 	onToggleGitHistory,
 	isGitHistoryOpen,
 	onOpenSettings,
+	onEditProject,
 	showDebugButton,
 	onOpenDebugDialog,
 	shortcuts,
@@ -331,7 +331,8 @@ export function TopBar({
 	isTerminalLoading?: boolean;
 	onToggleGitHistory?: () => void;
 	isGitHistoryOpen?: boolean;
-	onOpenSettings?: (section?: SettingsSection) => void;
+	onOpenSettings?: () => void;
+	onEditProject?: () => void;
 	showDebugButton?: boolean;
 	onOpenDebugDialog?: () => void;
 	shortcuts?: RuntimeProjectShortcut[];
@@ -356,7 +357,7 @@ export function TopBar({
 	const workspaceSegments = displayWorkspacePath ? getWorkspacePathSegments(displayWorkspacePath) : [];
 	const hasAbsoluteLeadingSlash = Boolean(displayWorkspacePath?.startsWith("/"));
 	const handleAddShortcut = () => {
-		onOpenSettings?.("shortcuts");
+		onEditProject?.();
 	};
 	const shortcutItems = shortcuts ?? [];
 	const selectedShortcutIndex =
@@ -712,7 +713,7 @@ export function TopBar({
 						Script shortcuts run a command in the bottom terminal so you can quickly run and test your project.
 					</p>
 					<p className="text-text-secondary text-[13px] mt-0 mb-3">
-						You can always open Settings to add and manage more shortcuts later.
+						You can always open Edit Project to add and manage more shortcuts later.
 					</p>
 					<div className="grid gap-2" style={{ gridTemplateColumns: "max-content 1fr 2fr" }}>
 						<FirstShortcutIconPicker value={newShortcutIcon} onSelect={setNewShortcutIcon} />

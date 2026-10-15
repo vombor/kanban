@@ -518,6 +518,13 @@ export function getKanbanWorkspaceDataPath(workspaceId: string, homePath = getKa
 	return join(getKanbanDataPath(homePath), workspaceId);
 }
 
+/** Encrypted, user-managed secrets for one project. No plaintext values live in project config. */
+export function getProjectSecretsPath(workspaceId: string, homePath = getKanbanHomePath()): string {
+	if (!workspaceId || workspaceId === "." || workspaceId === ".." || /[\\/\0]/u.test(workspaceId))
+		throw new Error("Invalid project secret scope");
+	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), "project-secrets.json");
+}
+
 /** The pipeline's per-card state (`<home>/data/<workspaceId>/pipeline-state.json`). */
 export function getPipelineStatePath(workspaceId: string, homePath = getKanbanHomePath()): string {
 	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), PIPELINE_STATE_FILENAME);
