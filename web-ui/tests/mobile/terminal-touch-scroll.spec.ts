@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { type CDPSession, expect, type Locator, test } from "@playwright/test";
+import type { CDPSession, Locator } from "@playwright/test";
+import { expect, test } from "../shared-chrome";
 
 import { type DevInstance, startDevInstance } from "./dev-instance";
 import {

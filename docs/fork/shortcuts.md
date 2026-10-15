@@ -91,7 +91,8 @@ The app behind it is a card's code on Kanban's origin, so the proxy keeps it awa
 
 - every response gets `Content-Security-Policy: sandbox allow-scripts allow-forms allow-popups …`, with no
   `allow-same-origin`, so the page runs in an opaque origin;
-- the CORS gate lets that page's `Origin: null` through to this path only, never to `/api/trpc`;
+- CSP confines the preview's network connections and form submissions to its own proxy path, keeping it away
+  from Kanban's API and terminal sockets without an application-wide Origin whitelist;
 - Kanban's cookie and `Authorization` header are not forwarded, and the app's `Set-Cookie` is dropped.
 
 What doesn't work through the proxy:

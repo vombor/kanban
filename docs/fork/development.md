@@ -89,8 +89,8 @@ env $(env | sed -n -e 's/^\(KANBAN_[A-Z0-9_]*\)=.*/-u \1/p' -e 's/^\(GIT_[A-Z0-9
 - Agent CLIs read their own config under HOME, so a temp HOME starts them signed out. Copy in only what a test
   needs, and never a token into the repo.
 - For the web-ui with hot reload, run the runtime with `NODE_ENV=development` and `KANBAN_WEB_UI_PORT=<vite port>`
-  and Vite with `KANBAN_RUNTIME_PORT=<runtime port>` (the runtime accepts the dev server's origin only on that port),
-  as dev-instance.ts does.
+  and Vite with `KANBAN_RUNTIME_PORT=<runtime port>`, as dev-instance.ts does. Vite proxies page-relative API/socket
+  requests to that runtime; no Host or Origin allow-list is required (see [direct-serving.md](direct-serving.md)).
 
 ## How a push reaches the pod
 

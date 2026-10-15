@@ -3,9 +3,8 @@ import type { AddressInfo } from "node:net";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { getKanbanRuntimePort } from "../../../src/core/runtime-endpoint";
-import { handleHttpRequest } from "../../../src/server/middleware";
 import {
+	buildDownstreamResponseHeaders,
 	createShortcutPortProxyHandler,
 	createShortcutPortRegistry,
 	parseShortcutPortProxyPath,
@@ -71,6 +70,19 @@ describe("shortcut port registry", () => {
 });
 
 describe("shortcut port proxy", () => {
+	it("confines a sandboxed preview's connections and forms to its own proxy path", () => {
+		const headers = buildDownstreamResponseHeaders(
+			{},
+			{ port: 41000, basePath: "/api/shortcut-port/41000/", pageHost: "kanban.example.test" },
+		);
+		expect(headers["content-security-policy"]).toContain(
+			"connect-src http://kanban.example.test/api/shortcut-port/41000/ https://kanban.example.test/api/shortcut-port/41000/",
+		);
+		expect(headers["content-security-policy"]).toContain(
+			"form-action http://kanban.example.test/api/shortcut-port/41000/",
+		);
+		expect(headers["content-security-policy"]).not.toContain("allow-same-origin");
+	});
 	it("serves only handed-out ports, sandboxed, without Kanban's cookie or the app's Set-Cookie", async () => {
 		let seen: IncomingMessage["headers"] | null = null;
 		const appPort = await listen((req, res) => {
@@ -94,7 +106,10 @@ describe("shortcut port proxy", () => {
 		});
 		expect(ok.status).toBe(200);
 		expect(ok.body).toBe("app saw /health?x=1");
-		expect(ok.headers["content-security-policy"]).toBe(SHORTCUT_PROXY_SANDBOX_CSP);
+		expect(ok.headers["content-security-policy"]).toContain(SHORTCUT_PROXY_SANDBOX_CSP);
+		expect(ok.headers["content-security-policy"]).toContain(
+			`connect-src http://127.0.0.1:${kanbanPort}/api/shortcut-port/${appPort}/`,
+		);
 		expect(ok.headers["set-cookie"]).toBeUndefined();
 		expect(seen).not.toHaveProperty("cookie");
 		expect(seen).not.toHaveProperty("authorization");
@@ -115,27 +130,5 @@ describe("shortcut port proxy", () => {
 		const response = await get(kanbanPort, "/api/shortcut-port/41999/");
 		expect(response.status).toBe(503);
 		expect(response.body).toContain('http-equiv="refresh"');
-	});
-
-	it("lets a sandboxed page's Origin: null through to the proxy only, never to Kanban's API", () => {
-		const decide = (url: string) => {
-			const headers: Record<string, string> = {};
-			const res = {
-				setHeader: (name: string, value: string) => {
-					headers[name] = value;
-				},
-				writeHead: () => undefined,
-				end: () => undefined,
-			} as unknown as ServerResponse;
-			const req = {
-				url,
-				method: "POST",
-				headers: { host: `127.0.0.1:${getKanbanRuntimePort()}`, origin: "null" },
-			} as IncomingMessage;
-			return { end: handleHttpRequest(req, res).end, headers };
-		};
-		expect(decide("/api/shortcut-port/41000/form")).toEqual({ end: false, headers: {} });
-		expect(decide("/api/trpc/plans.approve").end).toBe(true);
-		expect(decide("/api/shortcut-port/41000/../../trpc/plans.approve").end).toBe(true);
 	});
 });

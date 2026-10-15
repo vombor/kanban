@@ -1,4 +1,5 @@
-import { expect, type Locator, type Page, test } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
+import { expect, test } from "../shared-chrome";
 
 import { type DevInstance, startDevInstance } from "./dev-instance";
 import {

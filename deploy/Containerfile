@@ -72,7 +72,7 @@ USER node
 
 WORKDIR /projects
 
-EXPOSE 3485
+EXPOSE 3484
 EXPOSE 3600
 
 # Container lifecycle (docs/fork/container-lifecycle.md): kanban-entrypoint runs the CMD (or a quadlet Exec=
@@ -107,4 +107,6 @@ ENV KANBAN_IMAGE_REVISION=$KANBAN_IMAGE_REVISION \
     KANBAN_IMAGE_VERSION=$KANBAN_IMAGE_VERSION
 ENTRYPOINT ["/usr/local/bin/kanban-entrypoint"]
 
-CMD ["kanban", "--port", "3485", "--no-open", "--no-passcode", "--skip-shutdown-cleanup"]
+# The CLI defaults to 3484; the installation can set KANBAN_RUNTIME_PORT without replacing CMD.
+# :: is dual-stack on Linux: both IPv4 and IPv6 localhost must reach a rootless pod's published port.
+CMD ["kanban", "--host", "::", "--no-open", "--no-passcode", "--skip-shutdown-cleanup"]

@@ -91,7 +91,6 @@ import { getWebUiDir, normalizeRequestPath, readAsset } from "./assets";
 import { chooseBrowserOrigin, createBrowserOriginTracker, createBrowserUpgradeRecorder } from "./browser-origins";
 import { createClineLemonadeContextSyncMonitor } from "./cline-lemonade-context-sync-monitor";
 import { createGitHubAppRequestHandler } from "./github-app-route";
-import { handleHttpRequest, handleSocketUpgrade } from "./middleware";
 import { createModelListsRequestHandler } from "./model-lists-route";
 import { createOrchestratorInbox } from "./orchestrator-inbox";
 import { createOrphanProcessSweeper } from "./orphan-process-sweeper";
@@ -740,10 +739,6 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 	const tlsConfig = getKanbanRuntimeTls();
 	const requestHandler = async (req: IncomingMessage, res: import("node:http").ServerResponse) => {
 		try {
-			if (handleHttpRequest(req, res).end) {
-				return;
-			}
-
 			const requestUrl = new URL(req.url ?? "/", "http://localhost");
 			const pathname = normalizeRequestPath(requestUrl.pathname);
 
@@ -891,10 +886,6 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		? createHttpsServer({ key: tlsConfig.key, cert: tlsConfig.cert }, requestHandler)
 		: createServer(requestHandler);
 	server.on("upgrade", (request, socket, head) => {
-		if (handleSocketUpgrade(request, socket).end) {
-			return;
-		}
-
 		let requestUrl: URL;
 		try {
 			requestUrl = new URL(request.url ?? "/", getKanbanRuntimeOrigin());

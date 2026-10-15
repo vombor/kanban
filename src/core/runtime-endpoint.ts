@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { rootCertificates } from "node:tls";
 import { Agent } from "undici";
 import { getInternalToken } from "../security/passcode-manager";
@@ -101,14 +102,19 @@ export function isKanbanRemoteHost(): boolean {
 	return !LOCALHOST_HOSTS.has(runtimeHost);
 }
 
+function getRuntimeAuthority(): string {
+	const host = getKanbanRuntimeHost();
+	return `${isIP(host) === 6 ? `[${host}]` : host}:${getKanbanRuntimePort()}`;
+}
+
 export function getKanbanRuntimeOrigin(): string {
 	const scheme = isKanbanRuntimeHttps() ? "https" : "http";
-	return `${scheme}://${getKanbanRuntimeHost()}:${getKanbanRuntimePort()}`;
+	return `${scheme}://${getRuntimeAuthority()}`;
 }
 
 export function getKanbanRuntimeWsOrigin(): string {
 	const scheme = isKanbanRuntimeHttps() ? "wss" : "ws";
-	return `${scheme}://${getKanbanRuntimeHost()}:${getKanbanRuntimePort()}`;
+	return `${scheme}://${getRuntimeAuthority()}`;
 }
 
 export function buildKanbanRuntimeUrl(pathname: string): string {

@@ -1,6 +1,6 @@
-import { devices, expect, type Page, test } from "@playwright/test";
-
+import { devices, type Page } from "@playwright/test";
 import { isHomeAgentSessionId } from "../../../src/core/home-agent-session";
+import { expect, test } from "../shared-chrome";
 import { type DevInstance, startDevInstance } from "./dev-instance";
 
 // The orchestrator sidebar after a Kanban restart, on a phone (the config's
@@ -32,14 +32,7 @@ process.stdin.resume();
 const BANNER_PATTERN = /ORCH (\d+)/;
 
 // No WebGL: xterm falls back to its DOM renderer, so the screen can be read.
-test.use({
-	launchOptions: {
-		args: ["--disable-webgl", "--disable-webgl2"],
-		...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
-			? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH }
-			: {}),
-	},
-});
+test.use({ disableWebGL: true });
 
 let instance: DevInstance;
 

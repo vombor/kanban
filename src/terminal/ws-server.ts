@@ -14,7 +14,6 @@ import {
 	TERMINAL_WS_CLOSE_RESTORE_LIMIT,
 	type TerminalWsCloseCode,
 } from "../core/terminal-ws-close";
-import { handleSocketUpgrade } from "../server/middleware";
 import type { TerminalSessionService } from "./terminal-session-service";
 
 interface TerminalWebSocketConnectionContext {
@@ -738,9 +737,6 @@ export function createTerminalWebSocketBridge({
 			const isIoRequest = isTerminalIoWebSocketPath(pathname);
 			const isControlRequest = isTerminalControlWebSocketPath(pathname);
 			if (!isIoRequest && !isControlRequest) {
-				return;
-			}
-			if (handleSocketUpgrade(request, socket).end) {
 				return;
 			}
 			// ── Passcode gate for terminal WebSocket upgrades ─────────────────

@@ -187,7 +187,7 @@ export function rewriteProxiedLocation(location: string, input: { port: number; 
 
 export function buildDownstreamResponseHeaders(
 	headers: IncomingHttpHeaders,
-	input: { port: number; basePath: string },
+	input: { port: number; basePath: string; pageHost: string | undefined },
 ): OutgoingHttpHeaders {
 	const result: OutgoingHttpHeaders = {};
 	for (const [name, value] of Object.entries(headers)) {
@@ -197,10 +197,15 @@ export function buildDownstreamResponseHeaders(
 		result[name] = name === "location" && typeof value === "string" ? rewriteProxiedLocation(value, input) : value;
 	}
 	// A comma-separated list is several policies, each enforced (CSP3 §3.1): the app's own and the sandbox.
+	// Without an application-wide Origin gate, the sandbox also confines requests/forms to this preview's path.
+	// Both schemes work when TLS terminates outside Kanban; no DNS/Origin whitelist is involved.
+	let sources = "'none'";
+	if (input.pageHost && /^[A-Za-z0-9.\-:[\]]+$/u.test(input.pageHost)) {
+		sources = ["http", "https"].map((scheme) => `${scheme}://${input.pageHost}${input.basePath}`).join(" ");
+	}
+	const sandbox = `${SHORTCUT_PROXY_SANDBOX_CSP}; connect-src ${sources}; form-action ${sources}`;
 	const appPolicy = headers["content-security-policy"];
-	result["content-security-policy"] = appPolicy
-		? `${appPolicy}, ${SHORTCUT_PROXY_SANDBOX_CSP}`
-		: SHORTCUT_PROXY_SANDBOX_CSP;
+	result["content-security-policy"] = appPolicy ? `${appPolicy}, ${sandbox}` : sandbox;
 	return result;
 }
 
@@ -297,7 +302,11 @@ export function createShortcutPortProxyHandler(deps: ShortcutPortProxyDependenci
 			(upstreamRes) => {
 				res.writeHead(
 					upstreamRes.statusCode ?? 502,
-					buildDownstreamResponseHeaders(upstreamRes.headers, { port: parsed.port, basePath }),
+					buildDownstreamResponseHeaders(upstreamRes.headers, {
+						port: parsed.port,
+						basePath,
+						pageHost: req.headers.host,
+					}),
 				);
 				upstreamRes.pipe(res);
 			},

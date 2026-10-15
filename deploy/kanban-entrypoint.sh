@@ -1,6 +1,6 @@
 #!/bin/sh
 # Entrypoint of the ghcr.io/vombor/kanban image (deploy/Containerfile; docs/fork/container-lifecycle.md). Runs the
-# container command ("$@": the image CMD `kanban --port 3485 ...`, or a quadlet Exec= / `podman run` override) as a CHILD,
+# container command ("$@": the image CMD `kanban --host :: ...`, or a quadlet Exec= / `podman run` override) as a CHILD,
 # so a container stop can do work before Kanban gets the signal:
 #  - at start, launches an explicitly configured $KANBAN_START_HOOK detached (never waited for).
 #  - on SIGTERM/SIGINT, runs the pre-stop hook for at most $KANBAN_PRESTOP_TIMEOUT s (default 45):
@@ -18,7 +18,7 @@
 # KANBAN_HOME, then $HOME/.kanban. Hook output goes to <home>/logs/kanban-entrypoint.log when that dir is
 # writable, else stderr; the step lines go to stderr (podman logs) and that log. The restart prepare step gets the
 # command's --port/--host/--home/--https as KANBAN_RUNTIME_PORT/KANBAN_RUNTIME_HOST/KANBAN_HOME/KANBAN_RUNTIME_HTTPS:
-# a CLI started from here would otherwise look for the server on the default port (3484, the image uses 3485).
+# a CLI started from here must reach the same endpoint even when the installation overrides the image's port (3484).
 # Authentication and user configuration are explicit `kanban setup` operations, never startup side effects.
 # Replaces node's docker-entrypoint.sh, which only prefixes `node` when the command is a flag or not on PATH.
 set -u

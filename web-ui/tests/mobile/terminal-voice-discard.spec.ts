@@ -1,4 +1,5 @@
-import { type CDPSession, expect, type Locator, type Page, test } from "@playwright/test";
+import type { CDPSession, Locator, Page } from "@playwright/test";
+import { expect, test } from "../shared-chrome";
 
 import { type DevInstance, startDevInstance } from "./dev-instance";
 import { isTerminalFocused, type Point, tap, tapToFocus } from "./terminal-page";
@@ -75,14 +76,7 @@ interface FakeVoiceWindow {
 }
 
 // No WebGL: xterm falls back to its DOM renderer, so the screen can be read.
-test.use({
-	launchOptions: {
-		args: ["--disable-webgl", "--disable-webgl2"],
-		...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
-			? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH }
-			: {}),
-	},
-});
+test.use({ disableWebGL: true });
 
 let instance: DevInstance;
 

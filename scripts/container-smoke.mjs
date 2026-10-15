@@ -11,11 +11,18 @@ const {createRequire} = require("node:module");
 const path = require("node:path");
 const requireProduct = createRequire("/usr/local/lib/node_modules/@vombor/kanban/package.json");
 const pty = requireProduct("node-pty");
+const WebSocket = requireProduct("ws");
 const home = "/tmp/kanban-product-smoke";
-const port = 3485;
-const env = {...process.env, KANBAN_HOME: home, KANBAN_RUNTIME_PORT: String(port), KANBAN_PROJECTS_ROOTS: "/projects"};
+// Exercise the installation's env override: neither the image CMD nor this launch pins --port.
+const port = 3497;
+const env = {...process.env, KANBAN_HOME: home, KANBAN_RUNTIME_HOST: "::", KANBAN_RUNTIME_PORT: String(port), KANBAN_PROJECTS_ROOTS: "/projects"};
 let runtime;
 let output = "";
+function killRuntimeGroup() {
+  if (!runtime || !runtime.pid) return;
+  try {process.kill(-runtime.pid, "SIGKILL");}
+  catch (error) {if (error.code !== "ESRCH") throw error;}
+}
 function command(binary, args, cwd = "/projects") {
   const result = spawnSync(binary, args, {env, cwd, encoding: "utf8", timeout: 30000});
   assert.equal(result.status, 0, binary + " failed: " + result.stderr + result.stdout);
@@ -40,7 +47,7 @@ async function main() {
   });
   fs.mkdirSync(home, {recursive: true});
   fs.writeFileSync(path.join(home, "config.json"), JSON.stringify({agents: {cline: {lemonadeContextSync: {mode: "off"}}}}));
-  runtime = spawn("kanban-entrypoint", ["kanban", "--home", home, "--port", String(port), "--no-open", "--no-passcode"], {env: {...env, KANBAN_HOME: "/tmp/ignored-home"}, stdio: ["ignore", "pipe", "pipe"]});
+  runtime = spawn("kanban-entrypoint", ["kanban", "--home", home, "--host", "::", "--no-open", "--no-passcode"], {env: {...env, KANBAN_HOME: "/tmp/ignored-home"}, detached: true, stdio: ["ignore", "pipe", "pipe"]});
   runtime.stdout.on("data", data => {output += data;});
   runtime.stderr.on("data", data => {output += data;});
   let ready = false;
@@ -50,7 +57,23 @@ async function main() {
     await new Promise(resolve => setTimeout(resolve, 250));
   }
   assert.ok(ready, "Runtime did not start: " + output);
-  const projects = await (await fetch("http://127.0.0.1:" + port + "/api/trpc/projects.list")).json();
+  for (const host of ["127.0.0.1", "[::1]", "localhost"]) {
+    const origin = "http://" + host + ":" + port;
+    const response = await fetch(origin + "/api/passcode/status");
+    assert.equal(response.status, 200, "HTTP must reach " + host);
+    assert.equal((await response.json()).required, false);
+    await new Promise((resolve, reject) => {
+      let opened = false;
+      const socket = new WebSocket(origin.replace("http:", "ws:") + "/api/runtime/ws", {headers: {Origin: "https://different.example.test"}});
+      const timer = setTimeout(() => {socket.terminate(); reject(new Error("WebSocket timed out for " + host));}, 5000);
+      socket.once("error", error => {clearTimeout(timer); reject(error);});
+      socket.once("open", () => {opened = true; socket.close();});
+      socket.once("close", () => {clearTimeout(timer); opened ? resolve() : reject(new Error("WebSocket did not open for " + host));});
+    });
+  }
+  const projectsResponse = await fetch("http://127.0.0.1:" + port + "/api/trpc/projects.list");
+  const projects = await projectsResponse.json();
+  assert.ok(projectsResponse.ok && projects.result, "Initial project list failed: " + JSON.stringify(projects));
   assert.deepEqual(projects.result.data.projects, [], "New instances must have no projects");
   assert.ok(!fs.existsSync("/tmp/ignored-home"), "--home must win everywhere, including lifecycle helpers");
   const setup = JSON.parse(command("kanban", ["--home", home, "--port", String(port), "setup", "--json"]));
@@ -61,13 +84,13 @@ async function main() {
   assert.ok(!config.providers || !("setupWorkspaceId" in config.providers), "Creating the first project must not grant privileges");
   runtime.kill("SIGTERM");
   await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {runtime.kill("SIGKILL"); reject(new Error("Shutdown timed out: " + output));}, 30000);
+    const timer = setTimeout(() => {killRuntimeGroup(); reject(new Error("Shutdown timed out: " + output));}, 30000);
     runtime.once("exit", code => {clearTimeout(timer); try {assert.equal(code, 0, output); resolve();} catch(error) {reject(error);}});
   });
   assert.match(output, /restart prepare done/, "Lifecycle restart prepare must reach this home and server");
-  console.log(JSON.stringify({user: "node", globalPrefix: "/usr/local", agentClis: "all executable", projectInstall: true, nativePty: true, initialProjects: 0, firstProjectPrivileged: false, explicitSetup: true, customKanbanHome: true, gracefulStop: true}));
+  console.log(JSON.stringify({user: "node", globalPrefix: "/usr/local", agentClis: "all executable", projectInstall: true, nativePty: true, dualStackHttpAndWebSocket: true, initialProjects: 0, firstProjectPrivileged: false, explicitSetup: true, customKanbanHome: true, gracefulStop: true}));
 }
-main().catch(error => {if (runtime && runtime.exitCode === null) runtime.kill("SIGKILL"); console.error(error.message); process.exitCode = 1;});
+main().catch(error => {killRuntimeGroup(); console.error(error.message); process.exitCode = 1;});
 `;
 const result = spawnSync(engine, ["run", "--rm", "--network=none", image, "node", "-e", probe], {
 	stdio: "inherit",

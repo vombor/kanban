@@ -1,4 +1,5 @@
-import { devices, expect, type Locator, test } from "@playwright/test";
+import { devices, type Locator } from "@playwright/test";
+import { expect, test } from "../shared-chrome";
 
 import { type DevInstance, startDevInstance } from "./dev-instance";
 
@@ -29,14 +30,6 @@ process.stdin.resume();
 `;
 
 const LONG_MODEL = "us.anthropic.claude-opus-5-5-with-a-very-long-model-name-for-truncation";
-
-test.use({
-	launchOptions: {
-		...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
-			? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH }
-			: {}),
-	},
-});
 
 let instance: DevInstance;
 let runningTaskId = "";

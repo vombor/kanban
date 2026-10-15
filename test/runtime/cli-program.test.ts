@@ -45,6 +45,12 @@ async function parse(path: string[], argv: string[]): Promise<unknown[]> {
 }
 
 describe("CLI program option parsing", () => {
+	it("represents --no-passcode as a false passcode option, with authentication enabled by default", async () => {
+		const [defaults] = await parse([], []);
+		expect(defaults).toMatchObject({ passcode: true });
+		const [disabled] = await parse([], ["--host", "0.0.0.0", "--no-passcode"]);
+		expect(disabled).toMatchObject({ host: "0.0.0.0", passcode: false });
+	});
 	it("passes every option of models vet to the command, in both syntaxes", async () => {
 		const expected = {
 			agent: "cline",

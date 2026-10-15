@@ -69,7 +69,7 @@ interface RootCommandOptions {
 	https?: boolean;
 	cert?: string;
 	key?: string;
-	noPasscode?: boolean;
+	passcode?: boolean;
 }
 
 type ShutdownIndicatorResult = "done" | "interrupted" | "failed";
@@ -1027,7 +1027,7 @@ function createProgram(invocationArgs: string[]): Command {
 				https: options.https === true,
 				cert: options.cert ?? null,
 				key: options.key ?? null,
-				noPasscode: options.noPasscode === true,
+				noPasscode: options.passcode === false,
 			},
 			shouldAutoOpenBrowser,
 		);

@@ -1,4 +1,5 @@
-import { type CDPSession, expect, type Locator, type Page, test } from "@playwright/test";
+import type { CDPSession, Locator, Page } from "@playwright/test";
+import { expect, test } from "../shared-chrome";
 
 import { type DevInstance, startDevInstance } from "./dev-instance";
 import { dictate, ENTER, readTextarea, startInputProbe, stopInputProbe } from "./input-probe";

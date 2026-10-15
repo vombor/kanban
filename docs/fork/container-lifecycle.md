@@ -28,7 +28,7 @@ running step short, skips the rest and is passed on at once.
 default port 3484). With an `Exec=` override the entrypoint can't read (`sh -c '...'`), set those in the
 container's environment.
 
-The image's command (`kanban --port 3485 ...`) runs as the entrypoint's child, so Kanban is no longer
+The image's command (`kanban --host :: ...`, a dual-stack listener) runs as the entrypoint's child, so Kanban is no longer
 PID 2: it sits behind `podman-init` (PID 1) and the entrypoint (PID 2), with a small pid that is about the same at
 every start. An `Exec=` override still works: it replaces only the command, and the entrypoint runs whatever it gets.
 

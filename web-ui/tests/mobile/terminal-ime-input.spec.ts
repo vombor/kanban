@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../shared-chrome";
 
 import { type DevInstance, startDevInstance } from "./dev-instance";
 import { DEL, dictate, ENTER, readTextarea, startInputProbe, stopInputProbe } from "./input-probe";

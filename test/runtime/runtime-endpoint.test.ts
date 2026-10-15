@@ -8,6 +8,7 @@ import {
 	getKanbanRuntimeHost,
 	getKanbanRuntimePort,
 	getRuntimeFetch,
+	isKanbanRemoteHost,
 	isKanbanRuntimeHttps,
 	parseRuntimePort,
 	setKanbanRuntimeHost,
@@ -78,6 +79,31 @@ describe("runtime-endpoint", () => {
 
 	it("defaults host to 127.0.0.1", () => {
 		expect(getKanbanRuntimeHost()).toBe("127.0.0.1");
+	});
+
+	it.each([
+		["::", true],
+		["::1", false],
+		["2001:db8::1", true],
+	] as const)("brackets IPv6 host %s in HTTP and WebSocket URLs without changing the bind address", (host, remote) => {
+		setKanbanRuntimeHost(host);
+		setKanbanRuntimePort(4567);
+		expect(getKanbanRuntimeHost()).toBe(host);
+		expect(isKanbanRemoteHost()).toBe(remote);
+		const httpUrl = buildKanbanRuntimeUrl("/api/trpc");
+		const wsUrl = buildKanbanRuntimeWsUrl("api/terminal/ws");
+		expect(httpUrl).toBe(`http://[${host}]:4567/api/trpc`);
+		expect(wsUrl).toBe(`ws://[${host}]:4567/api/terminal/ws`);
+		expect(new URL(httpUrl).hostname).toBe(`[${host}]`);
+		expect(new URL(wsUrl).port).toBe("4567");
+	});
+
+	it("brackets IPv6 hosts in HTTPS and secure WebSocket URLs", () => {
+		setKanbanRuntimeHost("::1");
+		setKanbanRuntimePort(4567);
+		setKanbanRuntimeTls({ cert: "test-cert", key: "test-key" });
+		expect(buildKanbanRuntimeUrl("/api/trpc")).toBe("https://[::1]:4567/api/trpc");
+		expect(buildKanbanRuntimeWsUrl("api/terminal/ws")).toBe("wss://[::1]:4567/api/terminal/ws");
 	});
 
 	it("switches runtime url builders to https and wss when tls is enabled", () => {

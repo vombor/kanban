@@ -12,11 +12,12 @@ import { stripVTControlCharacters } from "node:util";
 
 const webUiDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const repoDir = resolve(webUiDir, "..");
-const LIVE_RUNTIME_PORT = 3485;
+const LIVE_RUNTIME_PORTS = new Set([3484, 3485]);
 const STARTUP_TIMEOUT_MS = 60_000;
 
 export interface DevInstance {
 	baseUrl: string;
+	runtimeUrl: string;
 	rootDir: string;
 	projectDir: string;
 	// Stops the runtime as a restart does (SIGTERM, so its shutdown runs) and
@@ -137,7 +138,7 @@ export async function startDevInstance(options: DevInstanceOptions = {}): Promis
 
 	const runtimePort = await findFreePort();
 	const webPort = await findFreePort();
-	if (runtimePort === LIVE_RUNTIME_PORT || webPort === LIVE_RUNTIME_PORT) {
+	if (LIVE_RUNTIME_PORTS.has(runtimePort) || LIVE_RUNTIME_PORTS.has(webPort)) {
 		throw new Error("Refusing to use the live Kanban port.");
 	}
 
@@ -155,7 +156,7 @@ export async function startDevInstance(options: DevInstanceOptions = {}): Promis
 			],
 			{
 				cwd: projectDir,
-				// Development mode accepts the Vite dev server's origin (KANBAN_WEB_UI_PORT).
+				// Keep the throwaway runtime paired with this Vite instance; there is no Origin allow-list.
 				env: createIsolatedEnv(rootDir, {
 					NODE_ENV: "development",
 					KANBAN_WEB_UI_PORT: String(webPort),
@@ -209,5 +210,13 @@ export async function startDevInstance(options: DevInstanceOptions = {}): Promis
 		});
 		return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 	};
-	return { baseUrl: `http://127.0.0.1:${webPort}`, rootDir, projectDir, restartRuntime, runCli, stop };
+	return {
+		baseUrl: `http://127.0.0.1:${webPort}`,
+		runtimeUrl: `http://127.0.0.1:${runtimePort}`,
+		rootDir,
+		projectDir,
+		restartRuntime,
+		runCli,
+		stop,
+	};
 }
