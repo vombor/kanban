@@ -7,6 +7,7 @@ import type { PipelineConfig } from "../../../config/pipeline-config";
 import type { RuntimeAgentId, RuntimeTaskRole } from "../../../core/api-contract";
 import { type CardRoleInput, resolveCardRole } from "../../../core/card-role";
 import { renameDurably, writeFileSynced } from "../../../fs/durable-file";
+import { createPipelineStateStore } from "../../../pipeline/pipeline-state";
 import {
 	getClineDataDirPath,
 	getCodexSessionsPath,
@@ -27,7 +28,7 @@ import { loadPriceTable } from "../bench/prices";
 import {
 	appendScoreboardLine,
 	buildScoreboardLine,
-	readScoreboard,
+	reconcileScoreboardScores,
 	type ScoreboardLine,
 	type ScoreboardLineInput,
 } from "./scoreboard-line";
@@ -78,10 +79,37 @@ export async function measureCard(input: MeasureCardInput): Promise<MeasuredCard
 	const located = await locateCard(input.taskId, input.workspaceId);
 	const card: CardMetricsCard | null = located?.card ?? null;
 	const repoPath = located?.repoPath ?? null;
+	const sources = await createCardMetricsSources(input.config, repoPath);
 	const metrics = await computeCardMetrics(
 		{ taskId: input.taskId, card, at: input.at ?? null, selectedAgentId: input.selectedAgentId ?? null },
-		await createCardMetricsSources(input.config, repoPath),
+		sources,
 	);
+	const workspaceId = located?.workspaceId ?? input.workspaceId;
+	const state = workspaceId ? await createPipelineStateStore().peek(workspaceId) : null;
+	const flow = state?.cards[metrics.devId]?.qaflow;
+	const resetAt =
+		flow && typeof flow === "object" && "resetAt" in flow && typeof flow.resetAt === "string" ? flow.resetAt : null;
+	if (resetAt) {
+		const attempt = await computeCardMetrics(
+			{ taskId: input.taskId, card, at: input.at, since: resetAt, selectedAgentId: input.selectedAgentId },
+			sources,
+		);
+		const start = Date.parse(attempt.wall.start ?? ""),
+			end = Date.parse(attempt.wall.end ?? "");
+		metrics.attempt = {
+			resetAt,
+			metrics: attempt.metrics,
+			wall: attempt.wall,
+			submissionSeconds: Number.isFinite(start) && Number.isFinite(end) ? (end - start) / 1000 : null,
+		};
+		// Attribute the reset attempt to its actual agent/model while keeping its historical counters cumulative.
+		if (attempt.metrics.sessions > 0) {
+			metrics.agent = attempt.agent;
+			metrics.provider = attempt.provider;
+			metrics.model = attempt.model;
+			metrics.modelSource = attempt.modelSource;
+		}
+	}
 	return { metrics, workspaceId: located?.workspaceId ?? input.workspaceId, repoPath };
 }
 
@@ -99,11 +127,18 @@ export function getScoreboardName(config: PipelineConfig, workspaceId: string, r
 
 /** Rewrites `scoreboard.md` from `scoreboard.jsonl`. Returns the number of rows. */
 export async function rebuildScoreboardMarkdown(input: {
-	paths: Pick<TeamBenchWorkspacePaths, "scoreboardJsonl" | "scoreboardMd">;
+	paths: Pick<TeamBenchWorkspacePaths, "scoreboardJsonl" | "scoreboardMd"> &
+		Partial<Pick<TeamBenchWorkspacePaths, "pipelineState">>;
 	name: string;
 	now?: Date;
 }): Promise<number> {
-	const file = await readScoreboard(input.paths.scoreboardJsonl);
+	const statePath = input.paths.pipelineState;
+	const state = statePath
+		? await createPipelineStateStore({ getStatePath: () => statePath }).peek(
+				basename(dirname(input.paths.scoreboardJsonl)),
+			)
+		: null;
+	const file = await reconcileScoreboardScores(input.paths.scoreboardJsonl, state);
 	await writeFileAtomic(
 		input.paths.scoreboardMd,
 		renderScoreboardMarkdown({

@@ -440,6 +440,7 @@ export function getPriceTableCandidatePaths(homePath = getKanbanHomePath()): str
 /** The team kit's per-workspace bench files (`<home>/data/<workspaceId>/…`; names kept from the legacy kit). */
 export interface TeamBenchWorkspacePaths {
 	dataDir: string;
+	pipelineState: string;
 	scoreboardJsonl: string;
 	scoreboardMd: string;
 	qaLog: string;
@@ -455,6 +456,7 @@ export function getTeamBenchWorkspacePaths(
 	const { dataDir, qaLog, attention } = getWatchdogWorkspacePaths(workspaceId, homePath);
 	return {
 		dataDir,
+		pipelineState: getPipelineStatePath(workspaceId, homePath),
 		scoreboardJsonl: join(dataDir, "scoreboard.jsonl"),
 		scoreboardMd: join(dataDir, "scoreboard.md"),
 		qaLog,

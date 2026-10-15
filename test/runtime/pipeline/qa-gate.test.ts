@@ -754,6 +754,7 @@ describe("QA gate", () => {
 			{
 				name: "verdictRecorded",
 				event: {
+					report: { scores: createVerdict().scores, visual: createVerdict().visual },
 					workspaceId: "foo",
 					taskId: "d1111",
 					qaTaskId: "qa001",

@@ -74,6 +74,8 @@ export interface CardMetricsInput {
 	at?: string | null;
 	/** Kanban's selected agent, for a card that names none and left no session files. */
 	selectedAgentId?: RuntimeAgentId | null;
+	/** Restrict metrics to a fresh attempt; the first review snapshot after this instant is its submission. */
+	since?: string | null;
 }
 
 export interface CardMetricsTotals {
@@ -107,6 +109,13 @@ export interface CardMetrics {
 	metrics: CardMetricsTotals;
 	wall: { start: string | null; end: string | null; endSource: string | null };
 	sessionStatuses: Record<string, number>;
+	/** Fresh restart attempt, separate from the historical cumulative metrics above. */
+	attempt?: {
+		resetAt: string;
+		metrics: CardMetricsTotals;
+		wall: CardMetrics["wall"];
+		submissionSeconds: number | null;
+	};
 }
 
 interface ClineSessionMeta {
@@ -126,6 +135,7 @@ interface ClineMessage {
 	content?: unknown;
 	modelInfo?: { provider?: string; id?: string };
 	metrics?: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number };
+	ts?: number;
 }
 
 interface ClineSession {
@@ -374,15 +384,21 @@ export async function computeCardMetrics(input: CardMetricsInput, sources: CardM
 	if (atMs !== null && !Number.isFinite(atMs)) {
 		throw new Error(`--at ${input.at} is not a date`);
 	}
-	const snapshots = await sources.readSnapshots(id, atMs);
-	const snapshot = snapshots[0] ?? null;
+	const sinceMs = input.since ? Date.parse(input.since) : null;
+	if (sinceMs !== null && !Number.isFinite(sinceMs)) throw new Error("Invalid attempt reset time");
+	const snapshots = (await sources.readSnapshots(id, atMs)).filter(
+		(snapshot) => sinceMs === null || snapshot.ms >= sinceMs,
+	);
+	const snapshot = (sinceMs === null ? snapshots[0] : snapshots.at(-1)) ?? null;
 	const previousSnapshot = snapshot
 		? (snapshots.find((candidate) => candidate.sha !== snapshot.sha && candidate.ms < snapshot.ms) ?? null)
 		: null;
 	const endMs = snapshot?.ms ?? atMs ?? null;
 	const inRound = (startMs: number): boolean => !previousSnapshot || startMs > previousSnapshot.ms;
 
-	const sessions = await loadClineSessions(sources.clineSessionsPath, id, sources.worktreeRoots, endMs);
+	const sessions = (await loadClineSessions(sources.clineSessionsPath, id, sources.worktreeRoots, endMs)).filter(
+		(session) => sinceMs === null || session.startMs >= sinceMs,
+	);
 	const totals = {
 		assistantTurns: 0,
 		toolCalls: 0,
@@ -420,21 +436,30 @@ export async function computeCardMetrics(input: CardMetricsInput, sources: CardM
 
 	for (const session of sessions) {
 		count(statuses, session.meta.status || "unknown");
-		const ended = Date.parse(session.meta.ended_at ?? "");
-		if (Number.isFinite(ended)) {
-			if (lastEndMs === null || ended > lastEndMs) {
-				lastEndMs = ended;
-			}
-			if (ended > session.startMs) {
-				activeMs += Math.min(ended, endMs ?? ended) - session.startMs;
-			}
-		}
 		const file = await readJson<{ messages?: ClineMessage[] } | ClineMessage[]>(
 			join(sources.clineSessionsPath, session.dir, `${session.dir}.messages.json`),
 		);
 		const messages = Array.isArray(file) ? file : (file?.messages ?? []);
+		const ended = Date.parse(session.meta.ended_at ?? "");
+		const lastMessage = messages.reduce(
+			(latest, message) =>
+				typeof message.ts === "number" && (endMs === null || message.ts <= endMs)
+					? Math.max(latest, message.ts)
+					: latest,
+			session.startMs,
+		);
+		const finished =
+			sinceMs !== null && lastMessage > session.startMs
+				? lastMessage
+				: Number.isFinite(ended)
+					? Math.min(ended, endMs ?? ended)
+					: lastMessage;
+		if (finished > session.startMs) activeMs += finished - session.startMs;
+		if (lastEndMs === null || finished > lastEndMs) lastEndMs = finished;
 		let sessionInput = 0;
 		for (const message of messages) {
+			if (sinceMs !== null && typeof message.ts === "number" && message.ts < sinceMs) continue;
+			if (endMs !== null && typeof message.ts === "number" && message.ts > endMs) continue;
 			if (message.id) {
 				if (seenMessages.has(message.id)) {
 					continue;
@@ -494,7 +519,9 @@ export async function computeCardMetrics(input: CardMetricsInput, sources: CardM
 	// A Codex card (no Cline sessions): measure its Codex rollouts instead.
 	const codex = sessions.length
 		? []
-		: await loadCodexSessions(sources.codexSessionsPath, id, sources.worktreeRoots, endMs);
+		: (await loadCodexSessions(sources.codexSessionsPath, id, sources.worktreeRoots, endMs)).filter(
+				(session) => sinceMs === null || session.startMs >= sinceMs,
+			);
 	for (const session of codex) {
 		const key = `codex/${session.model || "unknown"}`;
 		totals.toolCalls += session.toolCalls;
@@ -542,7 +569,11 @@ export async function computeCardMetrics(input: CardMetricsInput, sources: CardM
 			? "codex"
 			: (card?.agentId ?? input.selectedAgentId ?? null);
 	const startMs = measured[0]?.startMs ?? null;
-	const wallEndMs = endMs ?? lastEndMs;
+	// A fresh model build ends at its last submitted message, not at the later snapshot/check/QA clock.
+	const wallEndMs =
+		sinceMs !== null && lastEndMs !== null && startMs !== null && lastEndMs > startMs
+			? lastEndMs
+			: (endMs ?? lastEndMs);
 	const priced = measured.length > 0 && !unpriced;
 	return {
 		devId: id,
@@ -568,13 +599,16 @@ export async function computeCardMetrics(input: CardMetricsInput, sources: CardM
 		wall: {
 			start: startMs !== null ? new Date(startMs).toISOString() : null,
 			end: wallEndMs !== null ? new Date(wallEndMs).toISOString() : null,
-			endSource: snapshot
-				? `snapshot ${snapshot.sha.slice(0, 8)}`
-				: wallEndMs !== null
-					? endMs !== null
-						? "--at"
-						: "last session end"
-					: null,
+			endSource:
+				sinceMs !== null && wallEndMs === lastEndMs && lastEndMs !== null && startMs !== null && lastEndMs > startMs
+					? "last submitted session activity"
+					: snapshot
+						? `snapshot ${snapshot.sha.slice(0, 8)}`
+						: wallEndMs !== null
+							? endMs !== null
+								? "--at"
+								: "last session end"
+							: null,
 		},
 		sessionStatuses: statuses,
 	};

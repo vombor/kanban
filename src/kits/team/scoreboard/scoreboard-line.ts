@@ -8,6 +8,8 @@ import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import type { RuntimeAgentId } from "../../../core/api-contract";
+import { lockedFileSystem } from "../../../fs/locked-file-system";
+import type { PipelineWorkspaceState } from "../../../pipeline/pipeline-state";
 import type { CardMetrics, CardMetricsTotals } from "../bench/card-metrics";
 
 export const SCORE_DIMENSIONS = ["spec", "correctness", "tests", "ux", "code", "process"] as const;
@@ -42,6 +44,7 @@ export interface ScoreboardLine {
 	scores: Scores | null;
 	blocking: string[];
 	metrics: CardMetricsTotals | null;
+	attempt?: CardMetrics["attempt"];
 	visual: ScoreboardVisual | null;
 	benchmark: string | null;
 	notes: string;
@@ -129,6 +132,7 @@ export function buildScoreboardLine(metrics: CardMetrics, input: ScoreboardLineI
 		scores: input.scores ?? null,
 		blocking: (input.blocking ?? []).map((entry) => String(entry).slice(0, BLOCKING_MAX)),
 		metrics: metrics.metrics,
+		...(metrics.attempt ? { attempt: metrics.attempt } : {}),
 		visual: input.visual ?? { status: "n/a", artifacts: [], consoleErrors: 0 },
 		benchmark: input.benchmark ?? null,
 		notes: String(input.notes ?? "").slice(0, NOTES_MAX),
@@ -137,7 +141,7 @@ export function buildScoreboardLine(metrics: CardMetrics, input: ScoreboardLineI
 
 export async function appendScoreboardLine(path: string, line: ScoreboardLine): Promise<void> {
 	await mkdir(dirname(path), { recursive: true });
-	await appendFile(path, `${JSON.stringify(line)}\n`);
+	await lockedFileSystem.withLock({ path }, async () => await appendFile(path, `${JSON.stringify(line)}\n`));
 }
 
 export interface ScoreboardFile {
@@ -175,4 +179,56 @@ export function parseScoreboard(text: string): ScoreboardFile {
 
 export async function readScoreboard(path: string): Promise<ScoreboardFile> {
 	return parseScoreboard(await readFile(path, "utf8").catch(() => ""));
+}
+
+/** Repairs old missing score columns only from the exact authoritative QA verdict; history stays append-only. */
+export async function reconcileScoreboardScores(
+	path: string,
+	state: PipelineWorkspaceState | null,
+): Promise<ScoreboardFile> {
+	if (!state) return await readScoreboard(path);
+	return await lockedFileSystem.withLock({ path }, async () => {
+		const file = await readScoreboard(path);
+		const corrections: ScoreboardLine[] = [];
+		for (const row of file.rows) {
+			if (
+				(row.source ?? "qa") !== "qa" ||
+				(row.scores && SCORE_DIMENSIONS.every((dimension) => row.scores?.[dimension] != null))
+			)
+				continue;
+			const records = state.cards[row.devId]?.qaVerdicts;
+			if (!Array.isArray(records)) continue;
+			const matching = records
+				.filter(
+					(value): value is Record<string, unknown> =>
+						!!value && typeof value === "object" && !Array.isArray(value),
+				)
+				.reverse()
+				.find(
+					(record) =>
+						record.round === row.round && record.verdict === row.verdict && record.at === Date.parse(row.ts),
+				);
+			if (!matching) continue;
+			let authoritative: Scores | null;
+			try {
+				authoritative = normalizeScores(matching.scores);
+			} catch {
+				continue;
+			}
+			if (!authoritative) continue;
+			const scores = Object.fromEntries(
+				SCORE_DIMENSIONS.map((dimension) => [
+					dimension,
+					row.scores?.[dimension] ?? authoritative?.[dimension] ?? null,
+				]),
+			) as Scores;
+			if (SCORE_DIMENSIONS.some((dimension) => scores[dimension] !== (row.scores?.[dimension] ?? null)))
+				corrections.push({ ...row, scores });
+		}
+		if (corrections.length) {
+			await appendFile(path, `${corrections.map((row) => JSON.stringify(row)).join("\n")}\n`);
+			return await readScoreboard(path);
+		}
+		return file;
+	});
 }

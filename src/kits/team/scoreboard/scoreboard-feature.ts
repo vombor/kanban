@@ -44,6 +44,7 @@ export function createScoreboardFeature(deps: ScoreboardFeatureDependencies = {}
 			workspaceId: context.workspaceId,
 			config,
 			selectedAgentId: line.agent ?? null,
+			at: line.at.toISOString(),
 		});
 		const recorded = await recordScoreboardLine({
 			workspaceId: context.workspaceId,

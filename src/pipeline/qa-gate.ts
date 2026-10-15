@@ -1037,6 +1037,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			devModel: entry.devModel,
 			qaAgentId: entry.agentId as RuntimeAgentId,
 			qaModel: entry.model,
+			report: { scores: verdict.scores, visual: verdict.visual },
 		});
 		return `${entry.reviewsTaskId} round ${entry.round}: ${verdict.verdict} recorded${note ? ` (${note})` : ""}${stopped > 0 ? `; stopped ${stopped} scratch process(es)` : ""}`;
 	};

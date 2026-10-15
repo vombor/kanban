@@ -11,10 +11,14 @@ import {
 	buildScoreboardLine,
 	normalizeScores,
 	parseScoreboard,
+	readScoreboard,
 	type ScoreboardLine,
 } from "../../../../../src/kits/team/scoreboard/scoreboard-line";
 import { renderScoreboardMarkdown } from "../../../../../src/kits/team/scoreboard/scoreboard-markdown";
-import { getUnscoredCardRole } from "../../../../../src/kits/team/scoreboard/scoreboard-store";
+import {
+	getUnscoredCardRole,
+	rebuildScoreboardMarkdown,
+} from "../../../../../src/kits/team/scoreboard/scoreboard-store";
 import { createPipelineEventBus, type PipelineEventMap } from "../../../../../src/pipeline/events";
 import { createPipelineFeatureRegistry } from "../../../../../src/pipeline/features";
 import { getTeamBenchWorkspacePaths } from "../../../../../src/state/kanban-home";
@@ -128,6 +132,59 @@ describe("scoreboard lines", () => {
 });
 
 describe("scoreboard.md", () => {
+	it("repairs exact missing QA score vectors once while preserving recorded scores, attempts and history", async () => {
+		const temp = createTempDir("scoreboard-repair-");
+		try {
+			const paths = getTeamBenchWorkspacePaths("alpha", temp.path);
+			mkdirSync(paths.dataDir, { recursive: true });
+			const metrics = metricsFor("dev01");
+			metrics.attempt = {
+				resetAt: "2026-10-14T07:36:14.641Z",
+				metrics: { ...metrics.metrics, toolCalls: 1, toolErrors: 0 },
+				wall: {
+					start: "2026-10-14T07:36:14.982Z",
+					end: "2026-10-14T07:37:47.112Z",
+					endSource: "last submitted session activity",
+				},
+				submissionSeconds: 92.13,
+			};
+			const missing = buildScoreboardLine(metrics, {
+				at: new Date("2026-10-14T08:00:00Z"),
+				round: 1,
+				source: "qa",
+				verdict: "PASS",
+			});
+			const older = { ...missing, devId: "older", ts: "2026-10-14T07:00:00Z" };
+			writeFileSync(paths.scoreboardJsonl, `${[missing, older].map((row) => JSON.stringify(row)).join("\n")}\n`);
+			const scores = { spec: 4, correctness: 5, tests: 5, ux: 4, code: 4, process: 4 };
+			writeFileSync(
+				paths.pipelineState,
+				JSON.stringify({
+					version: 1,
+					since: "2026-10-14T00:00:00Z",
+					importedFrom: null,
+					cards: {
+						dev01: { qaVerdicts: [{ at: Date.parse(missing.ts), round: 1, verdict: "PASS", scores }] },
+						older: { qaVerdicts: [{ at: Date.parse(missing.ts), round: 1, verdict: "PASS", scores }] },
+					},
+				}),
+			);
+			await rebuildScoreboardMarkdown({ paths, name: "Alpha" });
+			const first = await readScoreboard(paths.scoreboardJsonl);
+			expect(first.lines).toBe(3);
+			expect(first.rows.find((row) => row.devId === "dev01")).toMatchObject({ scores, attempt: metrics.attempt });
+			expect(first.rows.find((row) => row.devId === "older")?.scores).toBeNull();
+			const md = readFileSync(paths.scoreboardMd, "utf8");
+			expect(md).toContain("4/5/5/4/4/4");
+			expect(md).toContain("92.1");
+			expect(md).toContain("cumulative");
+			expect(md).toContain("fresh tool err/calls");
+			await rebuildScoreboardMarkdown({ paths, name: "Alpha" });
+			expect((await readScoreboard(paths.scoreboardJsonl)).lines).toBe(3);
+		} finally {
+			temp.cleanup();
+		}
+	});
 	it("counts first-round passes and rounds to pass per model, and keeps outcomes out of the leaderboard", () => {
 		const rows = [
 			line("a", 1, "FAIL"),

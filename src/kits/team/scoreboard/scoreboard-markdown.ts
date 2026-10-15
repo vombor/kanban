@@ -124,6 +124,7 @@ function leaderboard(rows: ScoreboardLine[]): string {
 			means: scoreMeans(list),
 			wall: mean(numbers((row) => row.metrics?.wallMin)),
 			active: mean(numbers((row) => row.metrics?.activeMin)),
+			attempt: mean(numbers((row) => row.attempt?.submissionSeconds)),
 			cost: known.length ? known.reduce((sum, value) => sum + value, 0) : null,
 			costUnknown: costs.length - known.length,
 			toolErrorRate: calls ? errors / calls : null,
@@ -133,8 +134,8 @@ function leaderboard(rows: ScoreboardLine[]): string {
 	});
 	out.sort((a, b) => b.pass / (b.judged || 1) - a.pass / (a.judged || 1) || b.cards - a.cards);
 	const lines = [
-		`| model | cards | rounds | pass rate | 1st-round pass | ${SCORE_DIMENSIONS.join(" | ")} | mean wall (min) | mean active (min) | total cost ($) | tool-error rate |`,
-		`|---|---:|---:|---|---|${SCORE_DIMENSIONS.map(() => "---:").join("|")}|---:|---:|---:|---|`,
+		`| model | cards | rounds | pass rate | 1st-round pass | ${SCORE_DIMENSIONS.join(" | ")} | mean wall (min, cumulative) | mean active (min, cumulative) | fresh submission (s) | total cost ($) | tool-error rate |`,
+		`|---|---:|---:|---|---|${SCORE_DIMENSIONS.map(() => "---:").join("|")}|---:|---:|---:|---:|---|`,
 	];
 	for (const entry of out) {
 		const cost =
@@ -146,7 +147,7 @@ function leaderboard(rows: ScoreboardLine[]): string {
 				? "–"
 				: `${(100 * entry.toolErrorRate).toFixed(0)}% (${entry.errors}/${entry.calls})`;
 		lines.push(
-			`| ${escapeCell(entry.model)} | ${entry.cards} | ${entry.rounds} | ${percent(entry.pass, entry.judged)} | ${percent(entry.firstPass, entry.firsts)} | ${SCORE_DIMENSIONS.map((dimension) => formatNumber(entry.means[dimension])).join(" | ")} | ${formatNumber(entry.wall)} | ${formatNumber(entry.active)} | ${cost} | ${toolErrors} |`,
+			`| ${escapeCell(entry.model)} | ${entry.cards} | ${entry.rounds} | ${percent(entry.pass, entry.judged)} | ${percent(entry.firstPass, entry.firsts)} | ${SCORE_DIMENSIONS.map((dimension) => formatNumber(entry.means[dimension])).join(" | ")} | ${formatNumber(entry.wall)} | ${formatNumber(entry.active)} | ${formatNumber(entry.attempt)} | ${cost} | ${toolErrors} |`,
 		);
 	}
 	return lines.join("\n");
@@ -154,8 +155,8 @@ function leaderboard(rows: ScoreboardLine[]): string {
 
 function cardTable(rows: ScoreboardLine[]): string {
 	const lines = [
-		"| ts (UTC) | card | round | verdict | model | src | scores s/c/t/u/cd/p | wall | active | cost | tool err/calls | visual | blocking | title / notes |",
-		"|---|---|---:|---|---|---|---|---:|---:|---:|---|---|---:|---|",
+		"| ts (UTC) | card | round | verdict | model | src | scores s/c/t/u/cd/p | wall (cumulative) | active (cumulative) | fresh submission (s) | fresh tool err/calls | cost | tool err/calls (cumulative) | visual | blocking | title / notes |",
+		"|---|---|---:|---|---|---|---|---:|---:|---:|---|---:|---|---|---:|---|",
 	];
 	for (const row of rows) {
 		const scores = row.scores ? SCORE_DIMENSIONS.map((dimension) => row.scores?.[dimension] ?? "–").join("/") : "–";
@@ -164,7 +165,7 @@ function cardTable(rows: ScoreboardLine[]): string {
 			: "–";
 		const titleNotes = [row.title?.slice(0, 50), row.notes?.slice(0, 120)].filter(Boolean).join(" — ");
 		lines.push(
-			`| ${(row.ts || "").slice(0, 16).replace("T", " ")} | ${row.devId} | ${row.round} | ${row.verdict ?? "ungraded"}${isQa(row) ? "" : ` (${row.source})`} | ${escapeCell(modelKey(row))} | ${row.modelSource ?? "–"} | ${scores} | ${formatNumber(row.metrics?.wallMin)} | ${formatNumber(row.metrics?.activeMin)} | ${formatNumber(row.metrics?.costUSD, 2)} | ${row.metrics ? `${row.metrics.toolErrors}/${row.metrics.toolCalls}` : "–"} | ${visual} | ${row.blocking?.length ?? 0} | ${escapeCell(titleNotes)} |`,
+			`| ${(row.ts || "").slice(0, 16).replace("T", " ")} | ${row.devId} | ${row.round} | ${row.verdict ?? "ungraded"}${isQa(row) ? "" : ` (${row.source})`} | ${escapeCell(modelKey(row))} | ${row.modelSource ?? "–"} | ${scores} | ${formatNumber(row.metrics?.wallMin)} | ${formatNumber(row.metrics?.activeMin)} | ${formatNumber(row.attempt?.submissionSeconds)} | ${row.attempt ? `${row.attempt.metrics.toolErrors}/${row.attempt.metrics.toolCalls}` : "–"} | ${formatNumber(row.metrics?.costUSD, 2)} | ${row.metrics ? `${row.metrics.toolErrors}/${row.metrics.toolCalls}` : "–"} | ${visual} | ${row.blocking?.length ?? 0} | ${escapeCell(titleNotes)} |`,
 		);
 	}
 	return lines.join("\n");
@@ -190,7 +191,7 @@ export function renderScoreboardMarkdown(input: ScoreboardMarkdownInput): string
 		`# ${input.name} QA scoreboard`,
 		"",
 		`Generated ${input.generatedAt.toISOString()} from ${input.sourcePath} (${lines} lines, ${rows.length} after de-duplicating re-runs${bad.length ? `, unparseable lines: ${bad.join(",")}` : ""}).`,
-		"Models come from the agents' session files (src=session) unless noted (src=board). Pass rate uses each card's latest verdict; wall (first session -> review snapshot), active (sum of session durations), cost and tool errors use each card's latest round (cumulative). Cost is list price with cache reads and writes priced separately; – = no published price.",
+		"Models come from the agents' session files (src=session) unless noted (src=board). Historical wall, active, cost and tool errors remain cumulative. Fresh submission measures the first session after restart-fresh/reset through its last recorded activity before the first review snapshot (snapshot time is the fallback when activity timestamps are unavailable), excluding earlier attempts and later QA/infra waiting; fresh tool counts use that same attempt. Cost is list price with cache reads and writes priced separately; – = unavailable.",
 		"",
 		"## Dev cards — team flow by agent/provider/model",
 		"",

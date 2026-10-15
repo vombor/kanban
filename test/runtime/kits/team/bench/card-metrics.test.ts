@@ -91,6 +91,46 @@ afterEach(() => {
 });
 
 describe("card metrics", () => {
+	it("measures a fresh attempt through its first submission without old attempts or later QA waiting", async () => {
+		const cwd = join(worktreesRoot, TASK, "repo");
+		writeClineSession("1000_old", { cwd, started_at: "2026-10-14T06:00:00Z", ended_at: "2026-10-14T06:10:00Z" }, [
+			{
+				...assistant("old", "old-model", 1000, 100),
+				ts: Date.parse("2026-10-14T06:01:00Z"),
+				content: [{ type: "tool_result", is_error: true }],
+			},
+		]);
+		const start = Date.parse("2026-10-14T07:36:15Z");
+		writeClineSession(
+			"2000_new",
+			{ cwd, started_at: new Date(start).toISOString(), ended_at: null, model: "fresh-model", provider: "local" },
+			[
+				{ ...assistant("copied", "old-model", 1000, 100), ts: Date.parse("2026-10-14T06:01:00Z") },
+				{
+					...assistant("new", "fresh-model", 200, 20),
+					ts: start + 92_000,
+					content: [{ type: "tool_use", name: "build" }],
+				},
+				{ ...assistant("later", "fresh-model", 9999, 999), ts: start + 60 * 60_000 },
+			],
+		);
+		const reviews = [
+			{ sha: "first", ms: start + 100_000 },
+			{ sha: "later", ms: start + 60 * 60_000 },
+		];
+		const measured = await computeCardMetrics(
+			{ taskId: TASK, card, since: "2026-10-14T07:36:14Z" },
+			sources(reviews),
+		);
+		expect(measured.metrics.sessions).toBe(1);
+		expect(measured.metrics.tokensIn).toBe(200);
+		expect(measured.metrics.toolCalls).toBe(1);
+		expect(measured.metrics.toolErrors).toBe(0);
+		expect(measured.wall.start).toBe(new Date(start).toISOString());
+		expect(measured.wall.end).toBe(new Date(start + 92_000).toISOString());
+		expect(measured.wall.endSource).toBe("last submitted session activity");
+		expect(measured.metrics.activeMin).toBeCloseTo(1.5);
+	});
 	it("de-duplicates a resumed session's copied messages and skips the cumulative trailing message", async () => {
 		const cwd = join(worktreesRoot, TASK, "repo");
 		writeClineSession(
