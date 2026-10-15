@@ -370,6 +370,11 @@ export function getKanbanModelsDataPath(homePath = getKanbanHomePath()): string 
 	return join(getKanbanDataPath(homePath), MODELS_DATA_DIR);
 }
 
+/** Machine-wide provider quota reset deadlines; no project text or credentials. */
+export function getProviderUsageHoldsPath(homePath = getKanbanHomePath()): string {
+	return join(getKanbanModelsDataPath(homePath), "provider-usage-holds.json");
+}
+
 /**
  * Every change the server's Lemonade context sync writes into Cline's models.json, would write (report mode) or
  * couldn't write, one JSON line each (`<home>/data/models/cline-lemonade-sync.jsonl`,

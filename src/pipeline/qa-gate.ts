@@ -100,6 +100,7 @@ import {
 	readEscalatedAt,
 } from "./pipeline-state";
 import { type CapacityCard, findProviderCapacityHold, type ProviderCapacityHold } from "./provider-capacity";
+import { createProviderUsageHolds, type ProviderUsageHolds } from "./provider-usage-holds";
 import {
 	buildQaAgentErrorNote,
 	describeQaAgentError,
@@ -267,6 +268,7 @@ export interface QaGateDependencies {
 	/** The worker's QA log appender (one write chain per file, shared with the checks reports). */
 	appendQaLog: AppendQaLog;
 	store: PipelineStateStore;
+	usageHolds?: ProviderUsageHolds;
 	bus: PipelineEventBus;
 	preview: QaPreviewController;
 	/** The card's snapshot commit (`refs/kanban/snapshots/<id>`, written by the submission stage). Default: git. */
@@ -550,12 +552,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 	const slotWakes = new Set<string>();
 	/** workspaceId → qaTaskId → why that queued QA card waited at the workspace's last tick (describeQueueWaits). */
 	const queueWaits = new Map<string, Map<string, QaQueueWait>>();
-	/**
-	 * Provider → its usage limit, learned from a QA card that ended on it (issue #49). Machine-wide like the slots: one
-	 * account serves every project. Kept in memory only: after a worker restart the next QA card on the provider meets
-	 * the limit once more and the hold comes back, without using up a replacement.
-	 */
-	const usageLimits = new Map<string, number>();
+	const usageHolds = deps.usageHolds ?? createProviderUsageHolds();
 	/** "<workspace>:<provider>" → the note of its queued QA cards' wait for that limit (recorded once per change). */
 	const usageLimitWaits = new Map<string, string>();
 
@@ -565,12 +562,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 
 	/** Until when a QA card on this provider waits for its usage limit, or null (an ended limit is dropped). */
 	const readUsageLimitUntil = (provider: string, now: number): number | null => {
-		const until = usageLimits.get(provider);
-		if (until !== undefined && until <= now) {
-			usageLimits.delete(provider);
-			return null;
-		}
-		return until ?? null;
+		return usageHolds.until(provider, now);
 	};
 
 	const countCloudRunning = (): number => [...runningByWorkspace.values()].reduce((sum, count) => sum + count, 0);
@@ -1122,8 +1114,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		// replaced without using up a replacement, and no QA card on the provider starts before the reset.
 		if (error.kind === "usage_limit" && error.resetAt !== undefined) {
 			const provider = usageLimitKey(entry);
-			const until = Math.max(error.resetAt + USAGE_LIMIT_MARGIN_MS, readUsageLimitUntil(provider, context.now) ?? 0);
-			usageLimits.set(provider, until);
+			const until = await usageHolds.record(provider, error.resetAt + USAGE_LIMIT_MARGIN_MS);
 			const stopped = await markSuperseded(context, qaTaskId, entry);
 			const resumes = new Date(until).toISOString();
 			deps.log(`qa-ingest ${qaTaskId}: ${provider} usage limit reached; no QA card on it starts before ${resumes}`);
@@ -1797,8 +1788,14 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 	};
 
 	return {
-		submit,
-		tick,
+		submit: async (input) => {
+			await usageHolds.ready();
+			return await submit(input);
+		},
+		tick: async (context) => {
+			await usageHolds.ready();
+			return await tick(context);
+		},
 		forget: (workspaceId) => {
 			const before = runningByWorkspace.get(workspaceId) ?? 0;
 			runningByWorkspace.delete(workspaceId);

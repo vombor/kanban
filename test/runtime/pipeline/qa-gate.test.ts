@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { RuntimeBoardCard, RuntimeBoardColumnId } from "../../../src/core/api-contract";
 import { handBackTask } from "../../../src/pipeline/handback";
+import { createProviderUsageHolds } from "../../../src/pipeline/provider-usage-holds";
 import {
 	findRunningQaCard,
 	type QaSilentStallRead,
@@ -11,7 +12,9 @@ import {
 	readQaVerdictRecords,
 } from "../../../src/pipeline/qa-gate";
 import type { QaVerdict } from "../../../src/pipeline/qa-verdict";
+import { getProviderUsageHoldsPath } from "../../../src/state/kanban-home";
 import type { ClineSilentStall } from "../../../src/terminal/cline-turn-check";
+import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
 import { createPipelineWorkerHarness, createSnapshot, type QaGateHarnessAction } from "../../utilities/pipeline-worker";
 import { createBoard, createCard } from "../../utilities/workspace-state-store";
 
@@ -1288,6 +1291,39 @@ describe("QA gate", () => {
 			} finally {
 				vi.useRealTimers();
 			}
+		});
+
+		it("hydrates a persisted provider hold before another project's first QA start after restart", async () => {
+			await withTemporaryKanbanHome(async () => {
+				const file = getProviderUsageHoldsPath();
+				const provider = "bedrock";
+				const until = T0 + 24 * 60 * 60_000;
+				await createProviderUsageHolds({ path: file }).record(provider, until);
+				const restarted = createHarness({
+					config: { workspaces: { different: QA_WORKSPACE } },
+					usageHolds: createProviderUsageHolds({ path: file }),
+				});
+				await send(
+					restarted,
+					{ review: [createCard({ id: "d2222", ...OPENAI_DEV })] },
+					{ workspaceId: "different" },
+				);
+				const task = createdTasks(restarted.actions)[0];
+				expect(task).toBeDefined();
+				restarted.actions.length = 0;
+				await send(
+					restarted,
+					{
+						backlog: [createCard({ id: "qa001", role: "qa", reviewsTaskId: "d2222" })],
+						review: [createCard({ id: "d2222", ...OPENAI_DEV })],
+					},
+					{ workspaceId: "different" },
+				);
+				expect(restarted.actions.some((action) => action.kind === "startTask")).toBe(false);
+				expect(
+					restarted.readDecisions("different").some((record) => record.note.includes("usage limit to reset")),
+				).toBe(true);
+			});
 		});
 
 		it("still nudges a QA card that just stopped without a verdict", async () => {

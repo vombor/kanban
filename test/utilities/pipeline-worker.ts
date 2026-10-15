@@ -21,6 +21,7 @@ import {
 } from "../../src/pipeline/events";
 import type { PipelineFeatureRegistry } from "../../src/pipeline/features";
 import { createPipelineStateStore } from "../../src/pipeline/pipeline-state";
+import { createProviderUsageHolds, type ProviderUsageHolds } from "../../src/pipeline/provider-usage-holds";
 import { createQaGate, type QaSilentStallRead } from "../../src/pipeline/qa-gate";
 import { type AppendQaLog, createQaLogAppender } from "../../src/pipeline/qa-log";
 import type { QaPreviewController } from "../../src/pipeline/qa-preview";
@@ -43,6 +44,7 @@ export type QaGateHarnessAction =
 	| { kind: "deliverInput"; workspaceId: string; taskId: string; text: string };
 
 export interface PipelineWorkerHarnessOptions {
+	usageHolds?: ProviderUsageHolds;
 	/** The raw config.json content; mutable through `setConfig`. */
 	config?: unknown;
 	/** Default: every card has work (and the submission stage does nothing else). */
@@ -129,6 +131,8 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 		},
 	};
 	const qaGate = createQaGate({
+		usageHolds:
+			options.usageHolds ?? createProviderUsageHolds({ path: join(temp.path, "provider-usage-holds.json") }),
 		actions: { run: async (request) => answer(request) },
 		deliverInput: async (input) => answer({ kind: "deliverInput", ...input }),
 		finishTask: async (request) => {

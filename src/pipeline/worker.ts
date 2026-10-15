@@ -65,6 +65,8 @@ import {
 } from "./features";
 import { clearHold, preserveTaskWork, releaseHold } from "./hold";
 import { createPipelineStateStore, type PipelineStateStore } from "./pipeline-state";
+import { createProviderUsageHolds } from "./provider-usage-holds";
+import { readLegacyProviderUsageHolds } from "./provider-usage-holds-legacy";
 import { createQaGate, type QaGate } from "./qa-gate";
 import { type AppendQaLog, createQaLogAppender } from "./qa-log";
 import { createQaPreviewController } from "./qa-preview";
@@ -353,6 +355,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 	const qaGate =
 		deps.qaGate ??
 		createQaGate({
+			usageHolds: createProviderUsageHolds({ readLegacy: readLegacyProviderUsageHolds }),
 			actions: gateActions,
 			deliverInput,
 			finishTask,
