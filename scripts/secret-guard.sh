@@ -32,6 +32,7 @@ while IFS= read -r v; do [ ${#v} -ge 16 ] && known+=("$v"); done < <(
 			const walk=(o)=>{if(!o||typeof o!=="object")return;for(const [k,v] of Object.entries(o)){if(typeof v==="string"&&/key|token|secret|password|bearer/i.test(k))out.add(v);else walk(v)}};
 			for(const f of [H+"/.claude/settings.json",H+"/.cline/data/settings/providers.json"]){try{walk(JSON.parse(fs.readFileSync(f,"utf8")))}catch{}}
 			try{for(const l of String(JSON.parse(fs.readFileSync(process.argv[2]+"/secrets/github-app.json","utf8")).privateKey).split(/\r?\n/))if(!l.startsWith("-----"))out.add(l.trim())}catch{}
+			try{walk(JSON.parse(fs.readFileSync(process.argv[2]+"/secrets/obsidian-connector.json","utf8")))}catch{}
 			console.log([...out].join("\n"))' "$H" "$KH"
 		grep -hoE '(bearer_token|api_key|token|key)[[:space:]]*=[[:space:]]*"[^"]+"' "$H/.codex/config.toml" 2>/dev/null |
 			sed -E 's/^[^"]*"([^"]+)".*/\1/'

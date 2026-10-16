@@ -1558,5 +1558,11 @@ export const runtimeHookIngestResponseSchema = z.object({
 	error: z.string().optional(),
 });
 export type RuntimeHookIngestResponse = z.infer<typeof runtimeHookIngestResponseSchema>;
+export type {
+	ObsidianConnectorProbe,
+	ObsidianConnectorSettings,
+	ObsidianConnectorView,
+	ObsidianConnectorWrite,
+} from "../trpc/obsidian-connector-contract";
 export type { ProjectSecretInput, ProjectSecretMetadata } from "../trpc/project-secrets-contract";
 export type { AgentModelOption, AgentSettingsOptions } from "./agent-settings-options";

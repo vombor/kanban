@@ -670,6 +670,11 @@ export function getKanbanSecretsPath(homePath = getKanbanHomePath()): string {
 	return join(homePath, SECRETS_DIR);
 }
 
+/** User-configured system knowledge connector, including its server-owned credential. */
+export function getObsidianConnectorPath(homePath = getKanbanHomePath()): string {
+	return join(getKanbanSecretsPath(homePath), "obsidian-connector.json");
+}
+
 /** The machine's Kanban GitHub App: its id, slug and private key (`<home>/secrets/github-app.json`, mode 0600). */
 export function getGitHubAppCredentialsPath(homePath = getKanbanHomePath()): string {
 	return join(getKanbanSecretsPath(homePath), GITHUB_APP_FILENAME);

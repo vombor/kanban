@@ -29,6 +29,7 @@ import { getSharedGitHubAppTokenSource } from "../github-app/installation-tokens
 import { createIsolationService, type IsolationService } from "../isolation/isolation-service";
 import { createMessageNoticeQueue } from "../isolation/message-notices";
 import { applyIssueSync } from "../issues/issue-apply";
+import { createObsidianConnectorApi } from "../knowledge/obsidian/connector-api";
 import { createAgentOptionsLoader } from "../models/agent-options";
 import { readAgentDefaultModels } from "../models/cline-providers";
 import type { PipelineActionRequest, PipelineActionResult } from "../pipeline/actions";
@@ -526,6 +527,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		broadcastProjects: (workspaceId) => void deps.runtimeStateHub.broadcastRuntimeProjectsUpdated(workspaceId),
 	});
 	const projectSecretsApi = createProjectSecretsApi();
+	const obsidianConnectorApi = createObsidianConnectorApi();
 	// Shortcut runs that ask for a port, and the proxy the browser reaches those ports through (shortcut-ports.ts).
 	const shortcutPorts = createShortcutPortRegistry();
 	const handleShortcutPortProxyRequest = createShortcutPortProxyHandler({
@@ -662,6 +664,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			pipelinePauseApi,
 			projectNameApi,
 			projectSecretsApi,
+			obsidianConnectorApi,
 			getPipelineCardStages: deps.runtimeStateHub.getPipelineCardStages,
 			shortcutsApi,
 			githubApi,

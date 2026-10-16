@@ -1,0 +1,304 @@
+{
+	"version": 1,
+	"slug": "cost-aware-multi-agent-coordination",
+	"summary": "Build versioned shared project knowledge first, then report-first cost accounting, coordination recommendations, evidence-driven QA, integration reports and isolated setup acceleration. Later controls remain explicitly opt-in.",
+	"cards": [
+		{
+			"id": "obsidian-system-connector",
+			"title": "Configure an optional app-level Obsidian REST knowledge graph",
+			"prompt": "Implement and verify Global Settings > Knowledge with optional enable/endpoint/masked-key/CA configuration and authenticated draft capability tests. Use src/knowledge/obsidian, obsidian-connector-contract and strict-user-only routes. Persist credentials privately/durably in the canonical home, keep stale-save revisions and redact upstream failures. Discover native NoteJson links/backlinks/search/document maps from status/OpenAPI without vault reads or vectorization. This slice exists in the current checkout; review its tests and current boundary before adding duplicate code.",
+			"dependsOn": [],
+			"acceptanceCriteria": [
+				"Connection setup is optional, user-only and machine-wide; saved keys are never fetched back into inputs or agent APIs.",
+				"Tests authenticate drafts without saving, reject redirects/oversized responses and report native graph/indexing observations.",
+				"Unit and isolated phone/desktop tests cover save, rotation, removal, disabled/absent connection and stale settings."
+			]
+		},
+		{
+			"id": "obsidian-scoped-graph",
+			"title": "Broker native Obsidian graph access to scoped project and Shared collections",
+			"prompt": "Build server-owned, bounded read/search/link/backlink/tag traversal over the optional Obsidian connector. Add strict-user-owned private-project folder mappings and read-only Shared collection opt-ins in Global Settings. Use native note graph metadata, not an embedding pipeline or invented graph endpoint. Apply scope to every hop, edge endpoint, snippet and tag count; agent text/links never grant new scope. No direct API key, generic upstream proxy, active-file/command execution, global writes or broad MCP tools reach agents. Keep pinned Kanban execution revisions independent from mutable vault notes.",
+			"dependsOn": ["obsidian-system-connector", "knowledge-api-cli", "knowledge-curation"],
+			"acceptanceCriteria": [
+				"User-configured Shared collections can be read by opted-in projects without exposing another project's private notes.",
+				"Backlinks, aliases, unresolved links, tags and search cannot bypass scope; traversal has explicit depth/node/byte limits.",
+				"Graph discovery requires no vectorization and connection/indexing failures do not invalidate pinned execution knowledge."
+			]
+		},
+		{
+			"id": "knowledge-store",
+			"title": "Add durable versioned project knowledge storage",
+			"prompt": "Implement the knowledge storage domain specified in docs/specs/cost-aware-multi-agent-coordination.md. Add small schemas/store modules under src/knowledge and canonical path helpers in src/state/kanban-home.ts. Store immutable Markdown objects plus a locked versioned revision manifest, with expected-revision writes and source metadata. Use durable-file/locked-file-system helpers. Do not add RPCs, prompts, board effects or an external service in this card. Verify existing home migration and project rename move the knowledge directory; add any required shared-path coverage.",
+			"dependsOn": [],
+			"acceptanceCriteria": [
+				"Concurrent/stale revision writes cannot silently overwrite one another.",
+				"A failed content/manifest write or corrupt manifest cannot destroy existing knowledge; retries are idempotent.",
+				"Knowledge is workspace-scoped, uses the canonical Kanban home, and survives home/workspace-id migration."
+			]
+		},
+		{
+			"id": "knowledge-api-cli",
+			"title": "Expose scoped knowledge discovery and reads to all agents",
+			"prompt": "Add a narrow knowledge contract and runtime API plus generic kanban knowledge list/read/search/context commands. Follow project-secrets-contract and app-router's workspaceProcedure/strict-caller patterns; keep server implementation out of the web-ui router graph. Enforce own-project reads even with isolation off. Return bounded metadata, content slices and explicit truncation, with revision/source provenance. Use a maintained Markdown parser for heading/section extraction after checking dependencies. No LLM/embedding search, external MCP credentials or automatic prompt injection.",
+			"dependsOn": ["knowledge-store"],
+			"acceptanceCriteria": [
+				"User and every identified own-project role can read/search; unknown and cross-project callers are refused in every isolation mode.",
+				"Metadata/search responses are bounded, section reads retain revision provenance, and path escape attempts fail.",
+				"CLI reads work through the running server and AppRouter passes the web-ui graph/typechecks."
+			]
+		},
+		{
+			"id": "knowledge-curation",
+			"title": "Add proposals, curated publication and user-pinned decisions",
+			"prompt": "Implement knowledge proposal and publication policy in src/knowledge behind the scoped runtime routes. Cards/QA/planners submit proposals; only the user or own-project orchestrator publishes ordinary knowledge. Only the user pins/unpins or revises protected decisions. Record author, publisher, base revision and idempotency identity. Protect against pin bypass through delete, supersession, aliases and restoration. Use strict caller lookup, not only environment credentials. No knowledge publication may approve/expand a plan or mutate a kit/budget.",
+			"dependsOn": ["knowledge-api-cli"],
+			"acceptanceCriteria": [
+				"Cards cannot publish authoritative knowledge; proposals are inspectable and retry-safe.",
+				"Orchestrators cannot bypass user pins by replacement, deletion, renaming, supersession or aliasing.",
+				"Publication history preserves revisions/actors and does not change execution approval or project policy."
+			]
+		},
+		{
+			"id": "knowledge-ui",
+			"title": "Make shared project knowledge and proposals visible in the browser",
+			"prompt": "Add a project-level Knowledge view using existing project navigation, UI primitives and dark tokens. Keep document state/effects in focused hooks and rendering in small components. Show overview, kind/section discovery, revisions, source links, proposals/diffs and user-pin controls according to server permissions. Safely render Markdown with raw HTML/unsafe URLs disabled. Never put project content on the machine-wide project summary stream. Use isolated shared-Chrome phone and desktop tests.",
+			"dependsOn": ["knowledge-curation"],
+			"acceptanceCriteria": [
+				"Users can discover/read current and prior revisions, inspect/publish proposals and recognize user-pinned decisions.",
+				"Unsafe Markdown cannot execute script or make privileged same-origin requests.",
+				"Phone/desktop e2e covers the complete knowledge workflow without using live data or shared default Chrome contexts."
+			]
+		},
+		{
+			"id": "approved-plan-bundles",
+			"title": "Publish exact approved plan and contract bundles before execution",
+			"prompt": "Extend src/plans/plan-breakdown.ts, plan-index.ts, plan-target.ts and the existing user-only plans approval route for a new explicit bundle format. Bind approval to spec, breakdown and declared contracts together. Publish immutable knowledge content idempotently before expansion so deletion of the planner worktree does not remove it. Preserve legacy breakdown-only approvals without silently extending their authority to new contract text. Update planner/approval previews and tests; approval remains exclusively through the existing user route.",
+			"dependsOn": ["knowledge-curation"],
+			"acceptanceCriteria": [
+				"An approved bundle is readable to project agents before plan landing and after planner worktree deletion.",
+				"Changing any bound spec/contract/breakdown requires a fresh user approval.",
+				"Legacy approvals retain legacy semantics, publication/expansion retries do not double-create documents or cards."
+			]
+		},
+		{
+			"id": "task-knowledge-refs",
+			"title": "Persist task and attempt knowledge references across the workflow",
+			"prompt": "Add the optional task knowledge/approved-bundle references and a per-attempt context manifest. Extend src/core/api-contract.ts and web-ui/src/state/board-state.ts normalization plus relevant CLI/RPC parsers, plan expansion and pipeline sibling creation. Dev, QA, rework, escalation and runoff paths must retain exact revisions without cross-project references. Expose explicit contract drift, not silent latest-version replacement. Keep acceptance criteria before FINAL STEP; leave legacy cards valid.",
+			"dependsOn": ["approved-plan-bundles"],
+			"acceptanceCriteria": [
+				"Browser saves and every sibling/QA creator retain valid pinned knowledge refs; foreign project references are refused.",
+				"A new knowledge revision cannot silently change an active attempt or the acceptance criteria used by its QA.",
+				"Legacy cards remain usable, attempt manifests survive restart and expose current-versus-pinned drift."
+			]
+		},
+		{
+			"id": "agent-knowledge-bootstrap",
+			"title": "Give every agent short knowledge pointers instead of full plan payloads",
+			"prompt": "Integrate small stable knowledge-discovery pointers and per-attempt references into src/trpc/runtime-api.ts task/sidebar launches and headless orchestrator launch paths. Reuse adapter/profile boundaries for agent-specific facts. The generic knowledge CLI is the baseline for all agents. Do not paste document bodies, timestamps or changing search results into the stable prefix. Any launch files must be excluded/cleaned by existing owners. Update planner guidance to discover contracts while preserving its no-create/no-start/no-approval role.",
+			"dependsOn": ["task-knowledge-refs"],
+			"acceptanceCriteria": [
+				"Task, QA, planner, sidebar and headless launch paths can discover their own project's knowledge.",
+				"Launch prompts contain only bounded pointers/refs, not the full plan or unrelated knowledge documents.",
+				"Prefix output is stable, no agent-id literals are added to pipeline logic, and generated files do not land as project changes."
+			]
+		},
+		{
+			"id": "usage-observations",
+			"title": "Extend the existing token reader with normalized usage observations",
+			"prompt": "Extend src/terminal/agent-token-usage.ts through focused reader modules to expose per-session/per-model observations alongside the existing aggregate interface. Include source identity, time, worktree, counts, provider/model where actually known and telemetry completeness/delay. Preserve message de-duplication, cache accounting and synthetic/provider-error exclusions. Copilot delayed totals and unsupported CLI telemetry remain explicit. Do not infer historic provider/model from edited board defaults or add a second transcript parser.",
+			"dependsOn": [],
+			"acceptanceCriteria": [
+				"Existing aggregate token/model answers remain compatible.",
+				"Repeated/copied/cumulative transcript records cannot double-count observations.",
+				"Mixed models, absent provider telemetry and delayed session totals are represented with explicit coverage rather than zero estimates."
+			]
+		},
+		{
+			"id": "usage-ledger-lineage",
+			"title": "Retain usage and objective-family lineage beyond card cleanup",
+			"prompt": "Build a server-owned durable usage/family ledger consuming normalized observations from the shared reader. Track dev, QA, rework, escalation and runoff family relationships through existing creation/action parsers, without dependency links between racers/replacements. Retain observations after Done/worktree deletion/prune and reconcile late totals idempotently. Project overhead remains separate when planning/orchestrator sessions cannot be allocated reliably. Do not use team scoreboard entries as authoritative runtime observations.",
+			"dependsOn": ["usage-observations"],
+			"acceptanceCriteria": [
+				"Each observation is charged once despite restart, late totals and rereads.",
+				"Losing/discarded attempts and QA/rescue costs remain in family totals after pruning.",
+				"Legacy unlinked work and shared overhead are marked unattributed; no new board/Done writer or sibling dependency link is introduced."
+			]
+		},
+		{
+			"id": "efficiency-timing",
+			"title": "Measure active, setup, queue, hold and review time from existing owners",
+			"prompt": "Add normalized timing observations from existing session-manager running spans, pipeline checks status, QA queue waits, recovery/rework state and Done/landing outcomes. Store only facts needed for efficiency reporting. Account for overlapping waits and missing historic observations; distinguish critical-path elapsed time from summed agent durations. Do not infer progress from PTY output, derive new card columns, or duplicate card-stage/session-sync owners.",
+			"dependsOn": ["usage-ledger-lineage"],
+			"acceptanceCriteria": [
+				"Setup/checks, active agent, provider/QA waiting and human-review delays have attributable durations with coverage.",
+				"Overlapping stages cannot inflate elapsed-time totals; restart downtime is not active work.",
+				"Existing column sync and card-stage logic remain the sole behavior/presentation owners."
+			]
+		},
+		{
+			"id": "cost-report-forecast",
+			"title": "Report estimated objective costs, coverage and completion ranges",
+			"prompt": "Add pure pricing/reporting/forecast logic over the usage/family ledger and existing provider/price sources. Extract a reusable price boundary with compatibility exports if core reporting otherwise imports the team feature. Report separate metered estimates, subscription quota usage and local capacity/time; never describe estimates as invoice totals. Include failing/unfinished cohorts, all QA/rework/runoff costs, price-table revision and missing coverage. Forecasts explain their cohort and uncertainty.",
+			"dependsOn": ["efficiency-timing"],
+			"acceptanceCriteria": [
+				"Unknown prices/providers/usage remain unknown, not free; subscription/local usage is not equated with infinite capacity.",
+				"Family reports include losing attempts, QA, rework and rescue exactly once, with overhead shown separately.",
+				"Forecasts have provenance, sample size and ranges; sparse or biased evidence yields insufficient evidence."
+			]
+		},
+		{
+			"id": "efficiency-ui-cli",
+			"title": "Expose project, plan and task efficiency reports",
+			"prompt": "Add narrow workspace-scoped report APIs/CLI and a project/task/plan efficiency view over the new reporting domain. Show development, QA, rework/recovery, runoff and overhead components plus timing/coverage/forecast details. Reuse existing primitives and localized time helpers. Keep the board header token/time-only design unchanged and never send report text on the global project stream. Use injected metrics and shared-Chrome tests, not live agent sessions.",
+			"dependsOn": ["cost-report-forecast", "knowledge-ui"],
+			"acceptanceCriteria": [
+				"Users can inspect component costs, waits, coverage and forecast evidence for a task/plan/project.",
+				"Own-project agents can read scoped reports; foreign/unknown callers cannot see project text.",
+				"Phone/desktop behavior is tested and existing board headers remain unchanged."
+			]
+		},
+		{
+			"id": "ownership-annotations",
+			"title": "Add planning hints for module ownership and shared contracts",
+			"prompt": "Extend the new plan bundle/card schema and planner guidance with optional likely-edit paths/modules, shared interface producer/consumer refs, task-category/risk and rough duration hints. Paths must be relative and bounded. Preserve legacy schema compatibility and approval hashing semantics. Annotations are advisory evidence, not filesystem locks, a model allow list or automatic task creation/start. Update the plan preview to display them.",
+			"dependsOn": ["approved-plan-bundles"],
+			"acceptanceCriteria": [
+				"New plans can express ownership and producer/consumer relationships in validated bounded fields.",
+				"Legacy plans remain readable and changing new bundle annotations is visible to approval review.",
+				"Annotations never impose write locks, change workflow by provider or auto-start cards."
+			]
+		},
+		{
+			"id": "parallel-plan-advisor",
+			"title": "Explain task collisions, contract dependencies and critical path",
+			"prompt": "Implement pure advisory analysis of the approved plan dependency graph and ownership/contract hints. Find likely overlapping changes, missing producer dependencies and critical-path/parallel waves with uncertainty. Explain each suggestion with affected refs/files; show advice in plan preview without rewriting user-approved dependencies. Test cycles, fan-in, ambiguous ownership and duration gaps. Use existing plan graph validation rather than a second dependency schema.",
+			"dependsOn": ["ownership-annotations"],
+			"acceptanceCriteria": [
+				"Advisory collisions and critical-path suggestions are deterministic and evidence-linked.",
+				"No approved dependency or parallel group is mutated by analysis.",
+				"Missing hints/durations are shown as uncertainty; existing cycle/fan-in validation remains authoritative."
+			]
+		},
+		{
+			"id": "runtime-coordination-advisor",
+			"title": "Show ready work and current coordination bottlenecks",
+			"prompt": "Add advisory runtime facts comparing ready tasks, pinned-contract drift, observed changed files, active ownership and existing capacity/quota/QA waits. Read current stage/prerequisite owners; do not create a scheduler that writes columns or starts tasks. Provide project-scoped suggestions to the orchestrator/efficiency UI with provenance and next useful action. Keep machine-wide resource facts text-free across workspaces.",
+			"dependsOn": ["parallel-plan-advisor", "task-knowledge-refs", "efficiency-timing"],
+			"acceptanceCriteria": [
+				"The project can distinguish ready work, likely collisions, contract drift and resource waits.",
+				"Suggestions do not auto-start/reassign cards or bypass prerequisite claims.",
+				"No other project's card ids/text leak through shared capacity or summary views."
+			]
+		},
+		{
+			"id": "qa-evidence-manifest",
+			"title": "Give QA bounded evidence manifests and pinned contract references",
+			"prompt": "Extend existing checks/QA report append points with a bounded evidence manifest: exact snapshot/base, changed paths, pinned contracts, check commands/results, artifacts and base-failure evidence. Prefer scoped reads and references to full logs. Keep src/pipeline/qa-prompt.ts's legacy skeleton word-for-word intact. Dev claims never become verdicts, unavailable evidence never permits skipping checks, and an unanswered blocking checks failure must still fail the existing verdict completeness gate.",
+			"dependsOn": ["task-knowledge-refs", "agent-knowledge-bootstrap"],
+			"acceptanceCriteria": [
+				"QA receives usable revision-bound evidence without unbounded full-log or full-plan injection.",
+				"Legacy QA prompt equality and existing checks/verdict guards remain valid.",
+				"Missing, stale, agent-authored or truncated evidence cannot silently justify PASS or skip required verification."
+			]
+		},
+		{
+			"id": "integration-candidates",
+			"title": "Build disposable combined integration candidates without changing branches",
+			"prompt": "Implement deterministic candidate-tree construction for selected ready snapshots against an exact base. Use isolated temporary git repos/exports and createGitProcessEnv; include selected snapshot ids, base tree and pinned contract refs in the candidate identity. Report merge conflicts without resolving them with an agent or modifying live branches/worktrees. Test real temp git combinations that pass individually but conflict together. No Done/landing side effects.",
+			"dependsOn": ["task-knowledge-refs", "parallel-plan-advisor"],
+			"acceptanceCriteria": [
+				"Identical exact inputs yield the same candidate identity and deterministic conflict reports.",
+				"No live base branch, index or card worktree is modified.",
+				"A changed base/snapshot/contract invalidates the candidate identity; unresolved conflicts are not hidden."
+			]
+		},
+		{
+			"id": "integration-reports",
+			"title": "Run and display speculative combined-snapshot checks",
+			"prompt": "Connect disposable integration candidates to the existing scripted-check execution boundary with isolated exports/databases, environment stripping, redaction and cleanup. Persist exact-input result provenance and expose project-scoped reports. Initial mode is report only: no card finish/land, no override of per-card QA or existing vetoes. Deduplicate same-input checks and bound concurrency using existing resource facts. Do not copy the entire checks runner into a second implementation.",
+			"dependsOn": ["integration-candidates", "qa-evidence-manifest", "efficiency-ui-cli"],
+			"acceptanceCriteria": [
+				"Combined checks use existing isolation/redaction/cleanup guarantees and do not duplicate same-input work.",
+				"Stale candidate results are visibly invalid and cannot stand in for individual QA PASS.",
+				"Integration reports have no default board, Done or landing side effects."
+			]
+		},
+		{
+			"id": "isolated-setup-cache",
+			"title": "Reduce setup time using validated isolated dependency caches",
+			"prompt": "Instrument install/setup time in the existing checks path, then add opt-in acceleration using supported package-manager caches before considering preinstalled artifacts. Key by lockfile/manager/platform/toolchain/config and relevant install mode; never include credentials. Restore into isolated directories via copies/reflinks, not writable shared node_modules/build/database symlinks. Any reusable installed artifact needs a trusted producer and integrity validation. Preserve full checks, native install semantics, cleanup and fallback on mismatch.",
+			"dependsOn": ["efficiency-timing"],
+			"acceptanceCriteria": [
+				"Cache hit/miss and setup durations are measurable, and immutable-input changes invalidate reuse.",
+				"One card's install/mutation cannot change another card's dependencies or trusted cached artifacts.",
+				"Credentials and databases are not cached; native-script/config mismatch falls back to an isolated fresh install."
+			]
+		},
+		{
+			"id": "outcome-routing-advisor",
+			"title": "Recommend kit assignments using cost-to-completion evidence",
+			"prompt": "Add kit-owned report-only model/agent recommendations connected to src/kits/dev-assignment.ts and policy. Use project/task-type outcome cohorts, first-pass quality, all family costs, time ranges, quota/capacity and confidence separately. Keep current assignments and manual picks unchanged. Harness/account errors are not model-quality failures; small samples produce insufficient evidence. Models remain unrestricted, no routing allow list is introduced and preset workflows stay identical.",
+			"dependsOn": ["cost-report-forecast", "ownership-annotations"],
+			"acceptanceCriteria": [
+				"Recommendations explain samples, uncertainty, full completion cost and time/capacity tradeoffs.",
+				"No assignment changes in report mode, no model is prohibited, and manual selections win.",
+				"Harness/provider-account failures, unfinished work and losing attempts cannot bias the report into a false cheap winner."
+			]
+		},
+		{
+			"id": "budget-reports",
+			"title": "Add user-owned budget policies and report-only forecasts",
+			"prompt": "Define narrow user-owned task/plan/project budget policy and read/report interfaces over the cost domain. Default to report; strict callers prevent orchestrators/cards raising limits or changing enforcement mode. Show spend coverage, forecasts, quota/capacity distinction and next-step budget implications. Define explicit unknown-price/delayed-usage policy without claiming hard billing caps. No launch/retry/input holds or process interruption in this card.",
+			"dependsOn": ["cost-report-forecast", "efficiency-ui-cli"],
+			"acceptanceCriteria": [
+				"Budget reports default to no effects and expose uncertainty rather than converting unknown cost to zero.",
+				"Only the user changes protected budget policies/limits; changes are auditable and workspace-scoped.",
+				"Subscription quota and local capacity do not masquerade as metered-spend budget values."
+			]
+		},
+		{
+			"id": "optional-budget-admission",
+			"title": "Add explicit opt-in budget admission without killing active work",
+			"prompt": "Implement disabled-by-default budget admission/reservations at the shared launch and new-turn delivery boundaries, using existing server actions and typed-input hold ownership. Cover task/QA/retry/runoff/headless work, concurrency, unknown-cost policy and restart-safe holds/overrides. Hold new cost-incurring work only; never kill running shell tools or swap a model mid-turn. Surface reason/deadline/action through existing stage/watchdog facts. Avoid a second pipeline writer and accurately describe delayed telemetry/overshoot limitations.",
+			"dependsOn": ["budget-reports", "runtime-coordination-advisor"],
+			"acceptanceCriteria": [
+				"Report/off behavior remains unchanged; only explicit user opt-in activates admission.",
+				"Concurrent reservations and new-turn paths cannot independently spend the same remainder; missing estimates follow an explicit policy.",
+				"Active tools/user drafts are untouched; holds and user-authorized overrides survive restart and have a visible way to resume."
+			]
+		},
+		{
+			"id": "optional-policy-application",
+			"title": "Offer explicit application of assignment and integration advice",
+			"prompt": "Add user-controlled opt-in application of validated kit assignment recommendations at creation and optional exact-candidate integration landing prechecks. Reuse dev-assignment's creator/manual-pick semantics and the shared landing gate/veto interface. Do not change saved/running cards, vary team workflow by provider, bypass existing QA or finish cards from the integration feature. Initial defaults stay advisory; stale results/unknown evidence must not permit a land. Keep assignment and integration toggles independent.",
+			"dependsOn": ["outcome-routing-advisor", "integration-reports"],
+			"acceptanceCriteria": [
+				"Automatic choice/gating requires explicit separate opt-ins and preserves manual assignments.",
+				"Landing uses the single shared implementation and refuses/holds before side effects when exact integration evidence is stale or failing.",
+				"No per-card QA/veto/hold is bypassed and no existing card is silently rerouted."
+			]
+		},
+		{
+			"id": "project-attention-view",
+			"title": "Focus project attention on decisions that unblock the team",
+			"prompt": "Build a project efficiency/attention view joining existing watchdog decisions and new knowledge proposals, contract drift, collision advice, budget reports and integration failures. Group by decision needed, blocked work, worthwhile intervention and safe-to-wait. Link evidence and the smallest authorized action. Extend the existing watchdog facts/ATTENTION owner if necessary; never introduce another wake or ATTENTION writer. Keep text workspace-scoped and tests mobile/shared-Chrome isolated.",
+			"dependsOn": ["runtime-coordination-advisor", "budget-reports", "integration-reports", "knowledge-ui"],
+			"acceptanceCriteria": [
+				"Attention items distinguish user decisions from waits/recovery already handled by an owner.",
+				"Each item has provenance and a concrete authorized action; no duplicate wake/ATTENTION implementation exists.",
+				"Phone/desktop workflows work and no cross-project text appears in global summaries."
+			]
+		},
+		{
+			"id": "optional-obsidian-export",
+			"title": "Export canonical knowledge to an optional scoped Obsidian view",
+			"prompt": "Implement an explicitly enabled, asynchronous knowledge presentation/export adapter following .plan/docs/obsidian-adoption.md. Canonical execution remains the Kanban Markdown revisions. User-owned endpoint/project-folder mapping and a server-owned credential boundary define access; cards receive no vault token or broad MCP tools. Idempotent exports include revision/source refs and cannot block Done or change approvals/routing. Do not configure a live endpoint or migrate the user's vault automatically.",
+			"dependsOn": ["knowledge-ui", "approved-plan-bundles", "obsidian-scoped-graph"],
+			"acceptanceCriteria": [
+				"No external service is required and no credential is delivered to agent prompts/environments.",
+				"Exports are workspace-scoped, revision-linked, idempotent and independent of Done/approval/routing outcomes.",
+				"Vault edits cannot silently replace pinned execution knowledge; mapping/enablement remains explicitly user-owned."
+			]
+		}
+	]
+}

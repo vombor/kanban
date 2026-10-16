@@ -187,6 +187,12 @@ import {
 	type RuntimeKitSettingsApi,
 } from "./kit-settings-api";
 import {
+	obsidianConnectorProbeSchema,
+	obsidianConnectorViewSchema,
+	obsidianConnectorWriteSchema,
+	type RuntimeObsidianConnectorApi,
+} from "./obsidian-connector-contract";
+import {
 	orchestratorInboxStatusResponseSchema,
 	orchestratorInboxTakeResponseSchema,
 	type RuntimeOrchestratorInboxApi,
@@ -249,6 +255,7 @@ export interface RuntimeTrpcWorkspaceScope {
 
 export interface RuntimeTrpcContext {
 	projectSecretsApi?: RuntimeProjectSecretsApi;
+	obsidianConnectorApi?: RuntimeObsidianConnectorApi;
 	requestedWorkspaceId: string | null;
 	workspaceScope: RuntimeTrpcWorkspaceScope | null;
 	/**
@@ -547,6 +554,35 @@ const gitSyncActionInputSchema = z.object({
 });
 
 export const runtimeAppRouter = t.router({
+	obsidianConnector: t.router({
+		get: t.procedure.output(obsidianConnectorViewSchema).query(async ({ ctx }) => {
+			if (!ctx.obsidianConnectorApi)
+				throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Obsidian connector settings are unavailable." });
+			return await ctx.obsidianConnectorApi.get(await readStrictCaller(ctx));
+		}),
+		save: t.procedure
+			.input(obsidianConnectorWriteSchema)
+			.output(obsidianConnectorViewSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.obsidianConnectorApi)
+					throw new TRPCError({
+						code: "NOT_IMPLEMENTED",
+						message: "Obsidian connector settings are unavailable.",
+					});
+				return await ctx.obsidianConnectorApi.save(await readStrictCaller(ctx), input);
+			}),
+		test: t.procedure
+			.input(obsidianConnectorWriteSchema)
+			.output(obsidianConnectorProbeSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.obsidianConnectorApi)
+					throw new TRPCError({
+						code: "NOT_IMPLEMENTED",
+						message: "Obsidian connector settings are unavailable.",
+					});
+				return await ctx.obsidianConnectorApi.test(await readStrictCaller(ctx), input);
+			}),
+	}),
 	projectSecrets: t.router({
 		list: workspaceProcedure.output(projectSecretsMetadataSchema).query(async ({ ctx }) =>
 			ctx.projectSecretsApi

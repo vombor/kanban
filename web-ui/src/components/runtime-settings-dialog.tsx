@@ -15,12 +15,14 @@ import {
 	ExternalLink,
 	GitCommit,
 	Github,
+	Network,
 	Palette,
 	Settings,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentDefaultModelFields } from "@/components/agent-default-model-fields";
 import { GitHubAppSettingsSection } from "@/components/github-app-settings-section";
+import { ObsidianConnectorSettingsSection } from "@/components/obsidian-connector-settings-section";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
 import { Dialog, DialogFooter, DialogHeader } from "@/components/ui/dialog";
@@ -72,7 +74,7 @@ const GIT_PROMPT_VARIANT_OPTIONS: Array<{ value: TaskGitAction; label: string }>
 
 const SETTINGS_AGENT_ORDER: readonly RuntimeAgentId[] = ["cline", "claude", "codex", "droid", "kiro"];
 
-type SettingsNavId = "agents" | "git-prompts" | "notifications" | "appearance" | "github";
+type SettingsNavId = "agents" | "git-prompts" | "notifications" | "appearance" | "github" | "knowledge";
 
 const SETTINGS_NAV_ITEMS: ReadonlyArray<{
 	id: SettingsNavId;
@@ -84,6 +86,7 @@ const SETTINGS_NAV_ITEMS: ReadonlyArray<{
 	{ id: "notifications", label: "Notifications", icon: <Bell size={16} /> },
 	{ id: "appearance", label: "Appearance", icon: <Palette size={16} /> },
 	{ id: "github", label: "GitHub App", icon: <Github size={16} /> },
+	{ id: "knowledge", label: "Knowledge", icon: <Network size={16} /> },
 ];
 
 function formatNotificationPermissionStatus(permission: BrowserNotificationPermission): string {
@@ -575,6 +578,22 @@ export function RuntimeSettingsDialog({
 	return (
 		<Dialog open={open} onOpenChange={handleDialogOpenChange} contentClassName="!max-w-[780px]">
 			<DialogHeader title="Global Settings" icon={<Settings size={16} />} />
+			<div className="border-b border-border px-5 py-2 md:hidden">
+				<NativeSelect
+					aria-label="Settings section"
+					value={activeSection}
+					onChange={(event) => {
+						const item = navItems.find((entry) => entry.id === event.target.value);
+						if (item) handleNavSelect(item.id);
+					}}
+				>
+					{navItems.map((item) => (
+						<option key={item.id} value={item.id}>
+							{item.label}
+						</option>
+					))}
+				</NativeSelect>
+			</div>
 			<div className="flex h-[min(480px,60vh)]">
 				<SettingsNav items={navItems} activeId={activeSection} onSelect={handleNavSelect} />
 				<div
@@ -889,6 +908,13 @@ export function RuntimeSettingsDialog({
 						</h2>
 					</div>
 					<GitHubAppSettingsSection enabled={open} />
+					<div data-settings-section="knowledge" />
+					<div className="sticky top-0 -mx-5 px-5 pt-4 pb-2 bg-surface-1 z-10">
+						<h2 className="flex items-center gap-2 text-base font-semibold text-text-primary m-0">
+							<Network size={16} className="text-text-secondary" /> Knowledge
+						</h2>
+					</div>
+					<ObsidianConnectorSettingsSection active={open} />
 
 					{saveError ? (
 						<div className="flex gap-2 rounded-md border border-status-red/30 bg-status-red/5 p-3 text-[13px]">

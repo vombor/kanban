@@ -146,6 +146,18 @@ describe.sequential("scripts/secret-guard.sh", () => {
 		expect(result.stderr).not.toContain(keyLine);
 	});
 
+	it("knows the private Obsidian connector key without printing it", () => {
+		const key = "plain-obsidian-value-1234567890";
+		const secretsDir = join(env.KANBAN_HOME ?? "", "secrets");
+		mkdirSync(secretsDir, { recursive: true });
+		writeFileSync(join(secretsDir, "obsidian-connector.json"), JSON.stringify({ apiKey: key }));
+		const commit = commitFile("note.txt", `${key}\n`, "note");
+		const result = runGuard(["--scan", "HEAD"]);
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain(`commit ${commit.slice(0, 10)} adds a secret value used on this machine`);
+		expect(result.stderr).not.toContain(key);
+	});
+
 	it("knows Copilot's token from COPILOT_GITHUB_TOKEN as a secret value", () => {
 		const token = "plain-copilot-value-1234567890";
 		const commit = commitFile("copilot.txt", `copilot: ${token}\n`, "copilot");
