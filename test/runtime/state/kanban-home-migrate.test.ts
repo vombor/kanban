@@ -15,7 +15,7 @@ import {
 import { dirname, join, relative } from "node:path";
 
 import { describe, expect, it } from "vitest";
-
+import { createProjectKnowledgeStore } from "../../../src/knowledge/knowledge-store";
 import { isManifestForStart } from "../../../src/pipeline/restart-recovery";
 import {
 	getCalibrationPaths,
@@ -109,6 +109,45 @@ function listTarball(path: string): string[] {
 }
 
 describe("kanban home migrate", () => {
+	it("copies immutable project knowledge and preserves its exact revision/content through the real migration", async () => {
+		await withTemporaryKanbanHome(async ({ userHomePath }) => {
+			const { legacyHome, targetHome } = getHomes(userHomePath);
+			seedLegacyHome(userHomePath);
+			const source = createProjectKnowledgeStore({ homePath: legacyHome });
+			const published = await source.mutate(
+				"foo",
+				{ kind: "user" },
+				{
+					action: "publish",
+					requestId: "a4b05de9-e2cf-4c72-a89f-a7a58ab15dc9",
+					expectedRevision: null,
+					document: {
+						id: "api-contract",
+						kind: "contract",
+						title: "API Contract",
+						summary: "",
+						tags: [],
+						sources: [],
+					},
+					markdown: "# API Contract\nUse cursor pagination.\n",
+				},
+			);
+			if (published.kind !== "document") throw new Error("Expected document");
+			const result = await runKanbanHomeMigration({
+				...fromHome(userHomePath),
+				toPath: targetHome,
+				probeRuntimeServer: noServer,
+			});
+			expect(result.executed).toBe(true);
+			const target = createProjectKnowledgeStore({ homePath: targetHome });
+			expect((await target.snapshot("foo")).documents["api-contract"]?.[0]?.revision).toBe(
+				published.document.revision,
+			);
+			expect(await target.readContent("foo", published.document.contentHash)).toBe(
+				"# API Contract\nUse cursor pagination.\n",
+			);
+		});
+	});
 	it("copies the legacy home, marks the target and records the legacy worktree root", async () => {
 		await withTemporaryKanbanHome(
 			async ({ userHomePath }) => {

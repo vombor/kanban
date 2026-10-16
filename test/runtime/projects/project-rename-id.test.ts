@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { applyCliSessionScope } from "../../../src/isolation/cli-scope";
 import { KANBAN_SESSION_CREDENTIAL_ENV } from "../../../src/isolation/session-identity";
+import { createProjectKnowledgeStore } from "../../../src/knowledge/knowledge-store";
 import {
 	describeInvalidWorkspaceId,
 	type ProjectRenameIdOptions,
@@ -208,6 +209,42 @@ function snapshotTree(root: string): Record<string, string> {
 }
 
 describe("kanban project rename-id", () => {
+	it("moves project knowledge without changing content/revisions or rewriting historical author identities", async () => {
+		await withTemporaryKanbanHome(async () => {
+			seedHome();
+			const store = createProjectKnowledgeStore();
+			const published = await store.mutate(
+				"kanban-2uge",
+				{ kind: "session", role: "orchestrator", taskId: "__home_agent__:kanban-2uge:claude" },
+				{
+					action: "publish",
+					requestId: "c684d070-d1a9-4e53-8174-0bca65ceaf73",
+					expectedRevision: null,
+					document: {
+						id: "api-contract",
+						kind: "contract",
+						title: "API Contract",
+						summary: "",
+						tags: [],
+						sources: [],
+					},
+					markdown: "# API Contract\nUse cursor pagination.\n",
+				},
+			);
+			if (published.kind !== "document") throw new Error("Expected document");
+			await runProjectIdRename(options());
+			const revision = (await store.snapshot("kanban")).documents["api-contract"]?.[0];
+			expect(revision?.revision).toBe(published.document.revision);
+			expect(revision?.publishedBy).toEqual({
+				kind: "session",
+				role: "orchestrator",
+				taskId: "__home_agent__:kanban-2uge:claude",
+			});
+			expect(await store.readContent("kanban", published.document.contentHash)).toBe(
+				"# API Contract\nUse cursor pagination.\n",
+			);
+		});
+	});
 	it("renames a project: index, dirs, config, session ids, messages, calibration specs, restart requests", async () => {
 		await withTemporaryKanbanHome(async () => {
 			seedHome();

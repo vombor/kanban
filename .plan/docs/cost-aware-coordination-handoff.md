@@ -1,8 +1,10 @@
 # Cost-aware coordination implementation handoff
 
-Updated 2026-10-15. The user approved checkpointing the tested connector/roadmap before implementing the knowledge
-foundation. This slice was not deployed or used to configure the live vault/connector. The separate VS Code deletion
-commit was already pushed.
+Updated 2026-10-16. Connector/roadmap checkpoint: `f727d067`. The user authorized committing and pushing the tested
+knowledge foundation together with that checkpoint through the Kanban GitHub App over HTTPS. This commit records
+the foundation and its resume state. Publication does not authorize a live restart/deployment or vault configuration.
+Nothing in either slice has been deployed or used to configure the live vault. The separate VS Code deletion commit
+was already pushed.
 
 ## Confirmed product decisions
 
@@ -23,8 +25,9 @@ commit was already pushed.
 - Covers knowledge/revisions/proposals, approval bundles, task/attempt refs, tiny launch pointers, normalized usage,
   lineage/timing/cost forecasts, planning/coordination/routing advice, budgets, QA evidence, speculative integration,
   isolated setup caches, attention and optional system Obsidian graph/export capabilities.
-- Authorized next foundation cards: `knowledge-store`, `knowledge-api-cli`, `knowledge-curation`; then approved plan bundles
-  and task refs. `obsidian-scoped-graph` depends on scoped knowledge/curation and the connector slice below.
+- Foundation cards implemented: `knowledge-store`, `knowledge-api-cli`, `knowledge-curation`.
+- Next cards: `knowledge-ui`, `approved-plan-bundles`, `obsidian-scoped-graph`; then task refs and stable agent
+  bootstrap pointers. None of those dependent cards are claimed as implemented by the foundation.
 
 ## Implemented first slice: obsidian-system-connector
 
@@ -43,10 +46,29 @@ commit was already pushed.
 - Secret guard recognizes the private stored Obsidian key, with integration coverage.
 - Operator documentation: `docs/fork/obsidian-connector.md`.
 
+## Implemented foundation: project knowledge, discovery and curation
+
+- Canonical workspace paths under `<home>/data/<ws>/knowledge/`; immutable SHA-256 Markdown objects, hashed revision
+  chains and durable locked manifest/receipts. Objects commit before the manifest, so interrupted writes retain the
+  prior state and exact retries reuse the receipt. Missing/corrupt bodies/metadata are refused rather than reset.
+- Publication, proposals, review and user pins all keep history. Cards can propose, the user/own-project orchestrator
+  can curate ordinary knowledge, and user-pinned document changes/reviews/unpin remain user-only. No delete, alias
+  or supersede API exists, and a plan-kind document is explicitly reference material, not execution approval.
+- Strict workspace-scoped APIs for list/read/search/context/proposals/proposal body/history/mutation, even with
+  isolation off or grants to another workspace. AppRouter imports only the narrow contract, not the server/store.
+- Generic `kanban knowledge` CLI: source/section/revision discovery, bounded reads/snippets, publication and proposal
+  workflow. Read-only/proposal commands are available to project agents; CLI hints route requests but authorize
+  nothing. All operations call the server, never write its files in-process.
+- Uses maintained Markdown AST/string/slug packages instead of a custom Markdown parser. Search is bounded lexical
+  retrieval with no LLM/embedding call. There is no automatic full-plan prompt injection.
+- Public usage/retention/boundaries documented in `docs/fork/project-knowledge.md`. The store has explicit ceilings
+  and no automatic history eviction/GC. Project rename preserves historical author identities, which are provenance
+  only, not an access lookup; the whole knowledge data tree follows rename/home migration.
+
 ## Not yet implemented
 
-Project knowledge persistence/curation, plan content bundles, agent read/search/graph tools, folder/Shared mappings,
-graph traversal/pinning, usage/cost ledger/reports, scheduling/routing advice, budgets, integration checks, setup
+Knowledge browser view, plan content bundles, automatic task/attempt refs and launch pointers, Obsidian graph tools,
+folder/Shared mappings, graph traversal/pinning, usage/cost ledger/reports, scheduling/routing advice, budgets, integration checks, setup
 acceleration and export remain the dependency-ordered tasks in the breakdown. Enabling the connection does not yet
 grant agent vault access, crawl a vault, expose secrets or activate any automatic policy.
 
@@ -63,6 +85,18 @@ grant agent vault access, crawl a vault, expose secrets or activate any automati
 - The settings nav tracks scrolling, not tab lifetime. Binding the credential draft to activeSection cleared it
   during ordinary scrolling. It now stays for the whole open dialog and clears on close/unmount; mobile navigation
   is a native section selector rather than a desktop-only button locator.
+
+Foundation validation:
+
+- Final full check: 2,872 runtime tests and both typechecks passed, including the explicit real rename/home-migrate
+  tests. Existing rework-limits unused-import warning stays.
+- Web-ui suite: 709 passed. Production build passed in a throwaway source copy with sourcemap upload disabled.
+- Real CLI-through-server integration on a throwaway instance covers publication/exact retry, sections, search,
+  proposals/review, pins/history, stale writes, invalid ids/scopes and confirms no cards were created.
+- Focused store/RPC tests cover concurrent edit conflicts, failed commit recovery, immutable-object/manifest tamper,
+  user-pin enforcement, stale proposals, strict identity/cross-project refusal, bounded sections and migration.
+- Package-lock retains its existing two-space formatting. The Markdown dependencies add 34 packages, remove none,
+  and change no existing package versions.
 
 ## Safe continuation
 

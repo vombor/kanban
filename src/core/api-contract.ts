@@ -1559,6 +1559,12 @@ export const runtimeHookIngestResponseSchema = z.object({
 });
 export type RuntimeHookIngestResponse = z.infer<typeof runtimeHookIngestResponseSchema>;
 export type {
+	KnowledgeDocument,
+	KnowledgeMetadata,
+	KnowledgeProposal,
+	KnowledgeSection,
+} from "../trpc/knowledge-contract";
+export type {
 	ObsidianConnectorProbe,
 	ObsidianConnectorSettings,
 	ObsidianConnectorView,

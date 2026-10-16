@@ -10,6 +10,7 @@ import { registerHooksCommand } from "./commands/hooks";
 import { registerIsolationCommand } from "./commands/isolation";
 import { registerIssuesCommand } from "./commands/issues";
 import { registerKitCommand } from "./commands/kit";
+import { registerKnowledgeCommand } from "./commands/knowledge";
 import { registerMessageCommand } from "./commands/message";
 import { registerModelsCommand } from "./commands/models";
 import { registerOrchestratorCommand } from "./commands/orchestrator";
@@ -100,6 +101,7 @@ export function registerCliCommands(program: Command, version: string): void {
 	registerHomeCommand(program);
 	registerSetupCommand(program);
 	registerKitCommand(program);
+	registerKnowledgeCommand(program);
 	registerShortcutCommand(program);
 	registerConfigCommand(program);
 	registerModelsCommand(program);

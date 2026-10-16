@@ -532,6 +532,21 @@ export function getProjectSecretsPath(workspaceId: string, homePath = getKanbanH
 	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), "project-secrets.json");
 }
 
+/** Immutable project knowledge lives in the workspace data tree, so rename/home migration moves it with that tree. */
+export function getProjectKnowledgePaths(workspaceId: string, homePath = getKanbanHomePath()) {
+	if (
+		!workspaceId ||
+		workspaceId === "." ||
+		workspaceId === ".." ||
+		/[\\/\0]/u.test(workspaceId) ||
+		getReservedDataDirNames().includes(workspaceId)
+	) {
+		throw new Error("Invalid project knowledge scope");
+	}
+	const root = join(getKanbanWorkspaceDataPath(workspaceId, homePath), "knowledge");
+	return { root, manifest: join(root, "manifest.json"), objects: join(root, "objects") };
+}
+
 /** The pipeline's per-card state (`<home>/data/<workspaceId>/pipeline-state.json`). */
 export function getPipelineStatePath(workspaceId: string, homePath = getKanbanHomePath()): string {
 	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), PIPELINE_STATE_FILENAME);

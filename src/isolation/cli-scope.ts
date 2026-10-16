@@ -83,6 +83,8 @@ export const USER_ONLY_COMMANDS = [
 	"kit edit",
 	// Creates the machine's Kanban GitHub App, whose key the server keeps (src/github-app/).
 	"github bot create",
+	"knowledge pin",
+	"knowledge unpin",
 ] as const;
 
 /** The plan approval refusal (the server's, src/trpc/plans-api.ts, says the same). */
@@ -110,11 +112,14 @@ export const ORCHESTRATOR_OR_USER_COMMANDS = [
 	"project rename",
 	"shortcut add",
 	"shortcut remove",
+	"knowledge publish",
+	"knowledge review",
 ] as const;
 
 function orchestratorOrUserRefusal(commandPath: string): string {
-	const why =
-		commandPath === "issues sync"
+	const why = commandPath.startsWith("knowledge ")
+		? "publishes or reviews authoritative project knowledge"
+		: commandPath === "issues sync"
 			? "uses the user's GitHub login"
 			: commandPath === "models vet"
 				? "starts a smoke-test card on another agent and model"

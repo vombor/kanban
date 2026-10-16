@@ -187,6 +187,24 @@ import {
 	type RuntimeKitSettingsApi,
 } from "./kit-settings-api";
 import {
+	knowledgeContextResponseSchema,
+	knowledgeHistoryRequestSchema,
+	knowledgeHistoryResponseSchema,
+	knowledgeListRequestSchema,
+	knowledgeListResponseSchema,
+	knowledgeMutationResultSchema,
+	knowledgeMutationSchema,
+	knowledgeProposalReadRequestSchema,
+	knowledgeProposalReadResponseSchema,
+	knowledgeProposalsRequestSchema,
+	knowledgeProposalsResponseSchema,
+	knowledgeReadRequestSchema,
+	knowledgeReadResponseSchema,
+	knowledgeSearchRequestSchema,
+	knowledgeSearchResponseSchema,
+	type RuntimeKnowledgeApi,
+} from "./knowledge-contract";
+import {
 	obsidianConnectorProbeSchema,
 	obsidianConnectorViewSchema,
 	obsidianConnectorWriteSchema,
@@ -255,6 +273,7 @@ export interface RuntimeTrpcWorkspaceScope {
 
 export interface RuntimeTrpcContext {
 	projectSecretsApi?: RuntimeProjectSecretsApi;
+	knowledgeApi?: RuntimeKnowledgeApi;
 	obsidianConnectorApi?: RuntimeObsidianConnectorApi;
 	requestedWorkspaceId: string | null;
 	workspaceScope: RuntimeTrpcWorkspaceScope | null;
@@ -554,6 +573,73 @@ const gitSyncActionInputSchema = z.object({
 });
 
 export const runtimeAppRouter = t.router({
+	knowledge: t.router({
+		list: workspaceProcedure
+			.input(knowledgeListRequestSchema)
+			.output(knowledgeListResponseSchema)
+			.query(async ({ ctx, input }) => {
+				if (!ctx.knowledgeApi)
+					throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Project knowledge is unavailable." });
+				return await ctx.knowledgeApi.list(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId, input);
+			}),
+		read: workspaceProcedure
+			.input(knowledgeReadRequestSchema)
+			.output(knowledgeReadResponseSchema)
+			.query(async ({ ctx, input }) => {
+				if (!ctx.knowledgeApi)
+					throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Project knowledge is unavailable." });
+				return await ctx.knowledgeApi.read(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId, input);
+			}),
+		search: workspaceProcedure
+			.input(knowledgeSearchRequestSchema)
+			.output(knowledgeSearchResponseSchema)
+			.query(async ({ ctx, input }) => {
+				if (!ctx.knowledgeApi)
+					throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Project knowledge is unavailable." });
+				return await ctx.knowledgeApi.search(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId, input);
+			}),
+		context: workspaceProcedure.output(knowledgeContextResponseSchema).query(async ({ ctx }) => {
+			if (!ctx.knowledgeApi)
+				throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Project knowledge is unavailable." });
+			return await ctx.knowledgeApi.context(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId);
+		}),
+		proposals: workspaceProcedure
+			.input(knowledgeProposalsRequestSchema)
+			.output(knowledgeProposalsResponseSchema)
+			.query(async ({ ctx, input }) => {
+				if (!ctx.knowledgeApi)
+					throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Project knowledge is unavailable." });
+				return await ctx.knowledgeApi.proposals(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId, input);
+			}),
+		proposalRead: workspaceProcedure
+			.input(knowledgeProposalReadRequestSchema)
+			.output(knowledgeProposalReadResponseSchema)
+			.query(async ({ ctx, input }) => {
+				if (!ctx.knowledgeApi)
+					throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Project knowledge is unavailable." });
+				return await ctx.knowledgeApi.proposalRead(
+					await readStrictCaller(ctx),
+					ctx.workspaceScope.workspaceId,
+					input,
+				);
+			}),
+		history: workspaceProcedure
+			.input(knowledgeHistoryRequestSchema)
+			.output(knowledgeHistoryResponseSchema)
+			.query(async ({ ctx, input }) => {
+				if (!ctx.knowledgeApi)
+					throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Project knowledge is unavailable." });
+				return await ctx.knowledgeApi.history(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId, input);
+			}),
+		mutate: workspaceProcedure
+			.input(knowledgeMutationSchema)
+			.output(knowledgeMutationResultSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.knowledgeApi)
+					throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Project knowledge is unavailable." });
+				return await ctx.knowledgeApi.mutate(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId, input);
+			}),
+	}),
 	obsidianConnector: t.router({
 		get: t.procedure.output(obsidianConnectorViewSchema).query(async ({ ctx }) => {
 			if (!ctx.obsidianConnectorApi)

@@ -213,6 +213,40 @@ describe("applyCliSessionScope", () => {
 		});
 	});
 
+	it("keeps knowledge pins user-only and publication curated, even with isolation off", async () => {
+		await withTemporaryKanbanHome(async () => {
+			for (const commandPath of ["knowledge pin", "knowledge unpin"]) {
+				const result = await applyCliSessionScope({
+					commandPath,
+					options: {},
+					args: ["api-contract"],
+					createClient: noServer as never,
+					env: SESSION_ENV,
+				});
+				expect(result).not.toBeNull();
+			}
+			for (const commandPath of ["knowledge publish", "knowledge review"]) {
+				const result = await applyCliSessionScope({
+					commandPath,
+					options: {},
+					createClient: noServer as never,
+					env: SESSION_ENV,
+				});
+				expect(result).toContain("publishes or reviews authoritative project knowledge");
+			}
+			for (const commandPath of ["knowledge read", "knowledge propose"]) {
+				expect(
+					await applyCliSessionScope({
+						commandPath,
+						options: {},
+						createClient: noServer as never,
+						env: SESSION_ENV,
+					}),
+				).toBeNull();
+			}
+		});
+	});
+
 	it("refuses kit set/unset from a card session (isolation off included), allows the orchestrator and the user", async () => {
 		await withTemporaryKanbanHome(async () => {
 			const asRole = (role: "card" | "orchestrator") => () => ({
