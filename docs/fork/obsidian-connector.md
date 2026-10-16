@@ -22,7 +22,11 @@ with `authenticated: false` is a failed authentication test. Quiet indexing is n
 The verified Local REST API 5.4.0 exposes links/backlinks/unresolved links in its note JSON, plus tags/frontmatter
 and native search. Kanban detects advertised schemas rather than assuming a generic `/graph` route exists.
 
-**Save connector** persists settings and key in `<home>/secrets/obsidian-connector.json` (0600), using the canonical
+The popup's main **Save** button saves connector edits along with the other Global Settings; there is no separate
+connector save button. Cancel/close discards the unsaved key draft, and Test connection never persists it. If a save
+fails the popup stays open, successful changes are retained, and the remaining draft can be corrected/retried.
+
+Connector settings and key persist in `<home>/secrets/obsidian-connector.json` (0600), using the canonical
 Kanban home and durable writes. It is included when the home/secrets are backed up or migrated. Only the user can
 read/edit/test this configuration via strict caller checks, including with project isolation off. Saved keys are
 not returned to the browser, agent APIs, terminal environment or prompts. Concurrent stale saves are refused.

@@ -1,10 +1,9 @@
 # Cost-aware coordination implementation handoff
 
-Updated 2026-10-16. Connector/roadmap checkpoint: `f727d067`. The user authorized committing and pushing the tested
-knowledge foundation together with that checkpoint through the Kanban GitHub App over HTTPS. This commit records
-the foundation and its resume state. Publication does not authorize a live restart/deployment or vault configuration.
-Nothing in either slice has been deployed or used to configure the live vault. The separate VS Code deletion commit
-was already pushed.
+Updated 2026-10-16. Connector/roadmap checkpoint: `f727d067`; foundation publication: `cc71ea5b`. Both were pushed
+through the Kanban GitHub App over HTTPS and then deployed after the user explicitly requested the verified image
+and pod restart. The user tested/configured Obsidian successfully. The separate VS Code deletion was already pushed.
+The single-Save correction below was validated locally; the user subsequently authorized committing and deploying it.
 
 ## Confirmed product decisions
 
@@ -32,7 +31,8 @@ was already pushed.
 ## Implemented first slice: obsidian-system-connector
 
 - Global Settings has a Knowledge section with optional enablement, endpoint, masked key rotation/removal, optional
-  CA certificate, draft-only test and independent save. Mobile settings have a section selector.
+  CA certificate and draft-only test. The follow-up uses the popup's main Save for connector changes. Mobile settings
+  have a section selector.
 - Narrow contract/API: `src/trpc/obsidian-connector-contract.ts`; strict-user get/save/test routes in app-router.
   Server-only implementation under `src/knowledge/obsidian/`, constructed once by runtime-server.
 - Canonical private file: `<home>/secrets/obsidian-connector.json`, durable writes, 0600 file/0700 directory,
@@ -104,3 +104,19 @@ Preserve the source changes. Do not treat the remaining roadmap as implemented, 
 permission to configure services automatically. Do not commit/push/deploy without a new user request. Tests use
 isolated homes and shared Chrome contexts. For future agent graph retrieval, use native metadata and reapply scope
 at every hop; never make a link, tag, note frontmatter or project-authored mapping an authority to widen access.
+
+## Global Settings single-Save follow-up (2026-10-16)
+
+The user requested removing the separate Save connector button. The dialog now owns useObsidianConnector for its
+entire open lifetime, passes the draft to the presentation section and includes connector edits/key removal in its
+main Save dirty state. Test connection remains read-only. Connector-only saves do not rewrite unrelated runtime
+settings or require a new agent selection. The main Save closes only after required saves succeed; failures preserve
+the remaining draft and report partial success, and duplicate Save/Cancel/Escape are refused during persistence.
+Phone/desktop e2e covers main Save, Cancel, unsaved test and failure/retry. The user authorized committing and deploying
+this correction after validation. Exact image publication and live deployment evidence belong in the private
+installation maintenance ledger, not in the product source.
+
+Validation: `npm run check` passed both typechecks and all 2,872 runtime tests on the final rerun; the initial run had
+one transient failure in the unchanged server-lock subprocess test, which also passed alone. Its cause was not
+confirmed. All 714 web-ui tests, both shared-Chrome phone/desktop e2e cases and the isolated production build passed.
+The pre-existing rework-limits unused-import warning remains untouched.

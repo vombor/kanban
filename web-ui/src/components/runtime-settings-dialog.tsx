@@ -28,6 +28,7 @@ import { cn } from "@/components/ui/cn";
 import { Dialog, DialogFooter, DialogHeader } from "@/components/ui/dialog";
 import { NativeSelect } from "@/components/ui/native-select";
 import { TASK_GIT_BASE_REF_PROMPT_VARIABLE, type TaskGitAction } from "@/git-actions/build-task-git-action-prompt";
+import { useObsidianConnector } from "@/hooks/use-obsidian-connector";
 import { previewThemeId, readStoredThemeId, saveThemeId, THEME_GROUPS, THEMES, type ThemeId } from "@/hooks/use-theme";
 import { useLayoutCustomizations } from "@/resize/layout-customizations";
 import type { RuntimeAgentId, RuntimeConfigResponse } from "@/runtime/types";
@@ -254,6 +255,9 @@ export function RuntimeSettingsDialog({
 	onSaved?: () => void;
 }): React.ReactElement {
 	const { config, isLoading, isSaving, save } = useRuntimeConfig(open, workspaceId, initialConfig);
+	const obsidian = useObsidianConnector(open);
+	const [isSavingSettings, setIsSavingSettings] = useState(false);
+	const savingSettingsRef = useRef(false);
 	const { resetLayoutCustomizations } = useLayoutCustomizations();
 	const [selectedAgentId, setSelectedAgentId] = useState<RuntimeAgentId>("claude");
 	const [agentDefaults, setAgentDefaults] = useState<RuntimeAgentDefaultSettings>({});
@@ -278,7 +282,7 @@ export function RuntimeSettingsDialog({
 	const bodyRef = useRef<HTMLDivElement>(null);
 	const isScrollingProgrammatically = useRef(false);
 	const [activeSection, setActiveSection] = useState<SettingsNavId>("agents");
-	const controlsDisabled = isLoading || isSaving || config === null;
+	const controlsDisabled = isLoading || isSaving || isSavingSettings || config === null;
 	const commitPromptTemplateDefault = config?.commitPromptTemplateDefault ?? "";
 	const openPrPromptTemplateDefault = config?.openPrPromptTemplateDefault ?? "";
 	const isCommitPromptAtDefault =
@@ -336,7 +340,7 @@ export function RuntimeSettingsDialog({
 	const initialReadyForReviewNotificationsEnabled = config?.readyForReviewNotificationsEnabled ?? true;
 	const initialCommitPromptTemplate = config?.commitPromptTemplate ?? "";
 	const initialOpenPrPromptTemplate = config?.openPrPromptTemplate ?? "";
-	const hasUnsavedChanges = useMemo(() => {
+	const hasRuntimeUnsavedChanges = useMemo(() => {
 		if (!config) {
 			return false;
 		}
@@ -390,6 +394,7 @@ export function RuntimeSettingsDialog({
 		readyForReviewNotificationsEnabled,
 		selectedAgentId,
 	]);
+	const hasUnsavedChanges = hasRuntimeUnsavedChanges || obsidian.hasUnsavedChanges;
 
 	useEffect(() => {
 		if (!open) {
@@ -509,46 +514,67 @@ export function RuntimeSettingsDialog({
 	};
 
 	const handleSave = async () => {
+		if (savingSettingsRef.current || isSaving || obsidian.busy) return;
 		setSaveError(null);
 		if (!config) {
 			setSaveError("Runtime settings are still loading. Try again in a moment.");
 			return;
 		}
 		const selectedAgent = displayedAgents.find((agent) => agent.id === selectedAgentId);
-		if (!selectedAgent || selectedAgent.installed !== true) {
+		if (hasRuntimeUnsavedChanges && (!selectedAgent || selectedAgent.installed !== true)) {
 			setSaveError("Selected agent is not installed. Install it first or choose an installed agent.");
 			return;
 		}
-		const turnedOnNotifications =
-			(!initialReadyForReviewNotificationsEnabled && readyForReviewNotificationsEnabled) ||
-			(!initialOrchestratorWaitNotificationsEnabled && orchestratorWaitNotificationsEnabled);
-		const shouldRequestNotificationPermission = turnedOnNotifications && notificationPermission === "default";
-		if (shouldRequestNotificationPermission) {
-			const nextPermission = await requestBrowserNotificationPermission();
-			setNotificationPermission(nextPermission);
+		savingSettingsRef.current = true;
+		setIsSavingSettings(true);
+		try {
+			const turnedOnNotifications =
+				(!initialReadyForReviewNotificationsEnabled && readyForReviewNotificationsEnabled) ||
+				(!initialOrchestratorWaitNotificationsEnabled && orchestratorWaitNotificationsEnabled);
+			const shouldRequestNotificationPermission = turnedOnNotifications && notificationPermission === "default";
+			if (shouldRequestNotificationPermission) {
+				const nextPermission = await requestBrowserNotificationPermission();
+				setNotificationPermission(nextPermission);
+			}
+			const saved =
+				!hasRuntimeUnsavedChanges ||
+				(await save({
+					selectedAgentId,
+					agentDefaults: normalizeRuntimeAgentDefaultSettings(agentDefaults),
+					agentAutonomousModeEnabled,
+					readyForReviewNotificationsEnabled,
+					commitPromptTemplate,
+					openPrPromptTemplate,
+				}));
+			if (!saved) {
+				setSaveError("Could not save runtime settings. Check runtime logs and try again.");
+				return;
+			}
+			if (obsidian.hasUnsavedChanges && !(await obsidian.save())) {
+				setSaveError(
+					hasRuntimeUnsavedChanges
+						? "Runtime settings were saved, but the Obsidian connector could not be saved. Your connector draft is kept; fix it and retry."
+						: "Could not save the Obsidian connector. Your draft is kept; fix it and retry.",
+				);
+				return;
+			}
+			if (draftThemeId !== initialThemeId) {
+				saveThemeId(draftThemeId);
+				setInitialThemeId(draftThemeId);
+			}
+			if (orchestratorWaitNotificationsEnabled !== initialOrchestratorWaitNotificationsEnabled) {
+				setOrchestratorWaitNotificationsEnabled(orchestratorWaitNotificationsEnabled);
+				setInitialOrchestratorWaitNotificationsEnabled(orchestratorWaitNotificationsEnabled);
+			}
+			onSaved?.();
+			savingSettingsRef.current = false;
+			handleDialogOpenChange(false);
+		} catch {
+			setSaveError("Could not finish saving settings. Changes already saved are kept; you can retry.");
+		} finally {
+			savingSettingsRef.current = false;
+			setIsSavingSettings(false);
 		}
-		const saved = await save({
-			selectedAgentId,
-			agentDefaults: normalizeRuntimeAgentDefaultSettings(agentDefaults),
-			agentAutonomousModeEnabled,
-			readyForReviewNotificationsEnabled,
-			commitPromptTemplate,
-			openPrPromptTemplate,
-		});
-		if (!saved) {
-			setSaveError("Could not save runtime settings. Check runtime logs and try again.");
-			return;
-		}
-		if (draftThemeId !== initialThemeId) {
-			saveThemeId(draftThemeId);
-			setInitialThemeId(draftThemeId);
-		}
-		if (orchestratorWaitNotificationsEnabled !== initialOrchestratorWaitNotificationsEnabled) {
-			setOrchestratorWaitNotificationsEnabled(orchestratorWaitNotificationsEnabled);
-			setInitialOrchestratorWaitNotificationsEnabled(orchestratorWaitNotificationsEnabled);
-		}
-		onSaved?.();
-		handleDialogOpenChange(false);
 	};
 
 	const handleRequestPermission = () => {
@@ -560,6 +586,7 @@ export function RuntimeSettingsDialog({
 
 	const handleDialogOpenChange = useCallback(
 		(nextOpen: boolean) => {
+			if (!nextOpen && savingSettingsRef.current) return;
 			if (!nextOpen) {
 				const persistedThemeId = readStoredThemeId();
 				if (draftThemeId !== persistedThemeId) {
@@ -914,7 +941,7 @@ export function RuntimeSettingsDialog({
 							<Network size={16} className="text-text-secondary" /> Knowledge
 						</h2>
 					</div>
-					<ObsidianConnectorSettingsSection active={open} />
+					<ObsidianConnectorSettingsSection draft={obsidian} disabled={controlsDisabled} />
 
 					{saveError ? (
 						<div className="flex gap-2 rounded-md border border-status-red/30 bg-status-red/5 p-3 text-[13px]">
@@ -939,7 +966,7 @@ export function RuntimeSettingsDialog({
 				<Button
 					variant="primary"
 					onClick={() => void handleSave()}
-					disabled={controlsDisabled || !hasUnsavedChanges}
+					disabled={controlsDisabled || obsidian.busy || !hasUnsavedChanges}
 				>
 					Save
 				</Button>

@@ -10,7 +10,7 @@ import { useUnmount } from "@/utils/react-use";
 
 const EMPTY_SETTINGS: ObsidianConnectorSettings = { enabled: false, baseUrl: "", caCertificate: "" };
 
-/** Private key draft lives only while the settings section is open, and is never filled from the server. */
+/** Private key draft lives only while the settings dialog is open, and is never filled from the server. */
 export function useObsidianConnector(active: boolean) {
 	const [settings, setSettings] = useState<ObsidianConnectorSettings>(EMPTY_SETTINGS);
 	const [view, setView] = useState<ObsidianConnectorView | null>(null);
@@ -55,8 +55,16 @@ export function useObsidianConnector(active: boolean) {
 		setNotice(null);
 		setProbe(null);
 	};
-	const run = async (action: "save" | "test") => {
-		if (!view || busy || !active) return;
+	const hasUnsavedChanges =
+		view !== null &&
+		(settings.enabled !== view.settings.enabled ||
+			settings.baseUrl !== view.settings.baseUrl ||
+			settings.caCertificate !== view.settings.caCertificate ||
+			key.length > 0 ||
+			removeKey);
+	const run = async (action: "save" | "test"): Promise<boolean> => {
+		if (!view || busy || !active) return false;
+		if (action === "save" && !hasUnsavedChanges) return true;
 		const id = generation.current;
 		const input: ObsidianConnectorWrite = {
 			settings,
@@ -71,21 +79,25 @@ export function useObsidianConnector(active: boolean) {
 			const client = getRuntimeTrpcClient(null).obsidianConnector;
 			if (action === "save") {
 				const response = await client.save.mutate(input);
-				if (id !== generation.current) return;
+				if (id !== generation.current) return false;
 				setView(response);
 				setSettings(response.settings);
 				setKey("");
 				setRemoveKey(false);
 				setNotice("Obsidian connector settings saved.");
+				return true;
 			} else {
 				const result = await client.test.mutate(input);
-				if (id === generation.current) setProbe(result);
+				if (id !== generation.current) return false;
+				setProbe(result);
+				return result.ok;
 			}
 		} catch {
 			if (id === generation.current)
 				setError(
 					"Could not finish. Check the endpoint/key or reopen this section if settings changed in another window.",
 				);
+			return false;
 		} finally {
 			if (id === generation.current) setBusy(false);
 		}
@@ -107,7 +119,10 @@ export function useObsidianConnector(active: boolean) {
 		probe,
 		configured: view?.apiKeyConfigured ?? false,
 		loaded: view !== null,
+		hasUnsavedChanges,
 		save: () => run("save"),
 		test: () => run("test"),
 	};
 }
+
+export type ObsidianConnectorDraft = ReturnType<typeof useObsidianConnector>;

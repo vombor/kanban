@@ -2,6 +2,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ObsidianConnectorSettingsSection } from "@/components/obsidian-connector-settings-section";
+import { useObsidianConnector } from "@/hooks/use-obsidian-connector";
 
 const mocks = vi.hoisted(() => ({ get: vi.fn(), save: vi.fn(), test: vi.fn() }));
 vi.mock("@/runtime/trpc-client", () => ({
@@ -12,6 +13,18 @@ vi.mock("@/runtime/trpc-client", () => ({
 const settings = { enabled: false, baseUrl: "http://obsidian.example:27123", caCertificate: "" };
 const view = { settings, apiKeyConfigured: true, revision: "revision-1" };
 
+function SettingsHarness({ active }: { active: boolean }) {
+	const draft = useObsidianConnector(active);
+	return (
+		<>
+			<ObsidianConnectorSettingsSection draft={draft} />
+			<button type="button" disabled={!draft.hasUnsavedChanges || draft.busy} onClick={() => void draft.save()}>
+				Save
+			</button>
+		</>
+	);
+}
+
 describe("Obsidian connector settings", () => {
 	let container: HTMLDivElement, root: Root;
 	beforeEach(() => {
@@ -21,7 +34,12 @@ describe("Obsidian connector settings", () => {
 		root = createRoot(container);
 		for (const mock of Object.values(mocks)) mock.mockReset();
 		mocks.get.mockResolvedValue(view);
-		mocks.save.mockResolvedValue({ ...view, revision: "revision-2" });
+		mocks.save.mockImplementation(async (input: { settings: typeof settings; apiKey?: string | null }) => ({
+			...view,
+			settings: input.settings,
+			apiKeyConfigured: input.apiKey !== null,
+			revision: "revision-2",
+		}));
 		mocks.test.mockResolvedValue({
 			ok: true,
 			message: "Authenticated",
@@ -35,7 +53,7 @@ describe("Obsidian connector settings", () => {
 		container.remove();
 	});
 	async function render(active = true) {
-		await act(async () => root.render(<ObsidianConnectorSettingsSection active={active} />));
+		await act(async () => root.render(<SettingsHarness active={active} />));
 	}
 	function field() {
 		const input = container.querySelector<HTMLInputElement>('[aria-label="Obsidian API key"]');
@@ -57,6 +75,7 @@ describe("Obsidian connector settings", () => {
 		await render(false);
 		expect(mocks.get).not.toHaveBeenCalled();
 		await render();
+		expect(container.textContent).not.toContain("Save connector");
 		expect(field().type).toBe("password");
 		expect(field().value).toBe("");
 		expect(container.textContent).toContain("stored; leave empty to keep");
@@ -74,7 +93,7 @@ describe("Obsidian connector settings", () => {
 		expect(mocks.save).not.toHaveBeenCalled();
 		expect(container.textContent).toContain("Native graph: available");
 		expect(container.textContent).toContain("graph may be incomplete");
-		await click("Save connector");
+		await click("Save");
 		expect(field().value).toBe("");
 		expect(container.textContent).toContain("settings saved");
 		await enterKey("another-private-draft");
@@ -83,15 +102,31 @@ describe("Obsidian connector settings", () => {
 	});
 	it("omits an empty key so ordinary edits preserve the saved credential and supports removal", async () => {
 		await render();
-		await click("Save connector");
-		expect(mocks.save).toHaveBeenLastCalledWith({ settings, expectedRevision: "revision-1" });
+		const endpoint = container.querySelector<HTMLInputElement>('[aria-label="Obsidian REST API endpoint"]');
+		if (!endpoint) throw new Error("Missing endpoint field");
+		await act(async () => {
+			Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(
+				endpoint,
+				"http://new.example",
+			);
+			endpoint.dispatchEvent(new Event("input", { bubbles: true }));
+		});
+		await click("Save");
+		expect(mocks.save).toHaveBeenLastCalledWith({
+			settings: { ...settings, baseUrl: "http://new.example" },
+			expectedRevision: "revision-1",
+		});
 		const remove = [...container.querySelectorAll("label")]
 			.find((el) => el.textContent?.includes("Remove stored API key"))
 			?.querySelector("input");
 		if (!remove) throw new Error("Missing removal field");
 		await act(async () => remove.click());
-		await click("Save connector");
-		expect(mocks.save).toHaveBeenLastCalledWith({ settings, expectedRevision: "revision-2", apiKey: null });
+		await click("Save");
+		expect(mocks.save).toHaveBeenLastCalledWith({
+			settings: { ...settings, baseUrl: "http://new.example" },
+			expectedRevision: "revision-2",
+			apiKey: null,
+		});
 	});
 	it("does not show exception contents and ignores stale requests after the section closes", async () => {
 		await render();

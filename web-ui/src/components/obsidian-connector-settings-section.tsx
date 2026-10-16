@@ -1,12 +1,17 @@
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
-import { useObsidianConnector } from "@/hooks/use-obsidian-connector";
+import type { ObsidianConnectorDraft } from "@/hooks/use-obsidian-connector";
 
 const INPUT = "h-8 w-full rounded-md border border-border bg-surface-2 px-2 text-[13px] text-text-primary";
 
-export function ObsidianConnectorSettingsSection({ active }: { active: boolean }): React.ReactElement {
-	const draft = useObsidianConnector(active);
-	const disabled = draft.busy || !draft.loaded;
+export function ObsidianConnectorSettingsSection({
+	draft,
+	disabled: externallyDisabled = false,
+}: {
+	draft: ObsidianConnectorDraft;
+	disabled?: boolean;
+}): React.ReactElement {
+	const disabled = externallyDisabled || draft.busy || !draft.loaded;
 	return (
 		<section
 			aria-label="Obsidian knowledge connector"
@@ -91,9 +96,6 @@ export function ObsidianConnectorSettingsSection({ active }: { active: boolean }
 			<div className="flex items-center gap-2">
 				<Button type="button" size="sm" onClick={() => void draft.test()} disabled={disabled}>
 					Test connection
-				</Button>
-				<Button type="button" size="sm" variant="primary" onClick={() => void draft.save()} disabled={disabled}>
-					Save connector
 				</Button>
 				{draft.busy ? <Spinner size={14} /> : null}
 			</div>

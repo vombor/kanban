@@ -76,6 +76,17 @@ vi.mock("@radix-ui/react-select", () => ({
 
 const resetLayoutCustomizationsMock = vi.hoisted(() => vi.fn());
 const saveConfigMock = vi.hoisted(() => vi.fn(async (_config: Record<string, unknown>) => true));
+const connectorMocks = vi.hoisted(() => ({ get: vi.fn(), save: vi.fn(), test: vi.fn() }));
+vi.mock("@/runtime/trpc-client", () => ({
+	getRuntimeTrpcClient: () => ({
+		obsidianConnector: {
+			get: { query: connectorMocks.get },
+			save: { mutate: connectorMocks.save },
+			test: { mutate: connectorMocks.test },
+		},
+		github: { appStatus: { query: async () => ({ ok: true, app: null, origin: null, originSource: null }) } },
+	}),
+}));
 const replaceProjectShortcutsMock = vi.hoisted(() => vi.fn(async () => []));
 const fetchAgentSettingsOptionsMock = vi.hoisted(() =>
 	vi.fn(async (_workspaceId: string | null, agentId: string) => ({
@@ -215,6 +226,25 @@ describe("RuntimeSettingsDialog", () => {
 
 	beforeEach(() => {
 		resetLayoutCustomizationsMock.mockReset();
+		saveConfigMock.mockReset().mockResolvedValue(true);
+		connectorMocks.get.mockReset().mockResolvedValue({
+			settings: { enabled: false, baseUrl: "", caCertificate: "" },
+			revision: null,
+			apiKeyConfigured: false,
+		});
+		connectorMocks.save
+			.mockReset()
+			.mockImplementation(
+				async (input: {
+					settings: { enabled: boolean; baseUrl: string; caCertificate: string };
+					apiKey?: string | null;
+				}) => ({
+					settings: input.settings,
+					revision: "saved-revision",
+					apiKeyConfigured: typeof input.apiKey === "string",
+				}),
+			);
+		connectorMocks.test.mockReset();
 		window.localStorage.clear();
 		document.documentElement.removeAttribute("data-theme");
 		previousActEnvironment = (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
@@ -258,6 +288,132 @@ describe("RuntimeSettingsDialog", () => {
 		);
 		expect(agentRows).toHaveLength(1);
 		expect(document.body.textContent).not.toContain("Cline CLI");
+	});
+
+	describe("single Save for Obsidian and global settings", () => {
+		async function renderConnectorDialog(onOpenChange: (open: boolean) => void) {
+			await act(async () =>
+				root.render(
+					<RuntimeSettingsDialog
+						open
+						workspaceId={null}
+						initialConfig={savedConfig}
+						onOpenChange={onOpenChange}
+					/>,
+				),
+			);
+		}
+		async function enter(label: string, value: string) {
+			const input = document.body.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`);
+			if (!input) throw new Error(`Missing ${label}`);
+			await act(async () => {
+				Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
+				input.dispatchEvent(new Event("input", { bubbles: true }));
+			});
+		}
+		it("enables the main Save for connector-only edits and does not rewrite unrelated runtime settings", async () => {
+			const close = vi.fn();
+			await renderConnectorDialog(close);
+			expect(findButtonByText(document.body, "Save connector")).toBeNull();
+			expect(findButtonByText(document.body, "Save")?.disabled).toBe(true);
+			await enter("Obsidian REST API endpoint", "http://obsidian.test");
+			expect(findButtonByText(document.body, "Save")?.disabled).toBe(false);
+			await enter("Obsidian API key", "private-draft-value");
+			await act(async () => findButtonByText(document.body, "Save")?.click());
+			expect(connectorMocks.save).toHaveBeenCalledWith({
+				settings: { enabled: false, baseUrl: "http://obsidian.test", caCertificate: "" },
+				expectedRevision: null,
+				apiKey: "private-draft-value",
+			});
+			expect(saveConfigMock).not.toHaveBeenCalled();
+			expect(close).toHaveBeenCalledWith(false);
+			expect(document.body.querySelector<HTMLInputElement>('input[aria-label="Obsidian API key"]')?.value).toBe("");
+		});
+		it("keeps the dialog and connector draft after a partial save failure and permits retry", async () => {
+			const close = vi.fn();
+			await renderConnectorDialog(close);
+			await enter("Obsidian REST API endpoint", "http://obsidian.test");
+			await enter("Obsidian API key", "private-draft-value");
+			await act(async () => findButtonByAriaLabel(document.body, "Enable bypass permissions flag")?.click());
+			connectorMocks.save.mockRejectedValueOnce(new Error("private-draft-value"));
+			await act(async () => findButtonByText(document.body, "Save")?.click());
+			expect(saveConfigMock).toHaveBeenCalledTimes(1);
+			expect(close).not.toHaveBeenCalled();
+			expect(document.body.textContent).toContain(
+				"Runtime settings were saved, but the Obsidian connector could not be saved",
+			);
+			expect(document.body.textContent).not.toContain("private-draft-value");
+			expect(document.body.querySelector<HTMLInputElement>('input[aria-label="Obsidian API key"]')?.value).toBe(
+				"private-draft-value",
+			);
+			await act(async () => findButtonByText(document.body, "Save")?.click());
+			expect(close).toHaveBeenCalledWith(false);
+			expect(connectorMocks.save).toHaveBeenCalledTimes(2);
+		});
+		it("does not persist the connector when saving other runtime changes fails", async () => {
+			const close = vi.fn();
+			await renderConnectorDialog(close);
+			await enter("Obsidian API key", "private-draft-value");
+			await act(async () => findButtonByAriaLabel(document.body, "Enable bypass permissions flag")?.click());
+			saveConfigMock.mockResolvedValueOnce(false);
+			await act(async () => findButtonByText(document.body, "Save")?.click());
+			expect(close).not.toHaveBeenCalled();
+			expect(connectorMocks.save).not.toHaveBeenCalled();
+			expect(document.body.textContent).toContain("Could not save runtime settings");
+		});
+		it("discards a private connector draft on Cancel without a write", async () => {
+			const close = vi.fn();
+			await renderConnectorDialog(close);
+			await enter("Obsidian API key", "private-draft-value");
+			await act(async () => findButtonByText(document.body, "Cancel")?.click());
+			expect(connectorMocks.save).not.toHaveBeenCalled();
+			expect(close).toHaveBeenCalledWith(false);
+			await act(async () =>
+				root.render(
+					<RuntimeSettingsDialog
+						open={false}
+						workspaceId={null}
+						initialConfig={savedConfig}
+						onOpenChange={close}
+					/>,
+				),
+			);
+			await renderConnectorDialog(close);
+			expect(document.body.querySelector<HTMLInputElement>('input[aria-label="Obsidian API key"]')?.value).toBe("");
+		});
+		it("keeps the popup open and prevents duplicate Save/Cancel while connector persistence is pending", async () => {
+			const close = vi.fn();
+			await renderConnectorDialog(close);
+			await enter("Obsidian REST API endpoint", "http://obsidian.test");
+			let complete: (value: {
+				settings: { enabled: boolean; baseUrl: string; caCertificate: string };
+				revision: string;
+				apiKeyConfigured: boolean;
+			}) => void = () => {};
+			connectorMocks.save.mockImplementationOnce(
+				() =>
+					new Promise((resolve) => {
+						complete = resolve;
+					}),
+			);
+			await act(async () => findButtonByText(document.body, "Save")?.click());
+			expect(findButtonByText(document.body, "Save")?.disabled).toBe(true);
+			expect(findButtonByText(document.body, "Cancel")?.disabled).toBe(true);
+			await act(async () => {
+				findButtonByText(document.body, "Save")?.click();
+				document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+			});
+			expect(close).not.toHaveBeenCalled();
+			expect(connectorMocks.save).toHaveBeenCalledTimes(1);
+			await act(async () =>
+				complete({
+					settings: { enabled: false, baseUrl: "http://obsidian.test", caCertificate: "" },
+					revision: "saved-revision",
+					apiKeyConfigured: false,
+				}),
+			);
+			expect(close).toHaveBeenCalledWith(false);
+		});
 	});
 
 	it("does not render support actions inside settings", async () => {
