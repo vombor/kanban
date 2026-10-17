@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.1.70-fork.10]
+## [0.1.70-fork.11]
 
 - Share an opt-in provider concurrency limit across development, QA, fallback and recovery. Starts queue durably instead of being discarded, survive restarts, respect quota-reset holds, and show their provider/deadline on cards. Global Settings owns installation limits; a project's orchestrator can contribute stricter pacing and inspect its own queue without seeing other projects' card details (#53).
 - Acknowledge or defer escalations with `pipeline acknowledge`, without clearing holds or inventing a fixed verdict. Unchanged acknowledged dispositions no longer generate repeated human-decision wakes; changed evidence, a prerequisite result or a retry deadline brings them back (#60).
@@ -15,6 +15,12 @@
 - Add optional app-level Obsidian connector configuration and authenticated draft-only connection tests. Connector edits now use Global Settings' main Save button; keys stay masked and Cancel discards unsaved drafts. Connection enablement does not grant agents unrestricted vault access.
 - Add Kanban-owned versioned project Markdown knowledge, bounded discovery/search/sections/history, agent proposals and curated publication. User pins remain user-controlled; plan documents and knowledge context remain reference material, not execution approval.
 - Consolidate project editing and encrypted project secrets, separate installation paths from bare product packages, and run container images as non-root with dual-stack localhost/public serving. Existing project data and histories remain migration-controlled, and startup does not bootstrap tool authentication.
+
+## [0.1.70-fork.10]
+
+This tag did not produce a release: package publication stopped on a formatting check, and GHCR refused the image
+upload because the repository's generated Actions token lacked package write access. No GitHub release was created.
+The corrected release is `0.1.70-fork.11`; the original tag is retained unchanged.
 
 ## [0.1.70-fork.9]
 

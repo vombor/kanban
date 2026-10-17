@@ -84,7 +84,7 @@ evidence these need another code patch; these were not silently closed or treate
 
 ## Release authentication blocker
 
-Prepared next version: `0.1.70-fork.10`, with user-facing `CHANGELOG.md` notes covering all unreleased changes since .9.
+Prepared next version was `0.1.70-fork.10`, with user-facing `CHANGELOG.md` notes covering all unreleased changes since .9.
 The user approved the registry-only exception on continuation (2026-10-17): CI npm/GHCR writes use the automatically
 generated Actions `GITHUB_TOKEN` with `packages: write`. No token is added to the pod, and no PAT fallback is allowed.
 Commits/tags, issue updates, workflow dispatch and GitHub release creation still use the Kanban App. The host creates
@@ -99,6 +99,23 @@ also caught/fixed cap-draft resets on config refetch and unrelated connector-loa
 Historical setup attempts, verdicts and live provider/benchmark configuration are unchanged.
 
 ## Issue closure evidence to publish with the release
+
+### Failed .10 publication / continuation (2026-10-17)
+
+`d67988c6da1e6e09907dc8e221bfe52c92e59d27` and immutable tag `v0.1.70-fork.10` were pushed as the Kanban App.
+Package run `38986998915` failed lint because the final e2e diagnostic listener was not reformatted after the local
+check; that formatting-only correction is now applied. Image run `38986998845` passed build/tests and bare non-root
+smoke, then upload failed with `denied: permission_denied: write_package`. The user must grant `vombor/kanban` Write
+access in the existing container package's Manage Actions access (and npm package access should be checked) before
+publication can proceed. Do not use the PAT, rewrite the .10 tag, mark issues closed, or claim a release was published.
+The corrected pending release is `.11` with the same user-facing notes and a clear `.10` not-released entry.
+Private CI receipts/scripts: `/var/home/keith/.local/state/kanban-maintenance/fork10-release-20261017-7t3xe6ii/`.
+Those scripts pin .10/its commit and must not be reused unmodified for .11. No live update happened.
+
+OpenCode chat diagnosis in parallel: the service log for session `ses_ec4ad8455ffesaLPP5J1w0yu5l` reports intermittent
+`AI.Error.InvalidRequest: this conversation cannot be continued` (including 2026-10-17T00:36:41Z and 01:16:00Z).
+The log does not expose a more specific model/provider cause; do not call it an authentication/quota/context-limit
+failure without evidence. No OpenCode settings, service or conversation data were reset.
 
 | Issue | Resolution/disposition |
 |---|---|

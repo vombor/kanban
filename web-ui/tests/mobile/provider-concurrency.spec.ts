@@ -17,8 +17,12 @@ test.describe("persistent provider pacing (#53)", () => {
 	test.afterAll(async () => {
 		await instance?.stop();
 	});
-	test("queues instead of launching, survives restart, cancels safely and supports one global Save", async ({ page }, testInfo) => {
-		page.on("pageerror", error => { void testInfo.attach("page-error", { body: error.message, contentType: "text/plain" }); });
+	test("queues instead of launching, survives restart, cancels safely and supports one global Save", async ({
+		page,
+	}, testInfo) => {
+		page.on("pageerror", (error) => {
+			void testInfo.attach("page-error", { body: error.message, contentType: "text/plain" });
+		});
 		await page.addInitScript(() => localStorage.setItem("kanban.onboarding.dialog.shown", "true"));
 		await page.goto(instance.baseUrl);
 		await page.getByRole("button", { name: "Settings", exact: true }).click();
