@@ -17,6 +17,17 @@ def main():
     token = os.environ.get("GHCR_TOKEN", "")
     if not user or not token:
         raise ValueError("Registry preflight needs the generated Actions token and actor")
+    # Confirm the token and existing package resolve to the same immutable repository id, not a stale association.
+    owner = repository.split("/", 1)[0]
+    api_headers = {"Authorization": "Bearer " + token, "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "kanban-registry-preflight"}
+    for label, path in [("workflowRepository", "repos/" + repository), ("existingPackage", f"users/{owner}/packages/container/" + urllib.parse.quote(repository.split("/", 1)[1], safe=""))]:
+        try:
+            with urllib.request.urlopen(urllib.request.Request("https://api.github.com/" + path, headers=api_headers), timeout=30) as response:
+                info = json.load(response)
+            linked = info.get("repository", {}) if label == "existingPackage" else info
+            print(json.dumps({"check": label, "repositoryId": linked.get("id"), "repository": linked.get("full_name"), "packageId": info.get("id") if label == "existingPackage" else None}))
+        except urllib.error.HTTPError as error:
+            print(json.dumps({"check": label, "httpStatus": error.code}))
     authorization = base64.b64encode(f"{user}:{token}".encode()).decode()
     query = urllib.parse.urlencode({"service": "ghcr.io", "scope": f"repository:{repository}:pull,push"})
     request = urllib.request.Request(
@@ -39,6 +50,7 @@ def main():
     # Registry tokens are opaque. Check a real empty upload handshake, then cancel it; never publish a tag or blob.
     headers = {"Authorization": "Bearer " + scoped_token, "User-Agent": "kanban-registry-preflight"}
     start = urllib.request.Request(f"https://ghcr.io/v2/{repository}/blobs/uploads/", data=b"", headers=headers, method="POST")
+    stage = "start empty upload"
     try:
         with urllib.request.urlopen(start, timeout=30) as response:
             if response.status != 202:
@@ -47,11 +59,13 @@ def main():
         target = urllib.parse.urlparse(location)
         if target.scheme != "https" or target.netloc != "ghcr.io" or not target.path.startswith(f"/v2/{repository}/blobs/uploads/"):
             raise ValueError("Unexpected registry upload location")
+        print(json.dumps({"registry": "ghcr.io", "repository": repository, "uploadAuthorized": True}))
+        stage = "cancel empty upload"
         with urllib.request.urlopen(urllib.request.Request(location, headers=headers, method="DELETE"), timeout=30) as response:
             if response.status != 204:
                 raise ValueError("Could not cancel preflight upload")
     except urllib.error.HTTPError as error:
-        print(f"::error::GHCR refused upload/cancellation for {repository} (HTTP {error.code}); "
+        print(f"::error::GHCR refused to {stage} for {repository} (HTTP {error.code}); "
               "no image/tag was published and no PAT fallback is permitted.", file=sys.stderr)
         return 1
     print(json.dumps({"registry": "ghcr.io", "repository": repository, "uploadAuthorized": True, "preflightUploadCancelled": True}))

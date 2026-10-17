@@ -16,6 +16,8 @@ class Response:
     def read(self): return self.body
 calls=[]
 def request(req, timeout):
+    if req.full_url.startswith('https://api.github.com/'):
+        return Response(200,b'{"id":123,"full_name":"vombor/kanban","repository":{"id":123,"full_name":"vombor/kanban"}}')
     calls.append(req)
     if len(calls)==1: return Response(200,b'{"token":"opaque-private-registry-token"}')
     if len(calls)==2: return Response(202,headers={'Location':'/v2/vombor/kanban/blobs/uploads/probe'})
@@ -27,7 +29,7 @@ assert result==0
 assert [r.get_method() for r in calls]==['GET','POST','DELETE']
 assert calls[1].get_header('Authorization')=='Bearer opaque-private-registry-token'
 assert 'private' not in output.getvalue()
-assert json.loads(output.getvalue())['preflightUploadCancelled'] is True
+assert json.loads(output.getvalue().splitlines()[-1])['preflightUploadCancelled'] is True
 calls.clear()
 def denied(req, timeout): raise urllib.error.HTTPError(req.full_url,403,'private-server-response',{},None)
 urllib.request.urlopen=denied
