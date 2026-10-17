@@ -57,7 +57,9 @@ def main():
                 raise ValueError("Unexpected upload handshake")
             location = urllib.parse.urljoin("https://ghcr.io", response.headers.get("Location", ""))
         target = urllib.parse.urlparse(location)
-        if target.scheme != "https" or target.netloc != "ghcr.io" or not target.path.startswith(f"/v2/{repository}/blobs/uploads/"):
+        # GHCR returns singular `upload/`; the Distribution API commonly returns `uploads/`.
+        upload_prefixes = (f"/v2/{repository}/blobs/upload/", f"/v2/{repository}/blobs/uploads/")
+        if target.scheme != "https" or target.netloc != "ghcr.io" or target.fragment or not target.path.startswith(upload_prefixes):
             raise ValueError("Unexpected registry upload location")
         print(json.dumps({"registry": "ghcr.io", "repository": repository, "uploadAuthorized": True}))
         stage = "cancel empty upload"

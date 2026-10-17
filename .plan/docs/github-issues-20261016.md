@@ -118,6 +118,24 @@ do not keep asserting a missing repository grant: the failure is at GHCR push au
 Added safe early exact pull/push scope preflight and aligned the login username with the workflow actor; generated
 registry credentials and response tokens are never printed. The updated branch can diagnose before rebuilding.
 
+Follow-up preflight `38991072822` on `2a2bc96c` confirmed that workflow and existing package resolve to the SAME
+repository id `1406894052` (container package id `15817368`). Token exchange and package metadata read work; the
+actual POST starting an empty upload fails HTTP 403, before any image/tag publication. This is not merely a failed
+upload-cancellation permission. No visible workflow/repository-grant fix remains identified; do not weaken auth,
+delete/recreate packages, change inheritance or fall back to PAT. Asked the user to start image.yml via GitHub UI's
+Run workflow on fork/stack as a diagnostic of human-triggered vs App-triggered authorization (not a guaranteed fix).
+Current branch is clean/pushed through the App, latest head `2a2bc96c`; .11 tag remains uncreated. Final local checks
+on the corrected candidate: 2,916 runtime tests, 718 UI tests, both typechecks. Private .11 ledger:
+`/var/home/keith/.local/state/kanban-maintenance/fork11-release-20261017-v8nrrwvj/`.
+
+User follow-up resolves the package-settings ambiguity: the earlier Admin/inheritance check was for npm, not the
+container package. The user has now corrected the container package and authorized a retry. Run `38991072822`
+attempt 2 no longer returns HTTP 403; it reaches a bad assumption in our new preflight, which accepted only the
+Distribution API's plural `blobs/uploads/` location. GHCR returns singular `blobs/upload/`. Accept either location
+only on exact HTTPS ghcr.io and the intended repository, preserving query parameters privately; regressions cover
+both forms plus cross-host/protocol/repository/fragment refusals. No further package access change is requested.
+Release publication and issue closure remain pending; no live instance update is authorized.
+
 OpenCode chat diagnosis in parallel: the service log for session `ses_ec4ad8455ffesaLPP5J1w0yu5l` reports intermittent
 `AI.Error.InvalidRequest: this conversation cannot be continued` (including 2026-10-17T00:36:41Z and 01:16:00Z).
 The log does not expose a more specific model/provider cause; do not call it an authentication/quota/context-limit

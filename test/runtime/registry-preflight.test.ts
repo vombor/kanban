@@ -15,12 +15,13 @@ class Response:
     def __exit__(self, *args): return False
     def read(self): return self.body
 calls=[]
+location='/v2/vombor/kanban/blobs/upload/probe?private-query=retained'
 def request(req, timeout):
     if req.full_url.startswith('https://api.github.com/'):
         return Response(200,b'{"id":123,"full_name":"vombor/kanban","repository":{"id":123,"full_name":"vombor/kanban"}}')
     calls.append(req)
     if len(calls)==1: return Response(200,b'{"token":"opaque-private-registry-token"}')
-    if len(calls)==2: return Response(202,headers={'Location':'/v2/vombor/kanban/blobs/uploads/probe'})
+    if len(calls)==2: return Response(202,headers={'Location':location})
     return Response(204)
 urllib.request.urlopen=request
 output=io.StringIO()
@@ -28,8 +29,24 @@ with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output): res
 assert result==0
 assert [r.get_method() for r in calls]==['GET','POST','DELETE']
 assert calls[1].get_header('Authorization')=='Bearer opaque-private-registry-token'
+assert calls[2].full_url=='https://ghcr.io'+location
 assert 'private' not in output.getvalue()
 assert json.loads(output.getvalue().splitlines()[-1])['preflightUploadCancelled'] is True
+for location in ['/v2/vombor/kanban/blobs/uploads/probe','https://ghcr.io/v2/vombor/kanban/blobs/upload/probe']:
+    calls.clear()
+    with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output): result=module['main']()
+    assert result==0 and len(calls)==3
+for location in ['https://evil.example/v2/vombor/kanban/blobs/upload/probe',
+                 'http://ghcr.io/v2/vombor/kanban/blobs/upload/probe',
+                 '/v2/other/repository/blobs/upload/probe',
+                 '/v2/vombor/kanban/blobs/upload/probe#private-fragment']:
+    calls.clear()
+    with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+        try: module['main']()
+        except ValueError as error: assert str(error)=='Unexpected registry upload location'
+        else: raise AssertionError('Untrusted upload location accepted')
+    assert len(calls)==2
+assert 'private' not in output.getvalue()
 calls.clear()
 def denied(req, timeout): raise urllib.error.HTTPError(req.full_url,403,'private-server-response',{},None)
 urllib.request.urlopen=denied
