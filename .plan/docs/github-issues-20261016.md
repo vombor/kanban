@@ -112,6 +112,12 @@ The corrected pending release is `.11` with the same user-facing notes and a cle
 Private CI receipts/scripts: `/var/home/keith/.local/state/kanban-maintenance/fork10-release-20261017-7t3xe6ii/`.
 Those scripts pin .10/its commit and must not be reused unmodified for .11. No live update happened.
 
+User correction: the exact `vombor/kanban` repository already has Admin Actions access to both packages and inherited
+access is enabled. Failed image job logs confirm effective `Packages: write` and successful Docker login. Therefore
+do not keep asserting a missing repository grant: the failure is at GHCR push authorization despite those grants.
+Added safe early exact pull/push scope preflight and aligned the login username with the workflow actor; generated
+registry credentials and response tokens are never printed. The updated branch can diagnose before rebuilding.
+
 OpenCode chat diagnosis in parallel: the service log for session `ses_ec4ad8455ffesaLPP5J1w0yu5l` reports intermittent
 `AI.Error.InvalidRequest: this conversation cannot be continued` (including 2026-10-17T00:36:41Z and 01:16:00Z).
 The log does not expose a more specific model/provider cause; do not call it an authentication/quota/context-limit

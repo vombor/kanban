@@ -15,6 +15,10 @@ describe("registry-only Actions authentication exception", () => {
 			expect(workflow).not.toContain("issues: write");
 		}
 		expect(image).toMatch(/password: \$\{\{ github\.token \}\}/u);
+		expect(image).toMatch(/username: \$\{\{ github\.actor \}\}/u);
+		expect(image.indexOf("Verify generated-token registry scope")).toBeLessThan(
+			image.indexOf("Build and test Kanban"),
+		);
 		expect(publish).toMatch(/NODE_AUTH_TOKEN: \$\{\{ github\.token \}\}/u);
 		expect(publish).not.toContain("softprops/action-gh-release");
 	});
