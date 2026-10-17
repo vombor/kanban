@@ -67,6 +67,12 @@ def main():
             if response.status != 204:
                 raise ValueError("Could not cancel preflight upload")
     except urllib.error.HTTPError as error:
+        if stage == "cancel empty upload" and error.code == 405:
+            # GHCR authorizes the POST but does not implement DELETE for its temporary upload URLs.
+            # No bytes, blob or manifest were uploaded; do not mistake cleanup support for push authorization.
+            print("::warning::GHCR authorized the empty upload but does not support cancelling it (HTTP 405); no blob or image was published.")
+            print(json.dumps({"registry": "ghcr.io", "repository": repository, "uploadAuthorized": True, "preflightUploadCancelled": False, "cancellationUnsupported": True}))
+            return 0
         print(f"::error::GHCR refused to {stage} for {repository} (HTTP {error.code}); "
               "no image/tag was published and no PAT fallback is permitted.", file=sys.stderr)
         return 1

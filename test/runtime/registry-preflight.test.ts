@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const python = spawnSync("python3", ["--version"]);
 describe.skipIf(python.error || python.status !== 0)("GHCR preflight", () => {
-	it("accepts opaque tokens, checks and cancels a real upload handshake without exposing credentials", () => {
+	it("checks upload authorization and handles unsupported cleanup without exposing credentials", () => {
 		const script = `
 import contextlib, io, json, os, runpy, sys, urllib.error, urllib.request
 module = runpy.run_path(sys.argv[1])
@@ -16,12 +16,14 @@ class Response:
     def read(self): return self.body
 calls=[]
 location='/v2/vombor/kanban/blobs/upload/probe?private-query=retained'
+cancel_status=204
 def request(req, timeout):
     if req.full_url.startswith('https://api.github.com/'):
         return Response(200,b'{"id":123,"full_name":"vombor/kanban","repository":{"id":123,"full_name":"vombor/kanban"}}')
     calls.append(req)
     if len(calls)==1: return Response(200,b'{"token":"opaque-private-registry-token"}')
     if len(calls)==2: return Response(202,headers={'Location':location})
+    if cancel_status!=204: raise urllib.error.HTTPError(req.full_url,cancel_status,'private-server-response',{},None)
     return Response(204)
 urllib.request.urlopen=request
 output=io.StringIO()
@@ -47,6 +49,16 @@ for location in ['https://evil.example/v2/vombor/kanban/blobs/upload/probe',
         else: raise AssertionError('Untrusted upload location accepted')
     assert len(calls)==2
 assert 'private' not in output.getvalue()
+location='/v2/vombor/kanban/blobs/upload/probe'
+for cancel_status, expected in [(405,0),(403,1)]:
+    calls.clear()
+    output=io.StringIO()
+    with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output): result=module['main']()
+    assert result==expected and len(calls)==3 and 'private' not in output.getvalue()
+    if cancel_status==405:
+        record=json.loads(output.getvalue().splitlines()[-1])
+        assert record['uploadAuthorized'] is True and record['preflightUploadCancelled'] is False
+        assert record['cancellationUnsupported'] is True
 calls.clear()
 def denied(req, timeout): raise urllib.error.HTTPError(req.full_url,403,'private-server-response',{},None)
 urllib.request.urlopen=denied

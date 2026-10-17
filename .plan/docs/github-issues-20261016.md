@@ -136,6 +136,12 @@ only on exact HTTPS ghcr.io and the intended repository, preserving query parame
 both forms plus cross-host/protocol/repository/fragment refusals. No further package access change is requested.
 Release publication and issue closure remain pending; no live instance update is authorized.
 
+Corrected-location run `38991797298` definitively confirms `uploadAuthorized: true` with the generated token. GHCR's
+temporary upload DELETE returns HTTP 405 (not implemented), so the preflight now records uncancelled/unsupported
+cleanup honestly and permits publication only for that specific cleanup response; no bytes/blob/manifest were sent.
+403 and unsafe upload locations remain failures. The container-package grant is fixed; no PAT or human trigger is
+needed. Final local checks repeated on `2b66e08c`: 2,916 runtime tests, 718 UI tests, both typechecks, secret scan clean.
+
 OpenCode chat diagnosis in parallel: the service log for session `ses_ec4ad8455ffesaLPP5J1w0yu5l` reports intermittent
 `AI.Error.InvalidRequest: this conversation cannot be continued` (including 2026-10-17T00:36:41Z and 01:16:00Z).
 The log does not expose a more specific model/provider cause; do not call it an authentication/quota/context-limit

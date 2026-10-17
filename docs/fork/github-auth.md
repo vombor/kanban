@@ -106,6 +106,12 @@ No registry credential needs to be added to the pod or stored as a repository se
 request `packages: write` for their generated token. Grant the workflow repository Actions access in the existing
 npm/container package settings when necessary. Repository operations and GitHub releases still use the Kanban App.
 
+The npm package and container image are **separate packages**, even though both are named Kanban. Granting access
+on `@vombor/kanban` (npm) does not grant access on `ghcr.io/vombor/kanban` (container). Check **Manage Actions access**
+on each package's own settings page. The image workflow checks an actual empty upload before the expensive build;
+GHCR can authorize the upload while returning HTTP 405 for cancellation, which is reported separately and does not
+mean publishing is denied. The preflight publishes no blob, manifest or tag.
+
 ### Switching a checkout from SSH to HTTPS
 
 The entrypoint never changes remote URLs. To have a repo use the PAT instead of an SSH key:
