@@ -13,10 +13,12 @@ Release continuation checklist:
 - [x] Harden/validate the new controls, including restart, authorization, exact-snapshot and no-auto-action behavior.
 - [x] Implement #53 persistent provider-wide start/input scheduling, user settings and own-project restrictive pacing.
 - [x] Recheck all issue comments/current open issues and prepare evidence-backed dispositions.
-- [ ] Publish issue resolution/closure receipts through the GitHub App after verified release publication.
-- [ ] Run full checks, shared-Chrome journeys, production/package/image validation and secret scans.
-- [ ] Commit fixes with closing references, increment the fork release, write release notes, tag and push via the App.
-- [ ] Verify successful package/release/image publication, close resolved/duplicate issues, and reconcile this checklist.
+- [x] Publish issue resolution/closure receipts through the GitHub App after verified release publication.
+- [x] Run full local checks, shared-Chrome journeys, exact-tag production/package validation and secret scans.
+- [x] Commit fixes with closing references, increment the fork release, write release notes, tag and push via the App.
+- [x] Verify the exact .11 tag's validated non-root image publication and matching stable/versioned image metadata.
+- [x] Verify the exact .11 tag's CI npm package publication.
+- [x] Verify successful package/release/image publication, close resolved/duplicate issues, and reconcile this checklist.
 
 All 19 open vombor/kanban issues and all returned comments were read through the Kanban GitHub App. No live project,
 benchmark, provider, credential, price table or pipeline configuration was modified, and no issue was closed.
@@ -39,8 +41,9 @@ benchmark, provider, credential, price table or pipeline configuration was modif
 The partial descriptions above record the initial batch boundary; the autonomous additions below complete those
 controls. No finished benchmark is reopened, and evidence-only reassessment remains separately authorized.
 
-Implementation and validation for this batch are finished. Changes remain uncommitted and undeployed; the explicitly
-listed lifecycle/scheduling/toolchain follow-ups below are not claimed as complete.
+At this initial batch boundary, implementation and validation were finished but uncommitted and undeployed; the
+lifecycle/scheduling/toolchain follow-ups were not yet complete. The autonomous additions and final receipts below
+record their subsequent implementation and publication. The live instance remains deliberately unupgraded.
 
 Validation:
 
@@ -141,6 +144,55 @@ temporary upload DELETE returns HTTP 405 (not implemented), so the preflight now
 cleanup honestly and permits publication only for that specific cleanup response; no bytes/blob/manifest were sent.
 403 and unsafe upload locations remain failures. The container-package grant is fixed; no PAT or human trigger is
 needed. Final local checks repeated on `2b66e08c`: 2,916 runtime tests, 718 UI tests, both typechecks, secret scan clean.
+
+Immutable `.11` tag now points to `93b33c8a3ea0ba78c00eff4adca546c307ce839a`, pushed atomically with fork/stack as
+the Kanban App. The new .11-only watcher is awaiting both tag-triggered registry workflows; it does not create the
+release or close issues. Exact-tag production build and pack succeeded in `/tmp/opencode/fork11-exact-release-b5c8ku_2`.
+Secret scan from .9 through the release candidate: 15 commits, clean. All 19 issues/comments were rechecked and are
+unchanged from the reviewed snapshot, with no new open issues. User-requested workflow display-name change to
+lowercase `publish` was committed/pushed separately as `72de61b2`; the existing .11 tag was not rewritten.
+
+OpenCode side question: global auto-compaction uses `/var/home/keith/.config/opencode/opencode.json`, currently no
+override. Live V2 model API reports identical context/input/output limits for Global Sol 6.1 and Ultrafast:
+1,050,000 / 922,000 / 128,000. This rules out a configured window difference, not a backend/conversation failure.
+No compaction/model setting or service state was changed. The actual Desktop V2 CLI is
+`/var/home/keith/.config/ai.opencode.desktop/cli/2.0.30-x64/opencode-cli`; ~/.local/bin/opencode is a Flatpak GUI launcher,
+not the CLI. Read-only CLI API requests use normal service discovery/authentication, never direct unauthenticated HTTP.
+
+`.11` image workflow `38991969317` passed every gate, including the registry preflight, full build/tests, bare non-root
+smoke and upload. Anonymous readback verifies BOTH `:0.1.70-fork.11` and `:stable` carry revision
+`93b33c8a3ea0ba78c00eff4adca546c307ce839a`, release version `0.1.70-fork.11`, and the SAME digest
+`sha256:b852555ef221d4295f518d9bd516b9d71506e9bea0b7d51820baf5d25400c3e1`.
+The publication watcher lost one API read after image success; a fresh App-authenticated direct read confirms npm
+run `38991969287` has passed Node 22/24 tests and is still publishing. A read-only watcher was resumed, with bounded
+API retries only; publication was NOT rerun. Release creation and issue closures remain gated on npm success.
+Live readback still reports package .9 and revision `8827128fb652d3e1d9ced550cb0cba305e5be2a7` on HOME=/home/node;
+the running instance was not upgraded.
+
+## Final verified publication and issue closure — 2026-10-17
+
+All release checklist items are complete. The immutable `.11` release commit is
+`93b33c8a3ea0ba78c00eff4adca546c307ce839a`; `.10` remains unchanged and unreleased.
+
+- npm publication succeeded in run [38991969287](https://github.com/vombor/kanban/actions/runs/38991969287), including
+  both Node 22/24 test jobs. Publish logs confirm `+ @vombor/kanban@0.1.70-fork.11`, with npm dist-tag `next`.
+  Independent App-authenticated package metadata confirms version id `1400226123`:
+  https://github.com/users/vombor/packages/npm/kanban/1400226123
+- Versioned/stable image publication and non-root smoke succeeded in run
+  [38991969317](https://github.com/vombor/kanban/actions/runs/38991969317). Fresh registry readback after both jobs
+  confirms the exact release revision/version and equal digest recorded above for both image tags.
+- The Kanban App published the changelog notes as a prerelease, with a compare link from the last successful .9 release:
+  https://github.com/vombor/kanban/releases/tag/v0.1.70-fork.11
+- All 19 issues were re-read with every comment before closure and checked for new edits before mutation. Each now
+  has an issue-specific App-authored resolution/evidence comment and verified CLOSED state:
+  #41, #42, #45, #46, #48, #49, #50, #51, #52, #53, #55, #56, #57, #58, #59, #60, #61, #62, #63.
+  Final open issue count: **0**. Private comment URLs, release author/id and artifact receipts are in the .11 ledger.
+- No historical benchmark was rerun/reopened, model substituted/promoted or verdict fabricated. The live instance
+  still runs revision `8827128fb652d3e1d9ced550cb0cba305e5be2a7`, package .9, as node. Publishing does not authorize
+  upgrading it. The later `publish` workflow casing-only commit is separate from the immutable release.
+
+The GitHub auth interruption affected only a read-only watcher; it did not cause a second publication. The release
+used generated Actions credentials solely for registry uploads and the Kanban App for all repository/release/issues.
 
 OpenCode chat diagnosis in parallel: the service log for session `ses_ec4ad8455ffesaLPP5J1w0yu5l` reports intermittent
 `AI.Error.InvalidRequest: this conversation cannot be continued` (including 2026-10-17T00:36:41Z and 01:16:00Z).
