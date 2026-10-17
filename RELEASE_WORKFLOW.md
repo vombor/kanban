@@ -5,7 +5,7 @@
 This repository uses these GitHub Actions workflows for quality gates, publishing and the image:
 
 - `.github/workflows/test.yml`
-  - Reusable test workflow used by CI and Publish workflows.
+  - Reusable test workflow used by CI and publish workflows.
   - Runs build, checks, and web-ui unit tests.
 - `.github/workflows/ci.yml`
   - Runs on pushes and pull requests targeting `main`.
@@ -45,7 +45,7 @@ git tag v0.1.70-fork.5
 git push origin v0.1.70-fork.5
 ```
 
-Pushing the tag starts `publish.yml`. To re-run it for an existing tag: Actions → Publish → Run workflow, or
+Pushing the tag starts `publish.yml`. To re-run it for an existing tag: Actions → publish → Run workflow, or
 `gh workflow run publish.yml -f tag=v0.1.70-fork.5`.
 
 `CHANGELOG.md` section format (what `.github/scripts/extract-changelog-entry.mjs` reads):

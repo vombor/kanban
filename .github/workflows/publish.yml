@@ -3,7 +3,7 @@
 # nothing here (image.yml builds the image). How to cut a release: RELEASE_WORKFLOW.md.
 # Registry publishing uses Actions' short-lived GITHUB_TOKEN (user-authorized registry-only exception, 2026-10-17).
 # The host release workflow creates GitHub releases through the Kanban App after both publications are verified.
-name: Publish
+name: publish
 
 on:
   push:
