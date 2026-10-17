@@ -1,6 +1,7 @@
 import { isPendingGitActionStale, PENDING_GIT_ACTION_STALE_AFTER_MS } from "@runtime-task-state";
 import type {
 	RuntimeAgentId,
+	RuntimeBoardCard,
 	RuntimeBoardColumnId,
 	RuntimeTaskAgentSettings,
 	RuntimeTaskAutoReviewMode,
@@ -141,6 +142,7 @@ export interface BoardCard {
 	createdAt: number;
 	updatedAt: number;
 	pendingGitAction?: TaskPendingGitAction | null;
+	providerQueue?: RuntimeBoardCard["providerQueue"];
 }
 
 export interface BoardColumn {

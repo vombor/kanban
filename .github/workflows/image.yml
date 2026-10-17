@@ -11,7 +11,7 @@
 # The pod pulls the image; nothing is built from source on the host.
 # A daily scheduled run rebuilds LATEST_BRANCH so new npm releases of the agent CLIs (and npm) are picked up.
 # Schedules only fire from the repo DEFAULT branch: set the fork's default branch to LATEST_BRANCH.
-# The GHCR push uses the repo secret GH_PAT (the user's classic PAT, docs/fork/github-auth.md), not GITHUB_TOKEN.
+# Registry publishing uses Actions' short-lived GITHUB_TOKEN (user-authorized registry-only exception, 2026-10-17).
 # Publishing the npm package is publish.yml's, on version tags only.
 name: image
 
@@ -29,20 +29,12 @@ env:
 
 permissions:
   contents: read
+  packages: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Require the GH_PAT secret
-        env:
-          GH_PAT: ${{ secrets.GH_PAT }}
-        run: |
-          if [ -z "$GH_PAT" ]; then
-            echo "::error::The repository secret GH_PAT is missing. Add the classic PAT (scopes repo, read:packages, write:packages, workflow) as GH_PAT; see docs/fork/github-auth.md."
-            exit 1
-          fi
-
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'schedule' && env.LATEST_BRANCH || github.ref }}
@@ -108,7 +100,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
-          password: ${{ secrets.GH_PAT }}
+          password: ${{ github.token }}
 
       - id: meta
         uses: docker/metadata-action@v5

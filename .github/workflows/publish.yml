@@ -1,8 +1,8 @@
-# Publishes @vombor/kanban to GitHub Packages (npm.pkg.github.com) and creates the GitHub release, on a version tag
+# Publishes @vombor/kanban to GitHub Packages (npm.pkg.github.com), on a version tag
 # (vX.Y.Z or vX.Y.Z-prerelease, e.g. v0.1.70-fork.5) or by hand for an existing tag. Pushes to fork/** publish
 # nothing here (image.yml builds the image). How to cut a release: RELEASE_WORKFLOW.md.
-# Every write uses the repo secret GH_PAT (the user's classic PAT, docs/fork/github-auth.md), not GITHUB_TOKEN, so
-# the workflow's own token stays read-only.
+# Registry publishing uses Actions' short-lived GITHUB_TOKEN (user-authorized registry-only exception, 2026-10-17).
+# The host release workflow creates GitHub releases through the Kanban App after both publications are verified.
 name: Publish
 
 on:
@@ -21,25 +21,17 @@ concurrency:
 
 permissions:
   contents: read
+  packages: write
 
 jobs:
   test:
     uses: ./.github/workflows/test.yml
 
   publish:
-    name: Publish to GitHub Packages and create GitHub release
+    name: Publish to GitHub Packages
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - name: Require the GH_PAT secret
-        env:
-          GH_PAT: ${{ secrets.GH_PAT }}
-        run: |
-          if [ -z "$GH_PAT" ]; then
-            echo "::error::The repository secret GH_PAT is missing. Add the classic PAT (scopes repo, read:packages, write:packages, workflow) as GH_PAT; see docs/fork/github-auth.md."
-            exit 1
-          fi
-
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -134,7 +126,7 @@ jobs:
       - name: Publish to GitHub Packages
         run: npm publish --tag "${{ steps.resolve_tag.outputs.dist_tag }}"
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GH_PAT }}
+          NODE_AUTH_TOKEN: ${{ github.token }}
           # Optional fork-owned Sentry. Unset secrets build a bundle that reports nothing.
           KANBAN_SENTRY_DSN: ${{ secrets.KANBAN_SENTRY_DSN }}
           VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
@@ -158,14 +150,8 @@ jobs:
             echo "link=" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
-        with:
-          token: ${{ secrets.GH_PAT }}
-          tag_name: ${{ steps.resolve_tag.outputs.tag }}
-          name: ${{ steps.resolve_tag.outputs.tag }}
-          body: |
-            ${{ steps.changelog.outputs.body }}
-
-            ${{ steps.compare.outputs.link }}
-          prerelease: ${{ contains(steps.resolve_tag.outputs.tag, '-') }}
+      - name: Record registry publication
+        env:
+          TAG: ${{ steps.resolve_tag.outputs.tag }}
+        run: |
+          echo "Published $TAG to GitHub Packages. GitHub release notes are published separately as the Kanban App after the versioned image is verified." >> "$GITHUB_STEP_SUMMARY"

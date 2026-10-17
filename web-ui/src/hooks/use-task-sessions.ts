@@ -41,6 +41,7 @@ interface SendTaskSessionInputResult {
 
 interface StartTaskSessionResult {
 	ok: boolean;
+	queued?: boolean;
 	message?: string;
 }
 
@@ -169,6 +170,7 @@ export function useTaskSessions({ currentProjectId, setSessions }: UseTaskSessio
 					agentId: task.agentId,
 					agentSettings: task.agentSettings,
 				});
+				if (payload.ok && payload.queued) return { ok: true, queued: true };
 				if (!payload.ok || !payload.summary) {
 					return {
 						ok: false,

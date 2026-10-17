@@ -11,26 +11,34 @@ import seedPricesJson from "../../../../assets/prices.default.json" with { type:
 import { isConfiguredLocalProvider } from "../../../models/openai-compatible-providers";
 import { getPriceTableCandidatePaths } from "../../../state/kanban-home";
 
-const priceRatesSchema = z.object({
+const rawPriceRatesSchema = z.object({
 	in: z.number().nonnegative(),
-	cacheRead: z.number().nonnegative(),
-	cacheWrite: z.number().nonnegative(),
+	cacheRead: z.number().nonnegative().optional(),
+	cacheWrite: z.number().nonnegative().optional(),
 	out: z.number().nonnegative(),
 });
 
-export const priceEntrySchema = z.looseObject({
-	...priceRatesSchema.shape,
-	/** Regex on the model id. */
-	pattern: z.string().min(1),
-	/** Input tokens per request above which `long` applies (per turn). */
-	longOver: z.number().int().positive().optional(),
-	long: priceRatesSchema.optional(),
-	source: z.enum(["aws", "manual"]).optional(),
-	awsModel: z.string().optional(),
-	tier: z.string().optional(),
-	pin: z.boolean().optional(),
-	note: z.string().optional(),
-});
+/** Older hand-maintained tables omit unsupported cache rates; conservatively charge the input rate, never zero. */
+function completePriceRates<T extends z.infer<typeof rawPriceRatesSchema>>(rates: T) {
+	return { ...rates, cacheRead: rates.cacheRead ?? rates.in, cacheWrite: rates.cacheWrite ?? rates.in };
+}
+const priceRatesSchema = rawPriceRatesSchema.transform(completePriceRates);
+
+export const priceEntrySchema = z
+	.looseObject({
+		...rawPriceRatesSchema.shape,
+		/** Regex on the model id. */
+		pattern: z.string().min(1),
+		/** Input tokens per request above which `long` applies (per turn). */
+		longOver: z.number().int().positive().optional(),
+		long: priceRatesSchema.optional(),
+		source: z.enum(["aws", "manual"]).optional(),
+		awsModel: z.string().optional(),
+		tier: z.string().optional(),
+		pin: z.boolean().optional(),
+		note: z.string().optional(),
+	})
+	.transform(completePriceRates);
 
 export const priceTableFileSchema = z.looseObject({ prices: z.array(priceEntrySchema) });
 

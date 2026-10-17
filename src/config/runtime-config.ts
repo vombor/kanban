@@ -2,15 +2,23 @@
 // This module should store Kanban settings such as selected agents and prompt templates, not SDK-owned Cline
 // secrets or OAuth data. A project's shortcuts are not here: they are in the shortcut store
 // (src/projects/project-shortcut-store.ts), which only the shortcut route writes.
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { getRuntimeAgentCatalogEntry, isRuntimeAgentLaunchSupported } from "../core/agent-catalog";
 import type { RuntimeAgentId } from "../core/api-contract";
+import { type ProviderConcurrencySettings, providerConcurrencySchema } from "../core/provider-concurrency";
 import { normalizeRuntimeAgentDefaultSettings, type RuntimeAgentDefaultSettings } from "../core/task-agent-settings";
+import {
+	DEFAULT_WAKE_NOTICE_PRESENTATION,
+	type WakeNoticePresentation,
+	wakeNoticePresentationSchema,
+} from "../core/wake-notice-presentation";
 import { type LockRequest, lockedFileSystem } from "../fs/locked-file-system";
 import { getKanbanGlobalConfigPath, KANBAN_HOME_MARKER_VERSION } from "../state/kanban-home";
 import { detectInstalledCommands } from "../terminal/agent-registry";
 
 interface RuntimeGlobalConfigFileShape {
+	orchestrator?: { wake?: { presentation?: WakeNoticePresentation } };
+	providerConcurrency?: ProviderConcurrencySettings;
 	/** Initialized-home marker, see kanban-home.ts. */
 	home?: number;
 	selectedAgentId?: RuntimeAgentId;
@@ -23,6 +31,8 @@ interface RuntimeGlobalConfigFileShape {
 }
 
 export interface RuntimeConfigState {
+	wakeNoticePresentation?: WakeNoticePresentation;
+	providerConcurrency?: ProviderConcurrencySettings;
 	globalConfigPath: string;
 	selectedAgentId: RuntimeAgentId;
 	/** Kanban's default model per agent CLI, passed at launch when a card names none (resolveLaunchAgentSettings). */
@@ -37,6 +47,8 @@ export interface RuntimeConfigState {
 }
 
 export interface RuntimeConfigUpdateInput {
+	wakeNoticePresentation?: WakeNoticePresentation;
+	providerConcurrency?: ProviderConcurrencySettings;
 	selectedAgentId?: RuntimeAgentId;
 	agentDefaults?: RuntimeAgentDefaultSettings;
 	selectedShortcutLabel?: string | null;
@@ -182,6 +194,10 @@ function toRuntimeConfigState({
 	return {
 		globalConfigPath,
 		selectedAgentId: normalizeAgentId(globalConfig?.selectedAgentId),
+		providerConcurrency: providerConcurrencySchema.safeParse(globalConfig?.providerConcurrency ?? {}).data ?? {},
+		wakeNoticePresentation:
+			wakeNoticePresentationSchema.safeParse(globalConfig?.orchestrator?.wake?.presentation).data ??
+			DEFAULT_WAKE_NOTICE_PRESENTATION,
 		agentDefaults: normalizeRuntimeAgentDefaultSettings(globalConfig?.agentDefaults),
 		selectedShortcutLabel: normalizeShortcutLabel(globalConfig?.selectedShortcutLabel),
 		agentAutonomousModeEnabled: normalizeBoolean(
@@ -205,7 +221,8 @@ function toRuntimeConfigState({
 async function readRuntimeConfigFile<T>(configPath: string): Promise<T | null> {
 	try {
 		const raw = await readFile(configPath, "utf8");
-		return JSON.parse(raw) as T;
+		const value: unknown = JSON.parse(raw);
+		return value && typeof value === "object" && !Array.isArray(value) ? (value as T) : null;
 	} catch {
 		return null;
 	}
@@ -221,9 +238,24 @@ async function writeRuntimeGlobalConfigFile(
 		readyForReviewNotificationsEnabled?: boolean;
 		commitPromptTemplate?: string;
 		openPrPromptTemplate?: string;
+		providerConcurrency?: ProviderConcurrencySettings;
+		wakeNoticePresentation?: WakeNoticePresentation;
 	},
 ): Promise<void> {
 	const existing = await readRuntimeConfigFile<RuntimeGlobalConfigFileShape>(configPath);
+	if (
+		existing === null &&
+		(await stat(configPath).then(
+			() => true,
+			(error) => {
+				if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return false;
+				throw error;
+			},
+		))
+	)
+		throw new Error(
+			"Existing runtime configuration is unreadable; refusing to overwrite its provider limits or other settings.",
+		);
 	const selectedAgentId = config.selectedAgentId === undefined ? undefined : normalizeAgentId(config.selectedAgentId);
 	const existingSelectedAgentId = hasOwnKey(existing, "selectedAgentId")
 		? normalizeAgentId(existing?.selectedAgentId)
@@ -260,6 +292,22 @@ async function writeRuntimeGlobalConfigFile(
 		}
 	}
 	payload.home = KANBAN_HOME_MARKER_VERSION;
+	if (config.providerConcurrency !== undefined)
+		payload.providerConcurrency = providerConcurrencySchema.parse(config.providerConcurrency);
+	if (config.wakeNoticePresentation !== undefined) {
+		const existingOrchestrator =
+			payload.orchestrator && typeof payload.orchestrator === "object"
+				? (payload.orchestrator as Record<string, unknown>)
+				: {};
+		const existingWake =
+			existingOrchestrator.wake && typeof existingOrchestrator.wake === "object"
+				? (existingOrchestrator.wake as Record<string, unknown>)
+				: {};
+		payload.orchestrator = {
+			...existingOrchestrator,
+			wake: { ...existingWake, presentation: wakeNoticePresentationSchema.parse(config.wakeNoticePresentation) },
+		};
+	}
 	if (selectedAgentId !== undefined) {
 		if (hasOwnKey(existing, "selectedAgentId") || selectedAgentId !== DEFAULT_AGENT_ID) {
 			payload.selectedAgentId = selectedAgentId;
@@ -322,6 +370,8 @@ async function loadRuntimeConfigLocked(globalConfigPath: string): Promise<Runtim
 }
 
 function createRuntimeConfigStateFromValues(input: {
+	wakeNoticePresentation?: WakeNoticePresentation;
+	providerConcurrency?: ProviderConcurrencySettings;
 	globalConfigPath: string;
 	selectedAgentId: RuntimeAgentId;
 	agentDefaults: RuntimeAgentDefaultSettings;
@@ -333,6 +383,8 @@ function createRuntimeConfigStateFromValues(input: {
 }): RuntimeConfigState {
 	return {
 		globalConfigPath: input.globalConfigPath,
+		providerConcurrency: input.providerConcurrency ?? {},
+		wakeNoticePresentation: input.wakeNoticePresentation ?? DEFAULT_WAKE_NOTICE_PRESENTATION,
 		selectedAgentId: normalizeAgentId(input.selectedAgentId),
 		agentDefaults: normalizeRuntimeAgentDefaultSettings(input.agentDefaults),
 		selectedShortcutLabel: normalizeShortcutLabel(input.selectedShortcutLabel),
@@ -378,6 +430,7 @@ export async function loadRuntimeConfig(_projectPath: string): Promise<RuntimeCo
 }
 
 export async function saveRuntimeConfig(config: {
+	providerConcurrency?: ProviderConcurrencySettings;
 	selectedAgentId: RuntimeAgentId;
 	/** Absent: the stored defaults are kept. */
 	agentDefaults?: RuntimeAgentDefaultSettings;
@@ -397,6 +450,9 @@ export async function saveRuntimeConfig(config: {
 
 function applyRuntimeConfigUpdates(current: RuntimeConfigState, updates: RuntimeConfigUpdateInput) {
 	return {
+		wakeNoticePresentation:
+			updates.wakeNoticePresentation ?? current.wakeNoticePresentation ?? DEFAULT_WAKE_NOTICE_PRESENTATION,
+		providerConcurrency: updates.providerConcurrency ?? current.providerConcurrency ?? {},
 		selectedAgentId: updates.selectedAgentId ?? current.selectedAgentId,
 		agentDefaults:
 			updates.agentDefaults === undefined
@@ -419,6 +475,8 @@ async function writeRuntimeConfigUpdates(
 ): Promise<RuntimeConfigState> {
 	const nextConfig = applyRuntimeConfigUpdates(current, updates);
 	const hasChanges =
+		nextConfig.wakeNoticePresentation !== (current.wakeNoticePresentation ?? DEFAULT_WAKE_NOTICE_PRESENTATION) ||
+		JSON.stringify(nextConfig.providerConcurrency) !== JSON.stringify(current.providerConcurrency ?? {}) ||
 		nextConfig.selectedAgentId !== current.selectedAgentId ||
 		JSON.stringify(nextConfig.agentDefaults) !== JSON.stringify(current.agentDefaults) ||
 		nextConfig.selectedShortcutLabel !== current.selectedShortcutLabel ||
@@ -429,7 +487,11 @@ async function writeRuntimeConfigUpdates(
 	if (!hasChanges) {
 		return current;
 	}
-	await writeRuntimeGlobalConfigFile(globalConfigPath, nextConfig);
+	await writeRuntimeGlobalConfigFile(globalConfigPath, {
+		...nextConfig,
+		...(updates.wakeNoticePresentation === undefined ? { wakeNoticePresentation: undefined } : {}),
+		...(updates.providerConcurrency === undefined ? { providerConcurrency: undefined } : {}),
+	});
 	return createRuntimeConfigStateFromValues({ globalConfigPath, ...nextConfig });
 }
 

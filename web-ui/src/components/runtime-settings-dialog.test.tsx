@@ -565,6 +565,110 @@ describe("RuntimeSettingsDialog", () => {
 		expect(saveConfigMock.mock.calls[0]?.[0]).not.toHaveProperty("shortcuts");
 	});
 
+	it("edits provider caps through the main Save and preserves saved unknown limits", async () => {
+		await act(async () =>
+			root.render(
+				<RuntimeSettingsDialog
+					open
+					workspaceId={null}
+					initialConfig={{ ...savedConfig, providerConcurrency: { "cline-pass": 1, "unknown-provider": 7 } }}
+					onOpenChange={vi.fn()}
+				/>,
+			),
+		);
+		const cap = document.body.querySelector<HTMLSelectElement>(
+			'select[aria-label="cline-pass maximum active turns"]',
+		);
+		const unknown = document.body.querySelector<HTMLSelectElement>(
+			'select[aria-label="unknown-provider maximum active turns"]',
+		);
+		expect(cap?.value).toBe("1");
+		expect(unknown?.value).toBe("7");
+		if (!cap) throw new Error("Missing cap selector");
+		await act(async () => setSelectValue(cap, "2"));
+		expect(findButtonByText(document.body, "Save")?.disabled).toBe(false);
+		await act(async () => findButtonByText(document.body, "Save")?.click());
+		expect(saveConfigMock.mock.calls.at(-1)?.[0]).toMatchObject({
+			providerConcurrency: { "cline-pass": 2, "unknown-provider": 7 },
+		});
+	});
+
+	it("changes sidebar notice presentation through the main Save without changing delivery policy", async () => {
+		await act(async () =>
+			root.render(
+				<RuntimeSettingsDialog
+					open
+					workspaceId={null}
+					initialConfig={{ ...savedConfig, wakeNoticePresentation: "full" }}
+					onOpenChange={vi.fn()}
+				/>,
+			),
+		);
+		const selector = document.body.querySelector<HTMLSelectElement>('select[aria-label="Watchdog sidebar notices"]');
+		if (!selector) throw new Error("Missing notice selector");
+		expect(selector.value).toBe("full");
+		await act(async () => setSelectValue(selector, "hidden"));
+		await act(async () => findButtonByText(document.body, "Save")?.click());
+		expect(saveConfigMock.mock.calls.at(-1)?.[0]).toMatchObject({ wakeNoticePresentation: "hidden" });
+		expect(saveConfigMock.mock.calls.at(-1)?.[0]).not.toHaveProperty("orchestrator");
+	});
+
+	it("preserves edited provider caps across config refetches and keeps unrelated newly saved caps", async () => {
+		const close = vi.fn();
+		const render = async (caps: Record<string, number>) =>
+			act(async () =>
+				root.render(
+					<RuntimeSettingsDialog
+						open
+						workspaceId={null}
+						initialConfig={{ ...savedConfig, providerConcurrency: caps }}
+						onOpenChange={close}
+					/>,
+				),
+			);
+		await render({ "cline-pass": 1, "unknown-provider": 7 });
+		const select = document.body.querySelector<HTMLSelectElement>(
+			'select[aria-label="cline-pass maximum active turns"]',
+		);
+		if (!select) throw new Error("Missing cap selector");
+		await act(async () => setSelectValue(select, "2"));
+		await render({ "cline-pass": 1, "unknown-provider": 7 });
+		expect(select.value).toBe("2");
+		await render({ "cline-pass": 1, "unknown-provider": 8, "new-provider": 9 });
+		expect(select.value).toBe("2");
+		await act(async () => findButtonByText(document.body, "Save")?.click());
+		expect(saveConfigMock.mock.calls.at(-1)?.[0]).toMatchObject({
+			providerConcurrency: { "cline-pass": 2, "unknown-provider": 8, "new-provider": 9 },
+		});
+	});
+
+	it("does not block provider-only Save on an unrelated connector initial-load request", async () => {
+		connectorMocks.get.mockImplementationOnce(() => new Promise(() => {}));
+		const closed = vi.fn();
+		await act(async () =>
+			root.render(
+				<RuntimeSettingsDialog
+					open
+					workspaceId={null}
+					initialConfig={{ ...savedConfig, providerConcurrency: { "cline-pass": 1 } }}
+					onOpenChange={closed}
+				/>,
+			),
+		);
+		const selector = document.body.querySelector<HTMLSelectElement>(
+			'select[aria-label="cline-pass maximum active turns"]',
+		);
+		if (!selector) throw new Error("Missing provider cap");
+		await act(async () => setSelectValue(selector, "2"));
+		expect(findButtonByText(document.body, "Save")?.disabled).toBe(false);
+		await act(async () => findButtonByText(document.body, "Save")?.click());
+		expect(saveConfigMock).toHaveBeenCalledWith(
+			expect.objectContaining({ providerConcurrency: { "cline-pass": 2 } }),
+		);
+		expect(connectorMocks.save).not.toHaveBeenCalled();
+		expect(closed).toHaveBeenCalledWith(false);
+	});
+
 	describe("default model per agent", () => {
 		async function renderDialog(config: RuntimeConfigResponse = savedConfig): Promise<void> {
 			saveConfigMock.mockClear();

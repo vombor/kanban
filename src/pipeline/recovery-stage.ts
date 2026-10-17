@@ -27,6 +27,7 @@ import { evaluateClineTurnEnd } from "../terminal/cline-turn-outcome";
 import { describeWorktreeIndexRepair, type WorktreeIndexRepair } from "../workspace/worktree-index-health";
 import type { PipelineDecisionRecord } from "./decision-log";
 import { getRecoveryScope, type PipelineSessionView, type PipelineWorkspaceSnapshot, toEffectiveCard } from "./engine";
+import { manualReviewHoldReason } from "./manual-review";
 import type { PipelineWorkspaceState } from "./pipeline-state";
 import { type CapacityCard, findProviderCapacityHold } from "./provider-capacity";
 import { readQaGateEntry } from "./qa-gate";
@@ -424,6 +425,7 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 		const records: PipelineDecisionRecord[] = [];
 		const patches = new Map<string, RecoveryFlowPatch>();
 		for (const context of contexts) {
+			if (context.card.providerQueue || manualReviewHoldReason(input.state.cards[context.card.id])) continue;
 			if (plannedNow.has(context.card.id)) {
 				continue; // just marked; its resume is running
 			}
@@ -713,7 +715,11 @@ export function createRecoveryStage(deps: RecoveryStageDependencies): RecoverySt
 		}
 		const manifest = await deps.readManifest(workspaceId);
 		const plan = planRestartRecovery({
-			cards: contexts.map((context) => ({ card: context.card, column: context.column })),
+			cards: contexts
+				.filter(
+					(context) => !context.card.providerQueue && !manualReviewHoldReason(input.state.cards[context.card.id]),
+				)
+				.map((context) => ({ card: context.card, column: context.column })),
 			sessions: new Map(input.snapshot.sessions.map((session) => [session.taskId, session])),
 			serverStartedAt,
 			previousServerStartedAt: input.snapshot.previousServerStartedAt ?? null,

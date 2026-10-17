@@ -121,7 +121,7 @@ git tag v<version>
 
 ### 8. Push
 
-Push the commit to the release branch (the fork releases from `fork/stack`), then the tag. Pushing the tag starts `publish.yml`: it runs the tests, publishes `@vombor/kanban` to GitHub Packages (`next` for a prerelease version, `latest` otherwise) and creates the GitHub release, all with the repo secret `GH_PAT` (docs/fork/github-auth.md). It also starts `image.yml`, which pushes the container image `ghcr.io/vombor/kanban:<version>` (no `v`) and moves `:stable` to it; pods that follow `:stable` update with `kanban restart update` (docs/fork/container-lifecycle.md, "Releases").
+Push the commit to `fork/stack`, then the tag, authenticated through the Kanban GitHub App. The tag starts `publish.yml`: it runs tests and publishes `@vombor/kanban` to GitHub Packages (`next` for a fork prerelease) using Actions' generated registry-only token, never `GH_PAT`. It also starts `image.yml`, which pushes `ghcr.io/vombor/kanban:<version>` and `:stable` using that token. After both succeed and exact version/image metadata is verified, create the GitHub release with its changelog entry and compare link through the Kanban App-authenticated gh bridge, not the Actions token. Publication is not permission to upgrade a live instance. See RELEASE_WORKFLOW.md and docs/fork/github-auth.md.
 
 ```bash
 git push origin <branch>

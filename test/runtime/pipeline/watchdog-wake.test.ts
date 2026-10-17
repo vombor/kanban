@@ -313,7 +313,7 @@ describe("watchdog wake isolated by project", () => {
 		// `target` is the removed machine-wide key (foo's stalls once went to kanban-2uge's sidebar, 10/07).
 		const harness = twoProjects({
 			watchdog: { mode: "on" },
-			orchestrator: { wake: { mode: "sidebar", target: "foo" } },
+			orchestrator: { wake: { mode: "sidebar", presentation: "full", target: "foo" } },
 			workspaces: TWO_QA,
 		});
 		await harness.watchdog.tick();

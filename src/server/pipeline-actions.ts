@@ -148,6 +148,7 @@ export function createPipelineActionRunner(
 			agentId: card.agentId,
 			agentSettings: card.agentSettings,
 		});
+		if (started.ok && started.queued) return { ok: true, queued: true, detail: started.message };
 		if (!started.ok || !started.summary) {
 			return { ok: false, error: started.error ?? "could not start the task session" };
 		}
@@ -238,6 +239,7 @@ export function createPipelineActionRunner(
 			agentSettings: card.agentSettings,
 			...(request.continueConversation ? { resumeFromTrash: true } : {}),
 		});
+		if (started.ok && started.queued) return { ok: true, queued: true, detail: started.message };
 		if (!started.ok || !started.summary) {
 			return { ok: false, error: started.error ?? "could not start the task session" };
 		}

@@ -210,7 +210,7 @@ export function createTypedInputHold(deps: TypedInputHoldDependencies): TypedInp
 				held.delete(key);
 			}
 			const result = await typeInto(key, terminal, entry.taskId, text);
-			if (result.status === "user_typing") {
+			if (result.status === "user_typing" || result.status === "busy") {
 				// The user started typing between the check and the delivery: back to the front of the hold.
 				const current = held.get(key);
 				if (current) {
@@ -254,7 +254,7 @@ export function createTypedInputHold(deps: TypedInputHoldDependencies): TypedInp
 				return response("queued", { ok: true, summary: terminal.getSummary(taskId) });
 			}
 			const result = await typeInto(key, terminal, taskId, text);
-			if (result.status === "user_typing") {
+			if (result.status === "user_typing" || result.status === "busy") {
 				hold(key, workspaceId, taskId, text);
 				return response("queued", { ok: true, summary: result.summary });
 			}

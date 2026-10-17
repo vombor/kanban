@@ -5,7 +5,7 @@ import * as esbuild from "esbuild";
  * and a spawn-helper binary that must live on disk, so it can't be bundled.
  * Everything else esbuild can inline.
  */
-const external = ["node-pty"];
+const external = ["node-pty", "playwright-core", "pngjs"];
 
 /**
  * Bake build-time env into the bundle. Sentry error reporting stays off unless

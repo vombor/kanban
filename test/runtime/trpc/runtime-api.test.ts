@@ -59,11 +59,13 @@ vi.mock("../../../src/server/browser.js", () => ({
 
 import { createIsolationService } from "../../../src/isolation/isolation-service";
 import { KANBAN_SESSION_CREDENTIAL_ENV, KANBAN_SESSION_WORKSPACE_ENV } from "../../../src/isolation/session-identity";
+import { createProviderDispatcher } from "../../../src/server/provider-dispatcher";
 import { createTypedInputHold, type TypedInputHold } from "../../../src/server/typed-input-hold";
 import { getKanbanGlobalConfigPath } from "../../../src/state/kanban-home";
 import type { RuntimeTrpcContext } from "../../../src/trpc/app-router";
 import { type CreateRuntimeApiDependencies, createRuntimeApi } from "../../../src/trpc/runtime-api";
 import { withTemporaryKanbanHome } from "../../utilities/kanban-home";
+import { createBoard, createCard } from "../../utilities/workspace-state-store";
 
 type OptionalRuntimeApiDependency =
 	| "getUpdateStatus"
@@ -146,6 +148,50 @@ function createRuntimeConfigState(overrides: Partial<RuntimeConfigState> = {}): 
 }
 
 describe("createRuntimeApi startTaskSession", () => {
+	it("admits new task turns only through the instance broker while preserving guarded launch/reuse (#53)", async () => {
+		await withTemporaryKanbanHome(async ({ homePath }) => {
+			const terminalManager = {
+				getSummary: vi.fn(() => null),
+				willReuseLiveSession: vi.fn(() => false),
+				startTaskSession: vi.fn(async () => createSummary()),
+			};
+			const config = createRuntimeConfigState();
+			const dispatcher = createProviderDispatcher({
+				workspaceIds: async () => ["workspace-1"],
+				queuePath: (id) => join(homePath, id, "queue.json"),
+				lockPath: join(homePath, "dispatch"),
+				limits: async () => ({ "provider:agent:claude": 1 }),
+				activity: async () => [{ key: "other\0running", resources: ["provider:agent:claude"] }],
+				admission: async () => ({ resources: ["provider:agent:claude"], provider: "agent:claude", until: null }),
+				valid: async () => true,
+				execute: async () => {
+					throw new Error("A busy pool must never launch");
+				},
+				queued: async () => {},
+				finished: async () => {},
+				log: () => {},
+			});
+			boardMocks.loadWorkspaceBoardById.mockResolvedValue(createBoard({ backlog: [createCard({ id: "task-1" })] }));
+			agentRegistryMocks.resolveAgentCommand.mockReturnValue({ agentId: "claude", binary: "claude", args: [] });
+			const api = createTestRuntimeApi({
+				providerDispatcher: dispatcher,
+				getActiveWorkspaceId: () => "workspace-1",
+				loadScopedRuntimeConfig: async () => config,
+				setActiveRuntimeConfig: vi.fn(),
+				getScopedTerminalManager: async () => terminalManager as never,
+				resolveInteractiveShellCommand: () => ({ binary: "bash", args: [] }),
+			});
+			const result = await api.startTaskSession(
+				{ workspaceId: "workspace-1", workspacePath: "/tmp/test" },
+				{ taskId: "task-1", baseRef: "main", prompt: "Do a read-only task" },
+				{ kind: "user" },
+			);
+			expect(result).toMatchObject({ ok: true, queued: true, summary: null });
+			expect(terminalManager.startTaskSession).not.toHaveBeenCalled();
+			expect((await dispatcher.pending())[0]).toMatchObject({ explicit: true, body: { agentId: "claude" } });
+			dispatcher.close();
+		});
+	});
 	beforeEach(() => {
 		agentRegistryMocks.resolveAgentCommand.mockReset();
 		agentRegistryMocks.buildRuntimeConfigResponse.mockReset();

@@ -11,6 +11,8 @@ import { readFile } from "node:fs/promises";
 import { z } from "zod";
 
 import { type RuntimeLandingMode, runtimeLandingModeSchema } from "../core/api-contract";
+import { providerConcurrencySchema } from "../core/provider-concurrency";
+import { DEFAULT_WAKE_NOTICE_PRESENTATION, wakeNoticePresentationSchema } from "../core/wake-notice-presentation";
 import { lockedFileSystem } from "../fs/locked-file-system";
 import { getRenamedKit, type KitSelection } from "../kits/renamed-kits";
 import { setConfiguredOpenAiCompatibleProviders } from "../models/openai-compatible-providers";
@@ -124,12 +126,13 @@ export const orchestratorWakeDeliverySchema = z.enum(["type", "silent", "auto"])
 export type OrchestratorWakeDelivery = z.infer<typeof orchestratorWakeDeliverySchema>;
 
 /** Sidebar text only; compact/hidden retain the full wake in the workspace's watchdog decision log. */
-export const orchestratorWakePresentationSchema = z.enum(["full", "compact", "hidden"]);
+export const orchestratorWakePresentationSchema = wakeNoticePresentationSchema;
 export type OrchestratorWakePresentation = z.infer<typeof orchestratorWakePresentationSchema>;
 
 export const workspacePipelineSettingsSchema = z
 	.object({
 		name: z.string().nullable().default(null),
+		providerConcurrency: providerConcurrencySchema.default({}),
 		defaultBaseRef: z.string().nullable().default(null),
 		landing: z
 			.object({ mode: landingModeSchema.default("off") })
@@ -384,7 +387,7 @@ const ORCHESTRATOR_WAKE_DEFAULTS = {
 	timeoutMin: 45,
 	liveSessionMin: 10,
 	delivery: "auto",
-	presentation: "full",
+	presentation: DEFAULT_WAKE_NOTICE_PRESENTATION,
 	quietMin: 30,
 } as const;
 
@@ -805,6 +808,7 @@ const updateSectionSchema = z
 export type UpdateSettings = z.infer<typeof updateSectionSchema>;
 
 const SECTION_SCHEMAS = {
+	providerConcurrency: providerConcurrencySchema.default({}),
 	sessionSync: sessionSyncSectionSchema,
 	pipeline: pipelineSectionSchema,
 	watchdog: watchdogSectionSchema,

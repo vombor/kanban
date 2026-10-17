@@ -70,6 +70,47 @@ function writeFakeCommand(binDir: string, command: string): void {
 }
 
 describe.sequential("runtime-config auto agent selection", () => {
+	it("saves only requested pacing/presentation fields, preserving delivery, project facts and unrelated caps", async () => {
+		await withTemporaryKanbanHome(async ({ homePath }) => {
+			mkdirSync(homePath, { recursive: true });
+			const path = join(homePath, "config.json");
+			writeFileSync(
+				path,
+				JSON.stringify({
+					home: 1,
+					selectedAgentId: "claude",
+					providerConcurrency: { "cline-pass": 1 },
+					orchestrator: { wake: { presentation: "full", mode: "sidebar", enabled: true, quietMin: 8 } },
+					workspaces: { foo: { providerConcurrency: { "cline-pass": 1 } } },
+				}),
+			);
+			await updateRuntimeConfig({ wakeNoticePresentation: "hidden" });
+			expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({
+				providerConcurrency: { "cline-pass": 1 },
+				orchestrator: { wake: { presentation: "hidden", mode: "sidebar", enabled: true, quietMin: 8 } },
+				workspaces: { foo: { providerConcurrency: { "cline-pass": 1 } } },
+			});
+			await updateRuntimeConfig({ providerConcurrency: { "cline-pass": 2 } });
+			expect(await loadGlobalRuntimeConfig()).toMatchObject({
+				wakeNoticePresentation: "hidden",
+				providerConcurrency: { "cline-pass": 2 },
+			});
+		});
+	});
+
+	it("never resets an unreadable retained configuration while saving agent settings/pacing", async () => {
+		await withTemporaryKanbanHome(async ({ homePath }) => {
+			mkdirSync(homePath, { recursive: true });
+			const path = join(homePath, "config.json");
+			for (const invalid of ["{truncated", "[]", "null"]) {
+				writeFileSync(path, invalid);
+				await expect(
+					updateRuntimeConfig({ providerConcurrency: { "cline-pass": 1 }, selectedAgentId: "claude" }),
+				).rejects.toThrow("refusing to overwrite");
+				expect(readFileSync(path, "utf8")).toBe(invalid);
+			}
+		});
+	});
 	it("selects agents using the configured priority order", () => {
 		expect(pickBestInstalledAgentIdFromDetected(["codex", "opencode", "gemini"])).toBe("codex");
 		expect(pickBestInstalledAgentIdFromDetected(["opencode", "droid", "gemini"])).toBe("droid");

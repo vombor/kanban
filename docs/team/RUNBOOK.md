@@ -138,6 +138,10 @@ true` (landing and recovery stop; the watchdog keeps running if it is on).
 | Start a runoff | `kanban bench runoff create <name> (--model … \| --tier …) (--prompt … \| --from <id>) [--bench-only] [--start]` |
 | Calibrate QA models | `kanban bench calibrate <spec> [--project W] [--foreground] [--print] [--force]` |
 | Score, metrics, prices | `kanban bench scoreboard`, `kanban bench metrics <id>`, `kanban models prices sync [--apply\|--check]` |
+| Restrictive provider pacing / status | `kanban pipeline provider-limit <provider> <cap> [--workspace W]`, `--unset`, and `pipeline provider-status --json`; user installation caps are in Global Settings or `config set providerConcurrency.<provider> <cap>` ([details](../fork/provider-concurrency.md)) |
+| Acknowledge/defer an escalation | `kanban pipeline acknowledge <id> --reason … --disposition held\|deferred [--until <ISO>] [--wait-for-task <id>]`; clear with `--disposition clear`. Never clears escalation or changes a verdict |
+| Conclude an exhausted dead native review | `kanban pipeline conclude-review <dev> --qa-task <qa> --snapshot <sha> --reason <audited evidence>`: terminal operator-audited STALLED and replacement hold, no resume/retry ([controls](../fork/qa-review-tools.md)) |
+| One explicitly authorized evidence-only reassessment | `kanban pipeline review <dev> --snapshot <sha> --evidence-only --reason …`: separate findings, no historical-run reopening/landing/rework/fallback |
 
 - **Never `stopTaskSession` to switch models**: the session ends "interrupted" and the card moves. Use
   `restart-fresh`.
@@ -145,6 +149,9 @@ true` (landing and recovery stop; the watchdog keeps running if it is on).
   unchanged. Use `resume`. On a card whose session is still open but finished its turn (awaiting review), start
   and resume refuse rather than reattach it with no new turn: `kanban task send <id> "<text>"` gives it one, and a
   card escalated over a STALLED QA round goes back through `kanban task handback`.
+  An explicitly authorized dead Review `triage` assessment can continue on its same card with `task resume`, even
+  when its descriptive title starts `BLOCKED:`; it does not clear dev pipeline holds/escalations or enable QA.
+  This is manual continuation, not permission to retry an exhausted or safety-held diagnostic (issue #63).
 - **Calibration cards belong to their runner** (`role: "calibration"`, title `QA-CAL …`). The pipeline, auto-review
   and the watchdog's stall checks leave them alone, and session sync still moves them because the runner waits for
   Review. Only one runner works on a calibration (`runner.pid`, taken over from a dead holder). A rerun retries runs
@@ -358,5 +365,8 @@ only read, so the legacy kit carries on from where it stopped.
    errors.
 4. **Prices:** `kanban models prices sync` (dry run), then `--apply`. Models in the AWS Price List get an entry.
    Others need a manual one in `data/prices/prices.json`. Without a price, the cost shows `n/a`.
+   Retained tables may omit cache rates; omitted cache read/write rates conservatively use that row's input rate,
+   while explicit zero remains zero. Manual/pinned values and metadata are retained. Invalid rows report their field
+   path before fetching offers; malformed JSON is never treated as a missing file or overwritten (issue #62).
 5. **Tier:** add it to the project's kit (`tiers`, as an override or in a user kit). Tier 2 (more than about $20 per
    run) needs the user's go-ahead.

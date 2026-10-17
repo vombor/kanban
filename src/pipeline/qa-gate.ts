@@ -89,10 +89,12 @@ import {
 	describeUnsettledReview,
 	type PipelineSessionView,
 	type PipelineWorkspaceSnapshot,
+	readCardHistory,
 	toEffectiveCard,
 } from "./engine";
 import type { PipelineEventBus } from "./events";
 import { decideOnPass, readPipelineHold } from "./hold";
+import { manualReviewHoldReason, readManualReview } from "./manual-review";
 import {
 	type PipelineCardState,
 	type PipelineStateStore,
@@ -127,6 +129,7 @@ import { judgePassAgainstChecks } from "./qa-checks-verdict";
 import { type AppendQaLog, countQaLogRounds, formatQaLogSection, getPreviousQaRounds, readQaLog } from "./qa-log";
 import type { QaPreviewController } from "./qa-preview";
 import { buildQaCardTitle, buildQaPrompt, buildQaRequirements } from "./qa-prompt";
+import { buildQaSetupGuidance } from "./qa-setup-guidance";
 import {
 	applyQaVerdictRules,
 	buildQaVerdictNudge,
@@ -163,6 +166,7 @@ export const qaGateEntrySchema = z.object({
 	status: z.enum(["queued", "running", "ingested", "superseded"]),
 	createdAt: z.number(),
 	startedAt: z.number().nullable().default(null),
+	evidenceOnly: z.boolean().optional(),
 	/** When the gate first saw the card in Review in this attempt (the verdict grace runs from here). */
 	reviewSeenAt: z.number().nullable().default(null),
 	nudges: z.number().int().nonnegative().default(0),
@@ -709,6 +713,20 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			);
 			return `QA card ${qaTaskId} ${reason}, with its verdict written: ${recorded}; ${await trashQaCard(context, qaTaskId)}`;
 		}
+		if (entry.evidenceOnly) {
+			const recorded = await recordVerdict(
+				context,
+				qaTaskId,
+				entry,
+				createStalledQaVerdict(reason),
+				"evidence-only reviewer ended; no replacement authorized",
+			);
+			return `${recorded}; ${await trashQaCard(context, qaTaskId)}`;
+		}
+		await copyArtifacts(
+			entry.outboxDir,
+			join(artifactsPathOf(context.snapshot.workspaceId), entry.reviewsTaskId, `interrupted-${qaTaskId}`),
+		).catch((error) => deps.log(`qa ${qaTaskId}: partial artifact preservation failed: ${String(error)}`));
 		const stopped = await markSuperseded(context, qaTaskId, entry);
 		deps.log(`qa ${entry.reviewsTaskId}: QA card ${qaTaskId} ${reason}; superseded`);
 		return `QA card ${qaTaskId} of round ${entry.round} for snapshot ${entry.snapshot.slice(0, 8)} ${reason}: superseded${stopped > 0 ? ` (stopped ${stopped} scratch process(es))` : ""}, and ${entry.reviewsTaskId} gets a new QA card for its snapshot`;
@@ -768,7 +786,8 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		card,
 		dev,
 		answer,
-	}: QaGateSubmitInput): Promise<{ outcome: PipelineDecisionOutcome; note: string }> => {
+		evidenceOnly = false,
+	}: QaGateSubmitInput & { evidenceOnly?: boolean }): Promise<{ outcome: PipelineDecisionOutcome; note: string }> => {
 		const { snapshot } = context;
 		const workspaceId = snapshot.workspaceId;
 		// The submission stage snapshotted the card and found work in it before the kit was asked.
@@ -780,10 +799,12 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		const short = qaSnapshot.commit.slice(0, 8);
 		const state = await deps.store.load(workspaceId);
 		const devEntry = state.cards[card.id];
+		if (evidenceOnly && readManualReview(devEntry)?.snapshot !== qaSnapshot.commit)
+			return { outcome: "none", note: "evidence-only request snapshot changed; refusing another snapshot" };
 		// `kanban task resubmit` asks for a new QA round of the card's current snapshot (resubmit.ts, issue #20: 59d13's
 		// only QA card had STALLED on a harness problem, and its resubmit was answered "already has QA card"): a finished
 		// QA card created before the request no longer counts as the snapshot's one. Its verdict still does, below.
-		if (devEntry?.qaCreated === qaSnapshot.commit) {
+		if (!evidenceOnly && devEntry?.qaCreated === qaSnapshot.commit) {
 			const qaTaskId = String(devEntry.qaCard ?? "?");
 			const existing = readQaGateEntry(state.cards[qaTaskId]);
 			if (!(existing?.status === "ingested" && existing.createdAt < readResubmitRequestAt(devEntry))) {
@@ -795,6 +816,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		// issue #16). A PASS or FAIL still does.
 		const requeuedAt = readQaRequeuedAt(devEntry);
 		if (
+			!evidenceOnly &&
 			readQaVerdictRecords(devEntry).some(
 				(verdict) =>
 					verdict.snapshot === qaSnapshot.commit && !(verdict.verdict === "STALLED" && verdict.at < requeuedAt),
@@ -840,7 +862,8 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		const round = countQaLogRounds(qaLog, card.id) + 1;
 		const qaTaskId = createUniqueTaskId(new Set(listCards(snapshot).map((entry) => entry.card.id)), randomUuid);
 		const outboxDir = join(context.qa.outboxRoot, qaTaskId);
-		const scratchDir = join(context.qa.scratchRoot, card.id);
+		// QA-card and workspace scoped: replacements/supplemental reviews must never overwrite an earlier review's copy.
+		const scratchDir = join(context.qa.scratchRoot, workspaceId, qaTaskId);
 		const devTitle = card.title || card.prompt;
 		const qaPrompt = buildQaPrompt({
 			devTaskId: card.id,
@@ -864,7 +887,24 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			outboxDir,
 			chromiumLibs: resolveQaChromiumLibs(process.env.QA_CHROMIUM_LIBS || context.qa.chromiumLibs),
 		});
-		const prompt = [qaPrompt, browserNote, agentError ? buildQaAgentErrorNote(agentError) : null]
+		const setupNote = buildQaSetupGuidance({
+			repoPath: snapshot.workspacePath,
+			snapshot: qaSnapshot.commit,
+			baseRef: card.baseRef,
+			scratchDir,
+			outboxDir,
+			qaTaskId,
+			dbSetupNotes: answer.promptParts.notes.dbSetup,
+		});
+		const prompt = [
+			qaPrompt,
+			setupNote,
+			browserNote,
+			evidenceOnly
+				? "EXPLICIT EVIDENCE-ONLY REASSESSMENT: this separately authorized unchanged-snapshot review never triggers landing, rework, fallback, benchmark reopening, score/model promotion, or implementation execution. Historical verdicts remain unchanged. Report findings and actual evidence only."
+				: null,
+			agentError ? buildQaAgentErrorNote(agentError) : null,
+		]
 			.filter(Boolean)
 			.join("\n\n");
 		const created = await deps.actions.run({
@@ -901,6 +941,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			status: "queued",
 			createdAt: context.now,
 			startedAt: null,
+			...(evidenceOnly ? { evidenceOnly: true } : {}),
 			reviewSeenAt: null,
 			nudges: 0,
 			timedOutAt: null,
@@ -918,7 +959,9 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 				...current,
 				cards: {
 					...current.cards,
-					[card.id]: { ...dev, qaCreated: qaSnapshot.commit, qaCard: qaTaskId },
+					[card.id]: evidenceOnly
+						? { ...dev, manualReview: { ...readManualReview(dev), status: "running", qaTaskId } }
+						: { ...dev, qaCreated: qaSnapshot.commit, qaCard: qaTaskId },
 					[qaTaskId]: { ...(current.cards[qaTaskId] ?? {}), qaGate: entry },
 				},
 			};
@@ -932,6 +975,8 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 
 	const submit: QaGate["submit"] = async (input) => {
 		const { context, card, session } = input;
+		const manualHold = manualReviewHoldReason((await deps.store.load(context.snapshot.workspaceId)).cards[card.id]);
+		if (manualHold) return { outcome: "none", note: manualHold };
 		if (!isReviewSettled(session, context.now, context.snapshot.reviewSettleMs)) {
 			return { outcome: "none", note: describeUnsettledReview(session) };
 		}
@@ -969,7 +1014,11 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 					? "PASS without an answer for the failed checks → recorded as STALLED"
 					: null;
 		const note = [pipelineNote, ruled.changed, checksChange].filter(Boolean).join("; ") || null;
-		const artifactsDir = join(artifactsPathOf(workspaceId), entry.reviewsTaskId, `r${entry.round}`);
+		const artifactsDir = join(
+			artifactsPathOf(workspaceId),
+			entry.reviewsTaskId,
+			entry.evidenceOnly ? `evidence-${qaTaskId}` : `r${entry.round}`,
+		);
 		// State first: a worker that dies halfway through never records the same verdict twice.
 		const at = context.now;
 		const verdictRecord: QaVerdictRecord = {
@@ -992,7 +1041,16 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 				...state,
 				cards: {
 					...state.cards,
-					[entry.reviewsTaskId]: { ...devEntry, qaVerdicts: [...readQaVerdictRecords(devEntry), verdictRecord] },
+					[entry.reviewsTaskId]: entry.evidenceOnly
+						? {
+								...devEntry,
+								manualQaVerdicts: [
+									...(Array.isArray(devEntry.manualQaVerdicts) ? devEntry.manualQaVerdicts : []),
+									verdictRecord,
+								],
+								manualReview: { ...readManualReview(devEntry), status: "complete" },
+							}
+						: { ...devEntry, qaVerdicts: [...readQaVerdictRecords(devEntry), verdictRecord] },
 					[qaTaskId]: {
 						...qaEntry,
 						qaGate: { ...entry, status: "ingested", ingestedAt: at, verdict: verdict.verdict },
@@ -1022,23 +1080,24 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		const stopped = await deps
 			.stopScratchProcesses([entry.scratchDir, `${entry.scratchDir}-${entry.baseRef}`])
 			.catch(() => 0);
-		await deps.bus.emit("verdictRecorded", {
-			workspaceId,
-			taskId: entry.reviewsTaskId,
-			at,
-			qaTaskId,
-			verdict: {
-				verdict: verdict.verdict,
-				round: entry.round,
-				blocking: verdict.blocking,
-				notes: verdict.notes,
-			},
-			devAgentId: entry.devAgentId as RuntimeAgentId,
-			devModel: entry.devModel,
-			qaAgentId: entry.agentId as RuntimeAgentId,
-			qaModel: entry.model,
-			report: { scores: verdict.scores, visual: verdict.visual },
-		});
+		if (!entry.evidenceOnly)
+			await deps.bus.emit("verdictRecorded", {
+				workspaceId,
+				taskId: entry.reviewsTaskId,
+				at,
+				qaTaskId,
+				verdict: {
+					verdict: verdict.verdict,
+					round: entry.round,
+					blocking: verdict.blocking,
+					notes: verdict.notes,
+				},
+				devAgentId: entry.devAgentId as RuntimeAgentId,
+				devModel: entry.devModel,
+				qaAgentId: entry.agentId as RuntimeAgentId,
+				qaModel: entry.model,
+				report: { scores: verdict.scores, visual: verdict.visual },
+			});
 		return `${entry.reviewsTaskId} round ${entry.round}: ${verdict.verdict} recorded${note ? ` (${note})` : ""}${stopped > 0 ? `; stopped ${stopped} scratch process(es)` : ""}`;
 	};
 
@@ -1095,6 +1154,14 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		entry: QaGateEntry,
 		error: QaAgentError,
 	): Promise<string> => {
+		if (entry.evidenceOnly)
+			return await recordVerdict(
+				context,
+				qaTaskId,
+				entry,
+				createStalledQaVerdict(describeQaAgentError(error)),
+				"evidence-only review ended; no replacement is authorized",
+			);
 		const workspaceId = context.snapshot.workspaceId;
 		const state = await deps.store.load(workspaceId);
 		const earlier = listQaAgentErrors(state.cards[entry.reviewsTaskId], entry.snapshot);
@@ -1171,6 +1238,16 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		if (context.now - seenAt < context.qa.verdictGraceSec * 1000) {
 			return null;
 		}
+		if (entry.evidenceOnly) {
+			const recorded = await recordVerdict(
+				context,
+				qaTaskId,
+				entry,
+				createStalledQaVerdict(`Evidence-only review has no usable verdict: ${read.kind}`),
+				"bounded evidence-only review ended; no nudge or replacement authorized",
+			);
+			return `${recorded}; ${await trashQaCard(context, qaTaskId)}`;
+		}
 		// Before any nudge: a nudge resends the conversation that ends on the error (issue #12).
 		const agentError = await readQaAgentError(context, qaTaskId, entry);
 		if (agentError) {
@@ -1246,6 +1323,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		for (const card of review) {
 			const entry = state.cards[card.id];
 			const latest = readQaVerdictRecords(entry).at(-1);
+			if (manualReviewHoldReason(entry)) continue;
 			if (!latest || latest.verdict !== "PASS" || readQaPassEntry(entry)?.qaTaskId === latest.qaTaskId) {
 				continue;
 			}
@@ -1512,9 +1590,83 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		const workspaceId = snapshot.workspaceId;
 		const records: PipelineDecisionRecord[] = [];
 		const sessions = new Map(snapshot.sessions.map((session) => [session.taskId, session]));
+		const controls = await deps.store.load(workspaceId);
+		for (const [devId, raw] of Object.entries(controls.cards)) {
+			const manual = readManualReview(raw);
+			if (!manual || manual.status !== "pending" || manual.snapshot !== raw.snapshot) continue;
+			const found = listCards(snapshot).find((item) => item.card.id === devId && item.columnId !== "trash");
+			if (!found || (sessions.get(devId)?.live && sessions.get(devId)?.state === "running")) continue;
+			const linked = typeof raw.qaCard === "string" ? raw.qaCard : null;
+			if (linked && sessions.get(linked)?.live) continue;
+			if (linked) {
+				const old = readQaGateEntry(controls.cards[linked]);
+				if (old?.status === "queued")
+					await updateQaEntry(workspaceId, linked, { status: "superseded", supersededAt: context.now });
+			}
+			if (manual.kind === "conclude" && manual.qaTaskId) {
+				const old = readQaGateEntry(controls.cards[manual.qaTaskId]);
+				if (!old || old.snapshot !== manual.snapshot || sessions.get(manual.qaTaskId)?.live) continue;
+				if (old.status !== "ingested")
+					await recordVerdict(
+						context,
+						manual.qaTaskId,
+						old,
+						createStalledQaVerdict(manual.reason),
+						`operator-audited terminal STALLED by ${manual.by}; no new reviewer authorized`,
+					);
+				await updateCard(workspaceId, devId, (entry) => ({
+					...entry,
+					manualReview: { ...manual, status: "held" },
+				}));
+			} else if (manual.kind === "review") {
+				const effective = toEffectiveCard({
+					card: found.card,
+					session: sessions.get(devId) ?? null,
+					workspaceId,
+					selectedAgentId: snapshot.selectedAgentId,
+				});
+				const { history, round } = readCardHistory(raw);
+				const answer = context.policy.qaPolicy({ dev: { ...effective.effective, role: "dev" }, history, round });
+				if (answer.kind === "qa")
+					await queueQa({
+						context,
+						card: found.card,
+						dev: effective.effective,
+						session: null,
+						answer,
+						evidenceOnly: true,
+					});
+			}
+		}
 		records.push(...(await supersedeDeadQaCards(context)));
 		records.push(...(await supersedeResentTurns(context)));
 		let state = await deps.store.load(workspaceId);
+		// A supported manual start is already authorized. Observe it without launching, unpausing or reworking anything.
+		for (const [qaTaskId, raw] of Object.entries(state.cards)) {
+			const entry = readQaGateEntry(raw);
+			const session = sessions.get(qaTaskId);
+			if (
+				!entry ||
+				entry.status !== "queued" ||
+				findColumn(snapshot, qaTaskId) !== "in_progress" ||
+				!session?.live ||
+				session.state !== "running"
+			)
+				continue;
+			await updateQaEntry(workspaceId, qaTaskId, {
+				status: "running",
+				startedAt: session.startedAt ?? context.now,
+			});
+			records.push(
+				record(
+					context,
+					qaTaskId,
+					"qa_start",
+					`observed manually started QA of ${entry.reviewsTaskId} round ${entry.round}`,
+				),
+			);
+		}
+		state = await deps.store.load(workspaceId);
 
 		// Ingest: our QA cards whose turn has ended.
 		for (const [qaTaskId, rawEntry] of Object.entries(state.cards)) {
@@ -1623,7 +1775,11 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		const usageLimitWaiting = new Map<string, { until: number; taskIds: string[] }>();
 		// provider → the hold and the queued local QA cards that wait for it.
 		const capacityWaiting = new Map<string, { hold: ProviderCapacityHold; taskIds: string[] }>();
-		for (const { qaTaskId, entry } of pressureHeld || paused ? [] : queued) {
+		for (const { qaTaskId, entry } of pressureHeld
+			? []
+			: paused
+				? queued.filter((item) => item.entry.evidenceOnly)
+				: queued) {
 			const column = findColumn(snapshot, qaTaskId);
 			if (column !== "backlog") {
 				// Not created on the board yet (the snapshot predates it), or moved by hand: leave it alone.
@@ -1671,6 +1827,17 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			});
 			if (!started.ok) {
 				records.push(record(context, qaTaskId, "qa_start", `starting the QA card failed: ${started.error}`));
+				continue;
+			}
+			if (started.queued) {
+				records.push(
+					record(
+						context,
+						qaTaskId,
+						"qa_start",
+						started.detail ?? "queued behind shared provider capacity/quota; no turn started",
+					),
+				);
 				continue;
 			}
 			await updateQaEntry(workspaceId, qaTaskId, { status: "running", startedAt: context.now });

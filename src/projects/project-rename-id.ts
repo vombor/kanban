@@ -32,7 +32,9 @@ import {
 	updatePipelineConfigFile,
 } from "../config/pipeline-config";
 import { HOME_AGENT_SESSION_PREFIX, isHomeAgentSessionIdForWorkspace } from "../core/home-agent-session";
+import { providerStartQueueSchema } from "../core/provider-start-intent";
 import { getKanbanRuntimeOrigin } from "../core/runtime-endpoint";
+import { renameDurably, writeFileSynced } from "../fs/durable-file";
 import { lockedFileSystem } from "../fs/locked-file-system";
 import { createProjectSecretVault } from "../secrets/project-secret-vault";
 import {
@@ -83,6 +85,7 @@ const stepSchema = z.discriminatedUnion("kind", [
 			"restart-requests",
 			"orchestrator-queue",
 			"orchestrator-inbox",
+			"provider-starts",
 			"project-secrets",
 			"config",
 			"index",
@@ -495,6 +498,28 @@ const rewriteIndex: Rewriter = async ({ homePath, fromId, toId, repoPath, apply 
 	];
 };
 
+/** Only queued sidebar identity is rewritten; historical card/model/receipt identifiers remain unchanged. */
+const rewriteProviderStarts: Rewriter = async ({ homePath, fromId, toId, apply }) => {
+	const data = currentDataDir(homePath, fromId, toId);
+	const path = join(data.path, "provider-starts.json");
+	if (!existsSync(path)) return [];
+	const queue = providerStartQueueSchema.parse(JSON.parse(readFileSync(path, "utf8")));
+	let changed = 0;
+	const pending = queue.pending.map((intent) => {
+		if (!isHomeAgentSessionIdForWorkspace(intent.taskId, fromId)) return intent;
+		changed += 1;
+		const taskId = renameHomeAgentSessionId(intent.taskId, fromId, toId);
+		return { ...intent, taskId, body: { ...intent.body, taskId } };
+	});
+	if (changed === 0) return [];
+	if (apply) {
+		const temporary = `${path}.rename.tmp`;
+		await writeFileSynced(temporary, JSON.stringify({ ...queue, pending }, null, 2), { mode: 0o600 });
+		await renameDurably(temporary, path);
+	}
+	return [{ file: relative(homePath, path), detail: `${changed} queued sidebar start(s): ${fromId} → ${toId}` }];
+};
+
 const rewriteProjectSecrets: Rewriter = async ({ homePath, fromId, toId, apply }) => {
 	const target = getProjectSecretsPath(toId, homePath);
 	if (apply) {
@@ -511,6 +536,7 @@ const REWRITERS: Record<RewriteTarget, Rewriter> = {
 	"restart-requests": rewriteRestartRequests,
 	"orchestrator-queue": rewriteOrchestratorQueue,
 	"orchestrator-inbox": rewriteOrchestratorInbox,
+	"provider-starts": rewriteProviderStarts,
 	"project-secrets": rewriteProjectSecrets,
 	config: rewriteConfig,
 	// Last: until it runs, the old id is the registered one.

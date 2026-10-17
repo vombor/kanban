@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.1.70-fork.10]
+
+- Share an opt-in provider concurrency limit across development, QA, fallback and recovery. Starts queue durably instead of being discarded, survive restarts, respect quota-reset holds, and show their provider/deadline on cards. Global Settings owns installation limits; a project's orchestrator can contribute stricter pacing and inspect its own queue without seeing other projects' card details (#53).
+- Acknowledge or defer escalations with `pipeline acknowledge`, without clearing holds or inventing a fixed verdict. Unchanged acknowledged dispositions no longer generate repeated human-decision wakes; changed evidence, a prerequisite result or a retry deadline brings them back (#60).
+- Conclude exhausted dead reviews with an operator-audited terminal STALLED and hold unauthorized replacements. Explicit exact-snapshot evidence-only reassessments retain findings separately without reopening historical benchmarks, landing, rework, fallback or model promotion. Paused manual QA starts now report their real running stage, and dead Review triage assessments can continue on the same card without a false dev handback requirement (#61, #63).
+- Browser QA uses pinned shared Playwright and PNG-decoder packages with the existing Chrome sidecar—no per-worktree tooling installs or extra browser downloads/launches. `qa tools --verify --json` proves normal input journeys, mobile/desktop dimensions and actual decoded pixels; missing CDP gives a precise environment error (#57, #48).
+- Scripted screenshot flows honor all requested viewports, validate typed steps before connecting, scope text assertions to the specified region, and preserve distinct mobile/desktop PNGs with numeric viewport evidence in reports. Invalid reruns no longer leave stale success reports (#58).
+- Sequential bench-only runoffs retain a completed PASS hold when an earlier contender is archived, accurately report the result, and keep the explicit preserve-and-discard exit without auto-landing or falsely calling it stranded (#59).
+- QA receives quoted executable extraction/install commands, sequential setup guidance, reviewer-specific scratch copies and fail-closed database-isolation instructions. Database setup notes remain prose; partial evidence is retained before retiring interrupted reviewers when it is available (#61, #63).
+- Watchdog sidebar notices default to Compact, with Compact/Tiny/Full controls in Global Settings. Explicit saved selections and project overrides remain intact, and full instructions stay in the project's audit log rather than overwhelming the sidebar (#51, #56).
+- Retained price tables accept omitted cache rates conservatively at the input rate, retain manual/pinned prices and explicit zeros, and identify malformed rows before network access without overwriting damaged JSON (#62).
+- Provider quota deadlines now persist across restarts and cannot be shortened by rounded reset errors; benchmark reports preserve authoritative QA scores and separate fresh post-reset submission timing from explicitly cumulative costs/attempts (#49, #55).
+- Add optional app-level Obsidian connector configuration and authenticated draft-only connection tests. Connector edits now use Global Settings' main Save button; keys stay masked and Cancel discards unsaved drafts. Connection enablement does not grant agents unrestricted vault access.
+- Add Kanban-owned versioned project Markdown knowledge, bounded discovery/search/sections/history, agent proposals and curated publication. User pins remain user-controlled; plan documents and knowledge context remain reference material, not execution approval.
+- Consolidate project editing and encrypted project secrets, separate installation paths from bare product packages, and run container images as non-root with dual-stack localhost/public serving. Existing project data and histories remain migration-controlled, and startup does not bootstrap tool authentication.
+
 ## [0.1.70-fork.9]
 
 - Token consumption moves to the card header's top-right beside the task id; running time stays beside the agent below. Verified on desktop and phone layouts.

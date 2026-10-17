@@ -333,6 +333,18 @@ export function useBoardInteractions({
 				}
 			}
 			const started = await startTaskSession(task);
+			if (started.ok && started.queued) {
+				showAppToast({
+					intent: "none",
+					message: "Start queued behind shared provider capacity/quota; no agent turn has started.",
+				});
+				if (optimisticMove)
+					setBoard((current) => {
+						const moved = moveTaskToColumn(current, taskId, fromColumnId);
+						return moved.moved ? moved.board : current;
+					});
+				return true;
+			}
 			if (!started.ok) {
 				notifyError(started.message ?? "Could not start task session.");
 				if (optimisticMove) {

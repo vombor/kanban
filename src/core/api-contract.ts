@@ -1,5 +1,8 @@
 import { z } from "zod";
+import { providerConcurrencySchema } from "./provider-concurrency";
+import { runtimeProviderQueueSchema } from "./provider-queue";
 import { resolveTaskTitle } from "./task-title.js";
+import { wakeNoticePresentationSchema } from "./wake-notice-presentation";
 
 export const runtimeWorkspaceFileStatusSchema = z.enum([
 	"modified",
@@ -201,6 +204,7 @@ export const runtimeBoardCardSchema = z
 		createdAt: z.number(),
 		updatedAt: z.number(),
 		pendingGitAction: runtimeTaskPendingGitActionSchema.nullable().optional(),
+		providerQueue: runtimeProviderQueueSchema.optional(),
 	})
 	.transform(
 		({
@@ -370,6 +374,9 @@ export const runtimeTaskSessionSummarySchema = z.object({
 	lastTurnEnd: runtimeTaskTurnEndSchema.nullable().optional(),
 	warningMessage: z.string().nullable().optional(),
 	modelId: z.string().nullable().default(null),
+	providerId: z.string().nullable().optional(),
+	/** An empty composer/terminal restore is not a model turn until its first subsequent prompt hook or delivery. */
+	dispatchPromptSubmitted: z.boolean().optional(),
 	reasoningEffort: z.string().nullable().default(null),
 	latestTurnCheckpoint: runtimeTaskTurnCheckpointSchema.nullable().optional(),
 	previousTurnCheckpoint: runtimeTaskTurnCheckpointSchema.nullable().optional(),
@@ -896,6 +903,7 @@ export const runtimeTaskTrashStatusSchema = z.enum([
 export type RuntimeTaskTrashStatus = z.infer<typeof runtimeTaskTrashStatusSchema>;
 
 export const runtimeTaskTrashAutoStartSchema = z.object({
+	queued: z.boolean().optional(),
 	taskId: z.string(),
 	ok: z.boolean(),
 	/** Worktree setup warning for the started task (e.g. a saved patch could not be reapplied). */
@@ -1227,6 +1235,8 @@ export type RuntimeClineModelRecord = z.infer<typeof runtimeClineModelRecordSche
 
 export const runtimeConfigResponseSchema = z.object({
 	selectedAgentId: runtimeAgentIdSchema,
+	providerConcurrency: providerConcurrencySchema.optional(),
+	wakeNoticePresentation: wakeNoticePresentationSchema.optional(),
 	agentDefaults: runtimeAgentDefaultsSchema,
 	/** Cline's models.json records, for the settings dialog's Cline model select; empty when it can't be read. */
 	clineModelRecords: z.array(runtimeClineModelRecordSchema).optional(),
@@ -1255,6 +1265,8 @@ export type RuntimeConfigResponse = z.infer<typeof runtimeConfigResponseSchema>;
 
 export const runtimeConfigSaveRequestSchema = z.object({
 	selectedAgentId: runtimeAgentIdSchema.optional(),
+	providerConcurrency: providerConcurrencySchema.optional(),
+	wakeNoticePresentation: wakeNoticePresentationSchema.optional(),
 	/** Replaces every agent's default; an agent left out has none. */
 	agentDefaults: runtimeAgentDefaultsSchema.optional(),
 	selectedShortcutLabel: z.string().nullable().optional(),
@@ -1292,6 +1304,8 @@ export type RuntimeTaskSessionStartRequest = z.infer<typeof runtimeTaskSessionSt
 export const runtimeTaskSessionStartResponseSchema = z.object({
 	ok: z.boolean(),
 	summary: runtimeTaskSessionSummarySchema.nullable(),
+	queued: z.boolean().optional(),
+	message: z.string().optional(),
 	error: z.string().optional(),
 });
 export type RuntimeTaskSessionStartResponse = z.infer<typeof runtimeTaskSessionStartResponseSchema>;

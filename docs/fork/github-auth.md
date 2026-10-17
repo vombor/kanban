@@ -1,8 +1,18 @@
-# GitHub auth: one classic PAT
+# GitHub authentication boundaries
 
-The user's classic personal access token (PAT) is the one credential for everything GitHub-related, except GitHub
-Copilot (see below). In the container it is the environment variable `GH_TOKEN`; in GitHub Actions it is the
-repository secret `GH_PAT`. The workflows' built-in `GITHUB_TOKEN` writes nothing.
+For development of this repository, commits/tags, issues, workflow dispatch and GitHub release creation use the
+Kanban GitHub App, never a direct PAT fallback. The private key stays in the server; host `gh`/HTTPS helpers issue
+short-lived repository-scoped App tokens through private pipes/environment, not command arguments or saved state.
+
+The user-approved **registry-only CI exception** uses Actions' automatically generated `GITHUB_TOKEN` with
+`packages: write` to publish npm/GHCR packages. `GH_PAT` is no longer required by either publisher. GitHub release
+notes are created separately as the Kanban App after verified registry publication. Do **not** add `GITHUB_TOKEN`
+to the pod: the workflow generates it. If registry access is refused, grant the repository Actions access in each
+package's settings; do not restore PAT publishing.
+
+The following PAT/tool configuration describes installation/package-download compatibility and agents working in
+other projects, not permission to use that identity for development operations on this repository. Copilot retains
+its separate account credential as described below. Existing installation credentials are not automatically changed.
 
 ## Scopes
 
@@ -23,8 +33,8 @@ Create a **classic** PAT (Settings → Developer settings → Personal access to
 | git over https | explicit `kanban setup` configures a missing gh credential helper for github.com in the user's global git config; existing helpers are kept |
 | npm install / publish of `@vombor/*` | explicit `kanban setup` adds `@vombor:registry=https://npm.pkg.github.com` and `//npm.pkg.github.com/:_authToken=${GH_TOKEN}` to `~/.npmrc` (or `$NPM_CONFIG_USERCONFIG`). The file holds only the reference: npm expands it when it reads the file |
 | Kanban's update check | reads the same `.npmrc` line (else `GH_TOKEN`); without a token it checks nothing, quietly |
-| CI publish (`publish.yml`) | `NODE_AUTH_TOKEN: ${{ secrets.GH_PAT }}` for `npm publish`, and the GitHub release |
-| GHCR push (`image.yml`) | `docker/login-action` with `secrets.GH_PAT` |
+| CI publish (`publish.yml`) | `NODE_AUTH_TOKEN: ${{ github.token }}` solely for npm registry publishing; the host creates release notes as the Kanban App |
+| GHCR push (`image.yml`) | `docker/login-action` with `${{ github.token }}`; workflow permission `packages: write` |
 | Agent sessions (Claude, Codex, Cline, Copilot, ...) | keep `GH_TOKEN`: PR-mode cards need gh (Copilot itself runs on `COPILOT_GITHUB_TOKEN`, see below) |
 | Pipeline checks (`src/pipeline/checks.ts`) | never see it: `GH_TOKEN`, `GITHUB_TOKEN`, `COPILOT_GITHUB_TOKEN`, `AWS_BEARER_TOKEN_BEDROCK` and `CLINE_API_KEY` are removed, so a project's tests can't read them |
 | `scripts/secret-guard.sh` | counts the values of `GH_TOKEN` / `GITHUB_TOKEN` / `COPILOT_GITHUB_TOKEN` / `AWS_BEARER_TOKEN_BEDROCK` / `CLINE_API_KEY` as known secrets and blocks a push that adds one |
@@ -90,13 +100,11 @@ Without a quadlet: `podman run --secret gh_pat,type=env,target=GH_TOKEN
 the tokens, then run `kanban setup --dry-run` and `kanban setup` as the user to configure npm/git. Without the Copilot line, Copilot takes the PAT over its
 `copilot login` (doctor warns).
 
-### Repository secret
+### CI registry permission
 
-```sh
-gh secret set GH_PAT --repo vombor/kanban   # pastes the PAT from stdin
-```
-
-`publish.yml` and `image.yml` fail at their first step with a clear message when `GH_PAT` is missing.
+No registry credential needs to be added to the pod or stored as a repository secret. `publish.yml` and `image.yml`
+request `packages: write` for their generated token. Grant the workflow repository Actions access in the existing
+npm/container package settings when necessary. Repository operations and GitHub releases still use the Kanban App.
 
 ### Switching a checkout from SSH to HTTPS
 
@@ -123,6 +131,6 @@ with `GH_TOKEN` exported in the shell (any PAT with `read:packages` is enough to
 2. Container: `podman secret rm gh_pat`, then `printf '%s' "$NEW_PAT" | podman secret create gh_pat -`, then restart
    the container (when no cards are running). `.npmrc` and the git helper need no change: they only reference
    the variable.
-3. CI: `gh secret set GH_PAT --repo vombor/kanban` with the new PAT.
+3. CI publishers no longer use the PAT; leave their generated-token configuration unchanged.
 4. Revoke the old PAT on GitHub.
 5. Check: `gh auth status`, `npm view @vombor/kanban version`, `kanban doctor`.

@@ -50,6 +50,7 @@ describe("kanban task resume", () => {
 		mocks.startTaskSession.mockReset();
 		mocks.startTaskSession.mockResolvedValue({ ok: true, summary: { state: "running" } });
 		mocks.selectedAgentId = "cline";
+		mocks.updateTrackedPipelineCardFlow.mockClear();
 	});
 
 	it("continues a Claude card's conversation with the resume note as launch prompt", async () => {
@@ -107,6 +108,52 @@ describe("kanban task resume", () => {
 				},
 			],
 		});
+	});
+
+	it("continues the same dead Review triage assessment despite its BLOCKED title, without dev-flow mutations (#63)", async () => {
+		mocks.state = {
+			board: createBoard({
+				review: [
+					createCard({
+						id: "dev01",
+						role: "triage",
+						title: "BLOCKED: assessment",
+						prompt: "Evidence-only assessment.",
+						agentSettings: { providerId: "triton", modelId: "glm-4.7-flash" },
+					}),
+				],
+			}),
+			sessions: { dev01: deadSession("cline") },
+		};
+		const result = await resumeTasks({ cwd: "/repos/foo", taskIds: ["dev01"], dryRun: true });
+		expect(result).toMatchObject({ ok: true, results: [{ taskId: "dev01", role: "triage", dryRun: true }] });
+		expect(mocks.startTaskSession).not.toHaveBeenCalled();
+		await resumeTasks({ cwd: "/repos/foo", taskIds: ["dev01"], dryRun: false });
+		expect(mocks.startTaskSession).toHaveBeenCalledWith(
+			expect.objectContaining({
+				taskId: "dev01",
+				prompt: "Evidence-only assessment.",
+				agentId: "cline",
+				agentSettings: { providerId: "triton", modelId: "glm-4.7-flash" },
+				requireNewTurn: true,
+			}),
+		);
+		expect(mocks.updateTrackedPipelineCardFlow).not.toHaveBeenCalled();
+	});
+
+	it("continues to refuse BLOCKED dev and held QA cards, with no session or state mutation", async () => {
+		for (const role of ["dev", "qa"] as const) {
+			mocks.state = {
+				board: createBoard({ review: [createCard({ id: "dev01", role, title: "BLOCKED: held" })] }),
+				sessions: { dev01: deadSession("cline") },
+			};
+			expect(await resumeTasks({ cwd: "/repos/foo", taskIds: ["dev01"], dryRun: false })).toMatchObject({
+				ok: false,
+				results: [{ error: expect.stringContaining("BLOCKED") }],
+			});
+		}
+		expect(mocks.startTaskSession).not.toHaveBeenCalled();
+		expect(mocks.updateTrackedPipelineCardFlow).not.toHaveBeenCalled();
 	});
 });
 

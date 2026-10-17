@@ -10,6 +10,7 @@ import { formatLegacyImportReport, runLegacyImport } from "../pipeline/legacy-im
 import { runPipelineWorkerProcess } from "../pipeline/worker";
 import { getPipelineDecisionLogPath } from "../state/kanban-home";
 import { listWorkspaceIndexEntries, loadWorkspaceBoardById } from "../state/workspace-state";
+import type { PipelineControl } from "../trpc/pipeline-control-contract";
 import type { PipelinePauseResponse } from "../trpc/pipeline-pause-api";
 import { createRuntimeTrpcClient } from "./runtime-trpc-client";
 import { resolveWorkspaceTarget } from "./workspace-target";
@@ -108,6 +109,114 @@ function parseCount(value: string): number {
 
 export function registerPipelineCommand(program: Command): void {
 	const pipeline = program.command("pipeline").description("The pipeline: QA gate and landing for landing mode qa.");
+	pipeline
+		.command("provider-status")
+		.description(
+			"Show effective shared limits, this project's queue/holders and aggregate other-project occupancy, never other projects' card text.",
+		)
+		.option("--workspace <workspace>")
+		.option("--json")
+		.action(async (options: { workspace?: string }) => {
+			try {
+				const target = await resolveWorkspaceTarget(options.workspace, { allowUnregistered: false });
+				process.stdout.write(
+					`${JSON.stringify(await createRuntimeTrpcClient(target.workspaceId).pipeline.providerStatus.query(), null, 2)}\n`,
+				);
+			} catch (error) {
+				process.stderr.write(`${toErrorMessage(error)}\n`);
+				process.exitCode = 1;
+			}
+		});
+	const control = async (workspace: string | undefined, request: PipelineControl) => {
+		try {
+			const target = await resolveWorkspaceTarget(workspace, { allowUnregistered: false });
+			const response = await createRuntimeTrpcClient(target.workspaceId).pipeline.control.mutate(request);
+			process.stdout.write(`${JSON.stringify({ workspaceId: target.workspaceId, ...response }, null, 2)}\n`);
+			if (!response.ok) process.exitCode = 1;
+		} catch (error) {
+			process.stderr.write(`${toErrorMessage(error)}\n`);
+			process.exitCode = 1;
+		}
+	};
+	pipeline
+		.command("provider-limit")
+		.description(
+			"Set only this project's restrictive contribution to shared provider pacing; never overrides the user's or another project's cap.",
+		)
+		.argument("<provider>")
+		.argument("[limit]", "positive integer (1–1024)")
+		.option("--unset")
+		.option("--workspace <workspace>")
+		.action(async (provider: string, limit: string | undefined, options: { unset?: boolean; workspace?: string }) =>
+			control(options.workspace, { kind: "pacing", provider, limit: options.unset ? null : Number(limit) }),
+		);
+	pipeline
+		.command("acknowledge")
+		.description(
+			"Acknowledge/defer escalation without fabricating a verdict; changed evidence/prerequisites or --until re-enable wakes.",
+		)
+		.argument("<taskId>")
+		.requiredOption("--reason <reason>")
+		.option("--workspace <workspace>")
+		.option("--disposition <disposition>", "held, deferred or clear", "held")
+		.option("--until <ISO>")
+		.option("--wait-for-task <id>")
+		.action(
+			async (
+				taskId: string,
+				options: { reason: string; workspace?: string; disposition: string; until?: string; waitForTask?: string },
+			) => {
+				if (!["held", "deferred", "clear"].includes(options.disposition))
+					throw new Error("Use held, deferred or clear");
+				await control(options.workspace, {
+					kind: "acknowledge",
+					taskId,
+					reason: options.reason,
+					disposition: options.disposition as "held" | "deferred" | "clear",
+					...(options.until ? { until: options.until } : {}),
+					...(options.waitForTask ? { waitForTaskId: options.waitForTask } : {}),
+				});
+			},
+		);
+	pipeline
+		.command("conclude-review")
+		.description(
+			"Record an operator-audited terminal STALLED for an exact dead/superseded reviewer and hold its queued replacement; never resumes automation.",
+		)
+		.argument("<taskId>")
+		.requiredOption("--qa-task <id>")
+		.requiredOption("--snapshot <sha>")
+		.requiredOption("--reason <audit>")
+		.option("--workspace <workspace>")
+		.action(
+			async (taskId: string, options: { qaTask: string; snapshot: string; reason: string; workspace?: string }) =>
+				control(options.workspace, {
+					kind: "conclude",
+					taskId,
+					qaTaskId: options.qaTask,
+					snapshot: options.snapshot,
+					reason: options.reason,
+				}),
+		);
+	pipeline
+		.command("review")
+		.description(
+			"Request one evidence-only reassessment of an unchanged live card; no historical-run reopening, landing, rework, fallback or promotion.",
+		)
+		.argument("<taskId>")
+		.requiredOption("--snapshot <sha>")
+		.requiredOption("--reason <reason>")
+		.requiredOption("--evidence-only")
+		.option("--workspace <workspace>")
+		.action(async (taskId: string, options: { snapshot: string; reason: string; workspace?: string }) =>
+			control(options.workspace, {
+				kind: "review",
+				taskId,
+				snapshot: options.snapshot,
+				reason: options.reason,
+				evidenceOnly: true,
+			}),
+		);
 
 	pipeline
 		.command("status")

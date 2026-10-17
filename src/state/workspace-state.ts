@@ -791,7 +791,23 @@ async function writeWorkspaceStateSave(
 		) {
 			throw new WorkspaceStateConflictError(expectedRevision, currentMeta.revision);
 		}
-		const board = parsedPayload.board;
+		// The provider broker owns queued metadata. A stale browser save cannot erase it or invent another intent.
+		const storedBoard = await readWorkspaceBoard(context.workspaceId).catch(() => null);
+		const queuedById = new Map(
+			storedBoard?.columns.flatMap((column) => column.cards.map((card) => [card.id, card.providerQueue] as const)) ??
+				[],
+		);
+		const board = {
+			...parsedPayload.board,
+			columns: parsedPayload.board.columns.map((column) => ({
+				...column,
+				cards: column.cards.map((card) => {
+					const { providerQueue: _clientQueue, ...rest } = card;
+					const queue = column.id !== "trash" ? queuedById.get(card.id) : undefined;
+					return queue ? { ...rest, providerQueue: queue } : rest;
+				}),
+			})),
+		};
 		// The server persists summaries itself, so the save's summaries can be older than the stored ones.
 		const sessions = mergeSessionSummaries(
 			await readStoredSessionsForMerge(context.workspaceId),

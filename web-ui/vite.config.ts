@@ -87,6 +87,7 @@ export default defineConfig({
 			"@runtime-shortcuts": resolve(__dirname, "../src/config/shortcut-utils.ts"),
 			"@runtime-project-secrets": resolve(__dirname, "../src/trpc/project-secrets-contract.ts"),
 			"@runtime-task-id": resolve(__dirname, "../src/core/task-id.ts"),
+			"@runtime-provider-queue": resolve(__dirname, "../src/core/provider-queue.ts"),
 			"@runtime-kit-choice-display": resolve(__dirname, "../src/core/kit-choice-display.ts"),
 			"@runtime-task-title": resolve(__dirname, "../src/core/task-title.ts"),
 			"@runtime-turn-final-message": resolve(__dirname, "../src/core/turn-final-message.ts"),

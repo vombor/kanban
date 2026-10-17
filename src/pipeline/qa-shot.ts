@@ -6,17 +6,15 @@
 // failed requests, a page outline) and `<out>/report.json`. Exit 0 even when the page has errors (read the report),
 // 3 when the browser can't launch.
 //
-// Playwright is not a Kanban dependency: it is resolved from the scratch copy (root node_modules, then
-// tools/preview). If its bundled browser is missing, the newest chromium_headless_shell in the Playwright cache
-// is used. Containers without Chromium's system libraries can point `pipeline.qa.chromiumLibs` (or
-// QA_CHROMIUM_LIBS) at an unpacked copy: `<dir>/root/usr/lib/x86_64-linux-gnu` goes on LD_LIBRARY_PATH and
-// `<dir>/fonts.conf` becomes FONTCONFIG_FILE.
+// Kanban packages pinned Playwright/PNG modules and connects to the existing shared Chrome sidecar. Each run owns
+// new contexts; no worktree package resolution, browser install/download/launch, or default-context access occurs.
 //
 // Ported from archive/devteam-kit:qa/qa-shot.cjs@6da71597.
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
-import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
+import { z } from "zod";
+import { parseQaShotScript, type QaShotStep, qaViewportSchema } from "./qa-shot-script";
+import { connectQaBrowser } from "./qa-toolchain";
 
 // The parts of Playwright's API this uses (Playwright is loaded at run time from the project, see above).
 interface ShotConsoleMessage {
@@ -35,6 +33,7 @@ interface ShotResponse {
 interface ShotLocator {
 	first(): ShotLocator;
 	waitFor(options: { timeout: number }): Promise<void>;
+	getByText(text: string): ShotLocator;
 }
 interface ShotPage {
 	on(event: "console", listener: (message: ShotConsoleMessage) => void): void;
@@ -53,6 +52,7 @@ interface ShotPage {
 	selectOption(selector: string, value: string, options: { timeout: number }): Promise<unknown>;
 	waitForTimeout(ms: number): Promise<void>;
 	getByText(text: string): ShotLocator;
+	locator(selector: string): ShotLocator;
 }
 interface ShotContext {
 	newPage(): Promise<ShotPage>;
@@ -61,9 +61,6 @@ interface ShotContext {
 interface ShotBrowser {
 	newContext(options: { viewport: Viewport }): Promise<ShotContext>;
 	close(): Promise<void>;
-}
-interface ShotPlaywright {
-	chromium: { launch(options: { env?: NodeJS.ProcessEnv; executablePath?: string }): Promise<ShotBrowser> };
 }
 
 interface Viewport {
@@ -78,17 +75,11 @@ export interface ShotClip {
 	height: number;
 }
 
-export interface QaShotStep {
-	type: string;
-	url?: string;
-	selector?: string;
-	value?: string | number;
-	key?: string;
-	text?: string;
-	ms?: number;
-	path?: string;
-	fullPage?: boolean;
-	timeout?: number;
+export type { QaShotStep } from "./qa-shot-script";
+
+export interface QaShotDependencies {
+	/** Tests connect to shared Chrome and use only their own contexts, never launch another browser. */
+	openBrowser?: (scratch: string, chromiumLibs: string | null) => Promise<ShotBrowser>;
 }
 
 export interface QaShotOptions {
@@ -108,6 +99,7 @@ interface ShotRecord {
 	route?: string;
 	script?: string;
 	viewport: string;
+	viewportSize: Viewport;
 	url: string;
 	status?: number | null;
 	title?: string;
@@ -181,37 +173,6 @@ export function getChromiumLaunchEnv(chromiumLibs: string | null, env: NodeJS.Pr
 		// No system fonts either: text renders blank without it.
 		...(existsSync(fontsConf) && !env.FONTCONFIG_FILE ? { FONTCONFIG_FILE: fontsConf } : {}),
 	};
-}
-
-function loadPlaywright(scratch: string): ShotPlaywright {
-	const require = createRequire(join(scratch, "package.json"));
-	for (const root of [scratch, join(scratch, "tools/preview")]) {
-		for (const name of ["playwright", "@playwright/test", "playwright-core"]) {
-			try {
-				return require(require.resolve(name, { paths: [root] })) as ShotPlaywright;
-			} catch {
-				// Try the next one.
-			}
-		}
-	}
-	throw new Error(`playwright not found under ${scratch} (run npm ci there first)`);
-}
-
-function findCachedHeadlessShell(): string | null {
-	const root = join(homedir(), ".cache/ms-playwright");
-	const dirs = existsSync(root)
-		? readdirSync(root)
-				.filter((dir) => dir.startsWith("chromium_headless_shell-"))
-				.sort()
-				.reverse()
-		: [];
-	for (const dir of dirs) {
-		const executable = join(root, dir, "chrome-headless-shell-linux64/chrome-headless-shell");
-		if (existsSync(executable)) {
-			return executable;
-		}
-	}
-	return null;
 }
 
 /** The clip that keeps a full-page capture within `max` image pixels a side (CSS px; null: it fits as it is). */
@@ -311,6 +272,7 @@ export function formatShotBlock(record: ShotRecord): string {
 		rule,
 	];
 	lines.push(`URL:      ${record.url}`, `Status:   ${record.status ?? "n/a"}`, `Title:    ${record.title ?? ""}`);
+	lines.push(`Viewport: ${record.viewportSize.width}x${record.viewportSize.height}`);
 	if (record.error) {
 		lines.push(`ERROR:    ${record.error}`);
 	}
@@ -337,6 +299,26 @@ function firstLine(error: unknown): string {
 	return (error instanceof Error ? error.message : String(error)).split("\n")[0] ?? "";
 }
 
+function writeShotFailure(out: string, label: string, message: string): void {
+	writeFileSync(join(out, "report.txt"), `${label}: ${message}\n`);
+	// A failed rerun must not leave a previous successful machine-readable report as apparent new evidence.
+	writeFileSync(
+		join(out, "report.json"),
+		JSON.stringify(
+			{
+				consoleErrors: 0,
+				failedRequests: 0,
+				httpErrors: [],
+				stepFailures: [`${label}: ${message}`],
+				artifacts: [join(out, "report.txt")],
+				pages: [],
+			} satisfies QaShotSummary & { pages: unknown[] },
+			null,
+			2,
+		),
+	);
+}
+
 async function navigate(page: ShotPage, url: string, record: ShotRecord, waitFor: string | null): Promise<void> {
 	let response: ShotResponse | null;
 	try {
@@ -353,9 +335,15 @@ async function navigate(page: ShotPage, url: string, record: ShotRecord, waitFor
 	}
 }
 
-async function runStep(page: ShotPage, step: QaShotStep, record: ShotRecord, options: QaShotOptions): Promise<void> {
+async function runStep(
+	page: ShotPage,
+	step: QaShotStep,
+	record: ShotRecord,
+	options: QaShotOptions,
+	suffix: string | null,
+): Promise<void> {
 	const timeout = step.timeout ?? STEP_TIMEOUT_MS;
-	const selector = step.selector ?? "";
+	const selector = "selector" in step ? (step.selector ?? "") : "";
 	switch (step.type) {
 		case "goto":
 			await navigate(page, resolveShotUrl(options.base, step.url ?? "/"), record, options.waitFor);
@@ -379,118 +367,152 @@ async function runStep(page: ShotPage, step: QaShotStep, record: ShotRecord, opt
 			await page.waitForTimeout(step.ms ?? 1000);
 			return;
 		case "expectText":
-			await page
-				.getByText(step.text ?? "")
-				.first()
-				.waitFor({ timeout });
+			await (step.selector ? page.locator(step.selector) : page).getByText(step.text).first().waitFor({ timeout });
 			return;
 		case "screenshot": {
-			const target = step.path ?? `step-${record.shots.length + 1}.png`;
+			const original = step.path ?? `step-${record.shots.length + 1}.png`;
+			const target = suffix
+				? join(
+						dirname(original),
+						`${basename(original, extname(original))}-${suffix}${extname(original) || ".png"}`,
+					)
+				: original;
 			const file = isAbsolute(target) ? target : join(options.out, target);
 			mkdirSync(dirname(file), { recursive: true });
 			await takeShot(page, file, step.fullPage ?? options.fullPage, record);
 			record.shots.push(file);
 			return;
 		}
-		default:
-			throw new Error(`unknown step type ${step.type}`);
 	}
 }
 
-function readScript(path: string): { viewport: string; steps: QaShotStep[] } {
-	const spec = JSON.parse(readFileSync(path, "utf8")) as QaShotStep[] | { viewport?: string; steps?: QaShotStep[] };
-	return Array.isArray(spec)
-		? { viewport: "desktop", steps: spec }
-		: { viewport: spec.viewport || "desktop", steps: spec.steps ?? [] };
-}
-
-export async function runQaShot(options: QaShotOptions): Promise<{ exitCode: number; message: string }> {
+export async function runQaShot(
+	options: QaShotOptions,
+	dependencies: QaShotDependencies = {},
+): Promise<{ exitCode: number; message: string }> {
 	const out = resolve(options.out);
 	const scratch = resolve(options.scratch);
 	mkdirSync(out, { recursive: true });
-	let browser: ShotBrowser;
+	const scripts: Array<{ path: string; viewports: string[]; steps: QaShotStep[] }> = [];
 	try {
-		const playwright = loadPlaywright(scratch);
-		const env = getChromiumLaunchEnv(options.chromiumLibs, process.env);
-		try {
-			browser = await playwright.chromium.launch({ env });
-		} catch (error) {
-			const executablePath = findCachedHeadlessShell();
-			if (!executablePath) {
-				throw error;
+		z.array(qaViewportSchema).parse(options.viewports);
+		for (const path of options.scripts) {
+			try {
+				scripts.push({ path, ...parseQaShotScript(JSON.parse(readFileSync(path, "utf8")), options.viewports) });
+			} catch (error) {
+				throw new Error(
+					`${path}: ${error instanceof z.ZodError ? error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ") : firstLine(error)}`,
+				);
 			}
-			browser = await playwright.chromium.launch({ executablePath, env });
 		}
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		writeFileSync(join(out, "report.txt"), `BROWSER LAUNCH FAILED: ${message}\n`);
+		writeShotFailure(out, "SCRIPT/VIEWPORT VALIDATION FAILED", message);
+		return { exitCode: 2, message: `qa shot: invalid input: ${message}` };
+	}
+	let browser: ShotBrowser;
+	try {
+		browser = dependencies.openBrowser
+			? await dependencies.openBrowser(scratch, options.chromiumLibs)
+			: await connectQaBrowser();
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		writeShotFailure(out, "BROWSER LAUNCH FAILED", message);
 		return { exitCode: 3, message: `qa shot: browser launch failed: ${firstLine(error)}` };
 	}
 	const records: ShotRecord[] = [];
-	for (const route of options.routes) {
-		for (const viewport of options.viewports) {
-			const record: ShotRecord = {
-				kind: "route",
-				route,
-				viewport,
-				url: resolveShotUrl(options.base, route),
-				console: [],
-				failed: [],
-				shots: [],
-			};
-			const context = await browser.newContext({ viewport: resolveViewport(viewport) });
-			const page = await context.newPage();
-			watchPage(page, record);
-			try {
-				await navigate(page, record.url, record, options.waitFor);
-				record.title = await page.title();
-				record.outline = await page.evaluate<string[]>(OUTLINE_SCRIPT);
-				const file = join(out, `${slugifyRoute(route)}-${viewport}.png`);
-				await takeShot(page, file, options.fullPage, record);
-				record.shots.push(file);
-			} catch (error) {
-				record.error = firstLine(error);
-			}
-			await context.close();
-			records.push(record);
-		}
-	}
-	for (const script of options.scripts) {
-		const { viewport, steps } = readScript(script);
-		const record: ShotRecord = {
-			kind: "script",
-			script,
-			viewport,
-			url: options.base,
-			console: [],
-			failed: [],
-			shots: [],
-			steps: [],
-		};
-		const context = await browser.newContext({ viewport: resolveViewport(viewport) });
-		const page = await context.newPage();
-		watchPage(page, record);
-		for (const step of steps) {
-			const label = `${step.type} ${step.selector || step.url || step.path || step.text || step.ms || ""}`.trim();
-			try {
-				await runStep(page, step, record, { ...options, out });
-				record.steps?.push(`ok   ${label}`);
-			} catch (error) {
-				record.steps?.push(`FAIL ${label}: ${firstLine(error).slice(0, 200)}`);
-				const file = join(out, `${slugifyRoute(basename(script, ".json"))}-failure.png`);
-				await takeShot(page, file, true, record).catch(() => {});
-				record.shots.push(file);
-				record.error = `step failed: ${label}`;
-				break;
+	try {
+		for (const route of options.routes) {
+			for (const viewport of options.viewports) {
+				const record: ShotRecord = {
+					kind: "route",
+					route,
+					viewport,
+					viewportSize: resolveViewport(viewport),
+					url: resolveShotUrl(options.base, route),
+					console: [],
+					failed: [],
+					shots: [],
+				};
+				const context = await browser.newContext({ viewport: resolveViewport(viewport) });
+				try {
+					const page = await context.newPage();
+					watchPage(page, record);
+					await navigate(page, record.url, record, options.waitFor);
+					record.title = await page.title();
+					record.outline = await page.evaluate<string[]>(OUTLINE_SCRIPT);
+					const file = join(out, `${slugifyRoute(route)}-${viewport}.png`);
+					await takeShot(page, file, options.fullPage, record);
+					record.shots.push(file);
+				} catch (error) {
+					record.error = firstLine(error);
+				} finally {
+					await context.close();
+				}
+				records.push(record);
 			}
 		}
-		record.url = page.url();
-		record.title = await page.title().catch(() => "");
-		record.outline = await page.evaluate<string[]>(OUTLINE_SCRIPT).catch(() => []);
-		await context.close();
-		records.push(record);
+		for (const { path: script, viewports, steps } of scripts) {
+			for (const viewport of viewports) {
+				const record: ShotRecord = {
+					kind: "script",
+					script,
+					viewport,
+					viewportSize: resolveViewport(viewport),
+					url: options.base,
+					console: [],
+					failed: [],
+					shots: [],
+					steps: [],
+				};
+				const context = await browser.newContext({ viewport: resolveViewport(viewport) });
+				try {
+					const page = await context.newPage();
+					watchPage(page, record);
+					for (const step of steps) {
+						const detail =
+							"selector" in step
+								? step.selector
+								: "url" in step
+									? step.url
+									: "path" in step
+										? step.path
+										: "text" in step
+											? step.text
+											: "ms" in step
+												? step.ms
+												: "";
+						const label = `${step.type} ${detail ?? ""}`.trim();
+						try {
+							await runStep(page, step, record, { ...options, out }, viewports.length > 1 ? viewport : null);
+							record.steps?.push(`ok   ${label}`);
+						} catch (error) {
+							record.steps?.push(`FAIL ${label}: ${firstLine(error).slice(0, 200)}`);
+							const file = join(out, `${slugifyRoute(basename(script, ".json"))}-${viewport}-failure.png`);
+							try {
+								await takeShot(page, file, true, record);
+								record.shots.push(file);
+							} catch {
+								// Record the failed step, but never advertise a screenshot that could not be captured.
+							}
+							record.error = `step failed: ${label}`;
+							break;
+						}
+					}
+					record.url = page.url();
+					record.title = await page.title().catch(() => "");
+					record.outline = await page.evaluate<string[]>(OUTLINE_SCRIPT).catch(() => []);
+				} catch (error) {
+					record.error = firstLine(error);
+				} finally {
+					await context.close();
+				}
+				records.push(record);
+			}
+		}
+	} finally {
+		await browser.close();
 	}
-	await browser.close();
 	writeFileSync(join(out, "report.txt"), records.map(formatShotBlock).join("\n"));
 	const summary: QaShotSummary & { pages: unknown[] } = {
 		consoleErrors: records.flatMap((record) => record.console.filter((line) => line.startsWith("[error]"))).length,
@@ -502,18 +524,21 @@ export async function runQaShot(options: QaShotOptions): Promise<{ exitCode: num
 			.filter((record) => record.error)
 			.map((record) => `${record.script || record.route} (${record.viewport}): ${record.error}`),
 		artifacts: [join(out, "report.txt"), ...records.flatMap((record) => record.shots)],
-		pages: records.map(({ kind, route, script, viewport, url, status, title, console, failed, error }) => ({
-			kind,
-			route,
-			script,
-			viewport,
-			url,
-			status,
-			title,
-			console,
-			failed,
-			error,
-		})),
+		pages: records.map(
+			({ kind, route, script, viewport, viewportSize, url, status, title, console, failed, error }) => ({
+				kind,
+				route,
+				script,
+				viewport,
+				viewportSize,
+				url,
+				status,
+				title,
+				console,
+				failed,
+				error,
+			}),
+		),
 	};
 	writeFileSync(join(out, "report.json"), JSON.stringify(summary, null, 2));
 	return {

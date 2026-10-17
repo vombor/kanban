@@ -1,8 +1,7 @@
 // `kanban project rename-id` (src/projects/project-rename-id.ts) on temporary Kanban homes.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-
 import { describe, expect, it } from "vitest";
 
 import { applyCliSessionScope } from "../../../src/isolation/cli-scope";
@@ -112,6 +111,63 @@ function seedHome(): void {
 	);
 	writeText(getWatchdogWorkspacePaths("kanban-2uge", home).orchestratorInbox, `${JSON.stringify(INBOX_ENTRY)}\n`);
 }
+
+describe("provider queue rename compatibility", () => {
+	it("renames only queued sidebar identity, keeps card/model/receipt provenance and private file mode", async () => {
+		await withTemporaryKanbanHome(async () => {
+			seedHome();
+			const home = getKanbanHomePath();
+			const oldPath = join(getKanbanWorkspaceDataPath("kanban-2uge", home), "provider-starts.json");
+			const sidebar = "__home_agent__:kanban-2uge:claude";
+			writeJson(oldPath, {
+				version: 1,
+				pending: [
+					{
+						id: "receipt-original",
+						taskId: sidebar,
+						body: { taskId: sidebar, prompt: "queued wake", baseRef: "HEAD", agentId: "claude" },
+						fingerprint: "sidebar",
+						at: 42,
+						explicit: false,
+					},
+					{
+						id: "receipt-card",
+						taskId: "abc12",
+						body: {
+							taskId: "abc12",
+							prompt: "original card",
+							baseRef: "main",
+							agentId: "cline",
+							agentSettings: { providerId: "cline-pass", modelId: "original-model" },
+						},
+						fingerprint: "original",
+						at: 43,
+						explicit: true,
+					},
+				],
+			});
+			const result = await runProjectIdRename(options({ toId: "kanban-new" }));
+			expect(result.executed).toBe(true);
+			const target = join(getKanbanWorkspaceDataPath("kanban-new", home), "provider-starts.json");
+			expect(readJson(target)).toMatchObject({
+				pending: [
+					{
+						id: "receipt-original",
+						taskId: "__home_agent__:kanban-new:claude",
+						body: { taskId: "__home_agent__:kanban-new:claude" },
+					},
+					{
+						id: "receipt-card",
+						taskId: "abc12",
+						body: { agentSettings: { providerId: "cline-pass", modelId: "original-model" } },
+						fingerprint: "original",
+					},
+				],
+			});
+			expect(statSync(target).mode & 0o777).toBe(0o600);
+		});
+	});
+});
 
 const INBOX_ENTRY = {
 	workspaceId: "kanban-2uge",

@@ -66,7 +66,7 @@ export type PipelineActionRequest =
 	| (PipelineActionScope & { kind: "applyIssues"; issues: Omit<IssueApplyInput, "workspaceId" | "workspacePath"> });
 
 export type PipelineActionResult =
-	| { ok: true; detail?: string; issues?: IssueApplyResult }
+	| { ok: true; detail?: string; issues?: IssueApplyResult; queued?: boolean }
 	| { ok: false; error: string };
 
 export interface PipelineActions {

@@ -115,6 +115,30 @@ describe("QA gate on a paused workspace", () => {
 		expect(kinds(harness.actions)).toEqual(["finishTask:qa001", "finishTask:d1111"]);
 	});
 
+	it("observes an explicitly started queued reviewer while paused, without starting another turn or landing (#63)", async () => {
+		const harness = createHarness(configWith(PAUSED_WORKSPACE));
+		await send(harness, { review: [dev()] });
+		await send(harness, { backlog: [qa()], review: [dev()] });
+		harness.actions.length = 0;
+		const startedAt = T0 - 1000;
+		const snapshot = createSnapshot({
+			workspaceId: "foo",
+			board: createBoard({ in_progress: [qa()], review: [dev()] }),
+			selectedAgentId: "claude",
+			sessions: [{ taskId: "qa001", state: "running", live: true, startedAt }],
+		});
+		await harness.send(snapshot);
+		await harness.send(snapshot);
+		expect(harness.actions).toEqual([]);
+		expect(readQaGateEntry((await harness.store.load("foo")).cards.qa001)).toMatchObject({
+			status: "running",
+			startedAt,
+		});
+		expect(
+			harness.readDecisions("foo").filter((record) => record.note?.includes("observed manually started")),
+		).toHaveLength(1);
+	});
+
 	it("doesn't nudge a QA card that stopped without a verdict while paused, and holds no cloud slot for it", async () => {
 		const pipeline = { qa: { maxNudges: 1, verdictGraceSec: 20, slots: 1 } };
 		const harness = createHarness(configWith(QA_WORKSPACE, pipeline));
@@ -167,5 +191,88 @@ describe("QA gate on a paused workspace", () => {
 		harness.setConfig(configWith(QA_WORKSPACE));
 		await send(harness, { review: [dev()] });
 		expect(kinds(harness.actions).slice(1)).toContain("updateTask:d1111");
+	});
+
+	it("concludes an exhausted dead reviewer as audited STALLED without a replacement or global resume", async () => {
+		const harness = createHarness(configWith(QA_WORKSPACE));
+		await startQaThenPause(harness);
+		await harness.store.update("foo", (state) => ({
+			...state,
+			cards: {
+				...state.cards,
+				d1111: {
+					...state.cards.d1111,
+					snapshot: "snap-d1111",
+					manualReview: {
+						kind: "conclude",
+						taskId: "d1111",
+						qaTaskId: "qa001",
+						snapshot: "snap-d1111",
+						reason: "bounded tooling correction exhausted; evidence in original transcript",
+						at: new Date(T0).toISOString(),
+						by: "user",
+						status: "pending",
+					},
+				},
+			},
+		}));
+		await send(harness, { review: [dev(), qa()] });
+		await send(harness, { review: [dev()] });
+		const state = await harness.store.load("foo");
+		expect(readQaVerdictRecords(state.cards.d1111).at(-1)?.verdict).toBe("STALLED");
+		expect(state.cards.d1111?.manualReview).toMatchObject({ status: "held" });
+		expect(
+			harness.actions.every(
+				(action) => action.kind !== "createTask" && action.kind !== "startTask" && action.kind !== "deliverInput",
+			),
+		).toBe(true);
+		harness.setConfig(configWith(QA_WORKSPACE));
+		await send(harness, { review: [dev()] });
+		expect(harness.actions.some((action) => action.kind === "updateTask" || action.kind === "startTask")).toBe(false);
+	});
+
+	it("runs one explicitly authorized evidence-only review while paused and retains findings separately without landing/rework", async () => {
+		const harness = createHarness(configWith(PAUSED_WORKSPACE));
+		await send(harness, { review: [dev()] });
+		await harness.store.update("foo", (state) => ({
+			...state,
+			cards: {
+				...state.cards,
+				d1111: {
+					...state.cards.d1111,
+					snapshot: "snap-d1111",
+					manualReview: {
+						kind: "review",
+						taskId: "d1111",
+						snapshot: "snap-d1111",
+						reason: "one independently authorized unchanged-snapshot reassessment",
+						at: new Date(T0).toISOString(),
+						by: "user",
+						status: "pending",
+					},
+				},
+			},
+		}));
+		harness.actions.length = 0;
+		await send(harness, { backlog: [qa()], review: [dev()] });
+		const manualCard = createCard({ id: "qa002", role: "qa", reviewsTaskId: "d1111" });
+		await send(harness, { backlog: [qa(), manualCard], review: [dev()] });
+		expect(readQaGateEntry((await harness.store.load("foo")).cards.qa002)).toMatchObject({
+			evidenceOnly: true,
+			status: "running",
+		});
+		harness.setVerdict("/tmp/kanban-qa-out/qa002", { kind: "ok", verdict: createVerdict() });
+		await send(harness, { backlog: [qa()], review: [dev(), manualCard] });
+		const state = await harness.store.load("foo");
+		expect(state.cards.d1111?.manualQaVerdicts).toMatchObject([{ verdict: "PASS" }]);
+		expect(readQaVerdictRecords(state.cards.d1111)).toEqual([]);
+		expect(harness.actions.some((action) => action.kind === "finishTask" && action.taskId === "d1111")).toBe(false);
+		harness.setConfig(configWith(QA_WORKSPACE));
+		await send(harness, { backlog: [qa()], review: [dev()] });
+		expect(
+			harness.actions.some(
+				(action) => (action.kind === "finishTask" && action.taskId === "d1111") || action.kind === "updateTask",
+			),
+		).toBe(false);
 	});
 });

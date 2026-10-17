@@ -130,12 +130,18 @@ dev card stops ─▶ Review (settled) ─▶ snapshot refs/kanban/snapshots/<id
   can't race the lead.
 - **Browser fallback is explicit.** When the submitted snapshot has no root `browse` or `screenshot` script,
   the gate appends scratch-only `kanban qa shot` instructions after the unchanged legacy QA prompt. It explains
-  installing Playwright in the scratch copy if needed, the cached `chromium_headless_shell` fallback, and the
-  Chromium library/font bundle. `qa shot` uses `QA_CHROMIUM_LIBS`, then `pipeline.qa.chromiumLibs`, then an installed
-  `<Kanban home>/vendor/chromium-libs` bundle. Project browser scripts still take priority; set
+  Kanban's pinned Playwright/PNG modules, explicit custom-script resolution and shared Chrome CDP. No per-worktree
+  browser-tooling install or separate browser launch/download is needed; `qa tools --verify` checks real journeys and
+  decoded pixels. Project browser scripts still take priority; set
   `qa.serversScript` or `qa.promptNotes.screenshotFallback` for project-specific server setup. Doctor warns when
   the root scripts are missing, but does not claim the browser has been launched successfully. A UI PASS still
   requires screenshots and an exercised interaction; HTTP/code traces do not replace visual evidence (issue #48).
+- **Executable setup guidance** supplements the unchanged legacy prompt with quoted Bash extraction/diff/install
+  commands, an immutable snapshot commit, and sequential dependent setup. New scratch copies are scoped to workspace
+  and QA card, never reused across reviewers. Project `qa.promptNotes.dbSetup` is prose, not a shell fragment.
+  Database setup must prove it targets a disposable reviewer-specific database before schema/seed actions; otherwise
+  retain sanitized evidence as STALLED. This does not authorize retries or reopening a closed benchmark (issue #61).
+  [QA review tools](../fork/qa-review-tools.md) documents the flow contract, viewport evidence, and safe continuation.
 - **Missing or bad verdicts** get `pipeline.qa.maxNudges` nudges that quote what is wrong, after a 20 s grace. Then
   the round is STALLED. A UI card can't PASS with its visual check blocked: that counts as STALLED too.
 - **PASS** → the kit's `onPass` (a runoff may hold it) → the Done workflow's landing step: a `git merge-tree`
@@ -192,6 +198,9 @@ dev card stops ─▶ Review (settled) ─▶ snapshot refs/kanban/snapshots/<id
   The refusal prints the concrete tag and command. A plain `done --discard` does not create a tag.
   The Done workflow preserves committed and uncommitted work before moving an unheld card; a tag failure leaves
   the card, sessions and worktree in place, and a successful tag is recorded in task history.
+  If an earlier sequential `benchOnly` contender was archived by hand, the remaining completed PASS stays held for
+  user disposition instead of becoming an apparently stranded Review card. Nothing auto-lands; the explicit
+  preserve-and-discard release command remains available (issue #59).
 - **Pausing one project** (issue #23): `kanban pipeline pause [--workspace <id>] [--reason …]` and
   `kanban pipeline resume`, run by the user or that project's own orchestrator (never a card; the server checks).
   While paused, the gate still creates QA cards, queued in Backlog, but starts none. It nudges no QA card for its

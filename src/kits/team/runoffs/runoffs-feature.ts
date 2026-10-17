@@ -183,6 +183,9 @@ function planActions(
 	facts: readonly RunoffCardFacts[],
 ): PendingAction[] {
 	if (decision.kind === "closed_by_hand") {
+		// Archiving an earlier sequential benchmark contender is housekeeping, not permission to unhold its PASS sibling.
+		// The retained hold has the existing explicit release-hold --discard --tag exit; no benchmark ever auto-lands.
+		if (runoff.benchOnly === true) return [];
 		// Cards still held for this runoff (in Review, not trashed or deleted) are left to the human, unheld.
 		return facts
 			.filter((card) => card.held && card.column !== null && card.column !== "trash")
@@ -218,7 +221,7 @@ function describeDecision(
 	if (decision.kind === "closed_by_hand") {
 		return [
 			`## RUNOFF ${runoff.name}: closed by hand, winner ${decision.winner ?? "none"}`,
-			`- ${at} by the runoffs feature: ${decision.note}. Cards still held are unheld and left in Review for a human (Done asks "land or discard?").`,
+			`- ${at} by the runoffs feature: ${decision.note}. ${runoff.benchOnly === true ? "Completed benchmark results remain held, never landed. The user can preserve and archive with kanban task release-hold --task-id <id> --discard --tag preserve/<tag>." : 'Cards still held are unheld and left in Review for a human (Done asks "land or discard?").'}`,
 			...decision.results.map((result) => `- ${result.id}: ${result.out}`),
 		].join("\n");
 	}
@@ -365,6 +368,7 @@ export function createRunoffsFeature(deps: RunoffsFeatureDependencies = {}): Pip
 				entry.results = decision.results;
 				if (decision.kind === "closed_by_hand") {
 					entry.note = decision.note;
+					entry.closedByHand = true;
 				}
 				if (pending.length > 0) {
 					entry.pending = pending;

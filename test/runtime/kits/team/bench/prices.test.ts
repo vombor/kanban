@@ -10,12 +10,38 @@ import {
 	isSubscriptionProvider,
 	isUnmeteredProvider,
 	loadPriceTable,
+	priceTableFileSchema,
 	turnCost,
 } from "../../../../../src/kits/team/bench/prices";
 import { withTemporaryKanbanHome } from "../../../../utilities/kanban-home";
 import { createTempDir } from "../../../../utilities/temp-dir";
 
 describe("price table", () => {
+	it("accepts retained cache omissions conservatively and preserves explicit zero and pinned/manual metadata (#62)", () => {
+		const table = priceTableFileSchema.parse({
+			"//": "retained rates",
+			prices: [
+				{ pattern: "mai", in: 0.5, out: 2, cacheRead: 0, pin: true, source: "manual", long: { in: 1, out: 3 } },
+			],
+		});
+		expect(table["//"]).toBe("retained rates");
+		expect(table.prices[0]).toMatchObject({
+			cacheRead: 0,
+			cacheWrite: 0.5,
+			pin: true,
+			source: "manual",
+			long: { cacheRead: 1, cacheWrite: 1 },
+		});
+		const entry = table.prices[0];
+		if (!entry) throw new Error("Missing parsed rate");
+		expect(turnCost(entry, { input: 1000, cacheRead: 100, cacheWrite: 100, output: 0 })).toBeCloseTo(0.00045);
+		for (const cacheWrite of [-1, "0.5", null]) {
+			expect(
+				priceTableFileSchema.safeParse({ prices: [{ pattern: "mai", in: 0.5, out: 2, cacheWrite }] }).success,
+			).toBe(false);
+		}
+	});
+
 	it("ships a seed that parses and prices the team kit's models", () => {
 		const seed = createPriceTable(getSeedPriceTableFile(), "seed");
 		expect(seed.priceFor("us.anthropic.claude-haiku-4-5-20251001-v1:0")?.pattern).toBe("claude-haiku-4-5");

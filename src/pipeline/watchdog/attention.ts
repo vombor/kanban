@@ -108,7 +108,14 @@ export function renderAttention(
 	now: Date,
 ): { text: string; changed: boolean } {
 	const orchestrator = ORCHESTRATOR_SECTION.exec(previous)?.[0]?.trim() ?? "";
-	const auto = items.length > 0 ? `# Needs a human decision (${now.toISOString()})\n\n${items.join("\n")}\n` : "";
+	const pending = items.filter((item) => !item.includes("**acknowledged hold**"));
+	const acknowledged = items.filter((item) => item.includes("**acknowledged hold**"));
+	const auto = [
+		pending.length > 0 ? `# Needs a human decision (${now.toISOString()})\n\n${pending.join("\n")}\n` : "",
+		acknowledged.length > 0 ? `## Acknowledged orchestration holds\n\n${acknowledged.join("\n")}\n` : "",
+	]
+		.filter(Boolean)
+		.join("\n");
 	const text = [auto, orchestrator && `${orchestrator}\n`].filter(Boolean).join("\n");
 	const strip = (value: string) => value.replace(/\(.*?Z\)/u, "");
 	return { text, changed: strip(text) !== strip(previous) };

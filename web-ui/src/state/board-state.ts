@@ -1,4 +1,5 @@
 import type { DropResult } from "@hello-pangea/dnd";
+import { runtimeProviderQueueSchema } from "@runtime-provider-queue";
 import { createShortTaskId } from "@runtime-task-id";
 import * as runtimeTaskState from "@runtime-task-state";
 
@@ -198,6 +199,7 @@ function normalizeCard(rawCard: unknown): BoardCard | null {
 		createdAt?: unknown;
 		updatedAt?: unknown;
 		pendingGitAction?: unknown;
+		providerQueue?: unknown;
 	};
 	const prompt = typeof card.prompt === "string" ? card.prompt.trim() : "";
 	if (!prompt) {
@@ -220,6 +222,7 @@ function normalizeCard(rawCard: unknown): BoardCard | null {
 
 	const now = Date.now();
 	const pendingGitAction = normalizeTaskPendingGitAction(card.pendingGitAction);
+	const providerQueue = runtimeProviderQueueSchema.safeParse(card.providerQueue);
 	// The runtime writes the role (QA, TRIAGE and calibration cards), a QA card's reviewsTaskId and an imported card's
 	// issue; a browser save must keep them.
 	const role = normalizeTaskRole(card.role);
@@ -245,6 +248,7 @@ function normalizeCard(rawCard: unknown): BoardCard | null {
 		createdAt: typeof card.createdAt === "number" ? card.createdAt : now,
 		updatedAt: typeof card.updatedAt === "number" ? card.updatedAt : now,
 		...(pendingGitAction !== undefined ? { pendingGitAction } : {}),
+		...(providerQueue.success ? { providerQueue: providerQueue.data } : {}),
 	};
 }
 

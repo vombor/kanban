@@ -29,7 +29,9 @@ import { Dialog, DialogFooter, DialogHeader } from "@/components/ui/dialog";
 import { NativeSelect } from "@/components/ui/native-select";
 import { TASK_GIT_BASE_REF_PROMPT_VARIABLE, type TaskGitAction } from "@/git-actions/build-task-git-action-prompt";
 import { useObsidianConnector } from "@/hooks/use-obsidian-connector";
+import { useProviderConcurrencyDraft } from "@/hooks/use-provider-concurrency-draft";
 import { previewThemeId, readStoredThemeId, saveThemeId, THEME_GROUPS, THEMES, type ThemeId } from "@/hooks/use-theme";
+import { useWakeNoticePresentationDraft } from "@/hooks/use-wake-notice-presentation-draft";
 import { useLayoutCustomizations } from "@/resize/layout-customizations";
 import type { RuntimeAgentId, RuntimeConfigResponse } from "@/runtime/types";
 import { useRuntimeConfig } from "@/runtime/use-runtime-config";
@@ -256,6 +258,8 @@ export function RuntimeSettingsDialog({
 }): React.ReactElement {
 	const { config, isLoading, isSaving, save } = useRuntimeConfig(open, workspaceId, initialConfig);
 	const obsidian = useObsidianConnector(open);
+	const providerConcurrency = useProviderConcurrencyDraft(open, config);
+	const wakeNotice = useWakeNoticePresentationDraft(open, config);
 	const [isSavingSettings, setIsSavingSettings] = useState(false);
 	const savingSettingsRef = useRef(false);
 	const { resetLayoutCustomizations } = useLayoutCustomizations();
@@ -394,7 +398,8 @@ export function RuntimeSettingsDialog({
 		readyForReviewNotificationsEnabled,
 		selectedAgentId,
 	]);
-	const hasUnsavedChanges = hasRuntimeUnsavedChanges || obsidian.hasUnsavedChanges;
+	const hasUnsavedChanges =
+		hasRuntimeUnsavedChanges || obsidian.hasUnsavedChanges || providerConcurrency.dirty || wakeNotice.dirty;
 
 	useEffect(() => {
 		if (!open) {
@@ -514,7 +519,7 @@ export function RuntimeSettingsDialog({
 	};
 
 	const handleSave = async () => {
-		if (savingSettingsRef.current || isSaving || obsidian.busy) return;
+		if (savingSettingsRef.current || isSaving || (obsidian.busy && obsidian.hasUnsavedChanges)) return;
 		setSaveError(null);
 		if (!config) {
 			setSaveError("Runtime settings are still loading. Try again in a moment.");
@@ -537,8 +542,10 @@ export function RuntimeSettingsDialog({
 				setNotificationPermission(nextPermission);
 			}
 			const saved =
-				!hasRuntimeUnsavedChanges ||
+				(!hasRuntimeUnsavedChanges && !providerConcurrency.dirty && !wakeNotice.dirty) ||
 				(await save({
+					...(providerConcurrency.dirty ? { providerConcurrency: providerConcurrency.limits } : {}),
+					...(wakeNotice.dirty ? { wakeNoticePresentation: wakeNotice.presentation } : {}),
 					selectedAgentId,
 					agentDefaults: normalizeRuntimeAgentDefaultSettings(agentDefaults),
 					agentAutonomousModeEnabled,
@@ -710,6 +717,82 @@ export function RuntimeSettingsDialog({
 					</div>
 
 					{/* ---- Git Prompts ---- */}
+					<section
+						aria-label="Shared provider concurrency"
+						className="mb-4 space-y-2 rounded-lg border border-border bg-surface-0 px-4 py-3"
+					>
+						<h3 className="m-0 text-[13px] font-semibold text-text-primary">Agent coordination</h3>
+						<label
+							htmlFor="wake-notice-presentation"
+							className="flex items-center justify-between gap-3 text-xs text-text-secondary"
+						>
+							<span>Watchdog sidebar notices</span>
+							<NativeSelect
+								id="wake-notice-presentation"
+								aria-label="Watchdog sidebar notices"
+								value={wakeNotice.presentation}
+								disabled={controlsDisabled}
+								onChange={(event) =>
+									wakeNotice.setPresentation(
+										event.target.value as NonNullable<RuntimeConfigResponse["wakeNoticePresentation"]>,
+									)
+								}
+							>
+								<option value="compact">Compact</option>
+								<option value="hidden">Tiny notice</option>
+								<option value="full">Full details</option>
+							</NativeSelect>
+						</label>
+						<p className="m-0 text-xs text-text-tertiary">
+							Full instructions remain in each project's audit log. This changes presentation, not orchestration
+							or wake delivery; project overrides still take priority.
+						</p>
+						<p className="m-0 text-[13px] text-text-secondary">
+							Opt-in maximum active turns shared by dev, QA, rework and recovery across projects. Starts wait in
+							a persistent queue; existing turns are not interrupted. Project pacing can be stricter. Quota-reset
+							holds still apply.
+						</p>
+						{providerConcurrency.providers.map((provider) => (
+							<label
+								key={provider}
+								htmlFor={`provider-cap-${provider}`}
+								className="flex items-center justify-between gap-3 text-xs text-text-secondary"
+							>
+								<span>{provider}</span>
+								<NativeSelect
+									id={`provider-cap-${provider}`}
+									aria-label={`${provider} maximum active turns`}
+									value={providerConcurrency.limits[provider]?.toString() ?? ""}
+									disabled={controlsDisabled}
+									onChange={(event) => providerConcurrency.set(provider, event.target.value)}
+								>
+									<option value="">Unlimited</option>
+									{[
+										...new Set([
+											1,
+											2,
+											3,
+											4,
+											8,
+											...(providerConcurrency.limits[provider]
+												? [providerConcurrency.limits[provider]]
+												: []),
+										]),
+									]
+										.sort((a, b) => a - b)
+										.map((limit) => (
+											<option key={limit} value={limit}>
+												{limit}
+											</option>
+										))}
+								</NativeSelect>
+							</label>
+						))}
+						<p className="m-0 text-xs text-text-tertiary">
+							Provider-selecting CLIs use their provider id; opaque CLIs use agent:&lt;id&gt;. Saved unknown
+							providers/limits remain editable. Direct CLI work outside Kanban is not scheduled.
+						</p>
+					</section>
 					<div data-settings-section="git-prompts" />
 					<div className="sticky top-0 -mx-5 px-5 pt-4 pb-2 bg-surface-1 z-10">
 						<h2 className="flex items-center gap-2 text-base font-semibold text-text-primary m-0">
@@ -966,7 +1049,7 @@ export function RuntimeSettingsDialog({
 				<Button
 					variant="primary"
 					onClick={() => void handleSave()}
-					disabled={controlsDisabled || obsidian.busy || !hasUnsavedChanges}
+					disabled={controlsDisabled || (obsidian.busy && obsidian.hasUnsavedChanges) || !hasUnsavedChanges}
 				>
 					Save
 				</Button>

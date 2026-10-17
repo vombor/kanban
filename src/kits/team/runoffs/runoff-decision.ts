@@ -133,7 +133,14 @@ export function decideRunoff(
 			kind: "closed_by_hand",
 			winner,
 			results,
-			note: `card(s) moved to Done or deleted outside the pipeline; ${winner ? `${winner} held the only runoff PASS` : "no winner (no single card with a runoff PASS)"}`,
+			note: `card(s) moved to Done or deleted outside the pipeline; ${winner ? `${winner} held the only archived runoff PASS` : "no winner selected from archived PASSes"}${
+				runoff.benchOnly && results.some((result) => result.out === "pass")
+					? `; completed benchmark PASS awaiting user disposition: ${results
+							.filter((result) => result.out === "pass")
+							.map((result) => result.id)
+							.join(", ")}`
+					: ""
+			}`,
 		};
 	}
 	// `fails` counts every FAIL round of a card, so the round whose FAIL started a runoff (onFail.runoff) counts against

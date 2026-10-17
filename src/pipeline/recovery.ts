@@ -1018,6 +1018,9 @@ export function decideHeldInput(
  * provider-error retry or an outage hold is not finished work, so no snapshot and no QA round; dc6e70d, 692f174, 8a1bf34).
  */
 export function recoveryHoldReason(entry: Record<string, unknown> | undefined): string | null {
+	const manual = entry?.manualReview;
+	if (manual && typeof manual === "object" && "snapshot" in manual && manual.snapshot === entry?.snapshot)
+		return "explicit manual review disposition; no automatic implementation retry authorized";
 	const flow = readRecoveryFlow(entry);
 	if (flow.orphan) {
 		return "orphaned by a Kanban restart";

@@ -32,7 +32,7 @@ export interface QaPromptInput {
 	/** The ref that holds the submitted work, e.g. `refs/kanban/snapshots/<id>`. */
 	snapshotRef: string;
 	baseRef: string;
-	/** The scratch copy QA tests in (`<pipeline.qa.scratchRoot>/<devTaskId>`). */
+	/** The scratch copy QA tests in (the gate assigns a workspace/QA-card-scoped directory). */
 	scratchDir: string;
 	/** The QA card's outbox (`<pipeline.qa.outboxRoot>/<qaTaskId>`). */
 	outboxDir: string;

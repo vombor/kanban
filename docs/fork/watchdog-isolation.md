@@ -70,7 +70,9 @@ target won.
 
 ## Sidebar notice presentation
 
-`orchestrator.wake.presentation` selects the wake text: `full` (default), `compact`, or `hidden`.
+`orchestrator.wake.presentation` selects the wake text: `compact` (default), `full`, or `hidden`.
+Global Settings → Agents exposes **Watchdog sidebar notices** (Compact / Tiny notice / Full details), saved through
+the popup's main Save button. Existing explicit selections are preserved; this never disables orchestration.
 `workspaces.<id>.orchestrator.wake.presentation` overrides it for one project (`null` inherits the global setting).
 Edit the Kanban home's config.json; the worker reads this on its next tick, with no restart:
 

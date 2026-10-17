@@ -1108,6 +1108,13 @@ export async function startTask(input: { cwd: string; taskId: string; projectPat
 			// would sit there, since session sync only moves it on a newer session change (issue #16).
 			requireNewTurn: true,
 		});
+		if (started.ok && started.queued)
+			return {
+				ok: true,
+				queued: true,
+				message: started.message ?? "Start queued behind shared provider capacity/quota.",
+				task: { id: task.id, prompt: task.prompt, column: fromColumnId, workspacePath: workspaceRepoPath },
+			};
 		if (!started.ok || !started.summary) {
 			throw new Error(started.error ?? "Could not start task session.");
 		}

@@ -8,6 +8,7 @@ import { TRPCError } from "@trpc/server";
 import { getWorkspacePipelineSettings, parsePipelineConfig, readPipelineConfig } from "../config/pipeline-config";
 import type { RuntimeConfigState } from "../config/runtime-config";
 import { updateGlobalRuntimeConfig, updateRuntimeConfig } from "../config/runtime-config";
+import { getRuntimeAgentCatalogEntry } from "../core/agent-catalog";
 import type { AgentSettingsOptions } from "../core/agent-settings-options";
 import type {
 	RuntimeAgentId,
@@ -25,7 +26,9 @@ import {
 	parseTaskSessionStartRequest,
 	parseTaskSessionStopRequest,
 } from "../core/api-validation";
-import { isHomeAgentSessionId } from "../core/home-agent-session";
+import { getDispatchProvider } from "../core/dispatch-provider";
+import { isHomeAgentSessionId, isHomeAgentSessionIdForWorkspace } from "../core/home-agent-session";
+import { providerStartFingerprint } from "../core/provider-start-intent";
 import { resolveLaunchAgentSettings } from "../core/task-agent-settings";
 import { resolveOrchestratorGuardrails, resolveTaskGuardrails } from "../guardrails/task-guardrails";
 import { grantCoversSession } from "../isolation/grants";
@@ -38,8 +41,10 @@ import {
 	KANBAN_SESSION_WORKSPACE_ENV,
 } from "../isolation/session-identity";
 import { readClineModelRecords } from "../models/cline-model-records";
+import { readAgentDefaultModels } from "../models/cline-providers";
 import { readProjectShortcuts } from "../projects/project-shortcut-store";
 import { openInBrowser } from "../server/browser";
+import type { ProviderDispatcher } from "../server/provider-dispatcher";
 import type { TypedInputHold } from "../server/typed-input-hold";
 import { getClineModelsSettingsPath, getDebugResetTargetPaths, getProjectShortcutsPath } from "../state/kanban-home";
 import { listWorkspaceIndexEntries, loadWorkspaceBoardById } from "../state/workspace-state";
@@ -79,6 +84,9 @@ export interface CreateRuntimeApiDependencies {
 	 * refuses while the user types, too).
 	 */
 	typedInputHold?: Pick<TypedInputHold, "deliverUnlessBusy">;
+	providerDispatcher?: ProviderDispatcher;
+	/** Unforgeable in-process handoff, never serialized into a request or stored with an intent. */
+	launchAuthorization?: WeakMap<object, AbortSignal>;
 }
 
 async function resolveExistingTaskCwdOrEnsure(options: {
@@ -195,9 +203,25 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 			}
 			return await buildConfigResponse(nextRuntimeConfig, workspaceScope);
 		},
-		startTaskSession: async (workspaceScope, input) => {
+		startTaskSession: async (workspaceScope, input, caller) => {
 			try {
+				const authorization = input && typeof input === "object" ? deps.launchAuthorization?.get(input) : undefined;
+				if (input && typeof input === "object") deps.launchAuthorization?.delete(input);
 				const body = parseTaskSessionStartRequest(input);
+				if (
+					isHomeAgentSessionId(body.taskId) &&
+					(!isHomeAgentSessionIdForWorkspace(body.taskId, workspaceScope.workspaceId) ||
+						(caller &&
+							caller.kind !== "user" &&
+							(caller.kind !== "session" ||
+								caller.session.role !== "orchestrator" ||
+								caller.session.workspaceId !== workspaceScope.workspaceId)))
+				)
+					return {
+						ok: false,
+						summary: null,
+						error: "Sidebar starts belong only to the user or that project's own orchestrator.",
+					};
 				const scopedRuntimeConfig = await deps.loadScopedRuntimeConfig(workspaceScope);
 				const taskCwd = isHomeAgentSessionId(body.taskId)
 					? workspaceScope.workspacePath
@@ -253,6 +277,39 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 				}
 				// An unreadable config.json keeps the default guardrails (on) and isolation off.
 				const pipelineConfig = (await readPipelineConfig().catch(() => parsePipelineConfig({}))).config;
+				if (
+					deps.providerDispatcher &&
+					!authorization &&
+					!terminalManager.willReuseLiveSession(body.taskId) &&
+					body.prompt.trim().length > 0
+				) {
+					let settings = resolveLaunchAgentSettings(
+						resolved.agentId,
+						body.agentSettings,
+						scopedRuntimeConfig.agentDefaults,
+					);
+					if (
+						!settings?.providerId &&
+						getRuntimeAgentCatalogEntry(resolved.agentId)?.capabilities.providerOverride === "flag"
+					) {
+						const defaults = await readAgentDefaultModels(pipelineConfig.agents.cline.dataDir);
+						const provider = defaults?.[resolved.agentId]?.provider;
+						if (provider) settings = { ...settings, providerId: provider };
+					}
+					const board = await loadWorkspaceBoardById(workspaceScope.workspaceId);
+					const card = board.columns.flatMap((column) => column.cards).find((card) => card.id === body.taskId);
+					return await deps.providerDispatcher.submit({
+						workspaceId: workspaceScope.workspaceId,
+						taskId: body.taskId,
+						body: { ...body, agentId: resolved.agentId, agentSettings: settings },
+						fingerprint: card ? providerStartFingerprint(card) : "sidebar",
+						at: Date.now(),
+						explicit:
+							caller?.kind === "user" || (caller?.kind === "session" && caller.session.role === "orchestrator"),
+					});
+				}
+				if (authorization?.aborted)
+					return { ok: false, summary: null, error: "Queued start cancelled before launch." };
 				const identity: AgentSessionIdentity = {
 					workspaceId: workspaceScope.workspaceId,
 					taskId: body.taskId,
@@ -300,6 +357,8 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 				if (deps.beforeAgentLaunch && !terminalManager.willReuseLiveSession(body.taskId)) {
 					await deps.beforeAgentLaunch(resolved.agentId);
 				}
+				if (authorization?.aborted)
+					return { ok: false, summary: null, error: "Queued start cancelled before launch." };
 				const summary = await terminalManager.startTaskSession({
 					taskId: body.taskId,
 					agentId: resolved.agentId,
@@ -330,7 +389,10 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 						: {}),
 				});
 
-				let nextSummary = summary;
+				const providerId = getDispatchProvider(resolved.agentId, body.agentSettings);
+				let nextSummary =
+					terminalManager.recordDispatchProvider?.(body.taskId, providerId, body.prompt.trim().length > 0) ??
+					summary;
 				if (shouldCaptureTurnCheckpoint) {
 					try {
 						const nextTurn = (summary.latestTurnCheckpoint?.turn ?? 0) + 1;
@@ -358,6 +420,8 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 			}
 		},
 		stopTaskSession: async (workspaceScope, input) => {
+			const stoppedBody = parseTaskSessionStopRequest(input);
+			await deps.providerDispatcher?.cancel(workspaceScope.workspaceId, stoppedBody.taskId);
 			try {
 				const body = parseTaskSessionStopRequest(input);
 				const terminalManager = await deps.getScopedTerminalManager(workspaceScope);

@@ -12,9 +12,9 @@ This repository uses these GitHub Actions workflows for quality gates, publishin
   - Calls the reusable `test.yml` workflow.
 - `.github/workflows/publish.yml`
   - Runs when a version tag `vX.Y.Z[-prerelease]` is pushed, or by hand (`workflow_dispatch`) for an existing tag.
-  - Publishes `@vombor/kanban` to GitHub Packages (`npm.pkg.github.com`) and creates the GitHub release.
-  - Uses the repository secret `GH_PAT` (the user's classic PAT, see `docs/fork/github-auth.md`) for both;
-    the workflow fails at its first step without it.
+  - Publishes `@vombor/kanban` to GitHub Packages (`npm.pkg.github.com`) using Actions' automatically generated
+    `GITHUB_TOKEN` with `packages: write` (the user-approved registry-only exception; no PAT or pod token needed).
+  - The host creates the GitHub release as the Kanban App after package and versioned image publication are verified.
 - `.github/workflows/image.yml`
   - Runs on pushes to `fork/**` and daily; builds and pushes the dev-container image `ghcr.io/vombor/kanban`
     (`:sha-<short>`, `:<branch>`, and `:latest` from `fork/stack`; next to the npm package of the same name; it was
@@ -60,13 +60,14 @@ Pushing the tag starts `publish.yml`. To re-run it for an existing tag: Actions 
 
 Given the tag (the pushed tag, or the `tag` input):
 
-1. Fails at once when the `GH_PAT` secret is missing.
+1. Uses its automatically generated Actions token for registry publishing; package settings must grant this repository
+   Actions access. There is no PAT fallback.
 2. Runs the reusable test workflow (`test.yml`).
 3. Validates tag format (`vX.Y.Z` with optional prerelease suffix), verifies the tag exists and checks out its commit.
 4. Verifies the `package.json` name is `@vombor/kanban` (an upstream tag stops here) and `tag == v${package.json version}`.
 5. Extracts the matching version section from `CHANGELOG.md`.
 6. Runs `npm run prepublishOnly` (build + checks).
-7. Publishes with `NODE_AUTH_TOKEN` = `GH_PAT`:
+7. Publishes with `NODE_AUTH_TOKEN` = the workflow's `GITHUB_TOKEN`:
 
 ```bash
 npm publish --tag next     # prerelease versions (anything with a "-"), e.g. 0.1.70-fork.5
@@ -75,8 +76,11 @@ npm publish --tag latest   # releases
 
    The registry comes from `publishConfig.registry` in `package.json`. GitHub Packages has no npm provenance, and
    a package linked to the repository (`repository` in `package.json`) gets the repository's visibility.
-8. Creates a GitHub Release for the tag (with `GH_PAT`), with that changelog section as the body, a compare link
-   to the previous tag, and marked prerelease for a prerelease tag.
+8. Records registry publication in the workflow summary. After verifying both package and versioned/stable image
+   workflows, the host publishes the GitHub release using its Kanban App-authenticated `gh` bridge, with that changelog
+   section, a compare link, and prerelease status for fork prerelease tags. Never use a user's PAT or the Actions token
+   to create the release or update issues. If App or registry access is refused, report the exact missing permission;
+   do not silently switch identities.
 
 ## Installing from GitHub Packages
 
@@ -100,7 +104,8 @@ In the dev container the entrypoint writes the same lines with `${GH_TOKEN}` (`d
 
 Publish will fail if:
 
-- The `GH_PAT` secret is missing, or the PAT lacks `write:packages` / `repo`.
+- The workflow's generated token lacks package access: grant the repository Actions access in npm/GHCR package
+  settings. Both publisher workflows request `packages: write`; no pod environment variable is needed.
 - The tag does not exist or does not match the `package.json` version.
 - `CHANGELOG.md` is missing, or its section for that version is missing or empty.
 - Build/tests/checks fail.

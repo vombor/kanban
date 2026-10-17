@@ -179,7 +179,7 @@ describe("pipeline config", () => {
 			timeoutMin: 45,
 			liveSessionMin: 10,
 			delivery: "auto",
-			presentation: "full",
+			presentation: "compact",
 			quietMin: 30,
 		});
 		expect(

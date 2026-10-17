@@ -11,6 +11,8 @@ export interface ProviderUsageHolds {
 	ready: () => Promise<void>;
 	until: (provider: string, now: number) => number | null;
 	record: (provider: string, until: number) => Promise<number>;
+	refresh?: () => Promise<void>;
+	active?: (now: number) => Record<string, number>;
 }
 
 export function createProviderUsageHolds(
@@ -59,6 +61,11 @@ export function createProviderUsageHolds(
 	};
 	return {
 		ready,
+		refresh: async () => {
+			await ready();
+			holds = await read();
+		},
+		active: (now) => Object.fromEntries(Object.entries(holds).filter(([, until]) => until > now)),
 		until: (provider, now) => (deadlineOf(holds, provider) > now ? deadlineOf(holds, provider) : null),
 		record: async (provider, until) => {
 			if (!Number.isFinite(until) || until < 0) throw new Error("Invalid provider quota deadline");

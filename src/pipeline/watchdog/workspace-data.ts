@@ -81,7 +81,11 @@ export async function readUndecidedRunoffCardIds(runoffsPath: string): Promise<S
 		if (
 			!runoff ||
 			typeof runoff !== "object" ||
-			(runoff as { decided?: unknown }).decided ||
+			((runoff as { decided?: unknown }).decided &&
+				!(
+					(runoff as { benchOnly?: unknown }).benchOnly === true &&
+					(runoff as { closedByHand?: unknown }).closedByHand === true
+				)) ||
 			(runoff as { abandoned?: unknown }).abandoned
 		) {
 			continue;

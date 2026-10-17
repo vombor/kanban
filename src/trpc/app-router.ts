@@ -149,6 +149,7 @@ import {
 	runtimeWorktreeEnsureResponseSchema,
 } from "../core/api-contract";
 import { isHomeAgentSessionId, isHomeAgentSessionIdForWorkspace } from "../core/home-agent-session";
+import { type ProviderDispatchStatus, providerDispatchStatusSchema } from "../core/provider-dispatch-contract";
 import type { CallerRequest } from "../isolation/isolation-service";
 import type { RuntimeCaller } from "../isolation/session-identity";
 import {
@@ -215,6 +216,11 @@ import {
 	orchestratorInboxTakeResponseSchema,
 	type RuntimeOrchestratorInboxApi,
 } from "./orchestrator-inbox-api";
+import {
+	pipelineControlResponseSchema,
+	pipelineControlSchema,
+	type RuntimePipelineControlApi,
+} from "./pipeline-control-contract";
 import {
 	pipelinePauseRequestSchema,
 	pipelinePauseResponseSchema,
@@ -317,6 +323,8 @@ export interface RuntimeTrpcContext {
 	pipelinePauseApi?: RuntimePipelinePauseApi;
 	/** `kanban project rename` and the project menu's Rename (src/trpc/project-name-api.ts); absent = not available. */
 	projectNameApi?: RuntimeProjectNameApi;
+	pipelineControlApi?: RuntimePipelineControlApi;
+	providerDispatchStatus?: (workspaceId: string) => Promise<ProviderDispatchStatus>;
 	/**
 	 * The pipeline worker's card stages of a workspace as the state hub keeps them for its board (src/pipeline/card-stage.ts),
 	 * for `kanban pipeline status`; absent = not available.
@@ -332,6 +340,7 @@ export interface RuntimeTrpcContext {
 		startTaskSession: (
 			scope: RuntimeTrpcWorkspaceScope,
 			input: RuntimeTaskSessionStartRequest,
+			caller?: RuntimeCaller,
 		) => Promise<RuntimeTaskSessionStartResponse>;
 		stopTaskSession: (
 			scope: RuntimeTrpcWorkspaceScope,
@@ -719,6 +728,13 @@ export const runtimeAppRouter = t.router({
 			.output(runtimeConfigResponseSchema)
 			.mutation(async ({ ctx, input }) => {
 				// The runtime config's agent and prompt settings are machine-wide (config.json).
+				if (
+					(input.providerConcurrency !== undefined || input.wakeNoticePresentation !== undefined) &&
+					(await readStrictCaller(ctx)).kind !== "user"
+				)
+					throw forbidden(
+						"Installation provider pacing and sidebar notice presentation are user-owned; an orchestrator sets its own project's restrictive pacing instead.",
+					);
 				await assertMachineAction(ctx, "runtime.saveConfig");
 				return await ctx.runtimeApi.saveConfig(ctx.workspaceScope, input);
 			}),
@@ -726,7 +742,7 @@ export const runtimeAppRouter = t.router({
 			.input(runtimeTaskSessionStartRequestSchema)
 			.output(runtimeTaskSessionStartResponseSchema)
 			.mutation(async ({ ctx, input }) => {
-				return await ctx.runtimeApi.startTaskSession(ctx.workspaceScope, input);
+				return await ctx.runtimeApi.startTaskSession(ctx.workspaceScope, input, await readStrictCaller(ctx));
 			}),
 		stopTaskSession: workspaceProcedure
 			.input(runtimeTaskSessionStopRequestSchema)
@@ -1226,6 +1242,28 @@ export const runtimeAppRouter = t.router({
 	// workspace's QA pipeline paused or resumed (src/trpc/pipeline-pause-api.ts): the user's and that project's
 	// orchestrator's.
 	pipeline: t.router({
+		providerStatus: workspaceProcedure.output(providerDispatchStatusSchema).query(async ({ ctx }) => {
+			const caller = await readStrictCaller(ctx);
+			if (
+				caller.kind !== "user" &&
+				(caller.kind !== "session" || caller.session.workspaceId !== ctx.workspaceScope.workspaceId)
+			)
+				throw forbidden("Provider queue details are limited to the caller's own project.");
+			if (!ctx.providerDispatchStatus)
+				throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Provider dispatch status is unavailable" });
+			return await ctx.providerDispatchStatus(ctx.workspaceScope.workspaceId);
+		}),
+		control: workspaceProcedure
+			.input(pipelineControlSchema)
+			.output(pipelineControlResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.pipelineControlApi) return { ok: false, error: "Pipeline controls are unavailable." };
+				return await ctx.pipelineControlApi.request(
+					await readStrictCaller(ctx),
+					ctx.workspaceScope.workspaceId,
+					input,
+				);
+			}),
 		setPaused: workspaceProcedure
 			.input(pipelinePauseRequestSchema)
 			.output(pipelinePauseResponseSchema)

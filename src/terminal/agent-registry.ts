@@ -155,6 +155,8 @@ export function buildRuntimeConfigResponse(
 	return {
 		selectedAgentId: runtimeConfig.selectedAgentId,
 		agentDefaults: runtimeConfig.agentDefaults,
+		providerConcurrency: runtimeConfig.providerConcurrency ?? {},
+		wakeNoticePresentation: runtimeConfig.wakeNoticePresentation,
 		selectedShortcutLabel: runtimeConfig.selectedShortcutLabel,
 		agentAutonomousModeEnabled: runtimeConfig.agentAutonomousModeEnabled,
 		debugModeEnabled: isRuntimeDebugModeEnabled(),

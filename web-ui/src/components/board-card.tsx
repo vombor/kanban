@@ -28,6 +28,7 @@ import { useTaskTokenUsage } from "@/stores/task-token-usage-store";
 import { useTaskWorkspaceSnapshotValue } from "@/stores/workspace-metadata-store";
 import type { BoardCard as BoardCardModel, BoardColumnId } from "@/types";
 import { getTaskAutoReviewCancelButtonLabel, getTaskRoleBadgeLabel } from "@/types";
+import { formatLocalTime } from "@/utils/format-local-time";
 import { formatPathForDisplay } from "@/utils/path-display";
 import { useMeasure } from "@/utils/react-use";
 import { getTaskPrerequisiteLabel } from "@/utils/task-prerequisites-label";
@@ -829,7 +830,14 @@ export const BoardCard = memo(function BoardCard({
 										<BoardCardRunningTime sessionSummary={sessionSummary} />
 									)}
 								</div>
-								{columnId === "review" || columnId === "in_progress" ? (
+								{card.providerQueue && columnId !== "trash" ? (
+									<p className="mt-1 text-xs text-status-orange">
+										Queued for {card.providerQueue.providerId ?? "provider"}
+										{card.providerQueue.until
+											? ` until ${formatLocalTime(card.providerQueue.until)}`
+											: " capacity"}
+									</p>
+								) : columnId === "review" || columnId === "in_progress" ? (
 									<BoardCardPipelineStage taskId={card.id} />
 								) : null}
 								{sessionActivity ? (

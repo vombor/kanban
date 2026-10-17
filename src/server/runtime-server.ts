@@ -7,6 +7,7 @@ import { createHTTPHandler } from "@trpc/server/adapters/standalone";
 import { createClineLemonadeContextSyncSettingsLoader } from "../config/cline-lemonade-context-sync-config";
 import { createClineTurnDetectorSettingsLoader } from "../config/cline-turn-detector-config";
 import { createLemonadeModelListSettingsLoader } from "../config/model-lists-config";
+import { getWorkspacePipelineSettings, readPipelineConfig } from "../config/pipeline-config";
 import { createProcessReaperSettingsLoader } from "../config/process-reaper-config";
 import type {
 	RuntimeRunUpdateResponse,
@@ -15,6 +16,7 @@ import type {
 } from "../core/api-contract";
 import { getDetailTerminalTaskId } from "../core/detail-terminal-session";
 import { isHomeAgentSessionIdForWorkspace } from "../core/home-agent-session";
+import { providerStartFingerprint } from "../core/provider-start-intent";
 import {
 	buildKanbanRuntimeUrl,
 	getKanbanRuntimeHost,
@@ -97,8 +99,10 @@ import { createModelListsRequestHandler } from "./model-lists-route";
 import { createOrchestratorInbox } from "./orchestrator-inbox";
 import { createOrphanProcessSweeper } from "./orphan-process-sweeper";
 import { createPipelineActionRunner } from "./pipeline-actions";
+import { createPipelineControlApi } from "./pipeline-control";
 import { createProcessReaper, type PreparedWorktreeReap } from "./process-reaper";
 import { createProcProcessTableReader, isProcessTableSupported } from "./process-table";
+import { createProviderDispatchRuntime } from "./provider-dispatch-runtime";
 import { buildCallerRequest, createRequestCallerResolver } from "./request-caller";
 import type { RuntimeStateHub } from "./runtime-state-hub";
 import { createShortcutPortProxyHandler, createShortcutPortRegistry, isShortcutPortProxyPath } from "./shortcut-ports";
@@ -402,6 +406,60 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 	// and `kanban task send` is refused meanwhile (typed-input-hold.ts, issue #35).
 	const typedInputHold = createTypedInputHold({
 		getTerminal: (workspaceId) => deps.workspaceRegistry.getTerminalManagerForWorkspace(workspaceId) ?? null,
+		deliver: async (terminal, taskId, text, options) => {
+			const summary = terminal.getSummary(taskId);
+			if (
+				!summary ||
+				(summary.state === "running" &&
+					(summary.dispatchPromptSubmitted !== false || (summary.lastHookAt ?? 0) > (summary.startedAt ?? 0))) ||
+				options?.enter === false ||
+				terminal.hasTypedInputSinceEnter(taskId)
+			)
+				return await deliverTaskInput(terminal, taskId, text, options);
+			const workspace = deps.workspaceRegistry
+				.listManagedWorkspaces()
+				.find((workspace) => workspace.terminalManager === terminal);
+			if (!workspace) return await deliverTaskInput(terminal, taskId, text, options);
+			const board = await loadWorkspaceBoardById(workspace.workspaceId);
+			const card = board.columns.flatMap((column) => column.cards).find((card) => card.id === taskId);
+			const decision = await providerDispatcher.admission({
+				workspaceId: workspace.workspaceId,
+				taskId,
+				body: {
+					taskId,
+					prompt: text,
+					baseRef: card?.baseRef ?? "HEAD",
+					agentId: summary.agentId ?? undefined,
+					agentSettings: summary.providerId ? { providerId: summary.providerId } : card?.agentSettings,
+				},
+				fingerprint: card ? providerStartFingerprint(card) : "sidebar",
+				at: Date.now(),
+				explicit: true,
+			});
+			if (!(await providerDispatcher.reserveInput(workspace.workspaceId, taskId, decision)))
+				return {
+					ok: false,
+					status: "busy",
+					evidence: null,
+					enterAttempts: 0,
+					summary,
+					error: "Shared provider capacity/quota is held; nothing was typed.",
+				};
+			let typed = false;
+			try {
+				const result = await deliverTaskInput(terminal, taskId, text, options);
+				typed = !["busy", "user_typing", "no_session", "error", "aborted"].includes(result.status);
+				if (typed && (options?.enter ?? true))
+					workspace.terminalManager.recordDispatchProvider(taskId, decision.provider, true);
+				return result;
+			} finally {
+				if (!typed) providerDispatcher.releaseInput(workspace.workspaceId, taskId);
+				else {
+					const release = setTimeout(() => providerDispatcher.releaseInput(workspace.workspaceId, taskId), 12_000);
+					release.unref();
+				}
+			}
+		},
 		log: deps.warn,
 	});
 	typedInputHold.start();
@@ -413,7 +471,36 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		log: deps.warn,
 	});
 	orchestratorInbox.start();
-	const runtimeApi = createRuntimeApi({
+	const launchAuthorization = new WeakMap<object, AbortSignal>();
+	let runtimeApi: RuntimeTrpcContext["runtimeApi"];
+	const providerDispatcher = createProviderDispatchRuntime({
+		registry: deps.workspaceRegistry,
+		launch: async (intent, signal) => {
+			const repo = deps.workspaceRegistry.getWorkspacePathById(intent.workspaceId);
+			if (!repo)
+				return { ok: false, summary: null, error: "Queued project is unavailable; no session was launched." };
+			const input = { ...intent.body };
+			launchAuthorization.set(input, signal);
+			const result = await runtimeApi.startTaskSession(
+				{ workspaceId: intent.workspaceId, workspacePath: repo },
+				input,
+			);
+			if (signal.aborted && result.summary)
+				await runtimeApi.stopTaskSession(
+					{ workspaceId: intent.workspaceId, workspacePath: repo },
+					{ taskId: intent.taskId },
+				);
+			return result;
+		},
+		broadcast: async (workspaceId) => {
+			const path = deps.workspaceRegistry.getWorkspacePathById(workspaceId);
+			if (path) await deps.runtimeStateHub.broadcastRuntimeWorkspaceStateUpdated(workspaceId, path);
+		},
+		log: deps.warn,
+	});
+	runtimeApi = createRuntimeApi({
+		providerDispatcher,
+		launchAuthorization,
 		getAgentSettingsOptions: createAgentOptionsLoader(),
 		typedInputHold,
 		getActiveWorkspaceId: deps.workspaceRegistry.getActiveWorkspaceId,
@@ -456,7 +543,9 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		},
 		deliver: async (workspaceId, taskId, notice) => {
 			const terminalManager = deps.workspaceRegistry.getTerminalManagerForWorkspace(workspaceId);
-			return terminalManager ? (await deliverTaskInput(terminalManager, taskId, notice)).ok : false;
+			return terminalManager
+				? (await typedInputHold.deliverUnlessBusy(terminalManager, workspaceId, taskId, notice)).ok
+				: false;
 		},
 		settleMs: deps.reviewSettleMs ?? DEFAULT_REVIEW_SETTLE_MS,
 	});
@@ -526,6 +615,20 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 	const projectNameApi = createProjectNameApi({
 		log: isolation.log,
 		broadcastProjects: (workspaceId) => void deps.runtimeStateHub.broadcastRuntimeProjectsUpdated(workspaceId),
+	});
+	const pipelineControlApi = createPipelineControlApi({
+		isRunning: (workspaceId, taskId) => {
+			const manager = deps.workspaceRegistry.getTerminalManagerForWorkspace(workspaceId);
+			return Boolean(manager?.hasLiveProcess(taskId) && manager.getSummary(taskId)?.state === "running");
+		},
+		isLive: (workspaceId, taskId) =>
+			deps.workspaceRegistry.getTerminalManagerForWorkspace(workspaceId)?.hasLiveProcess(taskId) ?? false,
+		canReview: async (workspaceId) => {
+			const { config } = await readPipelineConfig();
+			const settings = getWorkspacePipelineSettings(config, workspaceId);
+			return settings.landing.mode === "qa" && !settings.pipeline.shadow && !config.pipeline.paused;
+		},
+		wake: (workspaceId) => deps.requestPipelineSnapshot?.(workspaceId),
 	});
 	const projectSecretsApi = createProjectSecretsApi();
 	const obsidianConnectorApi = createObsidianConnectorApi();
@@ -664,6 +767,32 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			pipelineResubmitApi,
 			providerCapacityApi,
 			pipelinePauseApi,
+			pipelineControlApi,
+			providerDispatchStatus: async (workspaceId) => {
+				const pending = (await providerDispatcher.pending()).filter((intent) => intent.workspaceId === workspaceId);
+				const active = await providerDispatcher.activity();
+				const queued = await Promise.all(
+					pending.map(async (intent) => {
+						const decision = await providerDispatcher.admission(intent);
+						return {
+							taskId: intent.taskId,
+							providerId: decision.provider,
+							requestedAt: intent.at,
+							until: decision.until === Number.MAX_SAFE_INTEGER ? null : decision.until,
+						};
+					}),
+				);
+				return {
+					limits: await providerDispatcher.limits(),
+					queued,
+					holders: active
+						.filter((item) => item.key.startsWith(`${workspaceId}\0`))
+						.map((item) => ({ taskId: item.key.split("\0")[1] ?? "", resources: item.resources })),
+					otherActive: new Set(
+						active.filter((item) => !item.key.startsWith(`${workspaceId}\0`)).map((item) => item.key),
+					).size,
+				};
+			},
 			projectNameApi,
 			projectSecretsApi,
 			obsidianConnectorApi,
@@ -965,6 +1094,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		throw new Error("Failed to start local server.");
 	}
 	orphanProcessSweeper.start();
+	providerDispatcher.start();
 	clineTurnMonitor.start();
 	clineLemonadeContextSync.start();
 	const activeWorkspaceId = deps.workspaceRegistry.getActiveWorkspaceId();
@@ -980,6 +1110,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		runPipelineAction,
 		isolation,
 		close: async () => {
+			providerDispatcher.close();
 			messageNotices.close();
 			typedInputHold.close();
 			orchestratorInbox.close();

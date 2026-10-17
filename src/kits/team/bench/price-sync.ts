@@ -106,6 +106,29 @@ async function readJsonFile<T>(path: string): Promise<T | null> {
 	}
 }
 
+/** Missing is not the same as damaged: sync must never replace malformed retained manual/pinned prices. */
+async function readOwnPriceTable(path: string): Promise<PriceTableFile | null> {
+	let text: string;
+	try {
+		text = await readFile(path, "utf8");
+	} catch (error) {
+		if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return null;
+		throw error;
+	}
+	let value: unknown;
+	try {
+		value = JSON.parse(text);
+	} catch {
+		throw new Error(`${path} is not valid JSON; the original price table is kept`);
+	}
+	const parsed = priceTableFileSchema.safeParse(value);
+	if (!parsed.success) {
+		const details = parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".")}: ${issue.message}`);
+		throw new Error(`${path} is not a valid price table: ${details.join("; ")}; the original file is kept`);
+	}
+	return parsed.data;
+}
+
 async function writeFileAtomic(path: string, text: string): Promise<void> {
 	await mkdir(dirname(path), { recursive: true });
 	await writeFileSynced(`${path}.tmp`, text);
@@ -156,6 +179,9 @@ export async function runPriceSync(options: PriceSyncOptions): Promise<PriceSync
 	};
 
 	try {
+		// Validate before fetching offers so damaged pricing can be diagnosed even without a cached/offline offer.
+		const ownTable = await readOwnPriceTable(paths.pricesJson);
+		const oldTable = ownTable ?? options.baseTable;
 		const state = (await readJsonFile<PriceSyncState>(paths.state)) ?? { offers: {} };
 		state.offers ??= {};
 
@@ -219,12 +245,6 @@ export async function runPriceSync(options: PriceSyncOptions): Promise<PriceSync
 		const versionChanges = BEDROCK_PRICE_OFFERS.filter(
 			(code) => previousVersions[code] && previousVersions[code] !== versions[code],
 		).map((code) => `${code} ${previousVersions[code]} → ${versions[code]}`);
-		const ownTable = await readJsonFile<unknown>(paths.pricesJson);
-		const ownParsed = ownTable === null ? null : priceTableFileSchema.safeParse(ownTable);
-		if (ownParsed && !ownParsed.success) {
-			throw new Error(`${paths.pricesJson} is not a valid price table; fix or remove it`);
-		}
-		const oldTable = ownParsed?.data ?? options.baseTable;
 		const { prices: newList, report } = buildPrices(oldTable.prices, rows, options.kitModels, { versions, region });
 		const pending = diffPrices(oldTable.prices, newList);
 		let changeLine: string | null = null;
@@ -356,7 +376,7 @@ export async function runPriceSync(options: PriceSyncOptions): Promise<PriceSync
 		}
 		if (!pending.length) {
 			lines.push(
-				`prices.json: in sync with AWS${ownParsed ? "" : ` (no ${paths.pricesJson} yet: compared with ${options.baseTableSource})`}`,
+				`prices.json: in sync with AWS${ownTable ? "" : ` (no ${paths.pricesJson} yet: compared with ${options.baseTableSource})`}`,
 			);
 			return result;
 		}

@@ -4,6 +4,7 @@ import { IMAGE_CHANNEL_KEY, setImageChannel, unsetImageChannel } from "../config
 import { type ImportKitResult, importLegacyKitConfig } from "../config/import-kit";
 import { CONFIG_SETTABLE_KEYS, setModelListInclude, unsetModelListInclude } from "../config/model-list-include-setting";
 import { getWorkspacePipelineSettings, readPipelineConfig } from "../config/pipeline-config";
+import { setProviderConcurrency } from "../config/provider-concurrency-setting";
 import { getLegacyKitConfigPath } from "../state/kanban-home";
 import { resolveWorkspaceTarget } from "./workspace-target";
 
@@ -20,9 +21,13 @@ function short(value: unknown, max = 100): string {
 }
 
 /** The keys `kanban config set|unset` takes: the Lemonade model list, and the pod's image channel. */
-const SETTABLE_KEYS = [...CONFIG_SETTABLE_KEYS, IMAGE_CHANNEL_KEY];
+const SETTABLE_KEYS = [...CONFIG_SETTABLE_KEYS, IMAGE_CHANNEL_KEY, "providerConcurrency.<provider>"];
 
 async function setConfigKey(key: string, values: string[]) {
+	if (key.startsWith("providerConcurrency.")) {
+		if (values.length !== 1) throw new Error("Provider concurrency takes one positive integer");
+		return await setProviderConcurrency(key.slice("providerConcurrency.".length), Number(values[0]));
+	}
 	if (key !== IMAGE_CHANNEL_KEY) {
 		return await setModelListInclude(key, values);
 	}
@@ -33,6 +38,8 @@ async function setConfigKey(key: string, values: string[]) {
 }
 
 async function unsetConfigKey(key: string) {
+	if (key.startsWith("providerConcurrency."))
+		return await setProviderConcurrency(key.slice("providerConcurrency.".length), null);
 	return key === IMAGE_CHANNEL_KEY ? await unsetImageChannel() : await unsetModelListInclude(key);
 }
 

@@ -196,6 +196,48 @@ describe("price sync", () => {
 		await expect(runPriceSync(options({ mode: "apply" }))).rejects.toThrow(/not a valid price table/u);
 		expect(readFileSync(paths.pricesJson, "utf8")).toBe(JSON.stringify({ prices: [{ pattern: "x" }] }));
 	});
+
+	it("syncs a retained table missing cacheWrite without discarding manual/pinned rates or writing during a check (#62)", async () => {
+		mkdirSync(paths.dir, { recursive: true });
+		const original = JSON.stringify({
+			"//": "retained",
+			prices: [
+				{ pattern: "mai-code-1\\.1-flash", in: 0.5, cacheRead: 0.05, out: 2, source: "manual", pin: true },
+				{ pattern: "kimi-k3", in: 9, cacheRead: 9, cacheWrite: 9, out: 9 },
+			],
+		});
+		writeFileSync(paths.pricesJson, original);
+		await expect(runPriceSync(options({ mode: "check" }))).resolves.toMatchObject({ applied: false });
+		expect(readFileSync(paths.pricesJson, "utf8")).toBe(original);
+		await runPriceSync(options({ mode: "apply" }));
+		const updated = JSON.parse(readFileSync(paths.pricesJson, "utf8")) as PriceTableFile;
+		expect(updated["//"]).toBe("retained");
+		expect(updated.prices[0]).toMatchObject({
+			pattern: "mai-code-1\\.1-flash",
+			in: 0.5,
+			cacheRead: 0.05,
+			cacheWrite: 0.5,
+			out: 2,
+			pin: true,
+			source: "manual",
+		});
+	});
+
+	it("diagnoses damaged rows before network/offline cache access, and never replaces malformed JSON (#62)", async () => {
+		mkdirSync(paths.dir, { recursive: true });
+		const fetchText = vi.fn(async () => "");
+		const invalid = JSON.stringify({ prices: [{ pattern: "x", in: 1, out: -2 }] });
+		writeFileSync(paths.pricesJson, invalid);
+		await expect(runPriceSync(options({ mode: "apply", offline: true, fetchText }))).rejects.toThrow(
+			/prices\.0\.out/u,
+		);
+		expect(fetchText).not.toHaveBeenCalled();
+		expect(readFileSync(paths.pricesJson, "utf8")).toBe(invalid);
+		writeFileSync(paths.pricesJson, "{broken");
+		await expect(runPriceSync(options({ mode: "apply", fetchText }))).rejects.toThrow(/not valid JSON/u);
+		expect(fetchText).not.toHaveBeenCalled();
+		expect(readFileSync(paths.pricesJson, "utf8")).toBe("{broken");
+	});
 });
 
 describe("price ATTENTION.md section", () => {

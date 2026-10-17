@@ -118,6 +118,40 @@ function initGitRepository(path: string): void {
 }
 
 describe.sequential("workspace-state integration", () => {
+	it("keeps broker-owned provider queue metadata across stale browser data and refuses forged badges", async () => {
+		await withTemporaryHome(async () => {
+			const sandbox = createTempDir("kanban-provider-queue-board-");
+			try {
+				const workspacePath = join(sandbox.path, "project");
+				mkdirSync(workspacePath);
+				initGitRepository(workspacePath);
+				const board = createBoard("Pending");
+				const forged = board.columns[0]?.cards[0];
+				if (!forged) throw new Error("Missing card");
+				forged.providerQueue = { providerId: "forged", requestedAt: 1, until: null };
+				const first = await saveWorkspaceState(workspacePath, { board, sessions: {} });
+				expect(first.board.columns[0]?.cards[0]?.providerQueue).toBeUndefined();
+				const broker = await mutateWorkspaceState(workspacePath, (state) => {
+					const board = structuredClone(state.board);
+					const card = board.columns[0]?.cards[0];
+					if (card) card.providerQueue = { providerId: "cline-pass", requestedAt: 42, until: 99 };
+					return { board, value: null };
+				});
+				const saved = await saveWorkspaceState(workspacePath, {
+					board: first.board,
+					sessions: {},
+					expectedRevision: broker.state.revision,
+				});
+				expect(saved.board.columns[0]?.cards[0]?.providerQueue).toEqual({
+					providerId: "cline-pass",
+					requestedAt: 42,
+					until: 99,
+				});
+			} finally {
+				sandbox.cleanup();
+			}
+		});
+	});
 	it("persists revision numbers and rejects stale writes", async () => {
 		await withTemporaryHome(async () => {
 			const { path: sandboxRoot, cleanup } = createTempDir("kanban-workspace-");

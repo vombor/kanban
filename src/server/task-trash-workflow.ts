@@ -437,6 +437,15 @@ export function createTaskTrashWorkflow(deps: CreateTaskTrashWorkflowDependencie
 				agentId: card.agentId,
 				agentSettings: card.agentSettings,
 			});
+			if (started.ok && started.queued)
+				return {
+					taskId,
+					ok: true,
+					queued: true,
+					warning:
+						started.message ??
+						"Start is queued behind shared provider capacity/quota; the ready dependency claim is retained.",
+				};
 			if (!started.ok || !started.summary) {
 				await releaseLinkedTask(scope, claim);
 				return { taskId, ok: false, error: started.error ?? "Could not start task session." };

@@ -90,6 +90,7 @@ import type { PipelineStateStore } from "../pipeline-state";
 import { type QaQueueWait, readQaGateEntry } from "../qa-gate";
 import type { RestartPassView } from "../recovery-stage";
 import { lostToRestart, type RestartManifest, readRestartManifest } from "../restart-recovery";
+import { readCurrentTriageAck } from "../triage-acknowledgement";
 import type { WatchdogActions } from "./actions";
 import {
 	formatQaPausedItem,
@@ -777,6 +778,13 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 				if (!escalation || !column || column === "trash") {
 					continue;
 				}
+				const ack = readCurrentTriageAck(snapshot.board, pipelineState.cards, taskId, context.now);
+				if (ack) {
+					attention.push(
+						`- **${taskId}** (${column}): **acknowledged hold** (${ack.disposition}): ${ack.reason}${ack.until ? `; retry at ${ack.until}` : ""}${ack.waitForTaskId ? `; waiting for changed evidence on ${ack.waitForTaskId}` : ""}`,
+					);
+					continue;
+				}
 				const verdict = readTriageVerdict(qaLog, taskId) ?? "no triage yet";
 				if (verdict !== "fixed") {
 					const item = `- **${taskId}** (${column}): escalated ${escalation.at} (${escalation.reason}); triage: ${verdict}`;
@@ -922,6 +930,7 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 				(item) =>
 					!item.includes(PID_PRESSURE_ITEM_MARKER) &&
 					!item.includes(QA_PAUSED_ITEM_MARKER) &&
+					!item.includes("**acknowledged hold**") &&
 					!(context.pidLevel !== "none" && item.includes(PIPELINE_IDLE_ITEM_MARKER)) &&
 					!isHandedOver(item, userItemIds, planHeldIds),
 			),

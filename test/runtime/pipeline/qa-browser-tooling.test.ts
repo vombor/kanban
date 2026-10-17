@@ -23,10 +23,10 @@ describe("QA browser tooling fallback", () => {
 		const note = buildQaBrowserToolingNote(input);
 		expect(note).toContain("no npm run screenshot script");
 		expect(note).toContain("--scratch '/tmp/scratch with spaces'");
-		expect(note).toContain("QA_CHROMIUM_LIBS=");
-		expect(note).toContain("LD_LIBRARY_PATH");
-		expect(note).toContain("FONTCONFIG_FILE");
-		expect(note).toContain("cached chromium_headless_shell");
+		expect(note).toContain("kanban qa tools --verify");
+		expect(note).toContain("chromium.connectOverCDP");
+		expect(note).toContain("PNG decoder");
+		expect(note).not.toContain("npm install --no-save");
 		expect(note).toContain("HTTP/code trace alone is insufficient");
 		expect(buildQaBrowserToolingNote({ ...input, scripts: ["browse", "screenshot"] })).toBeNull();
 	});

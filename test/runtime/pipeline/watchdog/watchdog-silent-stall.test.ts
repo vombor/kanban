@@ -54,7 +54,7 @@ describe("watchdog: silent Cline stalls are only reported", () => {
 		const dataDir = join(harness.home, "cline-data");
 		harness.setConfig({
 			watchdog: { mode: "on" },
-			orchestrator: { wake: { mode: "sidebar" } },
+			orchestrator: { wake: { mode: "sidebar", presentation: "full" } },
 			pipeline: { recovery: { mode: recoveryMode } },
 			workspaces: {
 				foo: {
@@ -161,7 +161,7 @@ describe("watchdog: a Cline run that never wrote a session file", () => {
 		const dataDir = join(harness.home, "cline-data");
 		harness.setConfig({
 			watchdog: { mode: "on" },
-			orchestrator: { wake: { mode: "sidebar" } },
+			orchestrator: { wake: { mode: "sidebar", presentation: "full" } },
 			pipeline: { recovery: { mode: recoveryMode } },
 			workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team-cloud" } } },
 			agents: { cline: { dataDir } },
@@ -256,7 +256,7 @@ describe("watchdog: a silent QA card", () => {
 		const dataDir = join(harness.home, "cline-data");
 		harness.setConfig({
 			watchdog: { mode: "on" },
-			orchestrator: { wake: { mode: "sidebar" } },
+			orchestrator: { wake: { mode: "sidebar", presentation: "full" } },
 			pipeline: { recovery: { mode: "on", hungMin: 15 } },
 			workspaces: { foo: { landing: { mode: "qa" }, kit: { name: "team-cloud" } } },
 			agents: { cline: { dataDir } },

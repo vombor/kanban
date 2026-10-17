@@ -25,7 +25,12 @@ const MIN = 60_000;
 const SERVER_STARTED_AT = WATCHDOG_NOW - 30_000;
 const PREVIOUS_SERVER_STARTED_AT = WATCHDOG_NOW - 86_400_000;
 const QA_FOO = { foo: { landing: { mode: "qa" }, kit: { name: "team-cloud" } } };
-const SIDEBAR_CONFIG = { watchdog: { mode: "on" }, orchestrator: { wake: { mode: "sidebar" } }, workspaces: QA_FOO };
+// These cases assert the entire diagnostic payload; concise-by-default presentation is tested separately.
+const SIDEBAR_CONFIG = {
+	watchdog: { mode: "on" },
+	orchestrator: { wake: { mode: "sidebar", presentation: "full" } },
+	workspaces: QA_FOO,
+};
 
 const harnesses: Array<{ cleanup: () => void }> = [];
 afterEach(() => {
@@ -254,7 +259,10 @@ describe("restart wake", () => {
 	});
 
 	it("an unclean stop is worded as one, with the last periodic manifest's time", async () => {
-		const harness = harnessWith({ watchdog: { mode: "on" }, orchestrator: { wake: { mode: "sidebar" } } });
+		const harness = harnessWith({
+			watchdog: { mode: "on" },
+			orchestrator: { wake: { mode: "sidebar", presentation: "full" } },
+		});
 		const path = getRestartManifestPath("bar", harness.home);
 		mkdirSync(dirname(path), { recursive: true });
 		writeFileSync(

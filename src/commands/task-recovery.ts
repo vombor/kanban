@@ -153,6 +153,7 @@ async function startCardSession(
 		...(options.resumeFromTrash ? { resumeFromTrash: true } : {}),
 		...(options.requireNewTurn ? { requireNewTurn: true } : {}),
 	});
+	if (started.ok && started.queued) return { state: "queued" };
 	if (!started.ok || !started.summary) {
 		throw new Error(started.error ?? "Could not start task session.");
 	}
@@ -236,7 +237,9 @@ async function resumeOne(workspace: TaskWorkspace, taskId: string, dryRun: boole
 	if (column === "trash") {
 		return { taskId, ok: false, error: "the card is Done" };
 	}
-	if (BLOCKED_TITLE.test(card.title ?? "")) {
+	// Triage assessments may be titled BLOCKED without ever being escalated by the dev rework loop (#63).
+	// Explicitly continuing that same non-dev assessment must not require a handback that cannot apply to it.
+	if (BLOCKED_TITLE.test(card.title ?? "") && resolveCardRole(card) !== "triage") {
 		return { taskId, ok: false, error: "BLOCKED (escalated): hand it back first" };
 	}
 	const summary = workspace.state.sessions[taskId] ?? null;
@@ -286,6 +289,11 @@ async function resumeOne(workspace: TaskWorkspace, taskId: string, dryRun: boole
 		resumeFromTrash: launch.continueConversation,
 		requireNewTurn: true,
 	});
+	if (started.state === "queued") return { ...result, ok: true, queued: true, sessionState: "queued" };
+	if (resolveCardRole(card) !== "dev") {
+		// This is an explicit non-dev continuation, not permission to clear dev holds/escalations or schedule QA.
+		return { ...result, ok: true, sessionState: started.state };
+	}
 	// A card restart recovery marked as orphaned is no longer one, and a resume by hand ends a recovery escalation.
 	// The session runs by now, so a failure here is a warning, not a failed resume.
 	const flowWarning = await updateTrackedPipelineCardFlow(workspace.workspaceId, taskId, (qaflow) => ({

@@ -765,7 +765,7 @@ describe("QA gate", () => {
 				},
 			},
 		]);
-		expect(harness.stoppedScratch).toEqual([["/tmp/kanban-qa/d1111", "/tmp/kanban-qa/d1111-main"]]);
+		expect(harness.stoppedScratch).toEqual([["/tmp/kanban-qa/foo/qa001", "/tmp/kanban-qa/foo/qa001-main"]]);
 	});
 
 	it("records a PASS with visual QA blocked as STALLED", async () => {

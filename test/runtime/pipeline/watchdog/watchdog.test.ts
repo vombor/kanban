@@ -280,7 +280,7 @@ describe("watchdog on", () => {
 	it("an empty-diff Review whose agent ran wakes its orchestrator with 'Done or restart?' (issue #14)", async () => {
 		const harness = harnessWith({
 			watchdog: { mode: "on" },
-			orchestrator: { wake: { mode: "sidebar" } },
+			orchestrator: { wake: { mode: "sidebar", presentation: "full" } },
 			workspaces: QA_FOO,
 		});
 		const paths = harness.paths("foo");

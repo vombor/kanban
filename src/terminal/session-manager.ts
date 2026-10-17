@@ -1179,6 +1179,20 @@ export class TerminalSessionManager implements TerminalSessionService {
 		return cloneSummary(summary);
 	}
 
+	recordDispatchProvider(
+		taskId: string,
+		providerId: string | null,
+		promptSubmitted = true,
+	): RuntimeTaskSessionSummary | null {
+		const entry = this.entries.get(taskId);
+		if (!entry) return null;
+		if (entry.summary.providerId === providerId && entry.summary.dispatchPromptSubmitted === promptSubmitted)
+			return cloneSummary(entry.summary);
+		const summary = updateSummary(entry, { providerId, dispatchPromptSubmitted: promptSubmitted });
+		this.emitSummary(summary);
+		return cloneSummary(summary);
+	}
+
 	applyTurnCheckpoint(taskId: string, checkpoint: RuntimeTaskTurnCheckpoint): RuntimeTaskSessionSummary | null {
 		const entry = this.entries.get(taskId);
 		if (!entry) {

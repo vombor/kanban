@@ -282,6 +282,27 @@ describe("runoffs feature", () => {
 		expect(qaLog.at(-1)).toContain("- b41c8: won (bench only)");
 	});
 
+	it("keeps a sequential benchmark's completed PASS held after the earlier contender is archived (#59)", async () => {
+		const { path, registry, releases, unholds, qaLog } = setup([{ ...RUNOFF, benchOnly: true }]);
+		registry.syncWorkspace("foo", teamKit());
+		await tick(registry, { trash: [luna], review: [sol] }, { b41c8: heldEntry("b41c8", { spec: 5 }) });
+		expect(releases).toEqual([]);
+		expect(unholds).toEqual([]);
+		expect((await readRunoffs(path)).runoffs[0]).toMatchObject({
+			winner: null,
+			results: [
+				{ id: "0789a", out: "done" },
+				{ id: "b41c8", out: "pass" },
+			],
+		});
+		expect(qaLog.join("\n")).toContain("completed benchmark PASS awaiting user disposition: b41c8");
+		expect(qaLog.join("\n")).toContain("remain held, never landed");
+		expect(qaLog.join("\n")).not.toContain("no single card with a runoff PASS");
+		await tick(registry, { trash: [luna], review: [sol] }, { b41c8: heldEntry("b41c8", { spec: 5 }) });
+		expect(releases).toEqual([]);
+		expect(unholds).toEqual([]);
+	});
+
 	it("a winner whose land conflicts leaves the hold for the rework stage; the decision is not retried", async () => {
 		const { path, registry, releases, qaLog } = setup([RUNOFF], {
 			release: (input) =>
