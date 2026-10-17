@@ -2,6 +2,7 @@ import type { Command } from "commander";
 
 import { readPipelineConfig } from "../config/pipeline-config";
 import { resolveQaChromiumLibs } from "../pipeline/qa-browser-tooling";
+import { inspectQaFontconfig, repairQaFontconfig } from "../pipeline/qa-fontconfig";
 import { runQaShot } from "../pipeline/qa-shot";
 import { getQaToolchainInfo, verifyQaToolchain } from "../pipeline/qa-toolchain";
 
@@ -18,6 +19,30 @@ function collect(value: string, previous: string[]): string[] {
 
 export function registerQaCommand(program: Command): void {
 	const qa = program.command("qa").description("Tools for QA agents (run in the QA scratch copy).");
+	qa.command("fonts")
+		.description(
+			"Inspect retained Fontconfig as the runtime/QA OS user; explicitly repair relocated paths with a backup. Never launches a browser.",
+		)
+		.option("--vendor <dir>", "Explicit retained Chromium libraries directory")
+		.option("--repair", "Back up and regenerate owned paths against the resolved vendor home (user only)")
+		.option("--json")
+		.action(async (options: { vendor?: string; repair?: boolean }) => {
+			try {
+				const { config } = await readPipelineConfig();
+				const vendor =
+					options.vendor || resolveQaChromiumLibs(process.env.QA_CHROMIUM_LIBS || config.pipeline.qa.chromiumLibs);
+				if (!vendor)
+					throw new Error(
+						"No retained Chromium font bundle is installed; native QA uses shared Chrome. Run kanban qa tools --verify --json for glyph readiness.",
+					);
+				const result = options.repair ? await repairQaFontconfig(vendor) : inspectQaFontconfig(vendor);
+				process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+				if (result.issues.length) process.exitCode = 3;
+			} catch (error) {
+				process.stderr.write(`${error instanceof Error ? error.message : "Fontconfig inspection failed"}\n`);
+				process.exitCode = 3;
+			}
+		});
 	qa.command("tools")
 		.description(
 			"Show pinned shared QA modules/CDP endpoint; --verify drives both sizes and decodes PNGs without installing or launching a browser.",

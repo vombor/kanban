@@ -56,6 +56,18 @@ function rawDataToBuffer(data: RawData): Buffer {
 	return Buffer.from(data);
 }
 
+async function waitForIoBytes(socket: QueuedWebSocket, bytes: number): Promise<Buffer> {
+	const chunks: Buffer[] = [];
+	let received = 0;
+	while (received < bytes) {
+		const chunk = await waitForIoMessage(socket);
+		expect(chunk.byteLength).toBeLessThanOrEqual(16 * 1024);
+		chunks.push(chunk);
+		received += chunk.byteLength;
+	}
+	return Buffer.concat(chunks);
+}
+
 class FakeTerminalManager implements TerminalSessionService {
 	private readonly listenersByTaskId = new Map<string, Set<TerminalSessionListener>>();
 	restoreGeneration = 1;
@@ -554,8 +566,8 @@ describe("createTerminalWebSocketBridge", () => {
 		const output = "x".repeat(120_000);
 		terminalManager.emitOutput(TASK_ID, output);
 
-		const outputA = await waitForIoMessage(ioSocketA);
-		const outputB = await waitForIoMessage(ioSocketB);
+		const outputA = await waitForIoBytes(ioSocketA, Buffer.byteLength(output));
+		const outputB = await waitForIoBytes(ioSocketB, Buffer.byteLength(output));
 		expect(outputA.byteLength).toBe(Buffer.byteLength(output));
 		expect(outputB.byteLength).toBe(Buffer.byteLength(output));
 		expect(terminalManager.pauseOutput).toHaveBeenCalledTimes(1);
@@ -1084,8 +1096,8 @@ describe("createTerminalWebSocketBridge", () => {
 
 			const output = "x".repeat(120_000);
 			isolatedManager.emitOutput(TASK_ID, output);
-			const outputA = await waitForIoMessage(ioSocketA);
-			const outputB = await waitForIoMessage(ioSocketB);
+			const outputA = await waitForIoBytes(ioSocketA, Buffer.byteLength(output));
+			const outputB = await waitForIoBytes(ioSocketB, Buffer.byteLength(output));
 			expect(outputA.byteLength).toBe(Buffer.byteLength(output));
 			expect(outputB.byteLength).toBe(Buffer.byteLength(output));
 			await waitForAssertion(() => {

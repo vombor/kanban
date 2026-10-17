@@ -31,6 +31,7 @@ import { createTaskTokenUsageLoader, type LoadTaskTokenUsage } from "../server/t
 import { appendTaskHistory, readTaskHistory, startTaskHistoryCallerLookup } from "../state/task-history-log";
 import { saveWorkspaceStateReportingAddedCards, WorkspaceStateConflictError } from "../state/workspace-state";
 import type { TerminalSessionManager } from "../terminal/session-manager";
+import { readTerminalOutputPage } from "../terminal/terminal-output-archive";
 import {
 	createEmptyWorkspaceChangesResponse,
 	getWorkspaceChanges,
@@ -199,6 +200,7 @@ export function createWorkspaceApi(deps: CreateWorkspaceApiDependencies): Runtim
 	const recordTaskHistory = deps.recordTaskHistory ?? (async (entry) => await appendTaskHistory(entry));
 	const loadTaskTokenUsage = deps.loadTaskTokenUsage ?? createTaskTokenUsageLoader();
 	return {
+		loadTerminalHistory: async (scope, input) => await readTerminalOutputPage(scope.workspaceId, input),
 		loadGitSummary: async (workspaceScope, input) => {
 			try {
 				const taskScope = normalizeOptionalTaskWorkspaceScopeInput(input);

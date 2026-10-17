@@ -60,6 +60,7 @@ export class TerminalReconnectController {
 	private status: TerminalConnectionStatus = { state: "connecting", lastClose: null };
 	private lastClose: TerminalCloseInfo | null = null;
 	private disposed = false;
+	private suspended = false;
 
 	constructor(private readonly options: TerminalReconnectControllerOptions) {
 		this.maxAttempts = options.maxAttempts ?? TERMINAL_RECONNECT_MAX_ATTEMPTS;
@@ -90,12 +91,25 @@ export class TerminalReconnectController {
 
 	// The retry button and a remount: try now, even if the browser reports offline.
 	retryNow(): void {
-		if (this.disposed || this.status.state === "connected") {
+		if (this.disposed || this.suspended || this.status.state === "connected") {
 			return;
 		}
 		this.clearRetryTimer();
 		this.attempt = 0;
 		this.startAttempt();
+	}
+
+	/** An unmounted viewer must not reconnect or keep parsing output; the PTY is not stopped. */
+	suspend(): void {
+		this.suspended = true;
+		this.clearRetryTimer();
+		this.setStatus({ state: "disconnected", lastClose: this.lastClose });
+	}
+
+	resume(): void {
+		if (!this.suspended) return;
+		this.suspended = false;
+		this.retryNow();
 	}
 
 	isDisconnected(): boolean {
@@ -122,7 +136,7 @@ export class TerminalReconnectController {
 	// Skips the remaining backoff (or the wait) when the reason for waiting is
 	// gone. An attempt that is already in flight is left alone.
 	private reconnectIfWaiting(): void {
-		if (this.disposed) {
+		if (this.disposed || this.suspended) {
 			return;
 		}
 		const status = this.status;

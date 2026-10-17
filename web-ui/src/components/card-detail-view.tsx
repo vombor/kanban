@@ -621,6 +621,7 @@ export function CardDetailView({
 			cursorColor={terminalThemeColors.textPrimary}
 			taskColumnId={selection.column.id}
 			voiceChat
+			isVisible={isMobile ? mobileTab === "chat" : !isDiffExpanded}
 		/>
 	);
 

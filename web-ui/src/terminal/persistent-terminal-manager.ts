@@ -16,7 +16,7 @@ import type {
 	RuntimeTerminalWsServerMessage,
 } from "@/runtime/types";
 import { type AppliedRestore, shouldSkipWarmRestore } from "@/terminal/restore-generation";
-import { splitRestoreSnapshot } from "@/terminal/restore-snapshot-chunks";
+import { iterateRestoreSnapshot, RESTORE_WRITE_CHUNK_BYTES } from "@/terminal/restore-snapshot-chunks";
 import { clearTerminalGeometry, reportTerminalGeometry } from "@/terminal/terminal-geometry-registry";
 import { attachTerminalImeInput, type TerminalImeInput } from "@/terminal/terminal-ime-input";
 import { createKanbanTerminalOptions } from "@/terminal/terminal-options";
@@ -51,6 +51,8 @@ const SHIFT_ENTER_SEQUENCE = "\n";
 const RESIZE_DEBOUNCE_MS = 50;
 const INTERRUPT_IDLE_SETTLE_MS = 250;
 const PARKING_ROOT_ID = "kb-persistent-terminal-parking-root";
+const MAX_QUEUED_WRITE_BYTES = 256 * 1024;
+const MAX_PARKED_TERMINALS = 5;
 
 interface PersistentTerminalAppearance {
 	cursorColor: string;
@@ -206,6 +208,11 @@ class PersistentTerminal {
 	private restoreCompleted = false;
 	private outputTextDecoder = new TextDecoder();
 	private terminalWriteQueue: Promise<void> = Promise.resolve();
+	private queuedWriteBytes = 0;
+	private writeEpoch = 0;
+	private restoreEpoch = 0;
+	private lastWriteYieldAt = Date.now();
+	private viewerVisible = true;
 	private lastRestore: AppliedRestore | null = null;
 	// Readiness (terminal-readiness.ts): the stream generation whose restore
 	// completed, whether anything visible is on screen, and the loading timeout.
@@ -533,30 +540,40 @@ class PersistentTerminal {
 		const ackBytes = options.ackBytes ?? 0;
 		const notifyText = options.notifyText ?? null;
 		const ackGeneration = this.connectionGeneration;
+		const writeEpoch = this.writeEpoch;
+		const byteLength = typeof data === "string" ? new TextEncoder().encode(data).byteLength : data.byteLength;
+		if (this.queuedWriteBytes + byteLength > MAX_QUEUED_WRITE_BYTES) {
+			// Only this viewer drops/re-restores. Raw output stays in the server archive and agent context is unchanged.
+			this.ioSocket?.close();
+			return Promise.resolve();
+		}
+		this.queuedWriteBytes += byteLength;
 		this.terminalWriteQueue = this.terminalWriteQueue
 			.catch(() => undefined)
-			.then(
-				async () =>
-					await new Promise<void>((resolve) => {
-						if (this.disposed) {
-							resolve();
-							return;
-						}
-						this.terminal.write(data, () => {
-							if (notifyText) {
-								this.notifyOutputText(notifyText);
-							}
-							if (ackBytes > 0 && ackGeneration === this.connectionGeneration) {
-								this.sendControlMessage({
-									type: "output_ack",
-									bytes: ackBytes,
-								});
-							}
-							resolve();
-						});
-					}),
-			);
+			.then(async () => {
+				const chunks = typeof data === "string" ? iterateRestoreSnapshot(data) : this.binaryWriteChunks(data);
+				for (const chunk of chunks) {
+					if (this.disposed || writeEpoch !== this.writeEpoch || ackGeneration !== this.connectionGeneration)
+						return;
+					await new Promise<void>((resolve) => this.terminal.write(chunk, resolve));
+					if (byteLength >= RESTORE_WRITE_CHUNK_BYTES || Date.now() - this.lastWriteYieldAt >= 8) {
+						await new Promise<void>((resolve) => setTimeout(resolve, 0));
+						this.lastWriteYieldAt = Date.now();
+					}
+				}
+				if (writeEpoch !== this.writeEpoch || ackGeneration !== this.connectionGeneration) return;
+				if (notifyText) this.notifyOutputText(notifyText);
+				if (ackBytes > 0) this.sendControlMessage({ type: "output_ack", bytes: ackBytes });
+			});
+		this.terminalWriteQueue = this.terminalWriteQueue.finally(() => {
+			if (writeEpoch === this.writeEpoch) this.queuedWriteBytes -= byteLength;
+		});
 		return this.terminalWriteQueue;
+	}
+
+	private *binaryWriteChunks(data: Uint8Array): Generator<Uint8Array> {
+		for (let start = 0; start < data.byteLength; start += RESTORE_WRITE_CHUNK_BYTES)
+			yield data.subarray(start, start + RESTORE_WRITE_CHUNK_BYTES);
 	}
 
 	private async applyRestore(
@@ -565,20 +582,24 @@ class PersistentTerminal {
 		rows: number | null | undefined,
 		restoreGeneration?: number,
 	): Promise<void> {
+		const restoreEpoch = this.restoreEpoch;
 		if (shouldSkipWarmRestore(this.lastRestore, { restoreGeneration, cols, rows })) {
 			return;
 		}
 		await this.terminalWriteQueue.catch(() => undefined);
+		if (this.disposed || restoreEpoch !== this.restoreEpoch) return;
 		this.terminal.reset();
 		if (cols && rows && (this.terminal.cols !== cols || this.terminal.rows !== rows)) {
 			this.terminal.resize(cols, rows);
 		}
 		this.hasScreenOutput = hasVisibleTerminalText(snapshot);
 		if (snapshot) {
-			for (const chunk of splitRestoreSnapshot(snapshot)) {
+			for (const chunk of iterateRestoreSnapshot(snapshot)) {
+				if (restoreEpoch !== this.restoreEpoch) return;
 				await this.enqueueTerminalWrite(chunk);
 			}
 		}
+		if (restoreEpoch !== this.restoreEpoch) return;
 		this.lastRestore =
 			restoreGeneration !== undefined && cols && rows ? { generation: restoreGeneration, cols, rows } : null;
 	}
@@ -613,6 +634,10 @@ class PersistentTerminal {
 			}
 			const writeData = getTerminalSocketWriteData(event.data);
 			if (!writeData) {
+				return;
+			}
+			if (this.queuedWriteBytes + getTerminalSocketChunkByteLength(event.data) > MAX_QUEUED_WRITE_BYTES) {
+				ioSocket.close();
 				return;
 			}
 			const decoded = decodeTerminalSocketChunk(this.outputTextDecoder, event.data);
@@ -662,10 +687,21 @@ class PersistentTerminal {
 			}
 
 			if (payload.type === "restore") {
+				const restoreEpoch = ++this.restoreEpoch;
+				if (
+					!shouldSkipWarmRestore(this.lastRestore, {
+						restoreGeneration: payload.restoreGeneration,
+						cols: payload.cols,
+						rows: payload.rows,
+					})
+				) {
+					this.writeEpoch += 1;
+					this.queuedWriteBytes = 0;
+				}
 				this.restoreCompleted = false;
 				void this.applyRestore(payload.snapshot, payload.cols, payload.rows, payload.restoreGeneration)
 					.then(() => {
-						if (this.disposed || this.controlSocket !== controlSocket) {
+						if (this.disposed || this.controlSocket !== controlSocket || restoreEpoch !== this.restoreEpoch) {
 							return;
 						}
 						this.restoreCompleted = true;
@@ -827,13 +863,25 @@ class PersistentTerminal {
 		if (this.disposed) {
 			return;
 		}
-		this.ensureConnected();
 		this.updateAppearance(appearance);
 		this.expectsSessionStart = options.expectsSessionStart ?? false;
 		this.updateReadiness();
 		if (this.visibleContainer !== container) {
 			this.visibleContainer = container;
 			container.appendChild(this.hostElement);
+		}
+		this.viewerVisible = options.isVisible !== false;
+		if (this.viewerVisible) {
+			this.reconnect.resume();
+			this.ensureConnected();
+		} else {
+			this.reconnect.suspend();
+			this.closeSockets();
+			this.writeEpoch += 1;
+			this.restoreEpoch += 1;
+			this.queuedWriteBytes = 0;
+			this.lastRestore = null;
+			trimParkedTerminals();
 		}
 		if (this.resizeObserver) {
 			this.resizeObserver.disconnect();
@@ -874,8 +922,20 @@ class PersistentTerminal {
 			return;
 		}
 		this.visibleContainer = null;
+		this.viewerVisible = false;
+		this.writeEpoch += 1;
+		this.restoreEpoch += 1;
+		this.queuedWriteBytes = 0;
+		this.lastRestore = null;
+		this.reconnect.suspend();
+		this.closeSockets();
 		clearTerminalGeometry(this.taskId);
 		this.parkingRoot.appendChild(this.hostElement);
+		trimParkedTerminals();
+	}
+
+	isViewerMounted(): boolean {
+		return this.visibleContainer !== null && this.viewerVisible;
 	}
 
 	focus(): void {
@@ -1045,6 +1105,14 @@ class PersistentTerminal {
 
 const terminals = new Map<string, PersistentTerminal>();
 
+function trimParkedTerminals(): void {
+	const parked = [...terminals.entries()].filter(([, terminal]) => !terminal.isViewerMounted());
+	for (const [key, terminal] of parked.slice(0, Math.max(0, parked.length - MAX_PARKED_TERMINALS))) {
+		terminals.delete(key);
+		terminal.dispose();
+	}
+}
+
 export function ensurePersistentTerminal(input: EnsurePersistentTerminalInput): PersistentTerminal {
 	const key = buildKey(input.workspaceId, input.taskId);
 	let terminal = terminals.get(key);
@@ -1062,6 +1130,8 @@ export function ensurePersistentTerminal(input: EnsurePersistentTerminalInput): 
 		terminalBackgroundColor: input.terminalBackgroundColor,
 		themeColors: input.themeColors,
 	});
+	terminals.delete(key);
+	terminals.set(key, terminal);
 	return terminal;
 }
 

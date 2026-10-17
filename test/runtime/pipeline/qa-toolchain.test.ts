@@ -33,7 +33,21 @@ describe("packaged shared QA tooling (#57)", () => {
 						setContent: vi.fn(async () => undefined),
 						fill: vi.fn(async () => undefined),
 						click: vi.fn(async () => undefined),
-						locator: () => ({ textContent: async () => "QA readiness" }),
+						locator: () => ({
+							textContent: async () => "QA readiness",
+							inputValue: async () => "first line\nsecond line",
+							boundingBox: async () => ({ x: 0, y: 0, width: 200, height: 40 }),
+							screenshot: async () => {
+								const png = new PNG({ width: 200, height: 40 });
+								png.data.fill(255);
+								for (let index = 40; index < 200; index += 1) {
+									png.data[index * 4] = 0;
+									png.data[index * 4 + 1] = 0;
+									png.data[index * 4 + 2] = 0;
+								}
+								return PNG.sync.write(png);
+							},
+						}),
 						screenshot: async () => {
 							const png = new PNG(viewport);
 							for (let index = 0; index < png.data.length; index += 4) {
@@ -51,8 +65,8 @@ describe("packaged shared QA tooling (#57)", () => {
 		expect(await verifyQaToolchain()).toMatchObject({
 			ready: true,
 			checks: [
-				{ width: 375, height: 667, decoded: true },
-				{ width: 1280, height: 720, decoded: true },
+				{ width: 375, height: 667, decoded: true, glyphs: true, multiline: true },
+				{ width: 1280, height: 720, decoded: true, glyphs: true, multiline: true },
 			],
 		});
 		expect(sizes).toHaveLength(2);

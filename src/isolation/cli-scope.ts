@@ -149,7 +149,7 @@ function orchestratorOrUserRefusal(commandPath: string): string {
  * the strict caller lookup: a session without its credential is traced to its process tree, an unidentified caller is
  * refused), outside a session too, since a card that drops its credential looks like the user from here.
  */
-export const USER_INSTANCE_COMMANDS = ["setup", "setup-provider", "restart update"] as const;
+export const USER_INSTANCE_COMMANDS = ["setup", "setup-provider", "restart update", "qa fonts"] as const;
 
 export type UserInstanceCallerDecision = { allowed: true } | { allowed: false; message: string };
 
@@ -160,12 +160,17 @@ function userInstanceCommandRefusal(commandPath: string, who: string): string {
 					"restarts the pod's container onto a newer image, which stops every project's agents",
 					"that an update is due",
 				]
-			: commandPath === "setup"
-				? ["changes this instance's user and agent configuration", "which setup is needed"]
-				: [
-						"writes model providers' settings into Cline's files, which every project's Cline cards use",
-						"which provider needs setting up",
-					];
+			: commandPath === "qa fonts"
+				? [
+						"inspects or repairs this instance's retained browser font configuration",
+						"which retained font bundle needs repair",
+					]
+				: commandPath === "setup"
+					? ["changes this instance's user and agent configuration", "which setup is needed"]
+					: [
+							"writes model providers' settings into Cline's files, which every project's Cline cards use",
+							"which provider needs setting up",
+						];
 	return `\`kanban ${commandPath}\` ${why}, so only the user runs it; ${who} can't. Tell the user ${ask}.`;
 }
 

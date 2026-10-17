@@ -1419,8 +1419,8 @@ export type RuntimeShellSessionStartResponse = z.infer<typeof runtimeShellSessio
 
 export const runtimeTerminalWsResizeMessageSchema = z.object({
 	type: z.literal("resize"),
-	cols: z.number().int().positive(),
-	rows: z.number().int().positive(),
+	cols: z.number().int().positive().max(500),
+	rows: z.number().int().positive().max(200),
 	pixelWidth: z.number().int().positive().optional(),
 	pixelHeight: z.number().int().positive().optional(),
 });

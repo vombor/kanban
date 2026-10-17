@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-
+import { TERMINAL_RESTORE_MAX_BYTES } from "../../../src/core/terminal-history";
 import { TerminalStateMirror } from "../../../src/terminal/terminal-state-mirror";
 
 const mirrors: TerminalStateMirror[] = [];
@@ -17,6 +17,26 @@ afterEach(() => {
 });
 
 describe("TerminalStateMirror", () => {
+	it("serves only a byte-bounded recent tail for large resumed/repainted output", async () => {
+		const mirror = createMirror(120, 40);
+		mirror.applyOutput(
+			Buffer.from(Array.from({ length: 20000 }, (_, i) => `row-${i} ${"wide🙂".repeat(30)}\r\n`).join("")),
+		);
+		const snapshot = await mirror.getSnapshot();
+		expect(Buffer.byteLength(snapshot.snapshot)).toBeLessThanOrEqual(TERMINAL_RESTORE_MAX_BYTES);
+		expect(snapshot.snapshot).toContain("row-19999");
+		expect(snapshot.snapshot).not.toContain("row-0 ");
+	});
+	it("bounds pathological cell styling while retaining alternate screen and input modes", async () => {
+		const mirror = createMirror(200, 80);
+		let output = "\u001b[?1049h\u001b[?2004h";
+		for (let i = 0; i < 16000; i += 1) output += `\u001b[38;2;${i % 255};${(i + 1) % 255};${(i + 2) % 255}mX`;
+		mirror.applyOutput(Buffer.from(output));
+		const snapshot = await mirror.getSnapshot();
+		expect(Buffer.byteLength(snapshot.snapshot)).toBeLessThanOrEqual(TERMINAL_RESTORE_MAX_BYTES);
+		expect(snapshot.snapshot).toContain("\u001b[?1049h");
+		expect(snapshot.snapshot).toContain("\u001b[?2004h");
+	});
 	it("serializes inline terminal content and dimensions", async () => {
 		const mirror = createMirror(100, 30);
 

@@ -21,6 +21,7 @@ import {
 import { ensureClaudeWorkspaceTrusted } from "../terminal/claude-workspace-trust";
 import { ensureCodexWorkspaceTrusted } from "../terminal/codex-workspace-trust";
 import { TerminalSessionManager } from "../terminal/session-manager";
+import { appendTerminalOutput } from "../terminal/terminal-output-archive";
 import type { BrokenGitRepository } from "../workspace/repo-health";
 import { findOrchestratorWait } from "./orchestrator-wait";
 
@@ -289,7 +290,9 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 			return loaded;
 		}
 		const loading = (async () => {
-			const manager = new TerminalSessionManager();
+			const manager = new TerminalSessionManager({
+				onOutput: (taskId, chunk) => appendTerminalOutput(workspaceId, taskId, chunk, undefined, deps.logError),
+			});
 			try {
 				const existingWorkspace = await loadWorkspaceState(repoPath);
 				manager.hydrateFromRecord(existingWorkspace.sessions);

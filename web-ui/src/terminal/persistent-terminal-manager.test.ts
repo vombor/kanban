@@ -5,7 +5,11 @@ import {
 } from "@runtime-terminal-ws-close";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeTaskSessionSummary } from "@/runtime/types";
-import { disposePersistentTerminal, ensurePersistentTerminal } from "@/terminal/persistent-terminal-manager";
+import {
+	disposeAllPersistentTerminalsForWorkspace,
+	disposePersistentTerminal,
+	ensurePersistentTerminal,
+} from "@/terminal/persistent-terminal-manager";
 import { TERMINAL_LOADING_TIMEOUT_MS, type TerminalReadiness } from "@/terminal/terminal-readiness";
 import {
 	TERMINAL_RECONNECT_MAX_ATTEMPTS,
@@ -21,6 +25,9 @@ const fakeTerminals = vi.hoisted(() => {
 		// What the screen shows: everything written since the last reset.
 		screen = "";
 		resetCount = 0;
+		disposed = false;
+		writeSizes: number[] = [];
+		private decoder = new TextDecoder();
 		// When set, write callbacks wait for releaseWrites(), like a busy renderer.
 		deferWrites = false;
 		unicode = { activeVersion: "" };
@@ -92,7 +99,8 @@ const fakeTerminals = vi.hoisted(() => {
 			return { dispose: () => {} };
 		}
 		write(data: string | Uint8Array, callback?: () => void): void {
-			this.screen += typeof data === "string" ? data : new TextDecoder().decode(data);
+			this.writeSizes.push(typeof data === "string" ? new TextEncoder().encode(data).byteLength : data.byteLength);
+			this.screen += typeof data === "string" ? data : this.decoder.decode(data, { stream: true });
 			if (this.deferWrites) {
 				this.deferredCallbacks.push(() => callback?.());
 				return;
@@ -135,7 +143,9 @@ const fakeTerminals = vi.hoisted(() => {
 		}
 		focus(): void {}
 		clear(): void {}
-		dispose(): void {}
+		dispose(): void {
+			this.disposed = true;
+		}
 	}
 	return { FakeTerminal };
 });
@@ -233,6 +243,9 @@ async function flushMicrotasks(): Promise<void> {
 	for (let index = 0; index < 30; index += 1) {
 		await Promise.resolve();
 	}
+	// Replay now deliberately yields to the event loop, not just a chain of microtasks.
+	await vi.advanceTimersByTimeAsync(0);
+	for (let index = 0; index < 30; index += 1) await Promise.resolve();
 }
 
 function socketsOf(kind: "stream" | "control"): FakeWebSocket[] {
@@ -567,6 +580,49 @@ describe("persistent terminal reconnect", () => {
 		// The new server viewer never sent the old 6 bytes; only its own are acked.
 		expect(acks).toEqual([{ type: "output_ack", bytes: 7 }]);
 	});
+
+	it("yields and limits both restore and live-burst parser writes without dropping UTF-8", async () => {
+		createTerminal();
+		const snapshot = `${"r".repeat(64 * 1024)}🙂LATEST`;
+		await completeConnection({ snapshot });
+		await vi.advanceTimersByTimeAsync(100);
+		const terminal = latestTerminal();
+		expect(terminal.screen).toBe(snapshot);
+		latestSocket("stream").serverSend(encode(`${"b".repeat(40000)}🙂LIVE`));
+		await vi.advanceTimersByTimeAsync(100);
+		await flushMicrotasks();
+		expect(terminal.screen).toBe(`${snapshot + "b".repeat(40000)}🙂LIVE`);
+		expect(terminal.writeSizes.every((bytes) => bytes <= 16 * 1024)).toBe(true);
+	});
+
+	it("disconnects only an over-budget viewer instead of queuing an unbounded burst", async () => {
+		createTerminal();
+		await completeConnection({ snapshot: "ready" });
+		const stream = latestSocket("stream");
+		stream.serverSend(encode("x".repeat(300 * 1024)));
+		expect(stream.readyState).toBe(FakeWebSocket.CLOSED);
+		expect(latestTerminal().screen).toBe("ready");
+	});
+
+	it("parks at most five idle terminals and detaches every closed viewer without stopping its agent", () => {
+		for (let index = 0; index < 7; index += 1) {
+			const terminal = ensurePersistentTerminal({
+				taskId: `parked-${index}`,
+				workspaceId,
+				cursorColor: "#fff",
+				terminalBackgroundColor: "#000",
+			});
+			terminal.unmount(null);
+		}
+		expect(fakeTerminals.FakeTerminal.instances.filter((terminal) => !terminal.disposed)).toHaveLength(5);
+		expect(FakeWebSocket.instances.every((socket) => socket.readyState === FakeWebSocket.CLOSED)).toBe(true);
+		expect(
+			FakeWebSocket.instances
+				.flatMap((socket) => socket.controlMessages())
+				.some((message) => message.type === "stop"),
+		).toBe(false);
+		disposeAllPersistentTerminalsForWorkspace(workspaceId);
+	});
 });
 
 function createSessionSummary(
@@ -615,7 +671,7 @@ describe("persistent terminal readiness", () => {
 			document.createElement("div"),
 			{ cursorColor: "#fff", terminalBackgroundColor: "#000" },
 			{
-				isVisible: false,
+				isVisible: true,
 				expectsSessionStart,
 			},
 		);
@@ -650,6 +706,7 @@ describe("persistent terminal readiness", () => {
 				disconnect(): void {}
 			},
 		);
+		vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 0);
 		Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibilityState });
 		Object.defineProperty(navigator, "onLine", { configurable: true, get: () => online });
 		vi.spyOn(Math, "random").mockReturnValue(0);

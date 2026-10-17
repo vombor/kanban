@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { type Browser, chromium } from "playwright-core";
 import { PNG } from "pngjs";
 import { z } from "zod";
+import { verifyRenderedGlyphs } from "./qa-glyph-readiness";
 
 export function getQaToolchainInfo() {
 	const require = createRequire(import.meta.url);
@@ -40,7 +41,14 @@ export async function connectQaBrowser(): Promise<Browser> {
 /** Readiness means actual normal-input journeys and decoded raster evidence in isolated owned contexts. */
 export async function verifyQaToolchain() {
 	const browser = await connectQaBrowser();
-	const checks: Array<{ width: number; height: number; journey: boolean; decoded: boolean }> = [];
+	const checks: Array<{
+		width: number;
+		height: number;
+		journey: boolean;
+		decoded: boolean;
+		glyphs: boolean;
+		multiline: boolean;
+	}> = [];
 	try {
 		for (const viewport of [
 			{ width: 375, height: 667 },
@@ -50,12 +58,16 @@ export async function verifyQaToolchain() {
 			try {
 				const page = await context.newPage();
 				await page.setContent(
-					'<!doctype html><style>body{background:#267a45}</style><input id="value"><button onclick="document.querySelector(\'#result\').textContent=document.querySelector(\'#value\').value">Save</button><p id="result"></p>',
+					'<!doctype html><style>body{background:#267a45}#qa-glyph-proof{display:inline-block;padding:0;border:0;color:#000;background:#fff;font:32px sans-serif}</style><div id="qa-glyph-proof">AgMW 0123456789</div><br><input id="value"><textarea id="multiline"></textarea><button onclick="document.querySelector(\'#result\').textContent=document.querySelector(\'#value\').value">Save</button><p id="result"></p>',
 				);
 				await page.fill("#value", "QA readiness");
 				await page.click("button");
 				if ((await page.locator("#result").textContent()) !== "QA readiness")
 					throw new Error("QA toolchain input journey failed");
+				await page.fill("#multiline", "first line\nsecond line");
+				if ((await page.locator("#multiline").inputValue()) !== "first line\nsecond line")
+					throw new Error("Shared Chrome multiline readiness failed (tooling, not application quality)");
+				await verifyRenderedGlyphs(page);
 				const png = PNG.sync.read(await page.screenshot());
 				if (
 					png.width !== viewport.width ||
@@ -71,7 +83,7 @@ export async function verifyQaToolchain() {
 					png.data[offset + 3] !== 255
 				)
 					throw new Error("QA toolchain decoded pixels do not match the rendered readiness fixture");
-				checks.push({ ...viewport, journey: true, decoded: true });
+				checks.push({ ...viewport, journey: true, decoded: true, glyphs: true, multiline: true });
 			} finally {
 				await context.close();
 			}

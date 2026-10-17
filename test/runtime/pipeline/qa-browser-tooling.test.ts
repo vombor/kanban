@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -12,6 +12,25 @@ import { createLandRepo } from "../../utilities/land-repo";
 describe("QA browser tooling fallback", () => {
 	let repo: ReturnType<typeof createLandRepo> | undefined;
 	afterEach(() => repo?.cleanup());
+	it("doctor reports relocated font paths as tooling without offering an automatic shared-file fix", async () => {
+		repo = createLandRepo();
+		const vendor = join(repo.root, "vendor/chromium-libs");
+		mkdirSync(join(vendor, "root/usr/share/fonts"), { recursive: true });
+		writeFileSync(join(vendor, "root/usr/share/fonts/fixture.ttf"), "readable font path");
+		writeFileSync(
+			join(vendor, "fonts.conf"),
+			"<fontconfig><dir>/inaccessible/old/vendor/chromium-libs/root/usr/share/fonts</dir><cachedir>/inaccessible/old/vendor/chromium-libs/fontcache</cachedir></fontconfig>",
+		);
+		const findings = await checkQaBrowserTooling({
+			config: parsePipelineConfig({ pipeline: { qa: { chromiumLibs: vendor } } }).config,
+			catalog: await loadKitCatalog(join(repo.root, "kits")),
+			entries: [],
+		});
+		expect(findings).toMatchObject([
+			{ level: "warn", area: "home", hint: expect.stringContaining("tooling, never application FAIL") },
+		]);
+		expect(findings[0]?.fix).toBeUndefined();
+	});
 
 	it("adds scratch-only browser guidance when a project script is missing, and leaves complete tooling alone", () => {
 		const input = {

@@ -289,6 +289,7 @@ function hasCodexStartupUiRendered(text: string): boolean {
 }
 
 export class TerminalSessionManager implements TerminalSessionService {
+	constructor(private readonly options: { onOutput?: (taskId: string, chunk: Buffer) => void } = {}) {}
 	private readonly entries = new Map<string, SessionEntry>();
 	private readonly summaryListeners = new Set<(summary: RuntimeTaskSessionSummary) => void>();
 	private readonly viewerSubmitListeners = new Set<(taskId: string) => void>();
@@ -541,8 +542,14 @@ export class TerminalSessionManager implements TerminalSessionService {
 		entry.terminalStateMirror?.dispose();
 		entry.terminalStateMirror = null;
 
-		const cols = Number.isFinite(request.cols) && (request.cols ?? 0) > 0 ? Math.floor(request.cols ?? 0) : 120;
-		const rows = Number.isFinite(request.rows) && (request.rows ?? 0) > 0 ? Math.floor(request.rows ?? 0) : 40;
+		const cols = Math.min(
+			500,
+			Number.isFinite(request.cols) && (request.cols ?? 0) > 0 ? Math.floor(request.cols ?? 0) : 120,
+		);
+		const rows = Math.min(
+			200,
+			Number.isFinite(request.rows) && (request.rows ?? 0) > 0 ? Math.floor(request.rows ?? 0) : 40,
+		);
 		const terminalStateMirror = new TerminalStateMirror(cols, rows, {
 			onInputResponse: (data) => {
 				if (!entry.active || this.hasLiveOutputListener(entry)) {
@@ -600,6 +607,7 @@ export class TerminalSessionManager implements TerminalSessionService {
 						return;
 					}
 					entry.terminalStateMirror?.applyOutput(filteredChunk);
+					this.options.onOutput?.(request.taskId, filteredChunk);
 
 					const shouldInspect =
 						entry.active.detectOutputTransition !== null &&
@@ -823,8 +831,14 @@ export class TerminalSessionManager implements TerminalSessionService {
 		entry.terminalStateMirror?.dispose();
 		entry.terminalStateMirror = null;
 
-		const cols = Number.isFinite(request.cols) && (request.cols ?? 0) > 0 ? Math.floor(request.cols ?? 0) : 120;
-		const rows = Number.isFinite(request.rows) && (request.rows ?? 0) > 0 ? Math.floor(request.rows ?? 0) : 40;
+		const cols = Math.min(
+			500,
+			Number.isFinite(request.cols) && (request.cols ?? 0) > 0 ? Math.floor(request.cols ?? 0) : 120,
+		);
+		const rows = Math.min(
+			200,
+			Number.isFinite(request.rows) && (request.rows ?? 0) > 0 ? Math.floor(request.rows ?? 0) : 40,
+		);
 		const terminalStateMirror = new TerminalStateMirror(cols, rows, {
 			onInputResponse: (data) => {
 				if (!entry.active || this.hasLiveOutputListener(entry)) {
@@ -857,6 +871,7 @@ export class TerminalSessionManager implements TerminalSessionService {
 						return;
 					}
 					entry.terminalStateMirror?.applyOutput(filteredChunk);
+					this.options.onOutput?.(request.taskId, filteredChunk);
 
 					if (entry.active.workspaceTrustBuffer !== null) {
 						entry.active.workspaceTrustBuffer += filteredChunk.toString("utf8");
@@ -1042,8 +1057,8 @@ export class TerminalSessionManager implements TerminalSessionService {
 		if (!entry?.active) {
 			return false;
 		}
-		const safeCols = Math.max(1, Math.floor(cols));
-		const safeRows = Math.max(1, Math.floor(rows));
+		const safeCols = Math.min(500, Math.max(1, Math.floor(cols)));
+		const safeRows = Math.min(200, Math.max(1, Math.floor(rows)));
 		const safePixelWidth = Number.isFinite(pixelWidth ?? Number.NaN) ? Math.floor(pixelWidth as number) : undefined;
 		const safePixelHeight = Number.isFinite(pixelHeight ?? Number.NaN)
 			? Math.floor(pixelHeight as number)

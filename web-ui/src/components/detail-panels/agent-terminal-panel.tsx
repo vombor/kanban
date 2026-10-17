@@ -6,6 +6,7 @@ import { useMemo } from "react";
 
 import { TerminalConnectionStatusIndicator } from "@/components/detail-panels/terminal-connection-status";
 import { TerminalLoadingOverlay } from "@/components/detail-panels/terminal-loading-overlay";
+import { TerminalOutputHistory } from "@/components/detail-panels/terminal-output-history";
 import { TerminalTouchBar, VoiceTerminalTouchBar } from "@/components/detail-panels/terminal-touch-bar";
 import { VoiceChatBar } from "@/components/detail-panels/voice-chat-bar";
 import { Button } from "@/components/ui/button";
@@ -345,6 +346,9 @@ function AgentTerminalPanelLayout({
 						/>
 					</div>
 				</div>
+			) : null}
+			{workspaceId ? (
+				<TerminalOutputHistory key={`${workspaceId}:${taskId}`} workspaceId={workspaceId} taskId={taskId} />
 			) : null}
 			<div
 				className="relative"

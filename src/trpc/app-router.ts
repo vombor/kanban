@@ -150,6 +150,12 @@ import {
 } from "../core/api-contract";
 import { isHomeAgentSessionId, isHomeAgentSessionIdForWorkspace } from "../core/home-agent-session";
 import { type ProviderDispatchStatus, providerDispatchStatusSchema } from "../core/provider-dispatch-contract";
+import {
+	type TerminalHistoryPage,
+	type TerminalHistoryRequest,
+	terminalHistoryPageSchema,
+	terminalHistoryRequestSchema,
+} from "../core/terminal-history";
 import type { CallerRequest } from "../isolation/isolation-service";
 import type { RuntimeCaller } from "../isolation/session-identity";
 import {
@@ -366,6 +372,10 @@ export interface RuntimeTrpcContext {
 		runProcessSweep: () => Promise<RuntimeProcessSweepResponse>;
 	};
 	workspaceApi: {
+		loadTerminalHistory?: (
+			scope: RuntimeTrpcWorkspaceScope,
+			input: TerminalHistoryRequest,
+		) => Promise<TerminalHistoryPage>;
 		loadGitSummary: (
 			scope: RuntimeTrpcWorkspaceScope,
 			input: RuntimeTaskWorkspaceInfoRequest | null,
@@ -850,6 +860,13 @@ export const runtimeAppRouter = t.router({
 			.output(runtimeTaskHistoryResponseSchema)
 			.query(async ({ ctx, input }) => {
 				return await ctx.workspaceApi.loadTaskHistory(ctx.workspaceScope, input);
+			}),
+		getTerminalHistory: workspaceProcedure
+			.input(terminalHistoryRequestSchema)
+			.output(terminalHistoryPageSchema)
+			.query(async ({ ctx, input }) => {
+				if (!ctx.workspaceApi.loadTerminalHistory) throw new TRPCError({ code: "NOT_IMPLEMENTED" });
+				return await ctx.workspaceApi.loadTerminalHistory(ctx.workspaceScope, input);
 			}),
 		getTaskContext: workspaceProcedure
 			.input(runtimeTaskWorkspaceInfoRequestSchema)

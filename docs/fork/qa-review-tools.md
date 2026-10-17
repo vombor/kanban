@@ -33,10 +33,34 @@ A flow is an array of **typed** steps, or an envelope with `steps` and an option
 Kanban now packages pinned `playwright-core` and `pngjs` modules. `kanban qa tools --json` prints their exact resolved
 paths and versions; custom scripts import these explicit paths instead of guessing global/worktree resolution.
 `kanban qa tools --verify --json` connects to the shared Chrome sidecar, drives normal fill/click journeys at both
-sizes and decodes the actual PNG pixels before reporting readiness. Both native shots and readiness checks create
+sizes and verifies actual decoded PNG pixels, rendered glyph ink/geometry and multiline fill/readback before reporting
+readiness. Process launch, DOM text and a solid background alone do not prove that fonts work. Both native shots and readiness checks create
 and close only their own contexts; they never install, download or launch another browser, or use agents' tabs.
 `PLAYWRIGHT_CDP_URL` selects the sidecar (default `http://127.0.0.1:9222`); credential-bearing endpoints are refused.
 Missing CDP yields a precise environment error, not instructions to repeatedly install Playwright in app copies.
+
+### Retained font bundles after a home move
+
+Native QA uses the shared Chrome sidecar, not a second browser launch. If the installation also retains old Chromium
+assets, their Fontconfig can still name an inaccessible former home. Doctor checks the retained paths read-only.
+The **user**, operating as the same OS account as the runtime/QA tools, can inspect and explicitly repair them:
+
+```sh
+kanban qa fonts --json
+kanban qa fonts --repair --json
+# --vendor <retained-library-directory> selects an explicit bundle.
+```
+
+Use the installation's normal home and runtime port. The check reports `checkedUserId`, readable fonts and writable
+cache paths for that account; running it as an unrelated privileged account does not prove the QA user's access.
+Repair uses the resolved vendor home, relative font directories and the correct cache path, retaining custom
+aliases/matches/includes and unrelated paths. It backs up existing XML before a durable rename and refuses malformed
+XML, user symlinks, or inaccessible fonts/cache instead of overwriting them or changing ownership. No cache is erased.
+
+This command is instance administration: every agent/orchestrator is refused, including with isolation off. Neither
+doctor nor startup silently changes retained assets. Glyph/font failures are **STALLED tooling**, not an application
+FAIL. Repair/readiness is not permission to reopen a historical run, rerun a benchmark, promote a model or fabricate
+acceptance; existing holds and partial evidence remain authoritative.
 
 ## Scratch setup
 

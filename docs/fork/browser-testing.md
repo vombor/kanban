@@ -16,6 +16,11 @@ needs xterm's DOM renderer; no shared browser launch flag changes are required.
 
 ## Running inside the pod network
 
+Restart/resume fixtures that model the live pod must pass `runtimeArgs: ["--skip-shutdown-cleanup"]` to the dev
+instance. Ordinary CLI shutdown intentionally moves cards to Done and deletes worktrees; that is not a resume
+fixture. Use `task resume <id>` for an interrupted session and check the returned JSON `ok`, not only CLI exit status.
+The browser retains selected-card state across reloads: navigate Back to board explicitly before testing reopening.
+
 When the runner already shares the sidecar's network namespace:
 
 ```sh

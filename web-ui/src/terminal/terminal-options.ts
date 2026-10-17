@@ -16,10 +16,10 @@ const TERMINAL_FONT_FAMILY =
 /**
  * Browser display cap for the last 1,000 lines.
  *
- * This is the room the client needs to hold a full 1k restore snapshot.
- * It is not a second restore-size cap, and it does not have to match the
- * server buffer in order to shrink the payload. Restore is a cached full
- * serialize applied in 16 KiB writes; warm reconnects can skip reset.
+ * Live display retains 1k lines. Initial replay is separately capped on the
+ * server to a recent 200-line / 128 KiB tail, with yielding 16 KiB writes.
+ * Older archived output is paged explicitly, never replayed into the live
+ * terminal. Warm control-only reconnects can still skip reset.
  */
 const TERMINAL_SCROLLBACK = 1_000;
 

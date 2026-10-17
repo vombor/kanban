@@ -7,6 +7,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import type { RuntimeTerminalWsServerMessage } from "../core/api-contract";
 import { parseTerminalWsClientMessage } from "../core/api-validation";
 import { getKanbanRuntimeOrigin } from "../core/runtime-endpoint";
+import { TERMINAL_WRITE_CHUNK_BYTES } from "../core/terminal-history";
 import {
 	TERMINAL_WS_CLOSE_ACK_STALL,
 	TERMINAL_WS_CLOSE_HEARTBEAT_TIMEOUT,
@@ -536,7 +537,9 @@ export function createTerminalWebSocketBridge({
 			if (ws.readyState !== ws.OPEN) {
 				return;
 			}
-			ws.send(chunk);
+			// Even a single enormous PTY burst must not arrive as one browser allocation/parser write.
+			for (let offset = 0; offset < chunk.byteLength; offset += TERMINAL_WRITE_CHUNK_BYTES)
+				ws.send(chunk.subarray(offset, offset + TERMINAL_WRITE_CHUNK_BYTES));
 			lastOutputSentAt = Date.now();
 			checkBackpressureAfterSend(chunk);
 		};
