@@ -18,7 +18,7 @@ usable through ordinary project Markdown even without knowledge manifests or a r
 - [x] Add strict scoped attempt retrieval and on-demand pointers/readouts for exact attempt references.
 - [x] Test privacy, retries, corruption, missing anchors, restart/pruning and Obsidian-disabled/unreachable operation
   using project/shared Markdown inputs, fake CLIs and owned shared-Chrome contexts only.
-- [ ] Validate full suites/typechecks/build and exact committed export/local smoke before App-only publication;
+- [x] Validate full suites/typechecks/build and exact committed export/local smoke before App-only publication;
   deploy only a verified published image with an explicit-port prepare and unchanged installation/sidecars/schedules.
 
 The new manifests are reference provenance, not a new approval or QA verdict. Snapshot labels identify the exact
@@ -49,5 +49,30 @@ requested review snapshot but must not invent which historical attempt produced 
   schema order while preserving pre-existing context hashes. A legacy pipeline runner fixture needed an injected
   no-context attachment owner rather than weakening production's fail-closed boundary. Failures were not counted as passes.
 
-Final exact-export/local smoke, App publication, exact-SHA image CI and authorized deployment remain pending until
-their receipts exist; live reference/plan/model/provider/secret configuration has not been changed by source validation.
+## Publication and deployment
+
+- Implementation committed/pushed through the Kanban GitHub App as **6f391dfad05e3b0bcea4abab5f4c632bf898df02**;
+  secret guard passed and exact push/image CI **39152156645** passed through validated registry publication.
+- Exact committed export built under isolated HOME/credentials and passed the owned local-pod overlay smoke, with
+  owned cleanup verified and no provider turns/live data/browser launch. CLI SHA-256:
+  `04b62b8cc11d5fd080bd47e4ac2b8d46491c90f8161b3a2e8a7c4b68d8e9bb0f`; full artifact-tree SHA-256:
+  `c299a536c9b3ebf66a530f27e55a1f2f5bab25e9840f582518a58102328d4b9e`. Package dry run stayed product-only (27 files).
+- Authorized application-only update completed through nonforced live `restart prepare` / `restart update` with
+  explicit `KANBAN_RUNTIME_PORT=3484`, after a fresh zero-running-card check and private rollback snapshot.
+- Production runs implementation **6f391dfa**, image id
+  `20cf064c5acb473e92cede7aead59597a31ae9022695d764f2b6bf2211122d18`, digest
+  `sha256:d659b32017a495b0a1ec759a6ec9b4e6baacea4fe3a44763150fdc4dec08c795`.
+- Readback verified unchanged config and both stored boards byte-for-byte, mount sets, Chrome/Postgres identities
+  and start times, ready Postgres, `/projects/foo` and `pawsome`, unchanged active Quadlet/inline credentials and
+  host maintainer artifact, and unchanged 03:00 America/Los_Angeles / ten-minute reconciliation policies.
+- Production phone/desktop Knowledge readouts passed in owned shared-Chrome contexts with mutation requests blocked
+  and no page errors. The strict scoped attempt CLI returned an empty **recorded** history for an old unpinned card,
+  explicitly marked reference provenance rather than approval; no pre-upgrade run was invented. HTTP/WebSockets
+  passed on 127.0.0.1, ::1 and localhost. No live task, reference, plan, provider, model or secret was changed for testing.
+- Private backup/proofs/readback/screenshots remain in the installation's `workflow-knowledge-attempts-6f391dfa`
+  deployment ledger, never the product payload. No release/tag, new agent/session or real-model experiment was added.
+
+This completes the native managed-context workflow inheritance/physical-attempt/prepared-rework slice. It does not
+instrument every internal agent-CLI model turn or direct user keystroke, retroactively certify historical attempts,
+automatically crawl shared Markdown/vault folders, or relax cross-project private-store access. Optional scoped graph
+retrieval and efficiency recommendations remain separate roadmap work.
