@@ -342,8 +342,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 	const gateActions: PipelineActions = deps.qaActions ?? {
 		run: async (request) => {
 			try {
-				await sendRequest(request);
-				return { ok: true };
+				return (await sendRequest(request)) as PipelineActionResult;
 			} catch (error) {
 				return { ok: false, error: error instanceof Error ? error.message : String(error) };
 			}
@@ -431,6 +430,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 		deps.reworkStage ??
 		createReworkStage({
 			objectives,
+			prepareKnowledge: (input) => gateActions.run({ kind: "prepareKnowledgeRework", ...input }),
 			actions: gateActions,
 			deliverInput,
 			store,

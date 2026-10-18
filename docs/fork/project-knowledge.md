@@ -82,6 +82,51 @@ stay blank and reattaching a live session does not inject a prompt. The detail v
 metadata only when opened and reads bodies only on request. It reports published revision drift without changing
 pins; phone/desktop reads and restart retention are covered by owned shared-Chrome fixtures with fake CLIs.
 
+## Workflow inheritance and per-attempt references
+
+Native QA, escalation and runoff creators pass a same-project source reference through the existing server creation
+owner. The owner durably attaches a derived context **before** creating the ordinary card; manual `bench runoff
+create --from <task>` uses the strict own-project user/orchestrator attachment route before creating each contender.
+The copy pins the source's exact current context, including any explicit user adoption, not today's document/vault
+versions. Exact target retries retain the original copy even if an unstarted source later adopts another reference.
+QA inheritance records its exact requested review snapshot; that is not a claim about which historical agent run
+produced the snapshot, and it never rewrites QA verdicts or grants implementation approval.
+
+Cards retain a `knowledgeHandoff.rootRevision` attachment anchor through ordinary CLI/server creation and browser
+normalization. This is the initial attachment identity, not a mutable latest-reference selector. A missing/mismatched
+anchored context refuses native reads/new starts, and replacement prechecks refuse before stopping an existing
+process. Old cards without anchors remain valid; their existing retained context is used where present, otherwise
+ordinary project Markdown remains the baseline. Inheritance remains in the project's private context file after
+Done, worktree cleanup or board pruning, with bounded depth and exact source revision checks. Child contexts do not
+create prerequisite links, bypass holds, change routing, promote models or manufacture objective membership.
+
+Physical admission now retains a distinct attempt reservation before every new pinned session, including blank
+composers, explicit restarts and attached automatic restarts through ordinary dispatch. It settles `started` only
+from the native manager's matching task identity and actual start clock; failures or interrupted/unknown outcomes
+stay `uncertain`/`reserved`. Those labels describe physical session admission, not prompt delivery, progress or QA
+acceptance. Reusing a physical attempt identity refuses replay. Explicit later starts retain separate records,
+including unsuccessful and losing runs; no count/cost/evidence is erased when a card is discarded.
+
+Rework retains a `rework_handoff` reference record through the existing IPC action channel before typing or replacing
+a session, including started-check retries. Its identity is pinned to the retained rework request, round and known
+snapshot. It remains `reserved`: queued input, a clear command or terminal output does not certify that the model
+processed the rework. A new physical session, if needed, has its own separate native outcome. The legacy QA prompt
+skeleton remains unchanged; short pointers travel alongside it, and a clear command remains a clear command.
+
+```sh
+kanban knowledge task-attempts <task-id> --project example --limit 10 --json
+kanban knowledge task-read <task-id> --project example --part spec --attempt-id <attempt-sha256> --json
+kanban knowledge task-read <task-id> --project example --part document --id api-contract \
+  --attempt-id <attempt-sha256> --section response --json
+```
+
+Attempt reads resolve only that same project's task/retained attempt/context; arbitrary content hashes and foreign
+task attempts are refused. An explicit context revision cannot contradict the selected attempt. The Plan context
+dialog exposes inherited-source provenance and an on-demand paged **Inspect retained attempts** view. Physical
+starts point at their exact retained attempt rather than an unpinned `latest` document. Attempt records are bounded
+to 1,000 per task within the existing 8 MiB context store; hitting a ceiling refuses new writes, never evicts history.
+Pre-upgrade runs without manifests remain unknown, not retroactively relabeled as observed attempts.
+
 ## Explicit pre-start reference adoption
 
 Only the user can adopt a replacement revision of a document already selected for a task. Adoption is not a new
@@ -115,6 +160,30 @@ either commits before the reservation and reaches that launch, or loses the race
 also reserve/freeze pins but stay blank. Failed/uncertain starts retain the reservation; there is no automatic
 refund, unfreeze or retry. Attached automatic restarts return through ordinary runtime admission. An installation
 without the physical admission hook refuses adoption rather than advertising a preflight-only safety guarantee.
+
+## Markdown baseline and optional services
+
+Obsidian is optional enrichment, **not a hard dependency** for Kanban, launches, plan handoffs or attempt reads.
+Ordinary agents can continue reading the project's Markdown (`README.md`, `AGENTS.md`, `docs/`, specs/contracts)
+through their normal workspace tools. Legacy/manual cards without knowledge manifests are valid; native execution
+does not require connecting or importing a vault.
+
+Versioned project references can be published directly from project Markdown. For reusable cross-project guidance,
+the user may keep a separately curated Markdown library under the configured Kanban home (`~/.kanban` by default)
+and explicitly publish the chosen file into each intended project's scoped store:
+
+```sh
+kanban knowledge publish api-contract --project example --kind contract --title 'API contract' \
+  --file docs/contracts/api.md --expected-revision none --json
+kanban knowledge publish shared-review-guide --project example --kind runbook --title 'Shared review guide' \
+  --file /path/to/configured-kanban-home/shared/review-guide.md --expected-revision none --json
+```
+
+Use the installation's configured home when it overrides the default. Publication retains an immutable copy and
+revision in that project's knowledge, so editing/removing the source Markdown or losing an optional connector does
+not change an attempt's pins. This is explicit file-based sharing, not automatic folder/vault crawling or permission
+to inspect another project's private store. Scoped shared-folder/graph discovery remains separate optional work.
+If retained pinned content is missing/corrupt, fail closed rather than silently substituting mutable files.
 
 ## Project Knowledge in the browser
 

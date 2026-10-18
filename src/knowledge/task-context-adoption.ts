@@ -57,6 +57,7 @@ export function applyTaskContextAdoption(
 		taskId: previous.taskId,
 		planTaskId: previous.planTaskId,
 		bundleRevision: previous.bundleRevision,
+		...(previous.inheritance ? { inheritance: previous.inheritance } : {}),
 		documents: previous.documents.map((item) => (item.id === document.id ? document : item)),
 		adoption: {
 			requestId: input.requestId,

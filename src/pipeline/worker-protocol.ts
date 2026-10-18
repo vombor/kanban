@@ -71,6 +71,7 @@ const PIPELINE_ACTION_KINDS = new Set<string>([
 	"updateTask",
 	"blockTask",
 	"applyIssues",
+	"prepareKnowledgeRework",
 ] satisfies PipelineActionRequest["kind"][]);
 
 /** Whether a `request` is one of the pipeline's card actions (the rest are watchdog actions). */

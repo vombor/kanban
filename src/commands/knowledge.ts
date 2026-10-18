@@ -91,6 +91,29 @@ export function registerKnowledgeCommand(program: Command): void {
 		.description(
 			"Discover versioned project knowledge on demand. Content is reference material, not an execution approval.",
 		);
+	addPagination(
+		addCommon(
+			knowledge
+				.command("task-attempts <task-id>")
+				.description(
+					"List durable physical attempts and prepared rework reference handoffs; not QA/acceptance evidence.",
+				),
+		),
+		"10",
+	).action(async (taskId: string, options: CommonOptions & { offset: number; limit: number }) => {
+		await runKnowledge(
+			options,
+			(client) => client.taskKnowledge.attempts.query({ taskId, offset: options.offset, limit: options.limit }),
+			(value) =>
+				[
+					...value.attempts.map(
+						(attempt) =>
+							`${attempt.id} · ${attempt.kind} · ${attempt.outcome} · context ${attempt.contextRevision}${attempt.snapshot ? ` · snapshot ${attempt.snapshot}` : ""}`,
+					),
+					`${value.total} retained attempts/handoffs${value.nextOffset !== null ? `; next --offset ${value.nextOffset}` : ""}. Reserved/uncertain is not proof of execution or acceptance.`,
+				].join("\n"),
+		);
+	});
 	addCommon(
 		knowledge
 			.command("task-context <task-id>")
@@ -126,6 +149,7 @@ export function registerKnowledgeCommand(program: Command): void {
 		.requiredOption("--part <part>", "spec, breakdown or document")
 		.option("--id <id>", "The pinned document id (only for --part document).")
 		.option("--context-revision <sha256>", "Exact retained task-context revision.")
+		.option("--attempt-id <sha256>", "Read the exact context retained for this physical attempt/rework handoff.")
 		.option("--section <id>", "Heading id from the returned section map.")
 		.action(
 			async (
@@ -134,6 +158,7 @@ export function registerKnowledgeCommand(program: Command): void {
 					part: "spec" | "breakdown" | "document";
 					id?: string;
 					contextRevision?: string;
+					attemptId?: string;
 					section?: string;
 					offset: number;
 					limit: number;
@@ -147,6 +172,7 @@ export function registerKnowledgeCommand(program: Command): void {
 							part: options.part,
 							id: options.id,
 							contextRevision: options.contextRevision,
+							attemptId: options.attemptId,
 							section: options.section,
 							offset: options.offset,
 							limit: options.limit,

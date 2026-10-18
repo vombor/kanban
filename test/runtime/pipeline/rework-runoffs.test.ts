@@ -90,6 +90,7 @@ describe("rework siblings never let two cards land", () => {
 		const store = createWorkspaceStateStore({ board: createBoard({ review: [DEV] }), sessions: {}, revision: 1 });
 		const fakes = createFakeTaskTrashWorkflowDependencies(store);
 		const run = createPipelineActionRunner({
+			attachKnowledge: async () => undefined, // This fixture's legacy source has no pinned context.
 			mutateWorkspaceState: store.mutateWorkspaceState,
 			ensureTaskWorktree: fakes.ensureTaskWorktree,
 			startTaskSession: fakes.startTaskSession,

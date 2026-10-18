@@ -636,6 +636,7 @@ describe("board dependency state", () => {
 							baseRef: "main",
 							role: "qa",
 							reviewsTaskId: "dev-1",
+							knowledgeHandoff: { rootRevision: "a".repeat(64) },
 							autoReviewMode: "qa",
 						},
 						{ id: "dev-1", prompt: "Dev", baseRef: "main", role: "dev" },
@@ -647,7 +648,12 @@ describe("board dependency state", () => {
 			dependencies: [],
 		});
 		const review = normalized?.columns.find((column) => column.id === "review")?.cards ?? [];
-		expect(review[0]).toMatchObject({ role: "qa", reviewsTaskId: "dev-1", autoReviewMode: "qa" });
+		expect(review[0]).toMatchObject({
+			role: "qa",
+			reviewsTaskId: "dev-1",
+			autoReviewMode: "qa",
+			knowledgeHandoff: { rootRevision: "a".repeat(64) },
+		});
 		expect(review[1]).not.toHaveProperty("role");
 		expect(review[1]).not.toHaveProperty("reviewsTaskId");
 		// A plan card keeps its role (and plan mode) through a browser save, or the pipeline would see a dev card.

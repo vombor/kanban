@@ -86,7 +86,7 @@ interface CreateOptions {
 async function readPrompt(
 	options: CreateOptions,
 	board: Awaited<ReturnType<typeof loadWorkspaceBoardById>> | null,
-): Promise<{ title: string | null; prompt: string; baseRef: string | null; source: string }> {
+): Promise<{ title: string | null; prompt: string; baseRef: string | null; source: string; sourceTaskId?: string }> {
 	if (options.from) {
 		const found = board ? findCard(board, options.from) : null;
 		if (!found) {
@@ -97,6 +97,7 @@ async function readPrompt(
 			prompt: found.card.prompt,
 			baseRef: found.card.baseRef,
 			source: `card ${found.card.id}`,
+			sourceTaskId: found.card.id,
 		};
 	}
 	if (!options.prompt) {
@@ -216,6 +217,13 @@ async function runCreate(name: string, options: CreateOptions): Promise<number> 
 	const failures: string[] = [];
 	for (const item of plannedCards) {
 		try {
+			const inherited = source.sourceTaskId
+				? await createRuntimeTrpcClient(target.workspaceId).taskKnowledge.attachDerived.mutate({
+						taskId: item.taskId,
+						sourceTaskId: source.sourceTaskId,
+						kind: "runoff",
+					})
+				: null;
 			await createTask({
 				cwd: target.repoPath,
 				projectPath: target.repoPath,
@@ -227,6 +235,7 @@ async function runCreate(name: string, options: CreateOptions): Promise<number> 
 				agentId: item.card.agentId,
 				agentSettings: item.card.agentSettings,
 				autoReviewEnabled: false,
+				...(inherited?.context ? { knowledgeHandoff: { rootRevision: inherited.context.revision } } : {}),
 			});
 			created.push(item);
 		} catch (error) {

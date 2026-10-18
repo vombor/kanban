@@ -401,6 +401,12 @@ async function expandPlanLocked(
 			continue;
 		}
 		// The normal create path: the kit's devAssignment picks the agent and model, as for any new dev card.
+		const pinned = (
+			await (deps.createClient ?? createRuntimeTrpcClient)(target.workspaceId).taskKnowledge.get.query({
+				taskId: card.taskId,
+			})
+		).context;
+		if (!pinned) throw new Error("Reserved planned-task context is missing; no unpinned card was created.");
 		const result = await createCard({
 			cwd: input.cwd,
 			projectPath: target.repoPath,
@@ -409,6 +415,7 @@ async function expandPlanLocked(
 			prompt: card.prompt,
 			baseRef: plan.card.baseRef,
 			role: "dev",
+			knowledgeHandoff: { rootRevision: pinned.revision },
 		});
 		created.push({ localId: card.localId, ...((result.task as JsonRecord | undefined) ?? {}) });
 		await index.update(target.workspaceId, (current) => {

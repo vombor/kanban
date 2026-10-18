@@ -3,6 +3,7 @@ import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogBody, DialogHeader } from "@/components/ui/dialog";
 import { useTaskPlanContext } from "@/hooks/use-task-plan-context";
+import { TaskKnowledgeAttempts } from "./task-knowledge-attempts";
 import { TaskReferenceAdoption } from "./task-reference-adoption";
 
 /** Reads metadata only on opening; document bodies remain explicit bounded, exact-context reads. */
@@ -61,6 +62,25 @@ export function TaskPlanContextButton({
 									Pinned reference context, not a new approval. Shared revisions never replace these pins
 									automatically.
 								</p>
+								{context.inheritance ? (
+									<p className="break-all text-xs text-text-secondary">
+										Inherited {context.inheritance.kind} reference handoff from task{" "}
+										{context.inheritance.sourceTaskId} at context {context.inheritance.sourceContextRevision}
+										{context.inheritance.snapshot
+											? ` · Requested snapshot ${context.inheritance.snapshot}`
+											: ""}
+										. This identifies references, not approval or evidence that a historical attempt produced
+										that snapshot.
+									</p>
+								) : null}
+								<TaskKnowledgeAttempts
+									key={`${workspaceId}:${taskId}`}
+									workspaceId={workspaceId}
+									taskId={taskId}
+									onRead={(attemptId) =>
+										select({ part: "spec", offset: 0, attemptId, contextRevision: undefined })
+									}
+								/>
 								{query.data?.drift.map((item) => (
 									<p key={item.id} className="break-all text-xs text-status-orange">
 										Revision drift: {item.id} · pinned {item.pinned.slice(0, 12)} · current{" "}

@@ -7,6 +7,7 @@
 // through the same code the CLI and the browser use (src/server/pipeline-actions.ts).
 import type { RuntimeAgentId, RuntimeTaskAgentSettings, RuntimeTaskIssue, RuntimeTaskRole } from "../core/api-contract";
 import type { IssueApplyInput, IssueApplyResult } from "../issues/issue-apply";
+import type { KnowledgeSource } from "../trpc/knowledge-execution-contract";
 
 /** The title prefix of an escalated card parked in Backlog (the legacy kit's, which people and the watchdog read). */
 export const BLOCKED_TITLE_PREFIX = "BLOCKED: ";
@@ -23,6 +24,7 @@ export interface PipelineCreateTaskInput {
 	prompt: string;
 	role: RuntimeTaskRole;
 	reviewsTaskId?: string;
+	knowledgeSource?: KnowledgeSource;
 	agentId: RuntimeAgentId;
 	agentSettings?: RuntimeTaskAgentSettings;
 	baseRef: string;
@@ -31,6 +33,13 @@ export interface PipelineCreateTaskInput {
 }
 
 export type PipelineActionRequest =
+	| (PipelineActionScope & {
+			kind: "prepareKnowledgeRework";
+			taskId: string;
+			snapshot: string | null;
+			round: number;
+			at: string;
+	  })
 	/** Adds a card to Backlog (never auto-reviewed). */
 	| (PipelineActionScope & { kind: "createTask"; task: PipelineCreateTaskInput })
 	/** Backlog → In Progress with a fresh session, as `kanban task start` does. */
@@ -66,7 +75,7 @@ export type PipelineActionRequest =
 	| (PipelineActionScope & { kind: "applyIssues"; issues: Omit<IssueApplyInput, "workspaceId" | "workspacePath"> });
 
 export type PipelineActionResult =
-	| { ok: true; detail?: string; issues?: IssueApplyResult; queued?: boolean }
+	| { ok: true; detail?: string; issues?: IssueApplyResult; queued?: boolean; knowledgeAttemptId?: string }
 	| { ok: false; error: string };
 
 export interface PipelineActions {

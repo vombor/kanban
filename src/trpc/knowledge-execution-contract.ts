@@ -55,6 +55,43 @@ export const taskContextStartReservationSchema = z
 	.object({ contextRevision: knowledgeRevisionSchema, at: z.string().datetime({ offset: true }) })
 	.strict();
 export type TaskContextStartReservation = z.infer<typeof taskContextStartReservationSchema>;
+export const taskContextInheritanceSchema = z
+	.object({
+		sourceTaskId: executionTaskIdSchema,
+		sourceContextRevision: knowledgeRevisionSchema,
+		kind: z.enum(["qa", "escalation", "runoff"]),
+		snapshot: z
+			.string()
+			.regex(/^[a-f0-9]{40,64}$/u)
+			.optional(),
+	})
+	.strict();
+export const knowledgeSourceSchema = taskContextInheritanceSchema.omit({ sourceContextRevision: true }).extend({
+	// Legacy board ids may not be valid new execution ids. They cannot hold native pins, but remain reference sources.
+	sourceTaskId: z
+		.string()
+		.min(1)
+		.max(160)
+		.refine((id) => id !== "prototype" && !Object.hasOwn(Object.prototype, id), "Reserved source id"),
+});
+export type KnowledgeSource = z.infer<typeof knowledgeSourceSchema>;
+export const knowledgeAttemptSchema = z
+	.object({
+		id: knowledgeRevisionSchema,
+		taskId: executionTaskIdSchema,
+		contextRevision: knowledgeRevisionSchema,
+		kind: z.enum(["session", "rework_handoff"]),
+		reservedAt: z.string().datetime({ offset: true }),
+		outcome: z.enum(["reserved", "started", "uncertain"]),
+		startedAt: z.number().nonnegative().nullable(),
+		snapshot: z
+			.string()
+			.regex(/^[a-f0-9]{40,64}$/u)
+			.optional(),
+		round: z.number().int().nonnegative().optional(),
+	})
+	.strict();
+export type KnowledgeAttempt = z.infer<typeof knowledgeAttemptSchema>;
 export const taskKnowledgeContextSchema = z
 	.object({
 		version: z.literal(1),
@@ -65,11 +102,25 @@ export const taskKnowledgeContextSchema = z
 		documents: z.array(knowledgeDocumentSchema).max(40),
 		attachedAt: z.string().datetime({ offset: true }),
 		adoption: taskContextAdoptionSchema.optional(),
+		inheritance: taskContextInheritanceSchema.optional(),
 	})
 	.strict();
 export type TaskKnowledgeContext = z.infer<typeof taskKnowledgeContextSchema>;
 export const taskKnowledgeRequestSchema = z.object({ taskId: executionTaskIdSchema }).strict();
 export const taskExpansionContextRequestSchema = z.object({ planTaskId: executionTaskIdSchema }).strict();
+export const taskDerivedContextRequestSchema = knowledgeSourceSchema.extend({ taskId: executionTaskIdSchema }).strict();
+export const taskKnowledgeAttemptsRequestSchema = taskKnowledgeRequestSchema.extend({
+	offset: z.number().int().min(0).max(1000).default(0),
+	limit: z.number().int().min(1).max(30).default(10),
+});
+export const taskKnowledgeAttemptsResponseSchema = z
+	.object({
+		authority: z.literal("reference_provenance_not_execution_approval"),
+		attempts: z.array(knowledgeAttemptSchema).max(30),
+		total: z.number().int().nonnegative(),
+		nextOffset: z.number().int().nullable(),
+	})
+	.strict();
 export const taskContextAdoptRequestSchema = z
 	.object({
 		taskId: executionTaskIdSchema,
@@ -92,6 +143,7 @@ export const taskContextAdoptResponseSchema = z
 export const taskKnowledgeReadRequestSchema = taskKnowledgeRequestSchema
 	.extend({
 		contextRevision: knowledgeRevisionSchema.optional(),
+		attemptId: knowledgeRevisionSchema.optional(),
 		part: z.enum(["spec", "breakdown", "document"]),
 		id: knowledgeIdSchema.optional(),
 		section: z.string().max(256).optional(),
@@ -142,6 +194,16 @@ export const taskKnowledgeResponseSchema = z
 	.strict();
 
 export interface RuntimeTaskKnowledgeApi {
+	attachDerived(
+		caller: RuntimeCaller,
+		workspaceId: string,
+		input: z.infer<typeof taskDerivedContextRequestSchema>,
+	): Promise<{ context: TaskKnowledgeContext | null }>;
+	attempts(
+		caller: RuntimeCaller,
+		workspaceId: string,
+		input: z.infer<typeof taskKnowledgeAttemptsRequestSchema>,
+	): Promise<z.infer<typeof taskKnowledgeAttemptsResponseSchema>>;
 	adopt(
 		caller: RuntimeCaller,
 		workspaceId: string,

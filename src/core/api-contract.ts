@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { knowledgeHandoffSchema } from "./knowledge-binding";
 import { providerConcurrencySchema } from "./provider-concurrency";
 import { runtimeProviderQueueSchema } from "./provider-queue";
 import { resolveTaskTitle } from "./task-title.js";
@@ -191,6 +192,7 @@ export const runtimeBoardCardSchema = z
 		role: runtimeTaskRoleSchema.optional(),
 		/** On a QA card (`role: "qa"`): the dev card it reviews. */
 		reviewsTaskId: z.string().optional(),
+		knowledgeHandoff: knowledgeHandoffSchema.optional(),
 		/** On a card imported from an issue: which one. */
 		issue: runtimeTaskIssueSchema.optional(),
 		images: z.array(runtimeTaskImageSchema).optional(),

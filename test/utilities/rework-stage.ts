@@ -11,7 +11,7 @@ import type { PipelineRunoffGroups } from "../../src/pipeline/features";
 import { createPipelineStateStore, type PipelineCardState } from "../../src/pipeline/pipeline-state";
 import type { QaPassEntry, QaVerdictRecord } from "../../src/pipeline/qa-gate";
 import { createQaLogAppender } from "../../src/pipeline/qa-log";
-import { createReworkStage } from "../../src/pipeline/rework";
+import { createReworkStage, type ReworkDependencies } from "../../src/pipeline/rework";
 import type { PipelineFinishTaskRequest } from "../../src/pipeline/worker-protocol";
 import type { ClineSessionSize } from "../../src/terminal/cline-session-files";
 import { createSnapshot } from "./pipeline-worker";
@@ -29,6 +29,7 @@ export type ReworkHarnessAction =
 type OnFailInput = Parameters<RoutingPolicy["onFail"]>[0];
 
 export interface ReworkHarnessOptions {
+	prepareKnowledge?: ReworkDependencies["prepareKnowledge"];
 	objectives?: ObjectiveEvidenceOwner;
 	/** The stub kit's onFail answer (default: rework, clearContext auto). */
 	onFail?: (input: OnFailInput) => OnFailAnswer;
@@ -71,6 +72,7 @@ export function createReworkHarness(options: ReworkHarnessOptions = {}) {
 	let siblingCount = 0;
 	const stage = createReworkStage({
 		objectives: options.objectives,
+		prepareKnowledge: options.prepareKnowledge,
 		actions: { run: async (request) => answer(request) },
 		deliverInput: async (input) => answer({ kind: "deliverInput", ...input }),
 		store,

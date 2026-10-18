@@ -5,7 +5,9 @@ import { z } from "zod";
 import { renameDurably, writeFileSynced } from "../fs/durable-file";
 import {
 	executionTaskIdSchema,
+	knowledgeAttemptSchema,
 	type TaskKnowledgeContext,
+	taskContextInheritanceSchema,
 	taskContextStartReservationSchema,
 	taskKnowledgeContextSchema,
 } from "../trpc/knowledge-execution-contract";
@@ -17,11 +19,23 @@ export const taskContextStateSchema = z
 		version: z.literal(1),
 		tasks: z.record(executionTaskIdSchema, z.array(taskKnowledgeContextSchema).min(1).max(100)),
 		starts: z.record(executionTaskIdSchema, taskContextStartReservationSchema).optional(),
+		attempts: z.record(executionTaskIdSchema, z.array(knowledgeAttemptSchema).max(1000)).optional(),
 	})
 	.strict();
 export type TaskContextState = z.infer<typeof taskContextStateSchema>;
 export function taskContextDigest(context: Omit<TaskKnowledgeContext, "revision" | "attachedAt">): string {
-	return hashKnowledgeContent(JSON.stringify(context));
+	const { version, taskId, planTaskId, bundleRevision, documents, adoption, inheritance } = context;
+	return hashKnowledgeContent(
+		JSON.stringify({
+			version,
+			taskId,
+			planTaskId,
+			bundleRevision,
+			documents,
+			...(adoption ? { adoption } : {}),
+			...(inheritance ? { inheritance: taskContextInheritanceSchema.parse(inheritance) } : {}),
+		}),
+	);
 }
 export function validateTaskContextState(state: TaskContextState): void {
 	if (Object.keys(state.tasks).length > 2000)
@@ -37,6 +51,22 @@ export function validateTaskContextState(state: TaskContextState): void {
 					"Retained task-context identity failed its immutable revision check.",
 				);
 			const adoption = context.adoption;
+			if (!previous && context.inheritance) {
+				const source = state.tasks[context.inheritance.sourceTaskId]?.find(
+					(item) => item.revision === context.inheritance?.sourceContextRevision,
+				);
+				if (
+					!source ||
+					source.taskId === taskId ||
+					source.bundleRevision !== context.bundleRevision ||
+					source.planTaskId !== context.planTaskId ||
+					JSON.stringify(source.documents) !== JSON.stringify(context.documents)
+				)
+					throw new KnowledgeError(
+						"PRECONDITION_FAILED",
+						"Derived context lost its exact same-project source revision.",
+					);
+			}
 			if (!previous && adoption)
 				throw new KnowledgeError("PRECONDITION_FAILED", "Task-context adoption has no original reviewed handoff.");
 			if (previous) {
@@ -46,7 +76,8 @@ export function validateTaskContextState(state: TaskContextState): void {
 					context.bundleRevision !== previous.bundleRevision ||
 					context.planTaskId !== previous.planTaskId ||
 					adoption.at !== attachedAt ||
-					requests.has(adoption.requestId)
+					requests.has(adoption.requestId) ||
+					JSON.stringify(previous.inheritance) !== JSON.stringify(context.inheritance)
 				)
 					throw new KnowledgeError("PRECONDITION_FAILED", "Task-context adoption lineage or receipt is damaged.");
 				const original = previous.documents.find((document) => document.id === adoption.documentId),
@@ -78,9 +109,41 @@ export function validateTaskContextState(state: TaskContextState): void {
 				"PRECONDITION_FAILED",
 				"Context changed after physical-start reservation; restore its history.",
 			);
+		const seen = new Set<string>();
+		for (const attempt of state.attempts?.[taskId] ?? []) {
+			if (
+				seen.has(attempt.id) ||
+				attempt.taskId !== taskId ||
+				!history.some((context) => context.revision === attempt.contextRevision) ||
+				!reservation ||
+				reservation.contextRevision !== attempt.contextRevision ||
+				(attempt.kind === "rework_handoff" && (attempt.outcome !== "reserved" || attempt.startedAt !== null)) ||
+				(attempt.outcome === "started") !== (attempt.startedAt !== null)
+			)
+				throw new KnowledgeError(
+					"PRECONDITION_FAILED",
+					"A retained knowledge attempt lost its identity, frozen context or honest outcome.",
+				);
+			seen.add(attempt.id);
+		}
+		let ancestor: TaskKnowledgeContext | undefined = history[0];
+		const chain = new Set([taskId]);
+		while (ancestor?.inheritance) {
+			if (chain.has(ancestor.inheritance.sourceTaskId) || chain.size > 30)
+				throw new KnowledgeError(
+					"PRECONDITION_FAILED",
+					"Knowledge inheritance is cyclic or exceeds its bounded depth.",
+				);
+			chain.add(ancestor.inheritance.sourceTaskId);
+			ancestor = state.tasks[ancestor.inheritance.sourceTaskId]?.find(
+				(item) => item.revision === ancestor?.inheritance?.sourceContextRevision,
+			);
+		}
 	}
 	if (Object.keys(state.starts ?? {}).some((taskId) => !Object.hasOwn(state.tasks, taskId)))
 		throw new KnowledgeError("PRECONDITION_FAILED", "A retained physical-start reservation lost its task context.");
+	if (Object.keys(state.attempts ?? {}).some((taskId) => !Object.hasOwn(state.tasks, taskId)))
+		throw new KnowledgeError("PRECONDITION_FAILED", "Retained knowledge attempts lost their task context.");
 }
 export async function readTaskContextState(file: string): Promise<TaskContextState> {
 	let text: string;

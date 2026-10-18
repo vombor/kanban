@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { readKnowledgeMarkdown } from "../../../src/commands/knowledge";
 import type { RuntimeTaskSessionSummary } from "../../../src/core/api-contract";
 import type { RuntimeCaller } from "../../../src/isolation/session-identity";
 import { createProjectKnowledgeStore } from "../../../src/knowledge/knowledge-store";
@@ -168,6 +169,321 @@ const request = (part: "spec" | "breakdown" | "document", extra = {}) =>
 	taskKnowledgeReadRequestSchema.parse({ taskId: "api1", part, ...extra });
 
 describe("approved-plan immutable knowledge handoffs", () => {
+	it("retains exact adopted refs through QA, escalation and runoff inheritance before any child exists", async () =>
+		withTemporaryKanbanHome(async () => {
+			const { contexts, api, adoptionInput, replacement, context } = await adoptionFixture();
+			const adopted = await api.adopt(USER, "demo", adoptionInput);
+			const qa = await contexts.attachDerived("demo", "qa1", {
+				sourceTaskId: "api1",
+				kind: "qa",
+				snapshot: "a".repeat(40),
+			});
+			expect(qa?.documents).toEqual(adopted.context.documents);
+			expect(qa?.inheritance).toEqual({
+				sourceTaskId: "api1",
+				sourceContextRevision: adopted.context.revision,
+				kind: "qa",
+				snapshot: "a".repeat(40),
+			});
+			const escalation = await contexts.attachDerived("demo", "rescue1", {
+				sourceTaskId: "api1",
+				kind: "escalation",
+			});
+			const runoff = await contexts.attachDerived("demo", "racer1", { sourceTaskId: "rescue1", kind: "runoff" });
+			expect(escalation?.documents).toEqual(qa?.documents);
+			expect(runoff?.documents).toEqual(qa?.documents);
+			expect(runoff?.bundleRevision).toBe(context.bundleRevision);
+			expect(runoff?.adoption).toBeUndefined();
+			expect(
+				(
+					await api.read(
+						USER,
+						"demo",
+						taskKnowledgeReadRequestSchema.parse({ taskId: "racer1", part: "document", id: replacement.id }),
+					)
+				).markdown,
+			).toContain("Explicitly reviewed replacement");
+			expect(
+				await contexts.attachDerived("demo", "qa1", { sourceTaskId: "api1", kind: "qa", snapshot: "a".repeat(40) }),
+			).toEqual(qa);
+			await expect(
+				contexts.attachDerived("demo", "qa1", { sourceTaskId: "api1", kind: "qa", snapshot: "b".repeat(40) }),
+			).rejects.toThrow(/different handoff/u);
+		}));
+	it("does not reselect refs on an exact inheritance retry when its unstarted source later adopts", async () =>
+		withTemporaryKanbanHome(async () => {
+			const { contexts, api, context, adoptionInput } = await adoptionFixture();
+			const before = await contexts.attachDerived("demo", "qa1", { sourceTaskId: "api1", kind: "qa" });
+			await api.adopt(USER, "demo", adoptionInput);
+			expect(await contexts.attachDerived("demo", "qa1", { sourceTaskId: "api1", kind: "qa" })).toEqual(before);
+			expect((await contexts.read("demo", "qa1"))?.inheritance?.sourceContextRevision).toBe(context.revision);
+		}));
+	it("retains every physical run and losing/uncertain attempt across restarts, without replay or invented historical attribution", async () =>
+		withTemporaryKanbanHome(async () => {
+			const { contexts, bundles, index } = await fixture();
+			await contexts.attachExpansion("demo", "plan1");
+			const request: StartTaskSessionRequest = {
+				taskId: "api1",
+				agentId: "claude",
+				binary: "fake",
+				args: [],
+				cwd: "/owned",
+				prompt: "",
+				admissionId: "owned-first-admission",
+			};
+			await expect(
+				startWithTaskContext({
+					contexts,
+					workspaceId: "demo",
+					request,
+					start: async () => {
+						throw new Error("uncertain spawn");
+					},
+				}),
+			).rejects.toThrow("uncertain spawn");
+			const reloaded = createTaskContextStore({ bundles, index });
+			expect((await reloaded.attempts("demo", "api1"))[0]).toMatchObject({
+				kind: "session",
+				outcome: "uncertain",
+				startedAt: null,
+			});
+			const start = vi.fn(async () => ({ taskId: "api1", startedAt: 12345 }) as RuntimeTaskSessionSummary);
+			await expect(
+				startWithTaskContext({ contexts: reloaded, workspaceId: "demo", request, start }),
+			).rejects.toThrow(/instead of replaying/u);
+			expect(start).not.toHaveBeenCalled();
+			await startWithTaskContext({
+				contexts: reloaded,
+				workspaceId: "demo",
+				request: { ...request, admissionId: "explicit-second-run", prompt: "Continue same pinned requirements" },
+				start,
+			});
+			const attempts = await reloaded.attempts("demo", "api1");
+			expect(attempts).toHaveLength(2);
+			expect(attempts[1]).toMatchObject({ kind: "session", outcome: "started", startedAt: 12345 });
+			expect(attempts[0]?.contextRevision).toBe(attempts[1]?.contextRevision);
+			expect(start).toHaveBeenCalledWith(
+				expect.objectContaining({ prompt: expect.stringContaining(`--attempt-id ${attempts[1]?.id}`) }),
+			);
+			const api = createTaskContextApi({ contexts: reloaded, bundles });
+			const first = await api.read(
+				USER,
+				"demo",
+				taskKnowledgeReadRequestSchema.parse({ taskId: "api1", part: "spec", attemptId: attempts[0]?.id }),
+			);
+			expect(first.contextRevision).toBe(attempts[0]?.contextRevision);
+			await expect(
+				api.read(
+					USER,
+					"demo",
+					taskKnowledgeReadRequestSchema.parse({ taskId: "ui1", part: "spec", attemptId: attempts[0]?.id }),
+				),
+			).rejects.toMatchObject({ code: "NOT_FOUND" });
+			expect(await api.attempts(USER, "demo", { taskId: "api1", offset: 0, limit: 1 })).toMatchObject({
+				total: 2,
+				nextOffset: 1,
+				attempts: [expect.objectContaining({ outcome: "started" })],
+			});
+		}));
+	it("records rework context before delivery without calling a queued handoff started or changing acceptance", async () =>
+		withTemporaryKanbanHome(async () => {
+			const { contexts, index, record } = await fixture();
+			await contexts.attachExpansion("demo", "plan1");
+			const request = {
+				taskId: "api1",
+				kind: "rework_handoff" as const,
+				requestId: "qa-round-1-at-retained-time",
+				snapshot: "a".repeat(40),
+				round: 1,
+			};
+			const first = await contexts.reserveAttempt("demo", request);
+			expect(first?.attempt).toMatchObject({
+				kind: "rework_handoff",
+				outcome: "reserved",
+				startedAt: null,
+				snapshot: request.snapshot,
+			});
+			expect(await contexts.reserveAttempt("demo", request)).toEqual(first);
+			await expect(contexts.reserveAttempt("demo", { ...request, snapshot: "b".repeat(40) })).rejects.toThrow(
+				/different context/u,
+			);
+			expect((await index.read("demo")).plans.plan1?.approval).toEqual(record.approval);
+			if (!first) throw new Error("Missing attempt");
+			await expect(contexts.settleAttempt("demo", "api1", first.attempt.id, "started", 123)).rejects.toThrow(
+				/No physical/u,
+			);
+		}));
+	it("fails closed when an inherited board anchor loses its retained context, before spawning", async () =>
+		withTemporaryKanbanHome(async () => {
+			const { contexts } = await fixture();
+			await contexts.attachExpansion("demo", "plan1");
+			const derived = await contexts.attachDerived("demo", "qa1", { sourceTaskId: "api1", kind: "qa" });
+			if (!derived) throw new Error("Missing handoff");
+			const path = join(getProjectKnowledgePaths("demo").root, "task-contexts.json"),
+				state = JSON.parse(await readFile(path, "utf8"));
+			delete state.tasks.qa1;
+			await writeFile(path, JSON.stringify(state));
+			const start = vi.fn();
+			await expect(
+				startWithTaskContext({
+					contexts,
+					workspaceId: "demo",
+					rootRevision: derived.revision,
+					request: { taskId: "qa1", agentId: "claude", binary: "fake", args: [], cwd: "/owned", prompt: "" },
+					start,
+				}),
+			).rejects.toThrow(/attachment is missing/u);
+			expect(start).not.toHaveBeenCalled();
+		}));
+	it("keeps native attempt inputs usable from project/shared Markdown without a connector or mutable source dependency", async () =>
+		withTemporaryKanbanHome(async ({ homePath }) => {
+			const network = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Obsidian unreachable"));
+			try {
+				const { contexts, knowledge, bundles, index, input } = await fixture();
+				const dir = join(homePath, "shared-markdown");
+				await mkdir(dir, { recursive: true });
+				const file = join(dir, "shared-contract.md");
+				await writeFile(file, "# Shared contract\nUser-curated Markdown baseline.");
+				const published = await knowledge.mutate(
+					"demo",
+					{ kind: "user" },
+					{
+						action: "publish",
+						requestId: randomUUID(),
+						expectedRevision: null,
+						document: {
+							id: "shared-contract",
+							title: "Shared contract",
+							kind: "contract",
+							summary: "",
+							tags: [],
+							sources: [],
+						},
+						markdown: await readKnowledgeMarkdown(file),
+					},
+				);
+				if (published.kind !== "document") throw new Error("No shared copy");
+				const breakdown = {
+					...input.breakdown,
+					knowledgeReferences: [{ id: published.document.id, revision: published.document.revision }],
+				};
+				const prepared = await bundles.prepare("demo", {
+					...input,
+					breakdown,
+					breakdownText: JSON.stringify(breakdown),
+				});
+				await bundles.persist("demo", prepared);
+				await index.update("demo", (current) => {
+					const record = current.plans.plan1;
+					if (!record?.approval || !record.expansion) throw new Error("No fixture plan");
+					return {
+						...current,
+						plans: {
+							plan1: {
+								...record,
+								approval: {
+									...record.approval,
+									bundleRevision: prepared.bundle.revision,
+									breakdownSha256: prepared.bundle.breakdown.contentHash,
+								},
+								expansion: {
+									...record.expansion,
+									bundleRevision: prepared.bundle.revision,
+									breakdownSha256: prepared.bundle.breakdown.contentHash,
+								},
+							},
+						},
+					};
+				});
+				await contexts.attachExpansion("demo", "plan1");
+				await rm(file);
+				const child = await contexts.attachDerived("demo", "qa1", { sourceTaskId: "api1", kind: "qa" });
+				expect(child?.documents.some((doc) => doc.id === "shared-contract")).toBe(true);
+				const attempt = await contexts.reserveAttempt("demo", {
+					taskId: "qa1",
+					requestId: "native-offline",
+					kind: "session",
+				});
+				expect(attempt?.context.revision).toBe(child?.revision);
+				expect(
+					await contexts.reserveAttempt("demo", {
+						taskId: "manual1",
+						requestId: "legacy-offline",
+						kind: "session",
+					}),
+				).toBeNull();
+				expect(
+					await contexts.attachDerived("demo", "legacyqa", { sourceTaskId: "manual1", kind: "qa" }),
+				).toBeNull();
+				expect(
+					await contexts.attachDerived("demo", "olderqa", { sourceTaskId: "legacy.card", kind: "qa" }),
+				).toBeNull();
+				expect(network).not.toHaveBeenCalled();
+			} finally {
+				network.mockRestore();
+			}
+		}));
+	it("keeps derived/attempt APIs strict own-project and reserves new target ids without adopting old task history", async () =>
+		withTemporaryKanbanHome(async () => {
+			const { contexts, bundles, knowledge } = await fixture();
+			await contexts.attachExpansion("demo", "plan1");
+			const api = createTaskContextApi({ contexts, bundles, knowledge, canAttachDerived: async () => true });
+			for (const caller of [
+				session("other", "orchestrator"),
+				{ kind: "unknown", reason: "fixture" } as RuntimeCaller,
+			]) {
+				await expect(
+					api.attachDerived(caller, "demo", { taskId: "qa1", sourceTaskId: "api1", kind: "qa" }),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				await expect(api.attempts(caller, "demo", { taskId: "api1", offset: 0, limit: 10 })).rejects.toMatchObject({
+					code: "FORBIDDEN",
+				});
+			}
+			await expect(
+				api.attachDerived(session("demo"), "demo", { taskId: "qa1", sourceTaskId: "api1", kind: "qa" }),
+			).rejects.toMatchObject({ code: "FORBIDDEN" });
+			expect(
+				(
+					await api.attachDerived(session("demo", "orchestrator"), "demo", {
+						taskId: "qa1",
+						sourceTaskId: "api1",
+						kind: "qa",
+					})
+				).context?.inheritance?.sourceTaskId,
+			).toBe("api1");
+			const refused = createTaskContextApi({ contexts, bundles, knowledge, canAttachDerived: async () => false });
+			await expect(
+				refused.attachDerived(USER, "demo", { taskId: "historical1", sourceTaskId: "api1", kind: "runoff" }),
+			).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+			expect(await contexts.read("demo", "historical1")).toBeNull();
+		}));
+	it("retains attempts without board/index membership and refuses corrupt attempt refs instead of resetting them", async () =>
+		withTemporaryKanbanHome(async () => {
+			const { contexts, index } = await fixture();
+			await contexts.attachExpansion("demo", "plan1");
+			const original = await contexts.reserveAttempt("demo", {
+				taskId: "api1",
+				requestId: "retained-after-pruning",
+				kind: "session",
+			});
+			if (!original) throw new Error("No retained attempt");
+			await index.update("demo", (current) => ({ ...current, plans: {} }));
+			expect((await contexts.attempts("demo", "api1"))[0]?.id).toBe(original.attempt.id);
+			const file = join(getProjectKnowledgePaths("demo").root, "task-contexts.json"),
+				state = JSON.parse(await readFile(file, "utf8"));
+			state.attempts.api1[0].contextRevision = "f".repeat(64);
+			const damaged = JSON.stringify(state);
+			await writeFile(file, damaged);
+			await expect(contexts.attempts("demo", "api1")).rejects.toThrow(/retained knowledge attempt/u);
+			await expect(
+				contexts.reserveAttempt("demo", {
+					taskId: "api1",
+					requestId: "cannot-reset-corrupt-history",
+					kind: "session",
+				}),
+			).rejects.toThrow();
+			expect(await readFile(file, "utf8")).toBe(damaged);
+		}));
 	it("records one explicit user adoption with historical reads, unchanged plan approval, exact-retry receipts and expansion retries", async () =>
 		withTemporaryKanbanHome(async () => {
 			const { api, contexts, context, adoptionInput, replacement, index, record } = await adoptionFixture();
@@ -270,7 +586,7 @@ describe("approved-plan immutable knowledge handoffs", () => {
 				request,
 				start: async (prepared) => {
 					launched = prepared;
-					return {} as RuntimeTaskSessionSummary;
+					return { taskId: "api1", startedAt: 123 } as RuntimeTaskSessionSummary;
 				},
 			});
 			release();

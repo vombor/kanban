@@ -5,7 +5,10 @@ import { useTrpcQuery } from "@/runtime/use-trpc-query";
 type Client = ReturnType<typeof getRuntimeTrpcClient>;
 type ReadInput = Parameters<Client["taskKnowledge"]["read"]["query"]>[0];
 export function useTaskPlanContext(workspaceId: string | null, taskId: string, open: boolean) {
-	const [selected, setSelected] = useState<Pick<ReadInput, "part" | "id" | "offset" | "contextRevision"> | null>(null);
+	const [selected, setSelected] = useState<Pick<
+		ReadInput,
+		"part" | "id" | "offset" | "contextRevision" | "attemptId"
+	> | null>(null);
 	const queryFn = useCallback(
 		() => getRuntimeTrpcClient(workspaceId).taskKnowledge.get.query({ taskId }),
 		[workspaceId, taskId],
@@ -23,7 +26,7 @@ export function useTaskPlanContext(workspaceId: string | null, taskId: string, o
 	}, [workspaceId, taskId, contextRevision, selected]);
 	const read = useTrpcQuery({ enabled: open && Boolean(contextRevision) && Boolean(selected), queryFn: readFn });
 	const select = useCallback(
-		(value: Pick<ReadInput, "part" | "id" | "offset" | "contextRevision"> | null) => {
+		(value: Pick<ReadInput, "part" | "id" | "offset" | "contextRevision" | "attemptId"> | null) => {
 			read.setData(null);
 			setSelected(value);
 		},

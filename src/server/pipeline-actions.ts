@@ -19,6 +19,13 @@ import { BLOCKED_TITLE_PREFIX, type PipelineActionRequest, type PipelineActionRe
 import type { MutateWorkspaceState, TaskTrashWorkspaceScope } from "./task-trash-workflow";
 
 export interface PipelineActionRunnerDependencies {
+	attachKnowledge?: (
+		workspaceId: string,
+		task: Extract<PipelineActionRequest, { kind: "createTask" }>["task"],
+	) => Promise<RuntimeBoardCard["knowledgeHandoff"]>;
+	prepareKnowledgeRework?: (
+		request: Extract<PipelineActionRequest, { kind: "prepareKnowledgeRework" }>,
+	) => Promise<string | null>;
 	mutateWorkspaceState: MutateWorkspaceState;
 	ensureTaskWorktree: (
 		scope: TaskTrashWorkspaceScope,
@@ -95,6 +102,9 @@ export function createPipelineActionRunner(
 		request: Extract<PipelineActionRequest, { kind: "createTask" }>,
 	): Promise<PipelineActionResult> => {
 		const { task } = request;
+		if (task.knowledgeSource && !deps.attachKnowledge)
+			return { ok: false, error: "This server cannot retain the requested knowledge handoff." };
+		const knowledgeHandoff = await deps.attachKnowledge?.(request.workspaceId, task);
 		await deps.mutateWorkspaceState(request.workspacePath, (state) => {
 			const created = addTaskToColumn(
 				state.board,
@@ -105,6 +115,7 @@ export function createPipelineActionRunner(
 					prompt: task.prompt,
 					role: task.role,
 					reviewsTaskId: task.reviewsTaskId,
+					knowledgeHandoff,
 					agentId: task.agentId,
 					agentSettings: task.agentSettings,
 					baseRef: task.baseRef,
@@ -295,6 +306,12 @@ export function createPipelineActionRunner(
 	return async (request) => {
 		try {
 			switch (request.kind) {
+				case "prepareKnowledgeRework": {
+					if (!deps.prepareKnowledgeRework)
+						return { ok: false, error: "This server cannot retain a rework knowledge handoff." };
+					const id = await deps.prepareKnowledgeRework(request);
+					return { ok: true, ...(id ? { knowledgeAttemptId: id } : {}) };
+				}
 				case "createTask":
 					return await createTask(request);
 				case "startTask":

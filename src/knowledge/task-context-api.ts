@@ -16,6 +16,8 @@ export function createTaskContextApi(
 		knowledge?: ProjectKnowledgeStore;
 		admissionAvailable?: boolean;
 		canAdopt?: (workspaceId: string, taskId: string) => Promise<boolean>;
+		canAttachDerived?: (workspaceId: string, taskId: string) => Promise<boolean>;
+		validateAnchor?: (workspaceId: string, taskId: string) => Promise<void>;
 	} = {},
 ): RuntimeTaskKnowledgeApi {
 	const contexts = options.contexts ?? createTaskContextStore();
@@ -33,6 +35,48 @@ export function createTaskContextApi(
 		}
 	};
 	return {
+		attachDerived: async (caller, workspaceId, input) => {
+			const actor = authorizeKnowledgeCaller(caller, workspaceId);
+			if (actor.kind !== "user" && actor.role !== "orchestrator")
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "Derived reference attachment belongs to the user or this project's orchestrator.",
+				});
+			return run(async () => {
+				await options.validateAnchor?.(workspaceId, input.sourceTaskId);
+				const existing = await contexts.read(workspaceId, input.taskId);
+				if (!existing && !(await options.canAttachDerived?.(workspaceId, input.taskId)))
+					throw new KnowledgeError(
+						"PRECONDITION_FAILED",
+						"New derived references require a fresh reserved target id, never an existing or historical task.",
+					);
+				return {
+					context: await contexts.attachDerived(
+						workspaceId,
+						input.taskId,
+						{
+							sourceTaskId: input.sourceTaskId,
+							kind: input.kind,
+							...(input.snapshot ? { snapshot: input.snapshot } : {}),
+						},
+						() => options.canAttachDerived?.(workspaceId, input.taskId) ?? Promise.resolve(false),
+					),
+				};
+			});
+		},
+		attempts: async (caller, workspaceId, input) => {
+			authorizeKnowledgeCaller(caller, workspaceId);
+			return run(async () => {
+				await options.validateAnchor?.(workspaceId, input.taskId);
+				const attempts = [...(await contexts.attempts(workspaceId, input.taskId))].reverse();
+				return {
+					attempts: attempts.slice(input.offset, input.offset + input.limit),
+					authority: "reference_provenance_not_execution_approval" as const,
+					total: attempts.length,
+					nextOffset: input.offset + input.limit < attempts.length ? input.offset + input.limit : null,
+				};
+			});
+		},
 		adopt: async (caller, workspaceId, input) => {
 			authorizeKnowledgeCaller(caller, workspaceId);
 			if (caller.kind !== "user")
@@ -57,6 +101,7 @@ export function createTaskContextApi(
 		get: async (caller, workspaceId, input) => {
 			authorizeKnowledgeCaller(caller, workspaceId);
 			return run(async () => {
+				await options.validateAnchor?.(workspaceId, input.taskId);
 				const { context, history, startReservation } = await contexts.inspect(workspaceId, input.taskId);
 				if (!context)
 					return {
@@ -98,7 +143,19 @@ export function createTaskContextApi(
 		read: async (caller, workspaceId, input) => {
 			authorizeKnowledgeCaller(caller, workspaceId);
 			return run(async () => {
-				const context = await contexts.read(workspaceId, input.taskId, input.contextRevision);
+				await options.validateAnchor?.(workspaceId, input.taskId);
+				const attempt = input.attemptId
+					? (await contexts.attempts(workspaceId, input.taskId)).find((item) => item.id === input.attemptId)
+					: null;
+				if (input.attemptId && !attempt)
+					throw new KnowledgeError("NOT_FOUND", "That retained attempt does not belong to this project's task.");
+				if (attempt && input.contextRevision && attempt.contextRevision !== input.contextRevision)
+					throw new KnowledgeError("CONFLICT", "Attempt and requested context identify different revisions.");
+				const context = await contexts.read(
+					workspaceId,
+					input.taskId,
+					attempt?.contextRevision ?? input.contextRevision,
+				);
 				if (!context) throw new KnowledgeError("NOT_FOUND", "This task has no approved-plan knowledge handoff.");
 				const bundle = await bundles.read(workspaceId, context.bundleRevision);
 				const document = input.part === "document" ? context.documents.find((item) => item.id === input.id) : null;

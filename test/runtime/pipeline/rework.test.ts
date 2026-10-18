@@ -37,6 +37,31 @@ describe("rework loop", () => {
 			harness.cleanup();
 		}
 	});
+	it("retains a rework handoff before delivery, preserves the clear command and keeps queued delivery distinct from started evidence", async () => {
+		const order: string[] = [];
+		const harness = createHarness({
+			onFail: () => ({ action: "rework", clearContext: "always" }),
+			prepareKnowledge: async (input) => {
+				order.push("retain");
+				expect(input.taskId).toBe("d1111");
+				return { ok: true, knowledgeAttemptId: "a".repeat(64) };
+			},
+			actionResult: (action) => {
+				if (action.kind === "deliverInput") order.push("deliver");
+				return action.kind === "deliverInput"
+					? ({ ok: true, status: "queued" } as PipelineActionResult)
+					: { ok: true };
+			},
+		});
+		await harness.seed("d1111", { qaVerdicts: [failVerdict(1)] });
+		await harness.tick({ review: [DEV] }, [SESSION]);
+		expect(order).toEqual(["retain", "deliver", "retain", "deliver"]);
+		const messages = harness.actions.filter(
+			(action): action is Extract<typeof action, { kind: "deliverInput" }> => action.kind === "deliverInput",
+		);
+		expect(messages[0]?.text).toBe("/clear");
+		expect(messages[1]?.text).toContain(`--attempt-id ${"a".repeat(64)}`);
+	});
 
 	it("the started-check restarts a rework that never ran once, then escalates; one seen In Progress is left alone", async () => {
 		const harness = createHarness();

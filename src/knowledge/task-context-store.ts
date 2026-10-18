@@ -7,6 +7,9 @@ import { getPlanIndexPath, getProjectKnowledgePaths } from "../state/kanban-home
 import { knowledgeRevisionSchema } from "../trpc/knowledge-contract";
 import {
 	executionTaskIdSchema,
+	type KnowledgeAttempt,
+	type KnowledgeSource,
+	knowledgeSourceSchema,
 	type TaskContextAdoptRequest,
 	type TaskContextStartReservation,
 	type TaskKnowledgeContext,
@@ -19,6 +22,7 @@ import { createProjectKnowledgeStore, type ProjectKnowledgeStore } from "./knowl
 import { createPlanBundleStore, type PlanBundleStore } from "./plan-bundle-store";
 import { applyTaskContextAdoption, findTaskContextAdoption } from "./task-context-adoption";
 import { readTaskContextState, type TaskContextState, writeTaskContextState } from "./task-context-state";
+import { createKnowledgeAttemptStore, inheritTaskContext, type ReserveKnowledgeAttempt } from "./task-context-workflow";
 
 export interface TaskContextInspection {
 	context: TaskKnowledgeContext | null;
@@ -26,6 +30,25 @@ export interface TaskContextInspection {
 	startReservation: TaskContextStartReservation | null;
 }
 export interface TaskContextStore {
+	attachDerived(
+		workspaceId: string,
+		taskId: string,
+		source: KnowledgeSource,
+		canAttach?: () => Promise<boolean>,
+	): Promise<TaskKnowledgeContext | null>;
+	attempts(workspaceId: string, taskId: string): Promise<KnowledgeAttempt[]>;
+	reserveAttempt(
+		workspaceId: string,
+		input: ReserveKnowledgeAttempt,
+		rootRevision?: string,
+	): Promise<{ context: TaskKnowledgeContext; attempt: KnowledgeAttempt } | null>;
+	settleAttempt(
+		workspaceId: string,
+		taskId: string,
+		id: string,
+		outcome: "started" | "uncertain",
+		startedAt: number | null,
+	): Promise<void>;
 	read(workspaceId: string, taskId: string, revision?: string): Promise<TaskKnowledgeContext | null>;
 	inspect(workspaceId: string, taskId: string): Promise<TaskContextInspection>;
 	attachExpansion(workspaceId: string, planTaskId: string): Promise<void>;
@@ -60,9 +83,10 @@ export function createTaskContextStore(
 		const bundle = await bundles.read(workspaceId, original.bundleRevision);
 		if (
 			bundle.planTaskId !== original.planTaskId ||
-			original.documents.some(
-				(document) => !bundle.documents.some((item) => JSON.stringify(item) === JSON.stringify(document)),
-			)
+			(!original.inheritance &&
+				original.documents.some(
+					(document) => !bundle.documents.some((item) => JSON.stringify(item) === JSON.stringify(document)),
+				))
 		)
 			throw new KnowledgeError(
 				"PRECONDITION_FAILED",
@@ -108,7 +132,44 @@ export function createTaskContextStore(
 			return { context: null, history: [], startReservation: null };
 		return inspectState(workspaceId, taskId, await snapshot(workspaceId));
 	};
+	const attemptStore = createKnowledgeAttemptStore({
+		file,
+		snapshot,
+		inspect: inspectState,
+		now: options.now ?? (() => new Date()),
+	});
 	return {
+		reserveAttempt: async (workspaceId, input, rootRevision) => {
+			if (!executionTaskIdSchema.safeParse(input.taskId).success) {
+				if (rootRevision)
+					throw new KnowledgeError("PRECONDITION_FAILED", "Invalid retained handoff task identity.");
+				return null;
+			}
+			return attemptStore.reserve(workspaceId, input, rootRevision);
+		},
+		settleAttempt: attemptStore.settle,
+		attempts: async (workspaceId, taskId) => {
+			const state = await snapshot(workspaceId);
+			await inspectState(workspaceId, executionTaskIdSchema.parse(taskId), state);
+			return state.attempts?.[taskId] ?? [];
+		},
+		attachDerived: async (workspaceId, taskId, raw, canAttach) =>
+			lockedFileSystem.withLock({ path: file(workspaceId) }, async () => {
+				const id = executionTaskIdSchema.parse(taskId),
+					source = knowledgeSourceSchema.parse(raw);
+				if (!executionTaskIdSchema.safeParse(source.sourceTaskId).success) return null;
+				const state = await snapshot(workspaceId);
+				await inspectState(workspaceId, source.sourceTaskId, state);
+				if (state.tasks[id]) await inspectState(workspaceId, id, state);
+				if (!state.tasks[id] && canAttach && !(await canAttach()))
+					throw new KnowledgeError(
+						"PRECONDITION_FAILED",
+						"A derived handoff cannot attach to an existing, started or historical task.",
+					);
+				const context = inheritTaskContext(state, id, source, (options.now?.() ?? new Date()).toISOString());
+				if (context) await writeTaskContextState(file(workspaceId), state);
+				return context;
+			}),
 		inspect,
 		read: async (workspaceId, taskId, revision) => {
 			const parsedId = executionTaskIdSchema.safeParse(taskId);

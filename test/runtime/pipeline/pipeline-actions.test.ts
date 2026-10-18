@@ -31,6 +31,62 @@ function createRunner(columns: Parameters<typeof createBoard>[0]) {
 }
 
 describe("pipeline actions on the server", () => {
+	it("retains a derived knowledge attachment before creating its ordinary QA/sibling card and fails closed on retention error", async () => {
+		const { store, fakes } = createRunner({});
+		const attached = vi.fn(async () => {
+			expect(findCardInBoard(store.stored.board, "qa001")).toBeNull();
+			return { rootRevision: "a".repeat(64) };
+		});
+		const run = createPipelineActionRunner({
+			mutateWorkspaceState: store.mutateWorkspaceState,
+			ensureTaskWorktree: fakes.ensureTaskWorktree,
+			startTaskSession: fakes.startTaskSession,
+			attachKnowledge: attached,
+		});
+		const task = {
+			taskId: "qa001",
+			title: "QA references",
+			prompt: "Review exact retained references",
+			role: "qa" as const,
+			reviewsTaskId: "dev01",
+			agentId: "codex" as const,
+			baseRef: "main",
+			knowledgeSource: { sourceTaskId: "dev01", kind: "qa" as const, snapshot: "a".repeat(40) },
+		};
+		expect(await run({ ...SCOPE, kind: "createTask", task })).toMatchObject({ ok: true });
+		expect(findCardInBoard(store.stored.board, "qa001")?.card.knowledgeHandoff).toEqual({
+			rootRevision: "a".repeat(64),
+		});
+		attached.mockRejectedValueOnce(new Error("Missing immutable source"));
+		expect(await run({ ...SCOPE, kind: "createTask", task: { ...task, taskId: "qa002" } })).toMatchObject({
+			ok: false,
+		});
+		expect(findCardInBoard(store.stored.board, "qa002")).toBeNull();
+		expect(fakes.startTaskSession).not.toHaveBeenCalled();
+	});
+	it("retains rework reference handoffs over the existing IPC action without board or session effects", async () => {
+		const { store, fakes } = createRunner({ review: [createCard({ id: "dev01" })] });
+		const before = structuredClone(store.stored);
+		const prepareKnowledgeRework = vi.fn(async () => "a".repeat(64));
+		const run = createPipelineActionRunner({
+			mutateWorkspaceState: store.mutateWorkspaceState,
+			ensureTaskWorktree: fakes.ensureTaskWorktree,
+			startTaskSession: fakes.startTaskSession,
+			prepareKnowledgeRework,
+		});
+		expect(
+			await run({
+				...SCOPE,
+				kind: "prepareKnowledgeRework",
+				taskId: "dev01",
+				snapshot: "b".repeat(40),
+				round: 1,
+				at: "2026-10-18T00:00:00.000Z",
+			}),
+		).toEqual({ ok: true, knowledgeAttemptId: "a".repeat(64) });
+		expect(store.stored).toEqual(before);
+		expect(fakes.startTaskSession).not.toHaveBeenCalled();
+	});
 	it("refuses objective-held replaceLive recovery before stopping its active tool or creating a worktree", async () => {
 		const { store, fakes } = createRunner({ review: [createCard({ id: "dev01" })] });
 		const stop = vi.fn(),

@@ -227,7 +227,11 @@ import {
 	type RuntimeTaskKnowledgeApi,
 	taskContextAdoptRequestSchema,
 	taskContextAdoptResponseSchema,
+	taskDerivedContextRequestSchema,
 	taskExpansionContextRequestSchema,
+	taskKnowledgeAttemptsRequestSchema,
+	taskKnowledgeAttemptsResponseSchema,
+	taskKnowledgeContextSchema,
 	taskKnowledgeReadRequestSchema,
 	taskKnowledgeReadResponseSchema,
 	taskKnowledgeRequestSchema,
@@ -682,6 +686,26 @@ export const runtimeAppRouter = t.router({
 			}),
 	}),
 	taskKnowledge: t.router({
+		attachDerived: workspaceProcedure
+			.input(taskDerivedContextRequestSchema)
+			.output(z.object({ context: taskKnowledgeContextSchema.nullable() }))
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.taskKnowledgeApi)
+					throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Pinned task context is unavailable." });
+				return ctx.taskKnowledgeApi.attachDerived(
+					await readStrictCaller(ctx),
+					ctx.workspaceScope.workspaceId,
+					input,
+				);
+			}),
+		attempts: workspaceProcedure
+			.input(taskKnowledgeAttemptsRequestSchema)
+			.output(taskKnowledgeAttemptsResponseSchema)
+			.query(async ({ ctx, input }) => {
+				if (!ctx.taskKnowledgeApi)
+					throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Pinned task context is unavailable." });
+				return ctx.taskKnowledgeApi.attempts(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId, input);
+			}),
 		adopt: workspaceProcedure
 			.input(taskContextAdoptRequestSchema)
 			.output(taskContextAdoptResponseSchema)

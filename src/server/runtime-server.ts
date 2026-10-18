@@ -99,6 +99,7 @@ import { createWorkspaceApi } from "../trpc/workspace-api";
 import {
 	deleteTaskWorktree,
 	ensureTaskWorktreeIfDoesntExist,
+	getTaskWorkspacePathInfo,
 	getTaskWorktreeCandidatePaths,
 } from "../workspace/task-worktree";
 import { getWebUiDir, normalizeRequestPath, readAsset } from "./assets";
@@ -559,8 +560,22 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		log: deps.warn,
 	});
 	const taskContexts = createTaskContextStore();
+	const validateKnowledgeAnchor = async (workspaceId: string, taskId: string) => {
+		const card = (await loadWorkspaceBoardById(workspaceId)).columns
+			.flatMap((column) => column.cards)
+			.find((card) => card.id === taskId);
+		const view = await taskContexts.inspect(workspaceId, taskId);
+		if (card?.knowledgeHandoff && view.history[0]?.revision !== card.knowledgeHandoff.rootRevision)
+			throw new Error(
+				"Retained knowledge attachment is missing or mismatched; no unpinned task action is permitted.",
+			);
+		return card?.knowledgeHandoff?.rootRevision;
+	};
 	runtimeApi = createRuntimeApi({
-		taskContextBootstrap: (workspaceId, taskId) => buildTaskContextBootstrap(taskContexts, workspaceId, taskId),
+		taskContextBootstrap: async (workspaceId, taskId) => {
+			await validateKnowledgeAnchor(workspaceId, taskId);
+			return buildTaskContextBootstrap(taskContexts, workspaceId, taskId);
+		},
 		objectiveAdmission: objectiveStore,
 		launchReceiptIds,
 		providerDispatcher,
@@ -624,7 +639,14 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 				workspaceId,
 				taskId: request.taskId,
 				requestId: request.admissionId,
-				start: () => startWithTaskContext({ contexts: taskContexts, workspaceId, request, start }),
+				start: async () =>
+					startWithTaskContext({
+						contexts: taskContexts,
+						workspaceId,
+						request,
+						start,
+						rootRevision: await validateKnowledgeAnchor(workspaceId, request.taskId),
+					}),
 			}),
 		async (workspaceId, request) => {
 			const repo = deps.workspaceRegistry.getWorkspacePathById(workspaceId);
@@ -732,9 +754,31 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 	const obsidianConnectorApi = createObsidianConnectorApi();
 	const knowledgeApi = createKnowledgeApi();
 	const objectiveReceiptStore = createPipelineStateStore();
+	const canAttachKnowledge = async (workspaceId: string, taskId: string) => {
+		const state = await loadWorkspaceStateById(workspaceId);
+		if (!state) return false;
+		const live = Object.fromEntries(
+			(deps.workspaceRegistry.getTerminalManagerForWorkspace(workspaceId)?.listSummaries() ?? []).map((summary) => [
+				summary.taskId,
+				summary,
+			]),
+		);
+		const eligible = await unstartedTaskEligibility({
+			workspaceId,
+			board: state.board,
+			sessions: { ...state.sessions, ...live },
+			pipelineTaskIds: Object.keys((await objectiveReceiptStore.peek(workspaceId))?.cards ?? {}),
+		});
+		if (eligible.known.has(taskId)) return false;
+		return !(await getTaskWorkspacePathInfo({ cwd: state.repoPath, taskId, baseRef: "HEAD" })).exists;
+	};
 	const taskKnowledgeApi = createTaskContextApi({
 		contexts: taskContexts,
 		admissionAvailable: objectiveAdmissionAvailable,
+		canAttachDerived: canAttachKnowledge,
+		validateAnchor: async (workspaceId, taskId) => {
+			await validateKnowledgeAnchor(workspaceId, taskId);
+		},
 		canAdopt: async (workspaceId, taskId) => {
 			const state = await loadWorkspaceStateById(workspaceId);
 			if (!state) return false;
@@ -894,7 +938,35 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 	});
 	const handleTrashTaskRequest = createTrashTaskRequestHandler(taskTrashWorkflow);
 	const runPipelineAction = createPipelineActionRunner({
+		attachKnowledge: async (workspaceId, task) => {
+			if (!task.knowledgeSource) return undefined;
+			await validateKnowledgeAnchor(workspaceId, task.knowledgeSource.sourceTaskId);
+			const context = await taskContexts.attachDerived(workspaceId, task.taskId, task.knowledgeSource, () =>
+				canAttachKnowledge(workspaceId, task.taskId),
+			);
+			return context ? { rootRevision: context.revision } : undefined;
+		},
+		prepareKnowledgeRework: async (request) => {
+			const rootRevision = await validateKnowledgeAnchor(request.workspaceId, request.taskId);
+			const result = await taskContexts.reserveAttempt(
+				request.workspaceId,
+				{
+					taskId: request.taskId,
+					kind: "rework_handoff",
+					requestId: JSON.stringify([request.snapshot, request.round, request.at]),
+					...(request.snapshot ? { snapshot: request.snapshot } : {}),
+					round: request.round,
+				},
+				rootRevision,
+			);
+			return result?.attempt.id ?? null;
+		},
 		canAdmitTask: async (scope, taskId) => {
+			try {
+				await validateKnowledgeAnchor(scope.workspaceId, taskId);
+			} catch {
+				return "Retained knowledge is unavailable; the existing process was not stopped.";
+			}
 			const decision = await objectiveStore.check(scope.workspaceId, taskId, "start");
 			return decision.allowed
 				? null

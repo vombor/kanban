@@ -133,6 +133,7 @@ export interface BoardCard {
 	role?: TaskRole;
 	/** On a QA card: the dev card it reviews (written by the pipeline). */
 	reviewsTaskId?: string;
+	knowledgeHandoff?: RuntimeBoardCard["knowledgeHandoff"];
 	/** On a card imported from an issue (written by the runtime's issue import). */
 	issue?: RuntimeTaskIssue;
 	images?: TaskImage[];

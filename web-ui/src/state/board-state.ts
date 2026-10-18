@@ -2,7 +2,6 @@ import type { DropResult } from "@hello-pangea/dnd";
 import { runtimeProviderQueueSchema } from "@runtime-provider-queue";
 import { createShortTaskId } from "@runtime-task-id";
 import * as runtimeTaskState from "@runtime-task-state";
-
 import { createInitialBoardData } from "@/data/board-data";
 import type { RuntimeAgentId, RuntimeTaskAgentSettings } from "@/runtime/types";
 import { isAllowedCrossColumnCardMove, type ProgrammaticCardMoveInFlight } from "@/state/drag-rules";
@@ -21,6 +20,7 @@ import {
 	type TaskImage,
 	type TaskPendingGitAction,
 } from "@/types";
+import { knowledgeHandoffSchema } from "../../../src/core/knowledge-binding";
 
 export interface TaskDraft {
 	title?: string;
@@ -188,6 +188,7 @@ function normalizeCard(rawCard: unknown): BoardCard | null {
 		autoReviewMode?: unknown;
 		role?: unknown;
 		reviewsTaskId?: unknown;
+		knowledgeHandoff?: unknown;
 		issue?: unknown;
 		images?: unknown;
 		baseRef?: unknown;
@@ -228,6 +229,7 @@ function normalizeCard(rawCard: unknown): BoardCard | null {
 	const role = normalizeTaskRole(card.role);
 	const reviewsTaskId = typeof card.reviewsTaskId === "string" && card.reviewsTaskId ? card.reviewsTaskId : null;
 	const issue = normalizeTaskIssue(card.issue);
+	const knowledgeHandoff = knowledgeHandoffSchema.safeParse(card.knowledgeHandoff);
 
 	return {
 		id: typeof card.id === "string" && card.id ? card.id : createShortTaskId(createBrowserUuid),
@@ -241,6 +243,7 @@ function normalizeCard(rawCard: unknown): BoardCard | null {
 		...(role ? { role } : {}),
 		...(reviewsTaskId ? { reviewsTaskId } : {}),
 		...(issue ? { issue } : {}),
+		...(knowledgeHandoff.success ? { knowledgeHandoff: knowledgeHandoff.data } : {}),
 		images: normalizeTaskImages(card.images),
 		baseRef,
 		...(typeof card.agentId === "string" && card.agentId ? { agentId: card.agentId as RuntimeAgentId } : {}),

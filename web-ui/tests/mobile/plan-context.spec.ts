@@ -122,6 +122,12 @@ for (const profile of ["phone", "desktop"] as const) {
 			const contexts = createTaskContextStore({ homePath, bundles, index });
 			await contexts.attachExpansion(workspaceId, "planfixture");
 			contextRevision = (await contexts.read(workspaceId, taskId))?.revision ?? "";
+			const qaContext = await contexts.attachDerived(workspaceId, "qafixture", {
+				sourceTaskId: taskId,
+				kind: "qa",
+				snapshot: "a".repeat(40),
+			});
+			if (!qaContext) throw new Error("Owned QA context missing");
 			await knowledge.mutate(
 				workspaceId,
 				{ kind: "user" },
@@ -139,6 +145,16 @@ for (const profile of ["phone", "desktop"] as const) {
 			if (!card) throw new Error("Fixture card missing");
 			for (const column of board.columns) column.cards = column.cards.filter((item) => item.id !== taskId);
 			board.columns.find((column) => column.id === "backlog")?.cards.push(card);
+			board.columns
+				.find((column) => column.id === "review")
+				?.cards.push({
+					...card,
+					id: "qafixture",
+					title: "Owned QA handoff fixture",
+					role: "qa",
+					reviewsTaskId: taskId,
+					knowledgeHandoff: { rootRevision: qaContext.revision },
+				});
 			await writeFile(boardPath, JSON.stringify(board));
 		});
 		test.afterAll(async () => {
@@ -206,6 +222,29 @@ for (const profile of ["phone", "desktop"] as const) {
 			expect(JSON.parse(started.stdout)).toMatchObject({ ok: true });
 			const frozen = instance.runCli(["knowledge", "task-context", taskId, "--json"]);
 			expect(JSON.parse(frozen.stdout)).toMatchObject({ canAdopt: false, startReservation: { contextRevision } });
+			const attempts = instance.runCli(["knowledge", "task-attempts", taskId, "--json"]);
+			expect(attempts.status, attempts.stderr).toBe(0);
+			expect(JSON.parse(attempts.stdout)).toMatchObject({
+				total: 1,
+				attempts: [{ kind: "session", outcome: "started", contextRevision }],
+			});
+			await page.reload();
+			if (!(await page.getByRole("button", { name: "Plan context", exact: true }).isVisible()))
+				await page.locator(`[data-task-id="${taskId}"]`).first().click();
+			await page.getByRole("button", { name: "Plan context", exact: true }).click();
+			await dialog.getByRole("button", { name: "Inspect retained attempts", exact: true }).click();
+			await expect(dialog).toContainText("Physical session · started");
+			await dialog.getByRole("button", { name: "Read attempt spec", exact: true }).click();
+			await expect(dialog.locator("pre")).toContainText("Retained reviewed spec");
+			await page.keyboard.press("Escape");
+			if (await page.getByRole("button", { name: "Back to board", exact: true }).isVisible())
+				await page.getByRole("button", { name: "Back to board", exact: true }).click();
+			await page.locator('[data-task-id="qafixture"]').first().click();
+			await page.getByRole("button", { name: "Plan context", exact: true }).click();
+			await expect(dialog).toContainText(`Inherited qa reference handoff from task ${taskId}`);
+			await dialog.getByRole("button", { name: "Read api", exact: true }).click();
+			await expect(dialog.locator("pre")).toContainText("Pinned reviewed response");
+			await expect(dialog.locator("pre")).not.toContainText("Future incompatible response");
 			expect(errors).toEqual([]);
 		});
 	});

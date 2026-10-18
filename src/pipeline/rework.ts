@@ -302,6 +302,15 @@ export interface ReworkContext {
 
 export interface ReworkDependencies {
 	objectives?: ObjectiveEvidenceOwner;
+	/** Server-owned retention before rework input/restarts; absent only in legacy/offline injected owners. */
+	prepareKnowledge?: (input: {
+		workspaceId: string;
+		workspacePath: string;
+		taskId: string;
+		snapshot: string | null;
+		round: number;
+		at: string;
+	}) => Promise<PipelineActionResult>;
 	/** updateTask, resumeTask, blockTask, createTask, startTask on the server. */
 	actions: PipelineActions;
 	/**
@@ -445,21 +454,61 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 	const loadEntry = async (workspaceId: string, taskId: string): Promise<PipelineCardState | undefined> =>
 		(await deps.store.load(workspaceId)).cards[taskId];
 
-	const run = async (request: PipelineActionRequest): Promise<PipelineActionResult> =>
-		await deps.actions.run(request).catch((error: unknown) => ({
+	const prepareKnowledge = async (
+		workspaceId: string,
+		workspacePath: string,
+		taskId: string,
+	): Promise<PipelineActionResult> => {
+		const last = readReworks(readQaflow(await loadEntry(workspaceId, taskId))).at(-1);
+		return last && deps.prepareKnowledge
+			? deps.prepareKnowledge({
+					workspaceId,
+					workspacePath,
+					taskId,
+					snapshot: last.snapshot,
+					round: last.round,
+					at: last.at,
+				})
+			: { ok: true };
+	};
+	const run = async (request: PipelineActionRequest): Promise<PipelineActionResult> => {
+		if (request.kind === "resumeTask") {
+			const retained = await prepareKnowledge(request.workspaceId, request.workspacePath, request.taskId);
+			if (!retained.ok) return retained;
+		}
+		return await deps.actions.run(request).catch((error: unknown) => ({
 			ok: false as const,
 			error: error instanceof Error ? error.message : String(error),
 		}));
+	};
 
 	const scopeOf = (scope: CardScope) => ({
 		workspaceId: scope.context.snapshot.workspaceId,
 		workspacePath: scope.context.snapshot.workspacePath,
 	});
 
-	const deliver = async (scope: CardScope, text: string): Promise<{ ok: boolean; status?: string; error?: string }> =>
-		await deps
-			.deliverInput({ workspaceId: scope.context.snapshot.workspaceId, taskId: scope.entry.card.id, text })
+	const deliver = async (
+		scope: CardScope,
+		text: string,
+	): Promise<{ ok: boolean; status?: string; error?: string }> => {
+		const retained = await prepareKnowledge(
+			scope.context.snapshot.workspaceId,
+			scope.context.snapshot.workspacePath,
+			scope.entry.card.id,
+		);
+		if (!retained.ok) return retained;
+		const pointer =
+			retained.knowledgeAttemptId && text !== getClearCommand(scope.dev.agentId)
+				? `\n\nRetained rework reference handoff (not delivery/acceptance proof): kanban knowledge task-read ${scope.entry.card.id} --part spec --attempt-id ${retained.knowledgeAttemptId}`
+				: "";
+		return await deps
+			.deliverInput({
+				workspaceId: scope.context.snapshot.workspaceId,
+				taskId: scope.entry.card.id,
+				text: text + pointer,
+			})
 			.catch((error: unknown) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+	};
 
 	/**
 	 * The open runoff group a card races in. A group file that can't be read counts as racing ("unknown"): the caller
@@ -669,6 +718,7 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 				title: input.title.slice(0, 200),
 				prompt: input.prompt,
 				role: "dev",
+				knowledgeSource: { sourceTaskId: card.id, kind: input.sibling.kind },
 				agentId: input.agentId,
 				agentSettings: toAgentSettings(input.model),
 				baseRef: card.baseRef,

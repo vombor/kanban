@@ -42,6 +42,7 @@ export function isPendingGitActionStale(pending: RuntimeTaskPendingGitAction, no
 }
 
 export interface RuntimeCreateTaskInput {
+	knowledgeHandoff?: RuntimeBoardCard["knowledgeHandoff"];
 	taskId?: string;
 	title?: string;
 	prompt: string;
@@ -347,6 +348,7 @@ export function addTaskToColumn(
 		autoReviewMode: normalizeTaskAutoReviewMode(input.autoReviewMode),
 		...(input.role && input.role !== "dev" ? { role: input.role } : {}),
 		...(input.reviewsTaskId ? { reviewsTaskId: input.reviewsTaskId } : {}),
+		...(input.knowledgeHandoff ? { knowledgeHandoff: input.knowledgeHandoff } : {}),
 		...(input.issue ? { issue: { ...input.issue } } : {}),
 		images: cloneTaskImages(input.images),
 		...(input.agentId ? { agentId: input.agentId } : {}),

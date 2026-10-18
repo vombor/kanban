@@ -929,6 +929,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 				prompt,
 				role: "qa",
 				reviewsTaskId: card.id,
+				knowledgeSource: { sourceTaskId: card.id, kind: "qa", snapshot: qaSnapshot.commit },
 				agentId: answer.agentId,
 				agentSettings: toAgentSettings(answer.model),
 				baseRef: card.baseRef,

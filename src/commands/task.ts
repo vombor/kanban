@@ -607,6 +607,7 @@ export async function createTask(input: {
 	agentSettings?: RuntimeTaskAgentSettings;
 	/** A plan card's spec slug (`docs/specs/<slug>.md`); default from the title. */
 	planSlug?: string;
+	knowledgeHandoff?: RuntimeBoardCard["knowledgeHandoff"];
 }): Promise<JsonRecord> {
 	const workspace = await resolveRuntimeWorkspace(input.projectPath, input.cwd);
 	const workspaceRepoPath = workspace.repoPath;
@@ -664,6 +665,7 @@ export async function createTask(input: {
 				autoReviewEnabled: input.autoReviewEnabled,
 				autoReviewMode: input.autoReviewMode,
 				role: input.role,
+				knowledgeHandoff: input.knowledgeHandoff,
 				agentId: planCard ? planCard.agentId : devAssignment ? devAssignment.agentId : (input.agentId ?? undefined),
 				agentSettings: planCard
 					? planCard.agentSettings
