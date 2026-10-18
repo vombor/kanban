@@ -106,12 +106,18 @@ function cardColumn(board: RuntimeBoardData, taskId: string): string {
 export async function checkWakeRequests(input: {
 	requests: readonly WakeRequest[];
 	board: RuntimeBoardData;
+	/** Production reads the current persisted board after reading requests, never an older worker snapshot. */
+	readBoard?: () => Promise<RuntimeBoardData>;
 	now: number;
 	probe: (provider: string, model: string) => Promise<boolean>;
 }): Promise<WakeRequestCheck> {
 	const items: string[] = [];
 	const remaining: WakeRequest[] = [];
 	const log: string[] = [];
+	const board =
+		input.readBoard && input.requests.some((request) => request.when?.kind === "card-done")
+			? await input.readBoard().catch(() => null)
+			: input.board;
 	for (const request of input.requests) {
 		const timedOut = input.now - Date.parse(request.createdAt) > request.timeoutMin * 60_000;
 		const when = request.when;
@@ -120,7 +126,7 @@ export async function checkWakeRequests(input: {
 			continue;
 		}
 		if (when.kind === "card-done") {
-			const column = cardColumn(input.board, when.taskId);
+			const column = board ? cardColumn(board, when.taskId) : "unknown (current board unavailable)";
 			const done = column === "trash" || column === "gone";
 			if (done || timedOut) {
 				items.push(

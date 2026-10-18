@@ -13,6 +13,11 @@ import type {
 	RuntimeTaskTypedInput,
 } from "../core/api-contract";
 import { isHomeAgentSessionId } from "../core/home-agent-session";
+import {
+	isTaskExecutionBlockWarning,
+	readTaskExecutionBlock,
+	TASK_EXECUTION_BLOCK_PREFIX,
+} from "../core/task-execution-block";
 import { accumulateRunningTime } from "../core/task-running-time";
 import {
 	type AgentAdapterLaunchInput,
@@ -213,6 +218,9 @@ function updateSummary(entry: SessionEntry, patch: Partial<RuntimeTaskSessionSum
 		...entry.summary,
 		// A turn end holds only for the Review it was reported in.
 		...(stateChanged ? { lastTurnEnd: null } : {}),
+		...(stateChanged && patch.state === "running" && isTaskExecutionBlockWarning(entry.summary.warningMessage)
+			? { warningMessage: null }
+			: {}),
 		...runningTime,
 		...patch,
 		...(stateChanged ? { stateChangedAt: updatedAt } : {}),
@@ -1160,6 +1168,7 @@ export class TerminalSessionManager implements TerminalSessionService {
 			next.notificationType !== (previous?.notificationType ?? null) ||
 			next.source !== (previous?.source ?? null);
 		const lastTurnEnd = resolveLastTurnEnd(entry.summary, activity, options);
+		const executionBlock = readTaskExecutionBlock(activity);
 		if (!didChange && lastTurnEnd === entry.summary.lastTurnEnd) {
 			return cloneSummary(entry.summary);
 		}
@@ -1168,6 +1177,13 @@ export class TerminalSessionManager implements TerminalSessionService {
 			lastHookAt: now(),
 			latestHookActivity: next,
 			lastTurnEnd,
+			...(executionBlock
+				? {
+						warningMessage: `${TASK_EXECUTION_BLOCK_PREFIX}${executionBlock}`,
+						reviewReason: "error" as const,
+						lastTurnEnd: null,
+					}
+				: {}),
 		});
 		if (entry.active) {
 			for (const listener of entry.listeners.values()) {

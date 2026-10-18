@@ -29,6 +29,7 @@ import {
 	resolveEffectiveAgentWithSource,
 	resolveEffectiveModel,
 } from "../core/effective-agent";
+import { isTaskExecutionBlocked } from "../core/task-execution-block";
 import type { CardHistory, EffectiveCard, QaPolicyAnswer, RoutingPolicy } from "../kits/policy";
 import { isReviewSettled } from "../terminal/review-settle";
 import type { PipelineDecisionOutcome, PipelineDecisionRecord } from "./decision-log";
@@ -289,6 +290,17 @@ export async function evaluatePipelineWorkspace(input: PipelineEvaluationInput):
 			role: effective.role,
 		};
 		// An escalated card waits for a human (BLOCKED in Backlog). If it is back in Review without a handback (started
+		if (isTaskExecutionBlocked(session)) {
+			input.onCardOutcome?.(card.id, { kind: "interrupted" });
+			decisions.push({
+				...common,
+				stage: "qa_gate",
+				answer: null,
+				outcome: "none",
+				note: "Kanban guardrails refused a tool: incomplete turn, not snapshotted or QA'd; user attention required without weakening the guard.",
+			});
+			continue;
+		}
 		// by hand, or by a board link), it is never QA'd or landed: a sibling may have taken its task over.
 		const escalatedAt = readEscalatedAt(input.state.cards[card.id]);
 		if (escalatedAt) {

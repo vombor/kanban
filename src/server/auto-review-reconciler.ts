@@ -25,6 +25,7 @@ import type {
 } from "../core/api-contract";
 import { resolveEffectiveAgent } from "../core/effective-agent";
 import { isPendingGitActionStale } from "../core/task-board-mutations";
+import { isTaskExecutionBlocked } from "../core/task-execution-block";
 import { type DeliverTaskInputResult, deliverTaskInput } from "../terminal/deliver-task-input";
 import { isReviewSettled } from "../terminal/review-settle";
 import type { TerminalSessionManager } from "../terminal/session-manager";
@@ -454,6 +455,7 @@ export function createAutoReviewReconciler(deps: CreateAutoReviewReconcilerDepen
 				const pendingGitAction = card.pendingGitAction ?? null;
 				// The agent the session actually runs on wins over card.agentId (plan §4.0, the 2026-10-06 incident).
 				const summary = workspace.terminalManager?.getSummary(card.id) ?? null;
+				if (isTaskExecutionBlocked(summary)) continue;
 				const effectiveAgent = selectedAgentId
 					? resolveEffectiveAgent(card, summary, { selectedAgentId })
 					: (summary?.agentId ?? card.agentId ?? null);

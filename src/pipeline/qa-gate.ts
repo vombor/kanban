@@ -75,6 +75,7 @@ import type {
 } from "../core/api-contract";
 import { resolveCardRole, resolveReviewedTaskId } from "../core/card-role";
 import type { EffectiveModel, EffectiveModelConfig } from "../core/effective-agent";
+import { isTaskExecutionBlocked } from "../core/task-execution-block";
 import { createUniqueTaskId } from "../core/task-id";
 import type { KitDocument } from "../kits/kit-schema";
 import type { EffectiveCard, KitVerdict, OnPassAnswer, QaPolicyAnswer, RoutingPolicy } from "../kits/policy";
@@ -1334,7 +1335,8 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			if (
 				resolveCardRole(card) !== "dev" ||
 				!isReviewSettled(session, context.now, snapshot.reviewSettleMs) ||
-				readEscalatedAt(entry)
+				readEscalatedAt(entry) ||
+				isTaskExecutionBlocked(session)
 			) {
 				continue;
 			}

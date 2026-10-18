@@ -276,7 +276,7 @@ function stripCliOptions(args: string[], optionNames: readonly string[]): string
 const CLINE_CLI_HOOK_SOURCE = "cline-cli";
 
 /** `kanban hooks cline-guard` with the card's policy: the worktree, writable dirs (+ Cline's data dir), denies. */
-function buildClineGuardCommandParts(guardrails: TaskGuardrails): string[] {
+function buildClineGuardCommandParts(guardrails: TaskGuardrails, card: ClineHookCard | null): string[] {
 	const policy: ClineGuardPolicy = {
 		worktreePath: guardrails.worktreePath,
 		confineWrites: guardrails.confineWrites,
@@ -284,7 +284,12 @@ function buildClineGuardCommandParts(guardrails: TaskGuardrails): string[] {
 		deniedCommands: listMatcherDeniedCommands(guardrails),
 		...buildIsolationGuardPolicy(guardrails),
 	};
-	return buildHooksCommandParts(["cline-guard", "--policy-base64", encodeGuardPolicy(policy)]);
+	return buildHooksCommandParts([
+		"cline-guard",
+		"--policy-base64",
+		encodeGuardPolicy(policy),
+		...(card ? createHookRuntimeArgs(card) : []),
+	]);
 }
 
 function encodeGuardPolicy(policy: CommandGuardPolicy): string {
@@ -404,7 +409,7 @@ if ($isUserQuestionTool) {
 		return `# ${KANBAN_MANAGED_CLINE_CLI_HOOK_MARKER} (PreToolUse)
 $inputText = [Console]::In.ReadToEnd()
 $decision = '{"cancel":false}'
-${guard}${notify}Write-Output $decision
+${notify}${guard}Write-Output $decision
 exit 0
 `;
 	}
@@ -426,7 +431,7 @@ fi
 # ${KANBAN_MANAGED_CLINE_CLI_HOOK_MARKER} (PreToolUse)
 INPUT="$(cat || true)"
 DECISION='{"cancel":false}'
-${guard}${notify}printf '%s\\n' "$DECISION"
+${notify}${guard}printf '%s\\n' "$DECISION"
 `;
 }
 
@@ -1826,7 +1831,7 @@ const clineCliAdapter: AgentSessionAdapter = {
 		const hooks = resolveHookContext(input);
 		const card: ClineHookCard | null = hooks && { ...hooks, workspaceRoot: input.cwd };
 		const guardrails = getSessionGuardrails(input);
-		const guardCommand = guardrails ? buildClineGuardCommandParts(guardrails) : undefined;
+		const guardCommand = guardrails ? buildClineGuardCommandParts(guardrails, card) : undefined;
 		// The hooks and rules written below are this card's: never a .cline directory shared with other cards.
 		await ensureCardOwnedClineDir(input.cwd);
 		if (hooks || guardCommand) {

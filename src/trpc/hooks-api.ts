@@ -5,6 +5,7 @@ import type {
 	RuntimeTaskTurnCheckpoint,
 } from "../core/api-contract";
 import { parseHookIngestRequest } from "../core/api-validation";
+import { isTaskExecutionBlocked, readTaskExecutionBlock } from "../core/task-execution-block";
 import { loadWorkspaceContextById } from "../state/workspace-state";
 import type { TerminalSessionManager } from "../terminal/session-manager";
 import { captureTaskTurnCheckpoint, deleteTaskTurnCheckpointRef } from "../workspace/turn-checkpoints";
@@ -59,6 +60,7 @@ export function createHooksApi(deps: CreateHooksApiDependencies): RuntimeTrpcCon
 
 				const manager = await deps.ensureTerminalManagerForWorkspace(workspaceId, workspacePath);
 				const summary = manager.getSummary(taskId);
+				const executionBlocked = readTaskExecutionBlock(body.metadata) !== null || isTaskExecutionBlocked(summary);
 				if (!summary) {
 					return {
 						ok: false,
@@ -68,7 +70,9 @@ export function createHooksApi(deps: CreateHooksApiDependencies): RuntimeTrpcCon
 
 				if (!canTransitionTaskForHookEvent(summary, event)) {
 					if (body.metadata) {
-						manager.applyHookActivity(taskId, body.metadata, { turnEnd: event === "to_review" });
+						manager.applyHookActivity(taskId, body.metadata, {
+							turnEnd: event === "to_review" && !executionBlocked,
+						});
 					}
 					return {
 						ok: true,
@@ -84,7 +88,7 @@ export function createHooksApi(deps: CreateHooksApiDependencies): RuntimeTrpcCon
 					} satisfies RuntimeHookIngestResponse;
 				}
 
-				if (event === "to_review") {
+				if (event === "to_review" && !executionBlocked) {
 					const nextTurn = (transitionedSummary.latestTurnCheckpoint?.turn ?? 0) + 1;
 					const checkpointCwd = transitionedSummary.workspacePath ?? workspacePath;
 					const staleRef = transitionedSummary.previousTurnCheckpoint?.ref ?? null;
@@ -109,11 +113,13 @@ export function createHooksApi(deps: CreateHooksApiDependencies): RuntimeTrpcCon
 				}
 
 				if (body.metadata) {
-					manager.applyHookActivity(taskId, body.metadata, { turnEnd: event === "to_review" });
+					manager.applyHookActivity(taskId, body.metadata, {
+						turnEnd: event === "to_review" && !executionBlocked,
+					});
 				}
 
 				void deps.broadcastRuntimeWorkspaceStateUpdated(workspaceId, workspacePath);
-				if (event === "to_review") {
+				if (event === "to_review" && !executionBlocked) {
 					deps.broadcastTaskReadyForReview(workspaceId, taskId);
 				}
 

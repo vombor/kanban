@@ -38,7 +38,7 @@ import {
 	resolveWorkspaceWakeSettings,
 	type WatchdogMode,
 } from "../../config/pipeline-config";
-import type { RuntimeAgentId, RuntimeBoardCard, RuntimeBoardColumnId } from "../../core/api-contract";
+import type { RuntimeAgentId, RuntimeBoardCard, RuntimeBoardColumnId, RuntimeBoardData } from "../../core/api-contract";
 import type { EffectiveModelConfig } from "../../core/effective-agent";
 import { createHomeAgentSessionId, isHomeAgentSessionIdForWorkspace } from "../../core/home-agent-session";
 import { resolveIsolationMode } from "../../isolation/isolation-settings";
@@ -55,6 +55,7 @@ import {
 	getWatchdogWorkspacePaths,
 	type WatchdogWorkspacePaths,
 } from "../../state/kanban-home";
+import { loadWorkspaceBoardById } from "../../state/workspace-state";
 import { getAgentTurnEndSource } from "../../terminal/agent-session-adapters";
 import { createClineSessionFileReader } from "../../terminal/cline-session-files";
 import {
@@ -189,6 +190,8 @@ export interface WatchdogDecisionRecord {
 }
 
 export interface WatchdogDependencies {
+	/** Read-only authoritative board for conditional wake requests; snapshot absence alone is not deletion. */
+	readWakeBoard?: (workspaceId: string) => Promise<RuntimeBoardData>;
 	actions: WatchdogActions;
 	readConfig: () => Promise<ParsedPipelineConfig>;
 	loadCatalog: () => Promise<KitCatalog>;
@@ -1003,6 +1006,7 @@ export function createWatchdog(deps: WatchdogDependencies): Watchdog {
 		const check = await checkWakeRequests({
 			requests: pending,
 			board: snapshot.board,
+			readBoard: async () => await (deps.readWakeBoard ?? loadWorkspaceBoardById)(snapshot.workspaceId),
 			now: context.now,
 			probe: probeModel,
 		});

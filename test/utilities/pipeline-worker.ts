@@ -331,6 +331,7 @@ export function createSnapshot(input: {
 				...(session.stateChangedAt !== undefined ? { stateChangedAt: session.stateChangedAt } : {}),
 				...(session.workspacePath !== undefined ? { workspacePath: session.workspacePath } : {}),
 				...(session.reviewReason !== undefined ? { reviewReason: session.reviewReason } : {}),
+				...(session.warningMessage !== undefined ? { warningMessage: session.warningMessage } : {}),
 				...(session.exitCode !== undefined ? { exitCode: session.exitCode } : {}),
 				...(session.latestHookActivity !== undefined ? { latestHookActivity: session.latestHookActivity } : {}),
 				...(session.live !== undefined ? { live: session.live } : {}),

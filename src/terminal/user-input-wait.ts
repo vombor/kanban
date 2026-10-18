@@ -24,6 +24,11 @@ import type {
 	RuntimeTaskSessionSummary,
 	RuntimeUserInputWaitKind,
 } from "../core/api-contract";
+import {
+	isTaskExecutionBlocked,
+	readTaskExecutionBlock,
+	TASK_EXECUTION_BLOCK_PREFIX,
+} from "../core/task-execution-block";
 import { readTurnFinalMessage } from "../core/turn-final-message";
 import { CLINE_CLI_ASK_TOOL_PATTERN } from "./agent-session-adapters";
 
@@ -44,7 +49,13 @@ export type UserInputWaitSession = Pick<RuntimeTaskSessionSummary, "state"> &
 	Partial<
 		Pick<
 			RuntimeTaskSessionSummary,
-			"reviewReason" | "lastHookAt" | "stateChangedAt" | "updatedAt" | "latestHookActivity" | "lastTurnEnd"
+			| "reviewReason"
+			| "lastHookAt"
+			| "stateChangedAt"
+			| "updatedAt"
+			| "latestHookActivity"
+			| "lastTurnEnd"
+			| "warningMessage"
 		>
 	>;
 
@@ -62,6 +73,7 @@ function hookEvent(activity: HookActivity): string {
 
 /** The newest hook of the session asked the user for a permission. */
 export function isPermissionRequestActivity(activity: HookActivity): boolean {
+	if (readTaskExecutionBlock(activity) !== null) return true;
 	const event = hookEvent(activity);
 	if (PERMISSION_HOOK_EVENTS.has(event) || event.endsWith("_approval_request")) {
 		return true;
@@ -124,6 +136,16 @@ export function describeUserInputWait(
 	if (typeof options.answeredAt === "number" && options.answeredAt >= since) {
 		return null;
 	}
+	if (isTaskExecutionBlocked(session))
+		return {
+			kind: "approval",
+			since,
+			text: oneLine(
+				readTaskExecutionBlock(activity) ??
+					session.warningMessage?.slice(TASK_EXECUTION_BLOCK_PREFIX.length) ??
+					"Execution blocked by Kanban guardrails",
+			),
+		};
 	// A tool that asks the user may need a permission first (Claude Code's AskUserQuestion): it is still a question.
 	if (isUserQuestionToolActivity(activity)) {
 		return {

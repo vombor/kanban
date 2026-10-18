@@ -25,6 +25,7 @@
 import type { PipelineConfig } from "../config/pipeline-config";
 import type { RuntimeBoardCard, RuntimeTaskRole } from "../core/api-contract";
 import type { EffectiveModel } from "../core/effective-agent";
+import { isTaskExecutionBlocked } from "../core/task-execution-block";
 import type { EscalationTarget, OnOutageAnswer } from "../kits/policy";
 import type { AgentRecoveryProfile } from "../terminal/agent-session-adapters";
 import type { ClineSessionDetail } from "../terminal/cline-session-files";
@@ -936,6 +937,12 @@ function nudgeForSilentStall(input: RecoveryCardInput, stall: ClineSilentStall):
 /** What recovery should do about one card now. */
 export function decideRecovery(input: RecoveryCardInput): RecoveryDecision {
 	const { flow } = input;
+	if (isTaskExecutionBlocked(input.session))
+		return {
+			kind: "wait",
+			reason:
+				"Kanban guardrails refused a tool; user attention required, not an automatic retry or provider failure",
+		};
 	if (input.role !== "dev") {
 		// QA cards get their own nudges from the QA gate (verdict outbox); calibration runs are calibrate's.
 		return { kind: "none", reason: `role ${input.role}: not recovered as a dev card` };

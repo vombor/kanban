@@ -4,6 +4,8 @@
 // payload carries the raw tool input as `tool_call.input` and a string-valued copy as `preToolUse.parameters`.
 import { realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import type { RuntimeHookIngestRequest } from "../core/api-contract";
+import { TASK_EXECUTION_BLOCK_EVENT } from "../core/task-execution-block";
 
 import {
 	describeDeniedCommand,
@@ -22,6 +24,34 @@ export interface ClineGuardDecision {
 }
 
 const ALLOW: ClineGuardDecision = { cancel: false };
+
+/** A refusal ends Cline's turn without a tool result/TaskComplete. Report only the script's explicit own identity. */
+export function buildClineGuardRefusalHook(
+	payload: unknown,
+	policy: ClineGuardPolicy,
+	decision: ClineGuardDecision,
+	context: { taskId?: string; workspaceId?: string },
+): RuntimeHookIngestRequest | null {
+	if (
+		!decision.cancel ||
+		!context.taskId ||
+		!context.workspaceId ||
+		checkClineHookWorkspaceRoot(payload, policy.worktreePath)
+	)
+		return null;
+	return {
+		taskId: context.taskId,
+		workspaceId: context.workspaceId,
+		event: "to_review",
+		metadata: {
+			source: "cline-guard",
+			hookEventName: TASK_EXECUTION_BLOCK_EVENT,
+			notificationType: "execution_blocked",
+			activityText: decision.errorMessage ?? "Kanban guardrails refused this tool; the turn is incomplete.",
+			finalMessage: null,
+		},
+	};
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
 	return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;

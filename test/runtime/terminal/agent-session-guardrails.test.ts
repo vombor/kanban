@@ -214,6 +214,10 @@ describe("Cline guardrails at launch", () => {
 		expect(valuesOf(launch.args, "--auto-approve")).toEqual(["true"]);
 		const hook = readPreToolUseHook();
 		expect(hook).toContain("cline-guard");
+		expect(hook).toContain("--task-id");
+		expect(hook).toContain("--workspace-id");
+		// Normal PreToolUse notifications precede the guard's terminal refusal notice; they must not undo it.
+		expect(hook.indexOf("--event")).toBeLessThan(hook.indexOf("'cline-guard'"));
 		expect(hook).toContain("printf '%s\\n' \"$DECISION\"");
 		const policyBase64 = /--policy-base64'? '?([A-Za-z0-9+/=]+)/u.exec(hook)?.[1] ?? "";
 		const policy = JSON.parse(Buffer.from(policyBase64, "base64").toString("utf8"));

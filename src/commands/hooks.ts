@@ -9,7 +9,7 @@ import { buildKanbanRuntimeUrl, getRuntimeFetch } from "../core/runtime-endpoint
 import { buildWindowsCmdArgsArray, resolveWindowsComSpec, shouldUseWindowsCmdLaunch } from "../core/windows-cmd-launch";
 import type { ClineGuardPolicy, CommandGuardPolicy } from "../terminal/agent-guardrails";
 import { evaluateClaudeGuard } from "../terminal/claude-guard";
-import { evaluateClineGuard } from "../terminal/cline-guard";
+import { buildClineGuardRefusalHook, evaluateClineGuard } from "../terminal/cline-guard";
 import { CLINE_HOOK_WORKSPACE_ROOT_FLAG, checkClineHookWorkspaceRoot } from "../terminal/cline-hook-identity";
 import { parseHookRuntimeContextFromEnv, resolveHookRuntimeContext } from "../terminal/hook-runtime-context";
 import type { RuntimeAppRouter } from "../trpc/app-router";
@@ -615,11 +615,23 @@ async function runCodexHookSubcommand(
 
 // Prints the PreToolUse decision for Cline (cline-guard.ts). Fails open: a policy or payload it can't read lets the
 // tool run, so a broken guard never freezes a card.
-async function runClineGuardSubcommand(policyBase64: string): Promise<void> {
+async function runClineGuardSubcommand(
+	policyBase64: string,
+	context: { taskId?: string; workspaceId?: string },
+): Promise<void> {
 	let decision: { cancel: boolean; errorMessage?: string } = { cancel: false };
 	try {
 		const policy = JSON.parse(Buffer.from(policyBase64, "base64").toString("utf8")) as ClineGuardPolicy;
-		decision = evaluateClineGuard(JSON.parse(await readStdinText()), policy);
+		const payload: unknown = JSON.parse(await readStdinText());
+		decision = evaluateClineGuard(payload, policy);
+		const refusal = buildClineGuardRefusalHook(payload, policy, decision, context);
+		if (refusal) {
+			try {
+				await ingestHookEvent(refusal);
+			} catch {
+				/* Reporting failure never changes the guard's deny decision. */
+			}
+		}
 	} catch {
 		// fail open
 	}
@@ -881,8 +893,10 @@ export function registerHooksCommand(program: Command): void {
 		.command("cline-guard")
 		.description("Cline PreToolUse guard for a task card's guardrails (prints the hook decision).")
 		.requiredOption("--policy-base64 <base64>", "Base64-encoded JSON guard policy.")
-		.action(async (options: { policyBase64: string }) => {
-			await runClineGuardSubcommand(options.policyBase64);
+		.option("--task-id <id>", "The card this guard script belongs to; never inherited from the shared daemon.")
+		.option("--workspace-id <id>", "The guard script's own workspace.")
+		.action(async (options: { policyBase64: string; taskId?: string; workspaceId?: string }) => {
+			await runClineGuardSubcommand(options.policyBase64, options);
 		});
 
 	hooks

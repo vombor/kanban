@@ -60,6 +60,7 @@ import type {
 } from "../core/api-contract";
 import { resolveCardRole } from "../core/card-role";
 import type { EffectiveModel, EffectiveModelConfig } from "../core/effective-agent";
+import { isTaskExecutionBlocked } from "../core/task-execution-block";
 import { createUniqueTaskId } from "../core/task-id";
 import {
 	type CardHistory,
@@ -1403,6 +1404,7 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 					continue;
 				}
 				const session = sessions.get(card.id) ?? null;
+				if (isTaskExecutionBlocked(session)) continue;
 				const { effective, agentSource } = toEffectiveCard({
 					card,
 					session,

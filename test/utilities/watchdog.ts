@@ -25,6 +25,7 @@ import { createTempDir } from "./temp-dir";
 export const WATCHDOG_NOW = Date.parse("2026-10-07T12:00:00.000Z");
 
 export interface WatchdogHarnessOptions {
+	readWakeBoard?: WatchdogDependencies["readWakeBoard"];
 	config?: unknown;
 	pidUsage?: PidUsage | null;
 	headlessPid?: number;
@@ -67,6 +68,7 @@ export function createWatchdogHarness(options: WatchdogHarnessOptions = {}) {
 	let pidUsage = options.pidUsage ?? null;
 	let headlessPid = options.headlessPid ?? 0;
 	const requests: WatchdogActionRequest[] = [];
+	const wakeBoards = new Map<string, RuntimeBoardData>();
 	const results = { ...options.results };
 	const startHeadlessRun = vi.fn(
 		(_input: { workspaceId: string; agentId: RuntimeAgentId; env?: Record<string, string> }) => ({
@@ -76,6 +78,13 @@ export function createWatchdogHarness(options: WatchdogHarnessOptions = {}) {
 	);
 	const log = vi.fn((_message: string) => {});
 	const watchdog = createWatchdog({
+		readWakeBoard:
+			options.readWakeBoard ??
+			(async (workspaceId) => {
+				const board = wakeBoards.get(workspaceId);
+				if (!board) throw new Error("No current board");
+				return board;
+			}),
 		actions: {
 			request: async (request) => {
 				requests.push(request);
@@ -154,6 +163,7 @@ export function createWatchdogHarness(options: WatchdogHarnessOptions = {}) {
 			serverStartedAt?: number;
 			previousServerStartedAt?: number | null;
 		}): PipelineWorkspaceSnapshot => {
+			wakeBoards.set(input.workspaceId, input.board);
 			const snapshot: PipelineWorkspaceSnapshot = {
 				workspaceId: input.workspaceId,
 				workspacePath: input.workspacePath ?? `/projects/${input.workspaceId}`,
