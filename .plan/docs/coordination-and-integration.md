@@ -16,9 +16,10 @@ authority. Finer-grained measurement and forecasting are deferred.
 - [x] Add integration UI/CLI with user-only execution, no automatic replay on uncertain submission and read-only reports.
 - [x] Validate privacy, immutable identities, prerequisite/hold/capacity truth, merge/staleness/cleanup, redaction and
   phone/desktop flows using disposable fixtures/fake CLIs only; run full source checks.
-- [ ] Run the exact committed-export build, package-boundary and isolated local-pod smoke gates.
-- [ ] App-only publish and verify exact-SHA image CI.
-- [ ] Deploy only while live work is idle; preserve state, sidecars, mounts, credentials and schedules.
+- [x] Run the exact committed-export build, package-boundary and isolated local-pod smoke gates.
+- [x] Publish the validated source through the GitHub App, without PAT fallback.
+- [x] Verify exact-SHA image CI.
+- [ ] Deploy only while live work is idle; preserve state, sidecars, mounts, credentials and schedules. **Blocked: live work remains active.**
 
 Implementation must reuse existing owners; retained plan approval/context is reference/provenance, not permission to
 execute a report's recommended sequence. Integration tests run project code, so an explicit user execution is a
@@ -43,3 +44,15 @@ fixture, not the product's lifecycle. A formatter rerun was needed; failed runs 
 Deployment preflight found live work active. No restart/prepare/update was performed and no automatic deployment
 watcher was installed. Finish independent export/publication validation, but retain deployment as pending while
 that work is active rather than interrupting it.
+
+Source `06b65470c6fa84d42c20732cb1b749bad8f15411` was committed/pushed via the App. Its exact committed export passed
+the build, package boundary and owned immutable-image local-pod smoke, with no live data mounted, provider turns or
+extra browser. Owned smoke cleanup was verified. CLI SHA-256:
+`634c35b4d3b7286eb162bd92b61ea382c927a7e1ec462db2378ad3467bc4d344`; asset-tree SHA-256:
+`66ffdfdc493e5b239d2c23869d7a51b0cf4e8aa855f84d0d401eabe1b5ba3079`.
+Exact-SHA image CI [39171290598](https://github.com/vombor/kanban/actions/runs/39171290598) passed, including image
+validation and publication. No live deployment is claimed. One fresh preflight after CI again found live work active;
+no restart prepare/update, forced restart, live report execution or recurring readiness/deployment watcher was used.
+The completed CI watcher read CI only and could not restart the application. Deployment is the only remaining step
+and must wait for an idle instance and a fresh state/rollback preflight. Private export/rollout evidence stays outside
+the product. The deployed discovery/efficiency baseline and Lemonade settings remain unchanged by this implementation.
