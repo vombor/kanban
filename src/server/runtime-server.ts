@@ -26,12 +26,16 @@ import {
 	getKanbanRuntimeTls,
 	isKanbanRemoteHost,
 } from "../core/runtime-endpoint";
+import { createEfficiencyApi } from "../efficiency/efficiency-api";
+import { createEfficiencyTimingStore } from "../efficiency/timing-store";
 import { writeGitHubAppCredentials } from "../github-app/app-credentials";
 import { createGitHubAppCreationFlow } from "../github-app/app-manifest";
 import { getSharedGitHubAppTokenSource } from "../github-app/installation-tokens";
 import { createIsolationService, type IsolationService } from "../isolation/isolation-service";
 import { createMessageNoticeQueue } from "../isolation/message-notices";
 import { applyIssueSync } from "../issues/issue-apply";
+import { createKnowledgeDiscoveryApi } from "../knowledge/discovery-api";
+import { createDiscoveryBroker } from "../knowledge/discovery-broker";
 import { createKnowledgeApi } from "../knowledge/knowledge-api";
 import { createObsidianConnectorApi } from "../knowledge/obsidian/connector-api";
 import { createTaskContextApi } from "../knowledge/task-context-api";
@@ -47,6 +51,7 @@ import type { PipelineEventMap } from "../pipeline/events";
 import { preserveTaskWork } from "../pipeline/hold";
 import { createPipelineStateStore } from "../pipeline/pipeline-state";
 import type { WatchdogActionRequest } from "../pipeline/watchdog/actions";
+import { createPlanIndexStore } from "../plans/plan-index";
 import { createProjectSecretsApi } from "../secrets/project-secrets-api";
 import {
 	checkRateLimit,
@@ -105,6 +110,7 @@ import {
 import { getWebUiDir, normalizeRequestPath, readAsset } from "./assets";
 import { chooseBrowserOrigin, createBrowserOriginTracker, createBrowserUpgradeRecorder } from "./browser-origins";
 import { createClineLemonadeContextSyncMonitor } from "./cline-lemonade-context-sync-monitor";
+import { createEfficiencyObserver, efficiencySample } from "./efficiency-observer";
 import { createGitHubAppRequestHandler } from "./github-app-route";
 import { createModelListsRequestHandler } from "./model-lists-route";
 import { accountObjectiveInput } from "./objective-input-accounting";
@@ -753,6 +759,40 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 	const projectSecretsApi = createProjectSecretsApi();
 	const obsidianConnectorApi = createObsidianConnectorApi();
 	const knowledgeApi = createKnowledgeApi();
+	const knowledgeDiscoveryApi = createKnowledgeDiscoveryApi(
+		createDiscoveryBroker({ projectPath: deps.workspaceRegistry.getWorkspacePathById }),
+	);
+	const efficiencyTiming = createEfficiencyTimingStore();
+	const efficiencyApi = createEfficiencyApi({
+		objectives: objectiveStore,
+		plans: createPlanIndexStore(),
+		contexts: taskContexts,
+		timing: efficiencyTiming,
+		board: loadWorkspaceBoardById,
+	});
+	const efficiencyObserver = createEfficiencyObserver({
+		store: efficiencyTiming,
+		workspaces: () => deps.workspaceRegistry.listManagedWorkspaces().map((workspace) => workspace.workspaceId),
+		warn: deps.warn,
+		sample: async (workspaceId) => {
+			const manager = deps.workspaceRegistry.getTerminalManagerForWorkspace(workspaceId);
+			if (!manager) return { labels: {}, counters: {} };
+			const board = await loadWorkspaceBoardById(workspaceId),
+				sessions = manager.listSummaries();
+			return efficiencySample({
+				sessions,
+				stages: deps.runtimeStateHub.getPipelineCardStages(workspaceId),
+				taskIds: new Set(
+					board.columns
+						.filter((column) => column.id !== "trash")
+						.flatMap((column) => column.cards.map((card) => card.id)),
+				),
+				isLive: (taskId) => manager.hasLiveProcess(taskId),
+				now: Date.now(),
+				settleMs: deps.reviewSettleMs ?? DEFAULT_REVIEW_SETTLE_MS,
+			});
+		},
+	});
 	const objectiveReceiptStore = createPipelineStateStore();
 	const canAttachKnowledge = async (workspaceId: string, taskId: string) => {
 		const state = await loadWorkspaceStateById(workspaceId);
@@ -1048,6 +1088,8 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			projectSecretsApi,
 			obsidianConnectorApi,
 			knowledgeApi,
+			knowledgeDiscoveryApi,
+			efficiencyApi,
 			taskKnowledgeApi,
 			objectiveApi,
 			getPipelineCardStages: deps.runtimeStateHub.getPipelineCardStages,
@@ -1363,6 +1405,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		runPipelineAction,
 		isolation,
 		close: async () => {
+			await efficiencyObserver.close();
 			unsubscribeObjectiveActivity();
 			await objectiveReconciler.close();
 			providerDispatcher.close();

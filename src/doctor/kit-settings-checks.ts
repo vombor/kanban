@@ -18,7 +18,7 @@ import { describeRecommendedValue, evaluateKitRecommendedSettings } from "../kit
 import { listKitRoles } from "../kits/kit-roles";
 import type { KitDocument } from "../kits/kit-schema";
 import { getUsableTierEntries } from "../kits/kit-schema";
-import { assessLocalResidency, listKitLocalWorkingSet } from "../kits/local-residency";
+import { assessLocalResidency, kitSerializesLocalModels, listKitLocalWorkingSet } from "../kits/local-residency";
 import { describeProjectSettings, listProjectModelSettingKeys } from "../kits/project-settings";
 import { DEFAULT_KIT_NAME, type KitCatalog, resolveWorkspaceKit } from "../kits/resolve-kit";
 import {
@@ -224,6 +224,7 @@ export async function checkKitLemonadeModels(
 				workingSet: listKitLocalWorkingSet(kit),
 				providerMaxLoaded: maxLlm,
 				kanbanCapacity: context.config.models.providerCapacity[LEMONADE_PROVIDER_ID]?.maxLoadedModels,
+				deliberatelySerialized: kitSerializesLocalModels(kit),
 			})) {
 				findings.push({ ...finding, area: "project", message: `${workspaceId}: ${finding.message}` });
 			}

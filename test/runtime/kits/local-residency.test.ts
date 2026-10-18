@@ -3,11 +3,7 @@ import { describe, expect, it } from "vitest";
 import { assessLocalResidency, listKitLocalWorkingSet } from "../../../src/kits/local-residency";
 import { resolveTeamKit } from "../../utilities/team-kits";
 
-const TEAM_LOCAL_SET = [
-	"Qwen3.8-27B-GGUF-UD-Q4_K_XL",
-	"Muse-Glimmer-30B-GGUF-Q4_K_M",
-	"Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M",
-];
+const TEAM_LOCAL_SET = ["Ornith-1.5-35B-A3B-GGUF-Q4_K_M", "Qwen36-35B-A3B-UD-Q6_K-QA", "MuseGlimmer-Q4-DFlash-Test"];
 
 describe("local residency", () => {
 	it("counts the local models team (lemonade) runs at once: dev, QA (= plan) and fallback", () => {

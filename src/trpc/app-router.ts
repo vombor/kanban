@@ -169,6 +169,7 @@ import {
 } from "../core/terminal-history";
 import type { CallerRequest } from "../isolation/isolation-service";
 import type { RuntimeCaller } from "../isolation/session-identity";
+import { efficiencyReportSchema, efficiencyRequestSchema, type RuntimeEfficiencyApi } from "./efficiency-contract";
 import {
 	githubAppStartRequestSchema,
 	githubAppStartResponseSchema,
@@ -223,6 +224,18 @@ import {
 	knowledgeSearchResponseSchema,
 	type RuntimeKnowledgeApi,
 } from "./knowledge-contract";
+import {
+	discoveryCollectionSaveSchema,
+	discoveryGraphRequestSchema,
+	discoveryGraphResponseSchema,
+	discoveryPolicySaveSchema,
+	discoveryPolicyViewSchema,
+	discoveryQueryResponseSchema,
+	discoveryQuerySchema,
+	discoveryReadResponseSchema,
+	discoveryReadSchema,
+	type RuntimeKnowledgeDiscoveryApi,
+} from "./knowledge-discovery-contract";
 import {
 	type RuntimeTaskKnowledgeApi,
 	taskContextAdoptRequestSchema,
@@ -314,6 +327,8 @@ export interface RuntimeTrpcContext {
 	objectiveApi?: RuntimeObjectiveApi;
 	projectSecretsApi?: RuntimeProjectSecretsApi;
 	knowledgeApi?: RuntimeKnowledgeApi;
+	knowledgeDiscoveryApi?: RuntimeKnowledgeDiscoveryApi;
+	efficiencyApi?: RuntimeEfficiencyApi;
 	taskKnowledgeApi?: RuntimeTaskKnowledgeApi;
 	obsidianConnectorApi?: RuntimeObsidianConnectorApi;
 	requestedWorkspaceId: string | null;
@@ -741,6 +756,65 @@ export const runtimeAppRouter = t.router({
 					ctx.workspaceScope.workspaceId,
 					input,
 				);
+			}),
+	}),
+	efficiency: t.router({
+		report: workspaceProcedure
+			.input(efficiencyRequestSchema)
+			.output(efficiencyReportSchema)
+			.query(async ({ ctx, input }) => {
+				if (!ctx.efficiencyApi)
+					throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Efficiency reporting is unavailable." });
+				return ctx.efficiencyApi.report(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId, input);
+			}),
+	}),
+	knowledgeDiscovery: t.router({
+		policy: workspaceProcedure.output(discoveryPolicyViewSchema).query(async ({ ctx }) => {
+			if (!ctx.knowledgeDiscoveryApi) throw new TRPCError({ code: "NOT_IMPLEMENTED" });
+			return ctx.knowledgeDiscoveryApi.policy(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId);
+		}),
+		savePolicy: workspaceProcedure
+			.input(discoveryPolicySaveSchema)
+			.output(discoveryPolicyViewSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.knowledgeDiscoveryApi) throw new TRPCError({ code: "NOT_IMPLEMENTED" });
+				return ctx.knowledgeDiscoveryApi.savePolicy(
+					await readStrictCaller(ctx),
+					ctx.workspaceScope.workspaceId,
+					input,
+				);
+			}),
+		saveCollection: workspaceProcedure
+			.input(discoveryCollectionSaveSchema)
+			.output(discoveryPolicyViewSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.knowledgeDiscoveryApi) throw new TRPCError({ code: "NOT_IMPLEMENTED" });
+				return ctx.knowledgeDiscoveryApi.saveCollection(
+					await readStrictCaller(ctx),
+					ctx.workspaceScope.workspaceId,
+					input,
+				);
+			}),
+		query: workspaceProcedure
+			.input(discoveryQuerySchema)
+			.output(discoveryQueryResponseSchema)
+			.query(async ({ ctx, input }) => {
+				if (!ctx.knowledgeDiscoveryApi) throw new TRPCError({ code: "NOT_IMPLEMENTED" });
+				return ctx.knowledgeDiscoveryApi.query(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId, input);
+			}),
+		read: workspaceProcedure
+			.input(discoveryReadSchema)
+			.output(discoveryReadResponseSchema)
+			.query(async ({ ctx, input }) => {
+				if (!ctx.knowledgeDiscoveryApi) throw new TRPCError({ code: "NOT_IMPLEMENTED" });
+				return ctx.knowledgeDiscoveryApi.read(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId, input);
+			}),
+		graph: workspaceProcedure
+			.input(discoveryGraphRequestSchema)
+			.output(discoveryGraphResponseSchema)
+			.query(async ({ ctx, input }) => {
+				if (!ctx.knowledgeDiscoveryApi) throw new TRPCError({ code: "NOT_IMPLEMENTED" });
+				return ctx.knowledgeDiscoveryApi.graph(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId, input);
 			}),
 	}),
 	knowledge: t.router({

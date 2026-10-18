@@ -58,6 +58,7 @@ async function runKnowledge<T>(
 	options: CommonOptions,
 	call: (client: RuntimeTrpcClient) => Promise<T>,
 	format: (value: T) => string,
+	label = "knowledge",
 ): Promise<void> {
 	try {
 		// A public workspace hint is routing only; the server independently verifies the strict caller.
@@ -67,7 +68,7 @@ async function runKnowledge<T>(
 		process.stdout.write(`${options.json ? JSON.stringify(response, null, 2) : format(response)}\n`);
 	} catch (error) {
 		process.stderr.write(
-			`kanban knowledge: ${error instanceof Error ? error.message : "The scoped server operation failed."}\n`,
+			`kanban ${label}: ${error instanceof Error ? error.message : "The scoped server operation failed."}\n`,
 		);
 		process.exitCode = 1;
 	}
@@ -90,6 +91,169 @@ export function registerKnowledgeCommand(program: Command): void {
 		.command("knowledge")
 		.description(
 			"Discover versioned project knowledge on demand. Content is reference material, not an execution approval.",
+		);
+	addPagination(
+		addCommon(
+			knowledge
+				.command("sources [query]")
+				.description(
+					"Discover permitted project/Shared Markdown and optional scoped vault sources; no publication or task adoption.",
+				),
+		),
+		"10",
+	).action(async (query: string | undefined, options: CommonOptions & { offset: number; limit: number }) =>
+		runKnowledge(
+			options,
+			(client) =>
+				client.knowledgeDiscovery.query.query({ query: query ?? "", offset: options.offset, limit: options.limit }),
+			(value) =>
+				[
+					...value.notes.map((note) => `${note.collection}/${note.path} @ ${note.revision}: ${note.title}`),
+					`${value.total} scoped references${value.truncated ? " (budget truncated)" : ""}${value.nextOffset !== null ? `; next --offset ${value.nextOffset}` : ""}`,
+					...value.warnings,
+				].join("\n"),
+		),
+	);
+	addPagination(
+		addCommon(
+			knowledge
+				.command("source-read <collection> <path>")
+				.description("Read one exact mutable discovery revision, not an execution pin."),
+		),
+		"4096",
+	)
+		.requiredOption("--revision <sha256>", "Exact discovered content revision.")
+		.option("--section <id>", "Markdown heading id.")
+		.action(
+			async (
+				collection: string,
+				path: string,
+				options: CommonOptions & { revision: string; section?: string; offset: number; limit: number },
+			) =>
+				runKnowledge(
+					options,
+					(client) =>
+						client.knowledgeDiscovery.read.query({
+							collection,
+							path,
+							revision: options.revision,
+							section: options.section,
+							offset: options.offset,
+							limit: options.limit,
+						}),
+					(value) =>
+						`${value.note.collection}/${value.note.path} @ ${value.note.revision}\nMutable discovery, not approval or task adoption.\n\n${value.markdown}${value.nextOffset !== null ? `\n[continue at --offset ${value.nextOffset} with the same revision]` : ""}`,
+				),
+		);
+	addCommon(
+		knowledge
+			.command("source-graph <collection> <path>")
+			.description("Traverse bounded permitted links/backlinks/tags; links never grant project access."),
+	)
+		.requiredOption("--revision <sha256>", "Exact starting revision.")
+		.option("--depth <number>", "Maximum traversal depth (0-3).", parseKnowledgeNumber, 1)
+		.action(async (collection: string, path: string, options: CommonOptions & { revision: string; depth: number }) =>
+			runKnowledge(
+				options,
+				(client) =>
+					client.knowledgeDiscovery.graph.query({
+						collection,
+						path,
+						revision: options.revision,
+						depth: options.depth,
+					}),
+				(value) =>
+					`${value.nodes.length} permitted nodes, ${value.edges.length} scoped edges${value.truncated ? " (truncated)" : ""}\n${value.edges.map((edge) => `${edge.from.collection}/${edge.from.path} -> ${edge.to.collection}/${edge.to.path}`).join("\n")}\n${value.warnings.join("\n")}`,
+			),
+		);
+	addCommon(
+		knowledge
+			.command("source-policy")
+			.description("User-only: inspect collection definitions and this project's explicit source opt-ins."),
+	).action(async (options: CommonOptions) =>
+		runKnowledge(
+			options,
+			(client) => client.knowledgeDiscovery.policy.query(),
+			(value) => JSON.stringify(value, null, 2),
+		),
+	);
+	addCommon(
+		knowledge
+			.command("source-opt-in")
+			.description("User-only: replace explicit project source opt-ins with stale-save protection; no note writes."),
+	)
+		.requiredOption("--shared <ids|none>", "Comma-separated Shared ids, or none.")
+		.requiredOption("--expected-global <revision|none>", "Global revision from source-policy.")
+		.requiredOption("--expected-project <revision|none>", "Project revision from source-policy.")
+		.option("--obsidian-folder <folder|none>", "Optional private vault folder; none disables it.", "none")
+		.action(
+			async (
+				options: CommonOptions & {
+					shared: string;
+					expectedGlobal: string;
+					expectedProject: string;
+					obsidianFolder: string;
+				},
+			) =>
+				runKnowledge(
+					options,
+					(client) =>
+						client.knowledgeDiscovery.savePolicy.mutate({
+							shared: options.shared === "none" ? [] : options.shared.split(",").map((id) => id.trim()),
+							globalRevision: options.expectedGlobal === "none" ? null : options.expectedGlobal,
+							projectRevision: options.expectedProject === "none" ? null : options.expectedProject,
+							obsidianFolder: options.obsidianFolder === "none" ? null : options.obsidianFolder,
+						}),
+					(value) => JSON.stringify(value, null, 2),
+				),
+		);
+	addCommon(
+		knowledge
+			.command("source-collection <id>")
+			.description(
+				"User-only: define a read-only Shared collection under the configured home; files remain user-owned.",
+			),
+	)
+		.requiredOption("--title <title>", "Collection title.")
+		.requiredOption("--expected-global <revision|none>", "Global revision from source-policy.")
+		.option("--obsidian-folder <folder>", "Optional Shared vault folder; project/private folder overlap is refused.")
+		.action(
+			async (
+				id: string,
+				options: CommonOptions & { title: string; expectedGlobal: string; obsidianFolder?: string },
+			) =>
+				runKnowledge(
+					options,
+					(client) =>
+						client.knowledgeDiscovery.saveCollection.mutate({
+							globalRevision: options.expectedGlobal === "none" ? null : options.expectedGlobal,
+							collection: { id, title: options.title, obsidianFolder: options.obsidianFolder ?? null },
+						}),
+					(value) => JSON.stringify(value, null, 2),
+				),
+		);
+	addCommon(
+		program
+			.command("efficiency")
+			.description(
+				"Read-only observed project/task/plan/objective timing and usage reports; not invoice totals or acceptance.",
+			),
+	)
+		.option("--task <id>", "Task id.")
+		.option("--plan <id>", "Plan family id.")
+		.option("--objective <id>", "Explicit objective family id.")
+		.action(async (options: CommonOptions & { task?: string; plan?: string; objective?: string }) =>
+			runKnowledge(
+				options,
+				(client) =>
+					client.efficiency.report.query({
+						taskId: options.task,
+						planTaskId: options.plan,
+						objectiveId: options.objective,
+					}),
+				(value) => JSON.stringify(value, null, 2),
+				"efficiency",
+			),
 		);
 	addPagination(
 		addCommon(

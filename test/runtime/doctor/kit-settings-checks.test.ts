@@ -27,6 +27,7 @@ const LEMONADE = { url: "http://localhost:13305", requireLabels: ["tool-calling"
 const LOCAL_ON = {
 	agents: { cline: { turnDetector: { mode: "on" } } },
 	pipeline: { recovery: { mode: "on" } },
+	providerConcurrency: { lemonade: 1 },
 };
 
 /** The fixture list plus team-local's dev and QA models (on the pod since 2026-10-12), without its fallback model. */
@@ -34,7 +35,7 @@ const WITH_TEAM_LOCAL_ROLES = {
 	...LEMONADE_MODELS_PAYLOAD,
 	data: [
 		...LEMONADE_MODELS_PAYLOAD.data,
-		...["Qwen3.8-27B-GGUF-UD-Q4_K_XL", "Muse-Glimmer-30B-GGUF-Q4_K_M"].map((id) => ({
+		...["Ornith-1.5-35B-A3B-GGUF-Q4_K_M", "Qwen36-35B-A3B-UD-Q6_K-QA"].map((id) => ({
 			id,
 			object: "model",
 			owned_by: "lemonade",
@@ -93,6 +94,7 @@ describe("kit settings doctor rows", () => {
 		expect(findings.map((finding) => [finding.level, finding.hint])).toEqual([
 			["warn", 'set pipeline.recovery.mode to "on" in config.json (the kit never applies it)'],
 			["warn", 'set agents.cline.turnDetector.mode to "on" in config.json (the kit never applies it)'],
+			["warn", "set providerConcurrency.lemonade to 1 in config.json (the kit never applies it)"],
 		]);
 		expect(findings[1]?.message).toContain("local: kit team (lemonade) needs agents.cline.turnDetector.mode");
 	});
@@ -104,7 +106,7 @@ describe("kit settings doctor rows", () => {
 			entries: [{ workspaceId: "local" }, { workspaceId: "foo" }],
 		});
 		expect(findings).toEqual([
-			{ level: "pass", area: "project", message: "local: the 3 setting(s) kit team (lemonade) needs are set" },
+			{ level: "pass", area: "project", message: "local: the 5 setting(s) kit team (lemonade) needs are set" },
 		]);
 	});
 
@@ -124,13 +126,13 @@ describe("kit settings doctor rows", () => {
 		expect(findings[0]).toMatchObject({
 			level: "warn",
 			message:
-				"local: kit team (lemonade) routes to Lemonade models it can't run: Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M is not listed by Lemonade",
+				"local: kit team (lemonade) routes to Lemonade models it can't run: MuseGlimmer-Q4-DFlash-Test is not listed by Lemonade",
 		});
 		const down = await checkKitLemonadeModels({ ...context, fetch: createFakeLemonadeFetch({ down: true }) });
 		expect(down).toMatchObject([{ level: "info", message: expect.stringContaining("did not answer") }]);
 	});
 
-	it("reads Lemonade's max_models.llm and warns while it can't hold the kit's dev, QA and fallback models", async () => {
+	it("respects deliberately serialized Lemonade capacity instead of recommending three loaded models", async () => {
 		const context = {
 			config: parsePipelineConfig(onTeamLocal(LOCAL_ON)).config,
 			catalog: await builtInCatalog(),
@@ -139,10 +141,10 @@ describe("kit settings doctor rows", () => {
 		};
 		const health = (llm: number) => ({ ...LEMONADE_HEALTH_IDLE_PAYLOAD, max_models: { llm } });
 		const one = await checkKitLemonadeModels({ ...context, fetch: createFakeLemonadeFetch({ health: health(1) }) });
-		expect(one.find((finding) => finding.message.includes("max_models.llm"))).toMatchObject({
-			level: "warn",
-			hint: expect.stringMatching(/LEMONADE_MAX_LOADED_MODELS=3 .*lemonade config set max_loaded_models=3/u),
+		expect(one.find((finding) => finding.message.includes("deliberately serializes"))).toMatchObject({
+			level: "pass",
 		});
+		expect(one.some((finding) => finding.hint?.includes("max_loaded_models=3"))).toBe(false);
 		const three = await checkKitLemonadeModels({
 			...context,
 			config: parsePipelineConfig(

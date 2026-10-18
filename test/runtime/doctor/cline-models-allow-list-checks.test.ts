@@ -10,9 +10,9 @@ import { loadKitCatalog } from "../../../src/kits/resolve-kit";
 import { createTempDir } from "../../utilities/temp-dir";
 import { createBoard, createCard } from "../../utilities/workspace-state-store";
 
-const QWEN = "Qwen3.8-27B-GGUF-UD-Q4_K_XL";
-const MUSE = "Muse-Glimmer-30B-GGUF-Q4_K_M";
-const QWEN_CODER = "Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M";
+const QWEN = "Ornith-1.5-35B-A3B-GGUF-Q4_K_M";
+const MUSE = "Qwen36-35B-A3B-UD-Q6_K-QA";
+const QWEN_CODER = "MuseGlimmer-Q4-DFlash-Test";
 
 describe("doctor: Cline's models.json is the allow list", () => {
 	let root: { path: string; cleanup: () => void };

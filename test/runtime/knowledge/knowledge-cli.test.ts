@@ -10,6 +10,12 @@ describe("knowledge CLI option parsing", () => {
 		registerCliCommands(root, "test");
 		const knowledge = root.commands.find((command) => command.name() === "knowledge");
 		expect(knowledge?.commands.map((command) => command.name())).toEqual([
+			"sources",
+			"source-read",
+			"source-graph",
+			"source-policy",
+			"source-opt-in",
+			"source-collection",
 			"task-attempts",
 			"task-context",
 			"task-read",

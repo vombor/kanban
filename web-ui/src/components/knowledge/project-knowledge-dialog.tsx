@@ -1,10 +1,12 @@
 import { BookOpen, RefreshCw } from "lucide-react";
 import { useId, useState } from "react";
+import { EfficiencyDialog } from "@/components/efficiency-dialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogBody, DialogFooter, DialogHeader } from "@/components/ui/dialog";
 import { NativeSelect } from "@/components/ui/native-select";
 import { useKnowledgeBrowser } from "@/hooks/use-knowledge-browser";
 import type { KnowledgeDocument, KnowledgeProposal } from "../../../../src/trpc/knowledge-contract";
+import { KnowledgeDiscoveryDialog } from "./knowledge-discovery-dialog";
 import { KnowledgeDocumentView } from "./knowledge-document-view";
 import { KnowledgeProposalView } from "./knowledge-proposal-view";
 
@@ -23,6 +25,8 @@ function KnowledgeDialogScope({
 }) {
 	const kindId = useId(),
 		statusId = useId();
+	const [discoveryOpen, setDiscoveryOpen] = useState(false);
+	const [efficiencyOpen, setEfficiencyOpen] = useState(false);
 	const view = useKnowledgeBrowser(workspaceId),
 		[draft, setDraft] = useState("");
 	const data = view.query.data,
@@ -230,13 +234,31 @@ function KnowledgeDialogScope({
 				</div>
 			</DialogBody>
 			<DialogFooter>
-				<Button size="sm" icon={<RefreshCw size={14} />} onClick={view.reload}>
-					Reload knowledge
-				</Button>
-				<Button size="sm" onClick={onClose}>
-					Close
-				</Button>
+				<div className="flex flex-wrap justify-end gap-2">
+					<Button size="sm" onClick={() => setDiscoveryOpen(true)}>
+						Explore reference sources
+					</Button>
+					<Button size="sm" onClick={() => setEfficiencyOpen(true)}>
+						Efficiency reports
+					</Button>
+					<Button size="sm" icon={<RefreshCw size={14} />} onClick={view.reload}>
+						Reload knowledge
+					</Button>
+					<Button size="sm" onClick={onClose}>
+						Close
+					</Button>
+				</div>
 			</DialogFooter>
+			{discoveryOpen ? (
+				<KnowledgeDiscoveryDialog workspaceId={workspaceId} onClose={() => setDiscoveryOpen(false)} />
+			) : null}
+			{efficiencyOpen ? (
+				<EfficiencyDialog
+					workspaceId={workspaceId}
+					projectName={projectName}
+					onClose={() => setEfficiencyOpen(false)}
+				/>
+			) : null}
 		</Dialog>
 	);
 }

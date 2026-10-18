@@ -30,6 +30,7 @@ export interface TaskContextInspection {
 	startReservation: TaskContextStartReservation | null;
 }
 export interface TaskContextStore {
+	bindings(workspaceId: string): Promise<Array<{ taskId: string; planTaskId: string }>>;
 	attachDerived(
 		workspaceId: string,
 		taskId: string,
@@ -139,6 +140,11 @@ export function createTaskContextStore(
 		now: options.now ?? (() => new Date()),
 	});
 	return {
+		bindings: async (workspaceId) =>
+			Object.entries((await snapshot(workspaceId)).tasks).flatMap(([taskId, history]) => {
+				const context = history[0];
+				return context ? [{ taskId, planTaskId: context.planTaskId }] : [];
+			}),
 		reserveAttempt: async (workspaceId, input, rootRevision) => {
 			if (!executionTaskIdSchema.safeParse(input.taskId).success) {
 				if (rootRevision)

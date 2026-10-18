@@ -12,7 +12,12 @@ import { applyWorkspaceKit } from "../kits/apply-kit";
 import { listKitChoices } from "../kits/kit-choices";
 import { buildKitReport, formatKitReport, formatRecommendedSettings, NO_WORKSPACE_ID } from "../kits/kit-report";
 import type { KitDocument } from "../kits/kit-schema";
-import { assessLocalResidency, type LocalResidencyFinding, listKitLocalWorkingSet } from "../kits/local-residency";
+import {
+	assessLocalResidency,
+	kitSerializesLocalModels,
+	type LocalResidencyFinding,
+	listKitLocalWorkingSet,
+} from "../kits/local-residency";
 import { migrateWorkspaceOverrides, type OverrideMigrationPlan } from "../kits/migrate-overrides";
 import { describeProjectSettings, readKitSettingsHistory } from "../kits/project-settings";
 import { formatKitSelection } from "../kits/renamed-kits";
@@ -210,6 +215,7 @@ async function readLocalResidency(
 					workingSet,
 					providerMaxLoaded: limit.maxLoaded,
 					kanbanCapacity: config.models.providerCapacity[provider]?.maxLoadedModels,
+					deliberatelySerialized: kitSerializesLocalModels(kit, provider),
 				}),
 			);
 		}

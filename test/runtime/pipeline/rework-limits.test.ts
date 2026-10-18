@@ -2,7 +2,6 @@
 // rework that would switch model, and parks escalated cards in Backlog as BLOCKED. No test here reads kits/team.json; one runs team-local's real policy.
 import { afterEach, describe, expect, it } from "vitest";
 import { createRoutingPolicy, type OnFailAnswer } from "../../../src/kits/policy";
-import { getBuiltInKits, getDefaultKit, resolveKitLayers } from "../../../src/kits/resolve-kit";
 import type {
 	PipelineRunoffGroup,
 	PipelineRunoffGroupHandler,
@@ -268,20 +267,20 @@ describe("rework limits", () => {
 
 	it("team (lemonade): after its FAIL rounds a card goes to the fallback local model once, then to the orchestrator", async () => {
 		const policy = createRoutingPolicy(resolveTeamKit("lemonade"));
-		const qwen = { providerId: "lemonade", modelId: "Qwen3.8-27B-GGUF-UD-Q4_K_XL" };
+		const qwen = { providerId: "lemonade", modelId: "Ornith-1.5-35B-A3B-GGUF-Q4_K_M" };
 		const dev = { ...DEV, agentSettings: qwen };
 		const fails = [failVerdict(1), failVerdict(2), failVerdict(3)];
 
 		const first = createHarness({ onFail: (input) => policy.onFail(input) });
 		await first.seed("d1111", { qaVerdicts: fails });
 		await first.tick({ review: [dev] }, [
-			{ taskId: "d1111", agentId: "cline", modelId: "Qwen3.8-27B-GGUF-UD-Q4_K_XL" },
+			{ taskId: "d1111", agentId: "cline", modelId: "Ornith-1.5-35B-A3B-GGUF-Q4_K_M" },
 		]);
 		expect(kinds(first.actions)).toEqual(["createTask:s0001", "startTask:s0001", "blockTask:d1111"]);
 		expect(first.actions[0]).toMatchObject({
 			task: {
 				agentId: "cline",
-				agentSettings: { providerId: "lemonade", modelId: "Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M" },
+				agentSettings: { providerId: "lemonade", modelId: "MuseGlimmer-Q4-DFlash-Test" },
 			},
 		});
 
@@ -290,14 +289,14 @@ describe("rework limits", () => {
 		const sibling = {
 			...DEV,
 			id: "s0001",
-			agentSettings: { providerId: "lemonade", modelId: "Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M" },
+			agentSettings: { providerId: "lemonade", modelId: "MuseGlimmer-Q4-DFlash-Test" },
 		};
 		await fallback.seed("s0001", {
 			qaVerdicts: fails.map((verdict) => ({ ...verdict, snapshot: "snap-s0001" })),
 			sibling: { of: "d1111", kind: "escalation", at: new Date(REWORK_T0 - 60_000).toISOString() },
 		});
 		await fallback.tick({ review: [sibling] }, [
-			{ taskId: "s0001", agentId: "cline", modelId: "Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M" },
+			{ taskId: "s0001", agentId: "cline", modelId: "MuseGlimmer-Q4-DFlash-Test" },
 		]);
 		expect(kinds(fallback.actions)).toEqual(["blockTask:s0001"]);
 		expect(readEscalationRecord(readQaflow(await fallback.entry("s0001")))).toMatchObject({ to: "orchestrator" });

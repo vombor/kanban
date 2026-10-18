@@ -317,21 +317,21 @@ describe("QA gate", () => {
 		});
 		const onQwen = {
 			agentId: "cline" as const,
-			agentSettings: { providerId: "lemonade", modelId: "Qwen3.8-27B-GGUF-UD-Q4_K_XL" },
+			agentSettings: { providerId: "lemonade", modelId: "Ornith-1.5-35B-A3B-GGUF-Q4_K_M" },
 		};
 		const dev = createCard({ id: "d1111", ...onQwen });
 		const busy = createCard({ id: "d2222", ...onQwen });
 		await send(harness, { review: [dev], in_progress: [busy] });
 		expect(createdTasks(harness.actions)).toMatchObject([
-			{ taskId: "qa001", agentSettings: { providerId: "lemonade", modelId: "Muse-Glimmer-30B-GGUF-Q4_K_M" } },
+			{ taskId: "qa001", agentSettings: { providerId: "lemonade", modelId: "Qwen36-35B-A3B-UD-Q6_K-QA" } },
 		]);
 
-		// Lemonade loads one model: Muse-Glimmer would evict Qwen while d2222 still runs on it. One record per hold.
+		// Lemonade loads one model: Qwen would evict Ornith while d2222 still runs on it. One record per hold.
 		harness.actions.length = 0;
 		const qa = createCard({ id: "qa001", role: "qa", reviewsTaskId: "d1111", ...onQwen });
 		const qaOnMuse = {
 			...qa,
-			agentSettings: { providerId: "lemonade", modelId: "Muse-Glimmer-30B-GGUF-Q4_K_M" },
+			agentSettings: { providerId: "lemonade", modelId: "Qwen36-35B-A3B-UD-Q6_K-QA" },
 		};
 		await send(harness, { backlog: [qaOnMuse], in_progress: [busy], review: [dev] });
 		await send(harness, { backlog: [qaOnMuse], in_progress: [busy], review: [dev] });
@@ -345,11 +345,11 @@ describe("QA gate", () => {
 			[
 				null,
 				"none",
-				"waiting for lemonade capacity: 1/1 model(s) loaded (held by d2222 (Qwen3.8-27B-GGUF-UD-Q4_K_XL)); queued: qa001",
+				"waiting for lemonade capacity: 1/1 model(s) loaded (held by d2222 (Ornith-1.5-35B-A3B-GGUF-Q4_K_M)); queued: qa001",
 			],
 		]);
 
-		// d2222 finished (it gets a QA card of its own): Qwen is free, so Muse-Glimmer may load.
+		// d2222 finished (it gets a QA card of its own): Ornith is free, so Qwen may load.
 		await send(harness, { backlog: [qaOnMuse], review: [dev, busy] });
 		expect(kinds(harness.actions)).toEqual(["createTask:qa002", "startTask:qa001"]);
 	});
@@ -584,11 +584,11 @@ describe("QA gate", () => {
 		};
 		const onQwen = {
 			agentId: "cline" as const,
-			agentSettings: { providerId: "lemonade", modelId: "Qwen3.8-27B-GGUF-UD-Q4_K_XL" },
+			agentSettings: { providerId: "lemonade", modelId: "Ornith-1.5-35B-A3B-GGUF-Q4_K_M" },
 		};
 		const onMuse = {
 			agentId: "cline" as const,
-			agentSettings: { providerId: "lemonade", modelId: "Muse-Glimmer-30B-GGUF-Q4_K_M" },
+			agentSettings: { providerId: "lemonade", modelId: "Qwen36-35B-A3B-UD-Q6_K-QA" },
 		};
 		const localQa = (id: string, devId: string) => createCard({ id, role: "qa", reviewsTaskId: devId, ...onMuse });
 		const cloudQa = (id: string, devId: string) => createCard({ id, role: "qa", reviewsTaskId: devId });
@@ -608,7 +608,7 @@ describe("QA gate", () => {
 			const n2 = createCard({ id: "n2222", ...onQwen });
 			const d1 = createCard({ id: "d1111", ...OPENAI_DEV });
 
-			// notes' QA card starts on Muse-Glimmer in Lemonade's capacity, not in a slot.
+			// notes' QA card starts on Qwen in Lemonade's capacity, not in a slot.
 			await send(harness, { review: [n1] }, { workspaceId: "notes" });
 			await send(harness, { backlog: [localQa("qa001", "n1111")], review: [n1] }, { workspaceId: "notes" });
 			expect(kinds(harness.actions)).toEqual(["createTask:qa001", "startTask:qa001"]);

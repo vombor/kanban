@@ -546,6 +546,17 @@ export function getProjectKnowledgePaths(workspaceId: string, homePath = getKanb
 	const root = join(getKanbanWorkspaceDataPath(workspaceId, homePath), "knowledge");
 	return { root, manifest: join(root, "manifest.json"), objects: join(root, "objects") };
 }
+export function getKnowledgeDiscoveryPaths(homePath = getKanbanHomePath()) {
+	const root = join(homePath, "data", "knowledge-collections");
+	return { root, manifest: join(root, "collections.json"), shared: join(root, "shared") };
+}
+export function getKnowledgeSourcePolicyPath(workspaceId: string, homePath = getKanbanHomePath()) {
+	return join(getProjectKnowledgePaths(workspaceId, homePath).root, "source-policy.json");
+}
+export function getEfficiencyStatePath(workspaceId: string, homePath = getKanbanHomePath()) {
+	getProjectKnowledgePaths(workspaceId, homePath);
+	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), "efficiency.json");
+}
 
 /** Native objective requirements/receipts live inside the workspace data tree for rename/home migration. */
 export function getObjectivePaths(workspaceId: string, homePath = getKanbanHomePath()) {
@@ -824,7 +835,7 @@ export function getKanbanWorkspaceStatePath(workspaceId: string, homePath = getK
 
 /** Names under `<home>/data` that are machine-wide, not a workspace's: no workspace may take one as its id. */
 export function getReservedDataDirNames(): string[] {
-	return [MODELS_DATA_DIR, PRICES_DATA_DIR];
+	return [MODELS_DATA_DIR, PRICES_DATA_DIR, "knowledge-collections"];
 }
 
 /**

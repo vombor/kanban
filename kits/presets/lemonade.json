@@ -1,93 +1,36 @@
 {
 	"preset": 1,
 	"name": "lemonade",
-	"description": "Local Lemonade models only (Cline + provider lemonade, no cloud anywhere, $0 per run): Qwen3.8-27B (Qwen) builds, Muse-Glimmer-30B (Meta, another family) reviews and plans, Qwen3-Coder-30B-A3B (Qwen) is the fallback dev model. Qwen3.8 passed kanban models vet for dev and QA (2026-10-13), Muse-Glimmer for dev and QA (2026-10-12), Qwen3-Coder for dev and QA (2026-10-13); none was vetted for plan. Needs Lemonade's max_loaded_models at 3 and the Cline turn detector on",
+	"description": "User-selected local Lemonade lineup (2026-10-18): Ornith primary dev, MuseGlimmer secondary/fallback dev, Qwen36 QA. All roles use Cline and Lemonade. Serialize to one model/request at a time; no new benchmark or plan-vetting claim.",
 	"roles": {
-		"dev": {
-			"agent": "cline",
-			"tier": "dev",
-			"note": "Cline on the dev tier's pick (Qwen3.8-27B-GGUF-UD-Q4_K_XL, passed kanban models vet for dev 2026-10-13)"
-		},
-		"qa": {
-			"agent": "cline",
-			"provider": "lemonade",
-			"model": "Muse-Glimmer-30B-GGUF-Q4_K_M",
-			"note": "Muse-Glimmer-30B (passed kanban models vet for dev and QA 2026-10-12): another family (meta) than the Qwen3.8 dev model and the Qwen3-Coder fallback model (both qwen), with vision, so it reads screenshots. It replaces gemma-4-E4B-it-GGUF-Q4_K_M, which passed the QA vet (2026-10-13-qa-cline-khuf9) but proved too small for a reliable QA reviewer in the notes project (2026-10-13)"
-		},
-		"plan": {
-			"agent": "cline",
-			"provider": "lemonade",
-			"model": "Muse-Glimmer-30B-GGUF-Q4_K_M",
-			"note": "plans run on Muse-Glimmer-30B (the QA model, not vetted for plan; passed dev and QA 2026-10-12) in Cline's plan mode (--plan), so a plan card loads no model beyond the three resident ones"
-		},
-		"fallback": {
-			"tier": "senior",
-			"note": "fallback dev model (Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M, passed kanban models vet for dev 2026-10-13) on the dev role's agent; the fallback only, not a dev pick: as a dev model in the notes project it emitted invalid JSON tool calls on Lemonade (2026-10-13)"
-		}
+		"dev": { "agent": "cline", "tier": "dev", "note": "Primary dev: Ornith-1.5-35B-A3B-GGUF-Q4_K_M; MuseGlimmer is the secondary dev option." },
+		"qa": { "agent": "cline", "provider": "lemonade", "model": "Qwen36-35B-A3B-UD-Q6_K-QA", "note": "User-selected QA. Ornith is a distinct review family from Qwen by explicit user policy; this is not a claim of independent base architecture." },
+		"plan": { "agent": "cline", "provider": "lemonade", "model": "Qwen36-35B-A3B-UD-Q6_K-QA", "note": "Preserve the preset's QA-model reuse for planning so no fourth model is introduced. No plan-vetting result is asserted." },
+		"fallback": { "tier": "senior", "note": "Secondary/fallback dev: MuseGlimmer-Q4-DFlash-Test; the standard team fallback workflow is unchanged." }
 	},
 	"plan": {
 		"candidates": [
-			{
-				"agent": "cline",
-				"model": {
-					"provider": "lemonade",
-					"model": "Muse-Glimmer-30B-GGUF-Q4_K_M"
-				},
-				"note": "in use (not vetted for plan; passed dev and QA 2026-10-12): the QA model, so a plan card loads no extra model; 65536 context as Lemonade loads it"
-			},
-			{
-				"agent": "cline",
-				"model": {
-					"provider": "lemonade",
-					"model": "Qwen3.8-27B-GGUF-UD-Q4_K_XL"
-				},
-				"note": "candidate (not vetted for plan; passed dev and QA 2026-10-13): the dev model; 65536 context as Lemonade loads it"
-			}
+			{ "agent": "cline", "model": { "provider": "lemonade", "model": "Qwen36-35B-A3B-UD-Q6_K-QA" }, "note": "Planning reuses QA; no new vetting claim." },
+			{ "agent": "cline", "model": { "provider": "lemonade", "model": "Ornith-1.5-35B-A3B-GGUF-Q4_K_M" }, "note": "Primary dev alternative for explicit plan selection; not newly vetted." }
 		],
-		"note": "Plans run on roles.plan (Muse-Glimmer-30B, the QA model) in Cline's plan mode (--plan)."
+		"note": "Planning defaults to the QA model in Cline plan mode; only the same three local models are referenced."
 	},
 	"tiers": {
 		"dev": [
-			{
-				"provider": "lemonade",
-				"model": "Qwen3.8-27B-GGUF-UD-Q4_K_XL",
-				"default": true,
-				"note": "dev pick (passed kanban models vet for dev 2026-10-13-dev-cline-311az and QA 2026-10-13-qa-cline-bxk8v): Qwen's Qwen3.8-27B, a dense 27B with vision + tool-calling + MTP, 17.2 GB at UD-Q4_K_XL; Lemonade loads it at 65536. The only dev pick: Muse-Glimmer is the QA model (a Muse dev card would have no QA model of another family) and Qwen3-Coder is the fallback only"
-			}
+			{ "provider": "lemonade", "model": "Ornith-1.5-35B-A3B-GGUF-Q4_K_M", "default": true, "note": "User-selected primary dev." },
+			{ "provider": "lemonade", "model": "MuseGlimmer-Q4-DFlash-Test", "note": "User-selected secondary dev; Qwen36 remains its QA reviewer." }
 		],
-		"qa": [
-			{
-				"provider": "lemonade",
-				"model": "Muse-Glimmer-30B-GGUF-Q4_K_M",
-				"default": true,
-				"note": "QA pick (passed kanban models vet for dev and QA 2026-10-12): another family (meta) than the Qwen3.8 dev and Qwen3-Coder fallback (qwen) models, a dense 30B with vision + tool-calling, 16.9 GB at Q4_K_M; Lemonade loads it at 65536 (its max is 131072). A dev card someone puts on Muse-Glimmer itself has no QA model of another family in this preset and waits in Review. gemma-4-E4B-it-GGUF-Q4_K_M passed the QA vet (2026-10-13-qa-cline-khuf9) but proved too small for a reliable QA reviewer in the notes project (2026-10-13)"
-			}
-		],
-		"senior": [
-			{
-				"provider": "lemonade",
-				"model": "Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M",
-				"default": true,
-				"note": "fallback dev model (passed kanban models vet for dev 2026-10-13-dev-cline-q9t3z and QA 2026-10-13-qa-cline-0gmwu): Qwen's Qwen3-Coder-30B-A3B, the dev model's family (qwen) but not the QA model's (meta), so its sibling is still reviewed by Muse-Glimmer; a MoE with 3B active, tool-calling, no vision, 17.4 GB at Q4_K_M, 65536 context as Lemonade loads it (max 262144). The fallback only: as a dev model in the notes project it emitted invalid JSON tool calls on Lemonade (2026-10-13)"
-			}
-		]
+		"qa": [ { "provider": "lemonade", "model": "Qwen36-35B-A3B-UD-Q6_K-QA", "default": true, "note": "User-selected QA for primary and secondary dev." } ],
+		"senior": [ { "provider": "lemonade", "model": "MuseGlimmer-Q4-DFlash-Test", "default": true, "note": "User-selected secondary/fallback dev." } ]
 	},
-	"tierRules": {
-		"dev": "Lemonade models with the tool-calling label; cost 0",
-		"qa": "a different vendor (model family) than the dev model",
-		"senior": "the fallback dev model: a family other than QA's"
-	},
+	"tierRules": { "dev": "Explicit primary/secondary choices; no runtime model allow list", "qa": "Distinct review family from dev; Ornith and Qwen are separate by user policy", "senior": "Secondary dev is the fallback, without changing the fixed team workflow" },
 	"tierNotes": {
-		"dev": "Memory budget (one GPU: Ryzen AI MAX+ 395, 96 GB GPU-addressable of 125 GB RAM): dev + QA + fallback must stay resident side by side within 80 GB, leaving 16 GB headroom. Weights (Lemonade's sizes), each loaded at 65536 context: Qwen3.8-27B 17.2 GB, Muse-Glimmer-30B 16.9 GB, Qwen3-Coder-30B-A3B 17.4 GB: 51.5 GB of weights. Each model's KV cache at 65536 and its compute buffers come on top; their sizes are not measured yet, so check the free memory with all three loaded before raising a context. Change a context with lemonade load <model> --ctx-size <n> --llamacpp vulkan --save-options. Three models resident at once needs Lemonade's max_loaded_models at 3 (and models.providerCapacity.lemonade.maxLoadedModels equal to it). Plans run on the QA model, so they load nothing more. kanban bench calibrate can still compare candidates",
-		"qa": "requireDifferentVendor reads the family from the model id (Muse → meta, Gemma → google, Qwen → qwen, Laguna → poolside, Devstral → mistral, DeepSeek → deepseek). Muse-Glimmer (meta) reviews the Qwen dev and fallback cards; a dev card on Muse-Glimmer has no QA model of another family here and waits in Review"
+		"dev": "One model at a time. Kanban model capacity and provider concurrency are 1; dev/QA/fallback transitions serialize and may reload the selected model. Do not raise this limit based on advertised resident slots.",
+		"qa": "Ornith, MuseGlimmer (Meta) and Qwen are distinct routing review families. No additional family/model, benchmark rerun or automatic promotion is required."
 	},
-	"recommends": {
-		"settings": [
-			{
-				"key": "agents.cline.turnDetector.mode",
-				"value": "on",
-				"why": "Lemonade/llama.cpp ends Cline turns without the TaskComplete hook; only the turn detector in mode on ends them (report only logs), or every card sits running with an idle TUI"
-			}
-		]
-	}
+	"recommends": { "settings": [
+		{ "key": "agents.cline.turnDetector.mode", "value": "on", "why": "Local turns can end without a TaskComplete hook; the existing detector owns native turn completion." },
+		{ "key": "models.providerCapacity.lemonade.maxLoadedModels", "value": 1, "why": "User constraint: Lemonade uses one model at a time, even if the server advertises more resident slots." },
+		{ "key": "providerConcurrency.lemonade", "value": 1, "why": "Serialize provider requests as well as model admission; no concurrent local model turns." }
+	] }
 }

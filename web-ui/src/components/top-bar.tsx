@@ -5,6 +5,7 @@ import {
 	ArrowUp,
 	BookOpen,
 	Bug,
+	ChartNoAxesCombined,
 	Check,
 	ChevronDown,
 	CircleArrowDown,
@@ -303,6 +304,7 @@ export function TopBar({
 	onOpenSettings,
 	onOpenObjectives,
 	onOpenKnowledge,
+	onOpenEfficiency,
 	onEditProject,
 	showDebugButton,
 	onOpenDebugDialog,
@@ -338,6 +340,7 @@ export function TopBar({
 	onOpenSettings?: () => void;
 	onOpenObjectives?: () => void;
 	onOpenKnowledge?: () => void;
+	onOpenEfficiency?: () => void;
 	onEditProject?: () => void;
 	showDebugButton?: boolean;
 	onOpenDebugDialog?: () => void;
@@ -688,6 +691,18 @@ export function TopBar({
 					) : null}
 
 					{/* Tips and settings: always visible */}
+					{!isMobile && !hideProjectDependentActions && onOpenEfficiency ? (
+						<Tooltip content="Project efficiency and timing reports">
+							<Button
+								variant="ghost"
+								size="sm"
+								icon={<ChartNoAxesCombined size={16} />}
+								onClick={onOpenEfficiency}
+								aria-label="Project efficiency"
+								className="ml-0.5"
+							/>
+						</Tooltip>
+					) : null}
 					{!hideProjectDependentActions && onOpenKnowledge ? (
 						<Tooltip content="Project knowledge and proposals">
 							<Button

@@ -264,7 +264,10 @@ describe("getModelVendor", () => {
 		expect(getModelVendor("Laguna-S-2.1-GGUF-UD-Q4_K_XL")).not.toBe(getModelVendor("Qwen3.8-27B-GGUF-UD-Q4_K_XL"));
 	});
 
-	it("reads the lemonade preset's dev and fallback models as Qwen and its QA model as Meta", () => {
+	it("keeps user-selected Ornith, MuseGlimmer and Qwen review families distinct", () => {
+		expect(getModelVendor("Ornith-1.5-35B-A3B-GGUF-Q4_K_M")).toBe("ornith");
+		expect(getModelVendor("MuseGlimmer-Q4-DFlash-Test")).toBe("meta");
+		expect(getModelVendor("Qwen36-35B-A3B-UD-Q6_K-QA")).toBe("qwen");
 		expect(getModelVendor("Qwen3.8-27B-GGUF-UD-Q4_K_XL")).toBe("qwen");
 		expect(getModelVendor("Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M")).toBe("qwen");
 		expect(getModelVendor("Muse-Glimmer-30B-GGUF-Q4_K_M")).toBe("meta");

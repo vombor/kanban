@@ -197,13 +197,13 @@ describe("provider-id rules for a configured provider", () => {
 			Object.fromEntries(TRITON_MODELS_PAYLOAD.data.map((model) => [model.id, getModelVendor(model.id)])),
 		).toEqual({
 			"qwen3.6-35b-a3b": "qwen",
-			"ornith-1.5-35b-a3b": "qwen",
+			"ornith-1.5-35b-a3b": "ornith",
 			"qwen3-coder-next": "qwen",
 			"gemma-4-26b-a4b-it": "google",
 			"laguna-s-2.1": "poolside",
 			"glm-5.3-flash": "zai",
 		});
-		expect(getModelVendor("ornith-1.5-31b")).toBe("google");
+		expect(getModelVendor("ornith-1.5-31b")).toBe("ornith");
 	});
 
 	it("keeps a configured apiKeyEnv out of the pipeline checks' env", () => {

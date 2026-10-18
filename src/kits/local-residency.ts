@@ -36,6 +36,18 @@ export interface LocalResidencyFinding {
 	hint?: string;
 }
 
+/** An explicit kit recommendation can deliberately serialize a multi-model lineup. It never applies a setting. */
+export function kitSerializesLocalModels(kit: KitDocument, provider = LEMONADE_PROVIDER): boolean {
+	return (
+		kit.recommends?.settings?.some(
+			(setting) =>
+				setting.key === `models.providerCapacity.${provider}.maxLoadedModels` &&
+				setting.value === 1 &&
+				(setting.op === undefined || setting.op === "equals"),
+		) ?? false
+	);
+}
+
 function sampleCard(model: EffectiveModel | null): EffectiveCard {
 	return {
 		card: { id: "sample", title: "", prompt: "", startInPlanMode: false, baseRef: "", createdAt: 0, updatedAt: 0 },
@@ -90,6 +102,7 @@ export function assessLocalResidency(input: {
 	workingSet: readonly string[];
 	providerMaxLoaded: number;
 	kanbanCapacity: number | undefined;
+	deliberatelySerialized?: boolean;
 }): LocalResidencyFinding[] {
 	const needed = input.workingSet.length;
 	if (needed < 2) {
@@ -103,6 +116,14 @@ export function assessLocalResidency(input: {
 	const kanban = input.kanbanCapacity ?? Number.POSITIVE_INFINITY;
 	const serverText = input.providerMaxLoaded < 0 ? "unlimited" : String(input.providerMaxLoaded);
 	const findings: LocalResidencyFinding[] = [];
+	if (input.deliberatelySerialized && kanban === 1 && server >= 1) {
+		return [
+			{
+				level: "pass",
+				message: `${facts.name}: kit ${input.kitName} deliberately serializes its ${needed} local models (${models}) to one active model; switches may reload models. No capacity increase is recommended.`,
+			},
+		];
+	}
 	if (server < needed) {
 		const serialized = Math.min(kanban, server);
 		findings.push({

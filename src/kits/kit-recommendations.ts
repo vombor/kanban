@@ -63,7 +63,14 @@ export function evaluateKitRecommendedSettings(
 			setting,
 			configKey: onWorkspace ? `workspaces.${workspaceId ?? "<id>"}.${path}` : setting.key,
 			current,
-			status: current === undefined ? "unknown" : meets(setting, current) ? "met" : "unmet",
+			status:
+				current === undefined
+					? /^providerConcurrency\.(?:agent:)?[a-z0-9][a-z0-9-]{0,63}$/u.test(path)
+						? "unmet"
+						: "unknown"
+					: meets(setting, current)
+						? "met"
+						: "unmet",
 		};
 	});
 }

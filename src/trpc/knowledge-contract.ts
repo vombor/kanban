@@ -9,7 +9,7 @@ export const knowledgeIdSchema = z
 	.refine((id) => !["constructor", "prototype", "__proto__"].includes(id), "That document id is reserved");
 export const knowledgeRevisionSchema = z.string().regex(/^[a-f0-9]{64}$/u);
 export const knowledgeKindSchema = z.enum(["overview", "plan", "contract", "decision", "discovery", "runbook"]);
-function hasControlCharacters(value: string, allowWhitespace = false): boolean {
+export function hasControlCharacters(value: string, allowWhitespace = false): boolean {
 	for (const character of value) {
 		const code = character.charCodeAt(0);
 		if (
@@ -125,6 +125,7 @@ const markdownSchema = z
 	.string()
 	.max(KNOWLEDGE_MAX_MARKDOWN_CHARS)
 	.refine((value) => !hasControlCharacters(value, true), "Markdown cannot contain terminal control characters");
+export const knowledgeMarkdownSchema = markdownSchema;
 const writeFields = {
 	requestId: z.string().uuid(),
 	document: knowledgeMetadataSchema,

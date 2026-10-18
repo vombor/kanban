@@ -9,11 +9,11 @@ import { getBuiltInKits, getBuiltInPresets, getDefaultKit, resolveKitLayers } fr
 import { listKitModels } from "../../../src/kits/team/bench/price-sync-job";
 import { createCardHistory, createEffectiveCard } from "../../utilities/effective-card";
 
-const QWEN = { provider: "lemonade", model: "Qwen3.8-27B-GGUF-UD-Q4_K_XL" };
-const MUSE = { provider: "lemonade", model: "Muse-Glimmer-30B-GGUF-Q4_K_M" };
-const QWEN_CODER = { provider: "lemonade", model: "Qwen3-Coder-30B-A3B-Instruct-GGUF-Q4_K_M" };
-/** The only models the preset may name (user, 2026-10-13: served on Lemonade and vetted; issue #45). */
-const SERVED_MODELS = [QWEN.model, MUSE.model, QWEN_CODER.model];
+const ORNITH = { provider: "lemonade", model: "Ornith-1.5-35B-A3B-GGUF-Q4_K_M" };
+const MUSE = { provider: "lemonade", model: "MuseGlimmer-Q4-DFlash-Test" };
+const QWEN = { provider: "lemonade", model: "Qwen36-35B-A3B-UD-Q6_K-QA" };
+/** User-selected lineup (2026-10-18), not a new vetting result. */
+const SERVED_MODELS = [ORNITH.model, MUSE.model, QWEN.model];
 
 /** The team kit with the lemonade preset (what team-local was until 2026-10-12). */
 function resolveTeamLocal(overrides: Record<string, unknown> = {}) {
@@ -66,7 +66,7 @@ describe("the team kit's lemonade preset", () => {
 		expect(kit.features).toEqual(["scoreboard", "bench", "runoffs", "calibration", "tiers"]);
 	});
 
-	it("names only the three served, vetted models, in the preset and in the resolved kit", () => {
+	it("names only the three user-selected models, in the preset and in the resolved kit", () => {
 		const preset = getBuiltInPresets().get("lemonade");
 		for (const document of [preset, resolveTeamLocal().kit]) {
 			const named = new Set(collectModelProviders(document).map(({ model }) => model));
@@ -85,13 +85,13 @@ describe("the team kit's lemonade preset", () => {
 			}),
 		).toEqual({
 			agentId: "cline",
-			model: QWEN,
+			model: ORNITH,
 			tier: "dev",
 		});
 		expect(answerPlanAssignment(kit)).toEqual({
 			kind: "plan",
 			agentId: "cline",
-			model: MUSE,
+			model: QWEN,
 			startInPlanMode: true,
 			rules: [],
 		});
@@ -105,8 +105,8 @@ describe("the team kit's lemonade preset", () => {
 				round: 1,
 				history: createCardHistory(),
 			});
-		expect(qaFor(QWEN)).toMatchObject({ kind: "qa", agentId: "cline", model: MUSE, route: null });
-		expect(qaFor(QWEN_CODER)).toMatchObject({ kind: "qa", model: MUSE, route: null });
+		expect(qaFor(ORNITH)).toMatchObject({ kind: "qa", agentId: "cline", model: QWEN, route: null });
+		expect(qaFor(MUSE)).toMatchObject({ kind: "qa", model: QWEN, route: null });
 	});
 
 	it("refuses QA by the dev model's own family: a dev card on the QA model gets none", () => {
@@ -115,17 +115,17 @@ describe("the team kit's lemonade preset", () => {
 			policy.qaPolicy({
 				dev: createEffectiveCard({
 					agentId: "cline",
-					model: MUSE,
+					model: QWEN,
 				}),
 				round: 1,
 				history: createCardHistory(),
 			}),
-		).toMatchObject({ kind: "none", reason: expect.stringContaining("(meta)") });
+		).toMatchObject({ kind: "none", reason: expect.stringContaining("(qwen)") });
 	});
 
 	it("reworks on the same model, then hands the task to the fallback local model at once, outages included", () => {
 		const policy = createRoutingPolicy(resolveTeamLocal().kit);
-		const dev = createEffectiveCard({ agentId: "cline", model: QWEN });
+		const dev = createEffectiveCard({ agentId: "cline", model: ORNITH });
 		const limits = { maxFailRounds: 3 };
 		expect(policy.onFail({ dev, cause: "fail", verdict: null, history: createCardHistory([1]), limits })).toEqual({
 			action: "rework",
@@ -133,14 +133,14 @@ describe("the team kit's lemonade preset", () => {
 		});
 		expect(
 			policy.onFail({ dev, cause: "fail", verdict: null, history: createCardHistory([1, 2, 3]), limits }),
-		).toMatchObject({ action: "escalate", to: { agentId: "cline", model: QWEN_CODER }, requireApproval: false });
+		).toMatchObject({ action: "escalate", to: { agentId: "cline", model: MUSE }, requireApproval: false });
 		// One workflow for every team (user 2026-10-12): an outage hold that lasted maxMin hands the task to the fallback
 		// too. On one Lemonade server the sibling waits on the same outage, then goes to the orchestrator (a fallback
 		// sibling never falls back again).
 		expect(policy.onOutage({ dev, heldMin: 200, maxMin: 360 })).toMatchObject({ action: "hold" });
 		expect(policy.onOutage({ dev, heldMin: 400, maxMin: 360 })).toMatchObject({
 			action: "escalate",
-			to: { agentId: "cline", model: QWEN_CODER },
+			to: { agentId: "cline", model: MUSE },
 			requireApproval: false,
 		});
 	});
@@ -149,10 +149,10 @@ describe("the team kit's lemonade preset", () => {
 		const { kit } = resolveTeamLocal();
 		const onCline = (model: { provider: string; model: string }) => ({ agentId: "cline", ...model });
 		expect(listKitRoutes(kit)).toEqual([
-			{ label: "roles.dev", combination: onCline(QWEN) },
-			{ label: "roles.qa", combination: onCline(MUSE) },
-			{ label: "roles.plan", combination: onCline(MUSE) },
-			{ label: "roles.fallback", combination: onCline(QWEN_CODER) },
+			{ label: "roles.dev", combination: onCline(ORNITH) },
+			{ label: "roles.qa", combination: onCline(QWEN) },
+			{ label: "roles.plan", combination: onCline(QWEN) },
+			{ label: "roles.fallback", combination: onCline(MUSE) },
 		]);
 		// No text in the kit names the models it ran before 2026-10-12, or the ones it dropped on 2026-10-13 (gemma-4-E4B
 		// is named only in the QA notes, as the reviewer notes found too small).
@@ -179,17 +179,22 @@ describe("the team kit's lemonade preset", () => {
 			"agents.cline.turnDetector.mode": "unmet",
 			"pipeline.recovery.mode": "unmet",
 			"workspaces.local.recovery.enabled": "met",
+			"models.providerCapacity.lemonade.maxLoadedModels": "met",
+			"providerConcurrency.lemonade": "unmet",
 		});
 		expect(
 			statusOf({
 				agents: { cline: { turnDetector: { mode: "on" } } },
 				pipeline: { recovery: { mode: "on" } },
+				providerConcurrency: { lemonade: 1 },
 				workspaces: { local: { recovery: { enabled: false } } },
 			}),
 		).toEqual({
 			"agents.cline.turnDetector.mode": "met",
 			"pipeline.recovery.mode": "met",
 			"workspaces.local.recovery.enabled": "unmet",
+			"models.providerCapacity.lemonade.maxLoadedModels": "met",
+			"providerConcurrency.lemonade": "met",
 		});
 	});
 
@@ -205,14 +210,14 @@ describe("the team kit's lemonade preset", () => {
 			config: parsePipelineConfig({}).config,
 		});
 		// The one refusal is a sample card built on the QA model itself: the kit requires a QA model of another
-		// vendor and has none for Muse-Glimmer, so a card someone builds on Muse-Glimmer waits in Review.
+		// vendor and has none for Qwen, so a card someone builds on the QA model waits in Review.
 		expect(report.warnings).toEqual([
-			expect.stringContaining("Muse-Glimmer-30B-GGUF-Q4_K_M is from the dev card's vendor (meta)"),
+			expect.stringContaining("Qwen36-35B-A3B-UD-Q6_K-QA is from the dev card's vendor (qwen)"),
 		]);
 		expect(report.recommendedLandingMode).toBe("qa");
 		const text = formatKitReport(report).join("\n");
 		expect(text).toContain(
-			"New dev cards (when the creator sets no agent):\n  cline on lemonade/Qwen3.8-27B-GGUF-UD-Q4_K_XL (tier dev)",
+			"New dev cards (when the creator sets no agent):\n  cline on lemonade/Ornith-1.5-35B-A3B-GGUF-Q4_K_M (tier dev)",
 		);
 		expect(text).not.toContain("[qa.routes[");
 		expect(text).toContain("Settings this kit needs (config.json; the kit never applies them):");
