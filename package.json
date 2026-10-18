@@ -23,7 +23,8 @@
 	},
 	"type": "module",
 	"bin": {
-		"kanban": "dist/cli.js"
+		"kanban": "dist/cli.js",
+		"kanban-maintenance": "dist/maintenance.js"
 	},
 	"man": "./man/kanban.1",
 	"main": "./dist/index.js",

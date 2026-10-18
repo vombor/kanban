@@ -24,7 +24,7 @@ describe("Kanban's package on GitHub Packages", () => {
 	it("matches package.json's name and publish registry", () => {
 		expect(packageJson.name).toBe(KANBAN_PACKAGE_NAME);
 		expect(packageJson.publishConfig.registry).toBe(KANBAN_PACKAGE_REGISTRY);
-		expect(packageJson.bin).toEqual({ kanban: "dist/cli.js" });
+		expect(packageJson.bin).toEqual({ kanban: "dist/cli.js", "kanban-maintenance": "dist/maintenance.js" });
 	});
 
 	it("encodes the scope's slash in the metadata URL", () => {
