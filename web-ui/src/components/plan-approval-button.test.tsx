@@ -31,6 +31,7 @@ const PLAN = {
 	specTitle: "Coupons at checkout",
 	cards: 3,
 	breakdownSha256: "abc123",
+	bundle: { revision: "d".repeat(64), spec: { contentHash: "e".repeat(64) }, documents: [] },
 	approval: null,
 };
 const APPROVAL = { at: "2026-10-07T12:00:00.000Z", via: "approve", breakdownSha256: "abc123" };
@@ -108,7 +109,12 @@ describe("PlanApprovalButton", () => {
 		expect(trpc.approve).not.toHaveBeenCalled();
 
 		await click(dialogButton("Approve plan"));
-		expect(trpc.approve).toHaveBeenCalledWith({ taskId: "p1", via: "approve", breakdownSha256: "abc123" });
+		expect(trpc.approve).toHaveBeenCalledWith({
+			taskId: "p1",
+			via: "approve",
+			breakdownSha256: "abc123",
+			bundleRevision: PLAN.bundle.revision,
+		});
 		expect(document.body.querySelector('[aria-label="Approval code"]')).toBeNull();
 		expect(showAppToast).toHaveBeenCalledWith(expect.objectContaining({ intent: "success" }), "plan-p1");
 		expect(document.body.querySelector('[role="alertdialog"]')).toBeNull();

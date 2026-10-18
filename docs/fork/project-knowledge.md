@@ -33,8 +33,88 @@ and next offset; continue with that revision and offset to avoid mixing revision
 project's current documents, with bounded snippets, not a paid embedding/model operation.
 
 `context` prioritizes user pins and returns up to 30 overview/plan/contract/decision pointers. It is **a project
-index, not an approved task context or plan approval bundle**. Task-pinned references and automatic stable launch
-bootstrap pointers are dependent roadmap work, not claimed by this foundation.
+index, not an approved task context or plan approval bundle**. The separate plan handoff below pins exact references
+to planned dev tasks without changing the meaning of ordinary publication or project discovery.
+
+## Reviewed plan bundles and task handoffs
+
+New user-only `plans.approve` approvals name an immutable reviewed bundle: the spec's exact bytes, the exact
+breakdown JSON and selected published knowledge revisions. Optional `knowledgeReferences` entries in the breakdown
+or on a card use `{ "id": "api-contract", "revision": "<full SHA-256>" }`; top-level entries are shared, card entries
+are specific to that card. The bundle also includes the user's current protected pins. Conflicting selections,
+invented/missing revisions, a selection shadowing a protected pin, or more than 40 documents refuse review rather
+than silently dropping context. Specs and breakdowns are bounded regular files inside the plan worktree, each at
+most 262,144 UTF-8 bytes. A spec must also fit the bounded Markdown heading map.
+
+The approval dialog identifies the spec, breakdown and bundle hashes plus selected knowledge metadata; review the
+plan's files before confirming. A spec-only edit or protected-pin change between preview and approval changes the
+bundle identity and is refused. Immutable content commits before the approval index. Historical breakdown-only
+approvals remain explicitly **legacy breakdown only**; they are not upgraded by publication, preview or expansion.
+A new user approval retains the earlier marker in `approvalHistory`. An already reserved expansion cannot switch
+to another approved bundle.
+
+Expansion validates the current spec/breakdown against the retained user approval and creates from the exact
+retained breakdown. Later shared-document publication does not reselect the task's knowledge. It durably reserves
+ids, then attaches every task's references before the first ordinary Backlog card creation. Task-specific entries,
+shared entries and protected pins are retained in `knowledge/task-contexts.json`. Expansion stays serialized,
+crash retries keep their ids, and confirmed creations are checkpointed. A confirmed task pruned during an unfinished
+expansion is not recreated by retry; native Done/delete history also protects a task removed before its create
+checkpoint was recorded. Cards keep ordinary kit routing and acceptance criteria before `FINAL STEP`,
+including a dev-task reference pointer for QA; expansion never starts tasks or links them to the plan card.
+
+```sh
+kanban knowledge task-context <dev-task-id> --project example --json
+kanban knowledge task-read <dev-task-id> --project example --part spec --context-revision <context-sha256> --json
+kanban knowledge task-read <dev-task-id> --project example --part breakdown --json
+kanban knowledge task-read <dev-task-id> --project example --part document --id api-contract \
+  --context-revision <context-sha256> --section response --offset 0 --limit 4096 --json
+```
+
+These use the strict own-project API even with isolation off or a grant. Reads accept only a retained task context
+and its pinned parts/documents, never an arbitrary content hash or mutable-worktree fallback. They use the same
+bounded slices/section maps as ordinary knowledge. Task/plan cleanup and board pruning do not remove these pins.
+Missing/corrupt bundles or missing reserved handoffs refuse reads/new launches rather than silently going unpinned.
+The task-context store is bounded to 2,000 retained tasks, 100 context revisions per task and 8 MiB; no history is
+evicted automatically.
+
+New nonempty ordinary agent launches append a small stable pointer, not full spec/document bodies. Blank composers
+stay blank and reattaching a live session does not inject a prompt. The detail view's **Plan context** dialog loads
+metadata only when opened and reads bodies only on request. It reports published revision drift without changing
+pins; phone/desktop reads and restart retention are covered by owned shared-Chrome fixtures with fake CLIs.
+
+## Explicit pre-start reference adoption
+
+Only the user can adopt a replacement revision of a document already selected for a task. Adoption is not a new
+plan approval: the reviewed spec, exact breakdown, acceptance criteria, plan approval and any QA/verdict history
+remain unchanged. It does not add/remove document identities, replace the approved plan bundle, start work or grant
+execution permission. Material scope/requirement changes still need their ordinary explicit approval, not a
+reference-adoption workaround.
+
+The task must be provably unstarted: a Backlog dev card with no current/persisted session, pipeline evidence,
+task history, existing worktree or retained physical-start reservation. Missing/unreadable evidence refuses it.
+The native **Plan context** dialog is available in the Backlog editor as well as task details; it offers bounded
+replacement review, an explicit reason and confirmation only when eligible. Opening/readout never adopts.
+
+```sh
+kanban knowledge task-adopt <dev-task-id> --project example --id api-contract \
+  --expected-context <context-you-reviewed> --expected-revision <currently-task-pinned-revision> \
+  --revision <exact-current-published-replacement> --reason 'Reviewed correction; acceptance unchanged' \
+  --request-id <uuid> --json
+```
+
+The strict user-only server route rechecks eligibility and exact context/document revisions. The replacement must
+still be the selected published current revision, checked under the knowledge manifest lock. A concurrent edit or
+adoption refuses rather than choosing a newer revision. The write retains the previous context, user/time/reason,
+parent revision, selected replacement and request id together. An exact retry returns its retained receipt even
+after a start; reuse with a different choice refuses. Old contexts remain readable through `--context-revision`.
+The UI displays adoption history and a previous-reference read, without relabeling original plan approval.
+
+Physical starts reserve the exact task context under the **same durable task-context lock** before preparing/spawning
+the agent. That physical admission owner injects the reserved pointer, not a preflight snapshot. Adoption therefore
+either commits before the reservation and reaches that launch, or loses the race and is refused. Blank composers
+also reserve/freeze pins but stay blank. Failed/uncertain starts retain the reservation; there is no automatic
+refund, unfreeze or retry. Attached automatic restarts return through ordinary runtime admission. An installation
+without the physical admission hook refuses adoption rather than advertising a preflight-only safety guarantee.
 
 ## Publish, propose and curate
 

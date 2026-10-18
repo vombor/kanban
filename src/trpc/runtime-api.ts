@@ -92,6 +92,7 @@ export interface CreateRuntimeApiDependencies {
 	launchAuthorization?: WeakMap<object, AbortSignal>;
 	launchReceiptIds?: WeakMap<object, string>;
 	objectiveAdmission?: ObjectiveAdmissionAccounting;
+	taskContextBootstrap?: (workspaceId: string, taskId: string) => Promise<string>;
 }
 
 async function resolveExistingTaskCwdOrEnsure(options: {
@@ -258,6 +259,23 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 							error: `Objective admission held (${decision.reason}); no session was started or replaced.`,
 						};
 				}
+				const bootstrap =
+					deps.taskContextBootstrap &&
+					!isHomeAgentSessionId(body.taskId) &&
+					!terminalManager.willReuseLiveSession(body.taskId)
+						? ((await deps.taskContextBootstrap?.(workspaceScope.workspaceId, body.taskId)) ?? "")
+						: "";
+				if (
+					bootstrap &&
+					caller &&
+					caller.kind !== "user" &&
+					(caller.kind !== "session" || caller.session.workspaceId !== workspaceScope.workspaceId)
+				)
+					return {
+						ok: false,
+						summary: null,
+						error: "Pinned plan launches belong only to the user or this project's identified sessions.",
+					};
 				const taskCwd = isHomeAgentSessionId(body.taskId)
 					? workspaceScope.workspacePath
 					: await resolveExistingTaskCwdOrEnsure({
@@ -401,6 +419,7 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 					args: resolved.args,
 					autonomousModeEnabled: scopedRuntimeConfig.agentAutonomousModeEnabled,
 					cwd: taskCwd,
+					// The physical admission owner selects/freezes/injects current pins, never this preflight snapshot.
 					prompt: body.prompt,
 					images: body.images,
 					startInPlanMode: body.startInPlanMode,

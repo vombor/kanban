@@ -1,6 +1,7 @@
 // The plan index: `data/<workspaceId>/plans.json` in the Kanban home. One entry per plan card, written by
 // `kanban task create --role plan` (slug, routing), `kanban plan approve` (the user's approval, pinned to the
-// breakdown's hash) and `kanban plan expand` (local id → task id, the links, the plan card's metrics). The team kit's
+// reviewed bundle; historical breakdown-only approvals stay historical) and `kanban plan expand` (local id → task id,
+// the links, confirmed creates and plan card metrics). The team kit's
 // scoring reads plans from here later (plan-metrics.ts); nothing in the pipeline decides on it.
 //
 // The expansion is written before any card is created, with the task ids chosen up front, so an expand that stops
@@ -11,20 +12,13 @@ import { z } from "zod";
 import { runtimeAgentIdSchema } from "../core/api-contract";
 import { lockedFileSystem } from "../fs/locked-file-system";
 import { getPlanIndexPath } from "../state/kanban-home";
+import { knowledgeRevisionSchema } from "../trpc/knowledge-contract";
+import { planApprovalSchema } from "../trpc/plans-contract";
 import { planSlugSchema } from "./plan-breakdown";
 
-export const PLAN_INDEX_VERSION = 1;
+export { type PlanApproval, planApprovalSchema } from "../trpc/plans-contract";
 
-export const planApprovalSchema = z
-	.object({
-		at: z.string(),
-		/** `approve`: `kanban plan approve` (or the UI); `expand`: `kanban plan expand --approved-by-user`. */
-		via: z.enum(["approve", "expand"]),
-		/** sha256 of the breakdown file the user approved; a changed breakdown needs a new approval. */
-		breakdownSha256: z.string(),
-	})
-	.strict();
-export type PlanApproval = z.infer<typeof planApprovalSchema>;
+export const PLAN_INDEX_VERSION = 1;
 
 export const planExpansionSchema = z
 	.object({
@@ -32,8 +26,11 @@ export const planExpansionSchema = z
 		startedAt: z.string(),
 		finishedAt: z.string().nullable(),
 		breakdownSha256: z.string(),
+		bundleRevision: knowledgeRevisionSchema.optional(),
 		/** Local id → task id, chosen before the first card is created. */
 		cards: z.record(z.string(), z.string()),
+		/** Confirmed ordinary creates; pruning one during an unfinished expansion never authorizes recreation. */
+		createdTaskIds: z.array(z.string()).max(30).optional(),
 		/** Board links by local id: `waiting` starts once `prerequisite` is Done. */
 		links: z.array(z.object({ waiting: z.string(), prerequisite: z.string() }).strict()),
 	})
@@ -67,6 +64,7 @@ export const planRecordSchema = z
 		modelId: z.string().nullable(),
 		startInPlanMode: z.boolean(),
 		approval: planApprovalSchema.nullable(),
+		approvalHistory: z.array(planApprovalSchema).max(1000).optional(),
 		expansion: planExpansionSchema.nullable(),
 		metrics: planCardMetricsSchema.nullable(),
 	})

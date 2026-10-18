@@ -222,6 +222,16 @@ import {
 	knowledgeSearchResponseSchema,
 	type RuntimeKnowledgeApi,
 } from "./knowledge-contract";
+import {
+	type RuntimeTaskKnowledgeApi,
+	taskContextAdoptRequestSchema,
+	taskContextAdoptResponseSchema,
+	taskExpansionContextRequestSchema,
+	taskKnowledgeReadRequestSchema,
+	taskKnowledgeReadResponseSchema,
+	taskKnowledgeRequestSchema,
+	taskKnowledgeResponseSchema,
+} from "./knowledge-execution-contract";
 import type { RuntimeObjectiveApi } from "./objective-contract";
 import {
 	obsidianConnectorProbeSchema,
@@ -255,7 +265,7 @@ import {
 	planPreviewRequestSchema,
 	planPreviewResponseSchema,
 	type RuntimePlansApi,
-} from "./plans-api";
+} from "./plans-contract";
 import { projectNameRequestSchema, projectNameResponseSchema, type RuntimeProjectNameApi } from "./project-name-api";
 import {
 	projectSecretsMetadataSchema,
@@ -299,6 +309,7 @@ export interface RuntimeTrpcContext {
 	objectiveApi?: RuntimeObjectiveApi;
 	projectSecretsApi?: RuntimeProjectSecretsApi;
 	knowledgeApi?: RuntimeKnowledgeApi;
+	taskKnowledgeApi?: RuntimeTaskKnowledgeApi;
 	obsidianConnectorApi?: RuntimeObsidianConnectorApi;
 	requestedWorkspaceId: string | null;
 	workspaceScope: RuntimeTrpcWorkspaceScope | null;
@@ -667,6 +678,44 @@ export const runtimeAppRouter = t.router({
 				if (!ctx.objectiveApi)
 					throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Project objectives are unavailable." });
 				return await ctx.objectiveApi.setLimits(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId, input);
+			}),
+	}),
+	taskKnowledge: t.router({
+		adopt: workspaceProcedure
+			.input(taskContextAdoptRequestSchema)
+			.output(taskContextAdoptResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.taskKnowledgeApi)
+					throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Pinned task context is unavailable." });
+				return ctx.taskKnowledgeApi.adopt(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId, input);
+			}),
+		get: workspaceProcedure
+			.input(taskKnowledgeRequestSchema)
+			.output(taskKnowledgeResponseSchema)
+			.query(async ({ ctx, input }) => {
+				if (!ctx.taskKnowledgeApi)
+					throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Pinned task context is unavailable." });
+				return ctx.taskKnowledgeApi.get(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId, input);
+			}),
+		read: workspaceProcedure
+			.input(taskKnowledgeReadRequestSchema)
+			.output(taskKnowledgeReadResponseSchema)
+			.query(async ({ ctx, input }) => {
+				if (!ctx.taskKnowledgeApi)
+					throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Pinned task context is unavailable." });
+				return ctx.taskKnowledgeApi.read(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId, input);
+			}),
+		attachExpansion: workspaceProcedure
+			.input(taskExpansionContextRequestSchema)
+			.output(z.object({ ok: z.literal(true) }))
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.taskKnowledgeApi)
+					throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Pinned task context is unavailable." });
+				return ctx.taskKnowledgeApi.attachExpansion(
+					await readStrictCaller(ctx),
+					ctx.workspaceScope.workspaceId,
+					input,
+				);
 			}),
 	}),
 	knowledge: t.router({
@@ -1182,7 +1231,12 @@ export const runtimeAppRouter = t.router({
 				if (!ctx.plansApi) {
 					return { ok: false, plan: null, error: "Plan approval is not available here." };
 				}
-				return await ctx.plansApi.preview(ctx.workspaceScope.workspacePath, input);
+				return await ctx.plansApi.preview(
+					ctx.workspaceScope.workspacePath,
+					input,
+					await readStrictCaller(ctx),
+					ctx.workspaceScope.workspaceId,
+				);
 			}),
 		approve: workspaceProcedure
 			.input(planApproveRequestSchema)

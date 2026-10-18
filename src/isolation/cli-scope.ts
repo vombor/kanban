@@ -85,6 +85,7 @@ export const USER_ONLY_COMMANDS = [
 	"github bot create",
 	"knowledge pin",
 	"knowledge unpin",
+	"knowledge task-adopt",
 	"objective create",
 	"objective limits",
 	"objective link",

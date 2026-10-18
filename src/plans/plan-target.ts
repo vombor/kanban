@@ -5,12 +5,16 @@
 import type { RuntimeBoardCard, RuntimeBoardColumnId, RuntimeWorkspaceStateResponse } from "../core/api-contract";
 import { resolveCardRole } from "../core/card-role";
 import { readPlanSlugFromPrompt } from "../kits/plan-prompt";
+import { createPlanBundleStore, type PlanBundleStore, type PreparedPlanBundle } from "../knowledge/plan-bundle-store";
 import { resolveProjectInputPath } from "../projects/project-path";
 import { loadWorkspaceContext, mutateWorkspaceState } from "../state/workspace-state";
+import type { PlanApprovalPreview } from "../trpc/plans-contract";
 import { getTaskWorkspacePathInfo } from "../workspace/task-worktree";
 import { type PlanBreakdown, parsePlanBreakdown, readPlanFiles } from "./plan-breakdown";
 import { hashPlanBreakdown } from "./plan-expand";
 import type { PlanApproval, PlanIndexStore, PlanRecord } from "./plan-index";
+
+export type { PlanApprovalPreview } from "../trpc/plans-contract";
 
 export interface PlanTarget {
 	repoPath: string;
@@ -90,6 +94,8 @@ export interface ValidPlanBreakdown {
 	sha: string;
 	specPath: string;
 	spec: string | null;
+	breakdownText: string;
+	breakdownPath: string;
 }
 
 /** Reads and validates the plan card's breakdown; throws with every issue when it doesn't validate. */
@@ -111,6 +117,8 @@ export async function readValidBreakdown(
 		sha: hashPlanBreakdown(files.breakdownText),
 		specPath: files.paths.specPath,
 		spec: files.spec,
+		breakdownText: files.breakdownText,
+		breakdownPath: files.paths.breakdownPath,
 	};
 }
 
@@ -120,40 +128,34 @@ export function readPlanSpecTitle(spec: string | null): string | null {
 	return heading ? heading.replace(/^#\s+/u, "").trim() : null;
 }
 
-export type PlanApprovalState = "approved" | "stale" | "not approved";
+export type PlanApprovalState = "approved" | "stale" | "not approved" | "legacy breakdown only";
 
 export function describePlanApprovalState(
 	approval: PlanApproval | null,
 	breakdownSha256: string | null,
+	bundleRevision?: string | null,
 ): PlanApprovalState {
 	if (!approval) {
 		return "not approved";
 	}
+	if (!approval.bundleRevision) return "legacy breakdown only";
+	if (bundleRevision !== undefined) {
+		if (approval.bundleRevision !== bundleRevision) return "stale";
+	}
 	return approval.breakdownSha256 === breakdownSha256 ? "approved" : "stale";
-}
-
-export interface PlanApprovalPreview {
-	taskId: string;
-	title: string;
-	slug: string;
-	specPath: string;
-	/** The spec's first heading (null when the spec has none or is missing). */
-	specTitle: string | null;
-	cards: number;
-	breakdownSha256: string;
-	approval: (PlanApproval & { state: PlanApprovalState }) | null;
 }
 
 export interface PlanApprovalDependencies {
 	index: PlanIndexStore;
 	findWorktree?: FindPlanWorktree;
 	now?: () => Date;
+	bundles?: PlanBundleStore;
 }
 
 async function readApprovablePlan(
 	input: { repoPath: string; taskId: string },
 	deps: PlanApprovalDependencies,
-): Promise<{ target: PlanTarget; plan: LocatedPlan; preview: PlanApprovalPreview }> {
+): Promise<{ target: PlanTarget; plan: LocatedPlan; preview: PlanApprovalPreview; prepared: PreparedPlanBundle }> {
 	const target = await loadPlanTarget(input.repoPath);
 	const plan = await locatePlan(target, deps.index, input.taskId);
 	if (plan.record?.expansion?.status === "done") {
@@ -164,9 +166,19 @@ async function readApprovablePlan(
 	}
 	const valid = await readValidBreakdown(target, plan, deps.findWorktree ?? findPlanWorktree);
 	const approval = plan.record?.approval ?? null;
+	const prepared = await (deps.bundles ?? createPlanBundleStore()).prepare(target.workspaceId, {
+		planTaskId: plan.card.id,
+		slug: plan.slug,
+		specPath: valid.specPath,
+		breakdownPath: valid.breakdownPath,
+		spec: valid.spec,
+		breakdownText: valid.breakdownText,
+		breakdown: valid.breakdown,
+	});
 	return {
 		target,
 		plan,
+		prepared,
 		preview: {
 			taskId: plan.card.id,
 			title: plan.card.title ?? "",
@@ -175,7 +187,10 @@ async function readApprovablePlan(
 			specTitle: readPlanSpecTitle(valid.spec),
 			cards: valid.breakdown.cards.length,
 			breakdownSha256: valid.sha,
-			approval: approval ? { ...approval, state: describePlanApprovalState(approval, valid.sha) } : null,
+			bundle: prepared.bundle,
+			approval: approval
+				? { ...approval, state: describePlanApprovalState(approval, valid.sha, prepared.bundle.revision) }
+				: null,
 		},
 	};
 }
@@ -189,23 +204,47 @@ export async function previewPlanApproval(
 }
 
 /**
- * Records the user's approval, pinned to the breakdown's hash. `expectedSha256` is the breakdown the user was shown:
- * a breakdown changed while the approval waited for the code is refused, so it gets an approval of its own.
+ * Records the user's exact reviewed bundle only after its immutable content is durable. A stale preview never
+ * approves new spec/breakdown/knowledge content, and historical breakdown-only approval remains provenance.
  */
 export async function recordPlanApproval(
-	input: { repoPath: string; taskId: string; via: PlanApproval["via"]; expectedSha256?: string | null },
+	input: {
+		repoPath: string;
+		taskId: string;
+		via: PlanApproval["via"];
+		expectedSha256?: string | null;
+		expectedBundleRevision: string;
+	},
 	deps: PlanApprovalDependencies,
 ): Promise<{ approval: PlanApproval; preview: PlanApprovalPreview }> {
 	const now = (deps.now ?? (() => new Date()))();
-	const { target, plan, preview } = await readApprovablePlan(input, deps);
+	const { target, plan, preview, prepared } = await readApprovablePlan(input, deps);
 	if (input.expectedSha256 && input.expectedSha256 !== preview.breakdownSha256) {
 		throw new Error(
 			`The breakdown of plan ${plan.card.id} changed while the approval waited; approve the new breakdown (kanban plan approve ${plan.card.id}).`,
 		);
 	}
-	const approval: PlanApproval = { at: now.toISOString(), via: input.via, breakdownSha256: preview.breakdownSha256 };
+	if (input.expectedBundleRevision !== preview.bundle.revision)
+		throw new Error(
+			"The reviewed plan bundle changed (spec, breakdown or knowledge revisions); review and approve its exact new revision.",
+		);
+	await (deps.bundles ?? createPlanBundleStore()).persist(target.workspaceId, prepared);
+	let approval: PlanApproval = {
+		at: now.toISOString(),
+		via: input.via,
+		breakdownSha256: preview.breakdownSha256,
+		bundleRevision: preview.bundle.revision,
+	};
 	await deps.index.update(target.workspaceId, (current) => {
 		const existing = current.plans[plan.card.id];
+		if (existing?.expansion?.status === "done")
+			throw new Error("Plan was already expanded while approval was being recorded.");
+		if (existing?.expansion && existing.approval?.bundleRevision !== approval.bundleRevision)
+			throw new Error(
+				"Plan expansion already reserved another approval; preserve its tasks and explicitly resolve that expansion before changing the approved bundle.",
+			);
+		if (existing?.approval && existing.approval.bundleRevision === approval.bundleRevision)
+			approval = existing.approval;
 		const record: PlanRecord = existing ?? {
 			// A plan card made by hand (no `task create --role plan`) gets its entry on first approval.
 			taskId: plan.card.id,
@@ -221,7 +260,12 @@ export async function recordPlanApproval(
 			expansion: null,
 			metrics: null,
 		};
-		return { ...current, plans: { ...current.plans, [plan.card.id]: { ...record, approval } } };
+		const history = [...(record.approvalHistory ?? [])];
+		if (record.approval && record.approval.bundleRevision !== approval.bundleRevision) history.push(record.approval);
+		return {
+			...current,
+			plans: { ...current.plans, [plan.card.id]: { ...record, approval, approvalHistory: history } },
+		};
 	});
 	return { approval, preview: { ...preview, approval: { ...approval, state: "approved" } } };
 }

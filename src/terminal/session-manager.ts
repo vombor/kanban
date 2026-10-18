@@ -544,7 +544,7 @@ export class TerminalSessionManager implements TerminalSessionService {
 		}
 		const start = Promise.resolve().then(() =>
 			this.taskStartAdmission
-				? this.taskStartAdmission(request, () => this.startTaskSessionAdmitted(request))
+				? this.taskStartAdmission(request, (prepared) => this.startTaskSessionAdmitted(prepared ?? request))
 				: this.startTaskSessionAdmitted(request),
 		);
 		this.taskStarts.set(request.taskId, start);
@@ -558,7 +558,7 @@ export class TerminalSessionManager implements TerminalSessionService {
 	private taskStartAdmission:
 		| ((
 				request: StartTaskSessionRequest,
-				start: () => Promise<RuntimeTaskSessionSummary>,
+				start: (prepared?: StartTaskSessionRequest) => Promise<RuntimeTaskSessionSummary>,
 		  ) => Promise<RuntimeTaskSessionSummary>)
 		| null = null;
 	private taskRestart: ((request: StartTaskSessionRequest) => Promise<void>) | null = null;

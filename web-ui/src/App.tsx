@@ -787,6 +787,7 @@ export default function App(): ReactElement {
 			onAgentSettingsChange={setEditTaskAgentSettings}
 			defaultAgentId={runtimeProjectConfig?.selectedAgentId ?? null}
 			mode="edit"
+			taskId={editingTaskId}
 			idPrefix={`inline-edit-task-${editingTaskId}`}
 		/>
 	) : undefined;

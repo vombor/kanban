@@ -22,8 +22,8 @@ function stopEvent(event: { stopPropagation: () => void }): void {
 
 /**
  * Approve plan on a plan card in Review: the user's approval of its card breakdown, which lets the orchestrator expand
- * it (`kanban plan expand`). The dialog shows the spec's title, the card count and the breakdown's hash, and the
- * user confirms; the runtime records the approval of exactly that breakdown.
+ * it (`kanban plan expand`). The dialog identifies the spec, exact breakdown and pinned knowledge revisions;
+ * the user confirms that reviewed bundle, never a mutable reference or historical breakdown-only approval.
  */
 export function PlanApprovalButton({ taskId, taskTitle }: { taskId: string; taskTitle: string }): ReactElement {
 	const workspaceId = useCurrentWorkspaceId();
@@ -84,15 +84,39 @@ export function PlanApprovalButton({ taskId, taskTitle }: { taskId: string; task
 									<span className="text-text-primary">{preview.specTitle || preview.title || taskTitle}</span>:{" "}
 									{preview.cards} {preview.cards === 1 ? "card" : "cards"}, spec{" "}
 									<span className="font-mono">{preview.specPath}</span>, breakdown{" "}
-									<span className="font-mono">{preview.breakdownSha256.slice(0, 12)}</span>.
+									<span className="font-mono">{preview.breakdownSha256.slice(0, 12)}</span>, reviewed bundle{" "}
+									<span className="font-mono">{preview.bundle.revision.slice(0, 12)}</span>.
 								</AlertDialogDescription>
 								<p className="text-text-secondary">
 									Approve only a plan you reviewed yourself: approving lets the orchestrator create these cards
-									in Backlog. A later change to the breakdown needs a new approval.
+									in Backlog, never starts them. The spec, breakdown and exact knowledge revisions are retained
+									before approval; a changed reviewed bundle needs explicit new approval.
 								</p>
+								<p className="break-all text-xs text-text-secondary">
+									Spec SHA-256 {preview.bundle.spec.contentHash}
+								</p>
+								{preview.bundle.documents.length ? (
+									<ul className="space-y-1 text-xs text-text-secondary">
+										{preview.bundle.documents.map((document) => (
+											<li key={document.id}>
+												{document.title} · {document.id} ·{" "}
+												<span className="font-mono">{document.revision.slice(0, 12)}</span>
+												{document.pinnedByUser ? " · user pin" : ""}
+											</li>
+										))}
+									</ul>
+								) : (
+									<p className="text-xs text-text-tertiary">No shared knowledge revisions selected.</p>
+								)}
 								{approvedCurrent ? (
 									<p className="flex items-center gap-1.5 text-status-green">
-										<CheckCircle2 size={14} /> Already approved for this breakdown.
+										<CheckCircle2 size={14} /> Already approved for this exact bundle.
+									</p>
+								) : null}
+								{preview.approval?.state === "legacy breakdown only" ? (
+									<p className="text-status-orange">
+										Historical approval covers the breakdown only. It does not approve this spec/knowledge
+										bundle; confirming records a new user approval and retains the earlier marker.
 									</p>
 								) : null}
 							</>

@@ -5,9 +5,11 @@
 // Beyond the zod shape, a breakdown must be a plan the board can run: unique local ids, dependencies that name
 // another card of the breakdown, no cycles (a cycle would leave every card in it waiting forever), and no card
 // depending (even transitively) on a card of its own parallel group, since a group is "these can run at once".
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { realpath } from "node:fs/promises";
+import { isAbsolute, join, relative } from "node:path";
 import { z } from "zod";
+import { readKnowledgeFile } from "../knowledge/content-store";
+import { KNOWLEDGE_MAX_CONTENT_BYTES, knowledgeIdSchema, knowledgeRevisionSchema } from "../trpc/knowledge-contract";
 
 export const PLAN_BREAKDOWN_VERSION = 1;
 /** Where specs go, relative to the repo root. */
@@ -26,6 +28,10 @@ const localIdSchema = z
 	.string()
 	.regex(/^[a-z0-9][a-z0-9-]{0,39}$/u, "must be 1-40 lowercase letters, digits or '-' (a local id, not a task id)");
 
+export const planKnowledgeReferenceSchema = z
+	.object({ id: knowledgeIdSchema, revision: knowledgeRevisionSchema })
+	.strict();
+
 export const planBreakdownCardSchema = z
 	.object({
 		/** Local id other cards name in `dependsOn`. */
@@ -35,6 +41,7 @@ export const planBreakdownCardSchema = z
 		prompt: z.string().trim().min(20, "is too short to be a card prompt"),
 		/** Plans produce dev cards only (QA cards come from the pipeline). */
 		role: z.literal("dev").default("dev"),
+		knowledgeReferences: z.array(planKnowledgeReferenceSchema).max(30).optional(),
 		/** Local ids of cards that must be done (landed) before this one starts. */
 		dependsOn: z.array(localIdSchema).default([]),
 		/** Cards of one group can run at the same time. */
@@ -52,6 +59,7 @@ export const planBreakdownSchema = z
 		/** One-paragraph summary of the plan. */
 		summary: z.string().trim().min(1).optional(),
 		cards: z.array(planBreakdownCardSchema).min(1, "has no cards").max(PLAN_MAX_CARDS),
+		knowledgeReferences: z.array(planKnowledgeReferenceSchema).max(30).optional(),
 	})
 	.strict()
 	.superRefine((breakdown, context) => {
@@ -221,9 +229,12 @@ export interface PlanFiles {
 	paths: PlanSpecPaths & { worktreePath: string };
 }
 
-async function readTextIfExists(path: string): Promise<string | null> {
+async function readTextIfExists(path: string, worktreePath: string): Promise<string | null> {
 	try {
-		return await readFile(path, "utf8");
+		const inside = relative(await realpath(worktreePath), await realpath(path));
+		if (isAbsolute(inside) || inside === ".." || inside.startsWith("../"))
+			throw new Error("Plan review files must stay inside the plan card's worktree.");
+		return await readKnowledgeFile(path, KNOWLEDGE_MAX_CONTENT_BYTES);
 	} catch (error) {
 		if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
 			return null;
@@ -236,8 +247,8 @@ async function readTextIfExists(path: string): Promise<string | null> {
 export async function readPlanFiles(worktreePath: string, slug: string): Promise<PlanFiles> {
 	const paths = getPlanSpecPaths(slug);
 	const [spec, breakdownText] = await Promise.all([
-		readTextIfExists(join(worktreePath, paths.specPath)),
-		readTextIfExists(join(worktreePath, paths.breakdownPath)),
+		readTextIfExists(join(worktreePath, paths.specPath), worktreePath),
+		readTextIfExists(join(worktreePath, paths.breakdownPath), worktreePath),
 	]);
 	return { spec, breakdownText, paths: { ...paths, worktreePath } };
 }

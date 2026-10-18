@@ -8,6 +8,7 @@ import { AgentTerminalPanel } from "@/components/detail-panels/agent-terminal-pa
 import { ColumnContextPanel } from "@/components/detail-panels/column-context-panel";
 import { type DiffLineComment, DiffViewerPanel } from "@/components/detail-panels/diff-viewer-panel";
 import { FileTreePanel } from "@/components/detail-panels/file-tree-panel";
+import { TaskPlanContextButton } from "@/components/task-plan-context-button";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
 import { useIsMobile } from "@/hooks/use-is-mobile";
@@ -630,6 +631,13 @@ export function CardDetailView({
 	if (isMobile) {
 		return (
 			<div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-surface-0">
+				<div className="flex shrink-0 justify-end border-b border-border px-2">
+					<TaskPlanContextButton
+						key={`${currentProjectId}:${selection.card.id}`}
+						taskId={selection.card.id}
+						workspaceId={currentProjectId}
+					/>
+				</div>
 				<MobileDetailTabBar activeTab={mobileTab} onTabChange={setMobileTab} />
 				<div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
 					<div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
@@ -758,6 +766,13 @@ export function CardDetailView({
 				className="flex min-h-0 min-w-0 flex-col overflow-hidden"
 				style={{ width: isDiffExpanded ? "100%" : detailContentPanelPercent }}
 			>
+				<div className="flex shrink-0 justify-end border-b border-border px-2">
+					<TaskPlanContextButton
+						key={`${currentProjectId}:${selection.card.id}`}
+						taskId={selection.card.id}
+						workspaceId={currentProjectId}
+					/>
+				</div>
 				{gitHistoryPanel ? (
 					<div className="flex min-h-0 flex-1 overflow-hidden">{gitHistoryPanel}</div>
 				) : (

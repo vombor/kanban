@@ -343,6 +343,61 @@ describe("createRuntimeApi startTaskSession", () => {
 			ensure: true,
 		});
 	});
+	it("checks pinned context before launch but leaves injection to physical admission, keeps blank/reused composers unchanged, and refuses unknown pinned starts", async () => {
+		taskWorktreeMocks.resolveTaskCwd.mockResolvedValue("/tmp/owned-plan-worktree");
+		const terminalManager = {
+			willReuseLiveSession: vi.fn(() => false),
+			startTaskSession: vi.fn(async () => createSummary()),
+			applyTurnCheckpoint: vi.fn(),
+		};
+		const bootstrap = vi.fn(async () => "Pinned reference pointer (not approval)");
+		const api = createTestRuntimeApi({
+			getActiveWorkspaceId: () => "workspace-1",
+			loadScopedRuntimeConfig: async () => createRuntimeConfigState(),
+			setActiveRuntimeConfig: vi.fn(),
+			getScopedTerminalManager: async () => terminalManager as never,
+			resolveInteractiveShellCommand: vi.fn(),
+			taskContextBootstrap: bootstrap,
+		});
+		const scope = { workspaceId: "workspace-1", workspacePath: "/tmp/repo" };
+		expect(
+			await api.startTaskSession(
+				scope,
+				{ taskId: "task-1", baseRef: "main", prompt: "Implement reviewed task" },
+				{ kind: "user" },
+			),
+		).toMatchObject({ ok: true });
+		expect(terminalManager.startTaskSession).toHaveBeenLastCalledWith(
+			expect.objectContaining({ prompt: "Implement reviewed task" }),
+		);
+		await api.startTaskSession(scope, { taskId: "task-1", baseRef: "main", prompt: "" }, { kind: "user" });
+		expect(terminalManager.startTaskSession).toHaveBeenLastCalledWith(expect.objectContaining({ prompt: "" }));
+		terminalManager.willReuseLiveSession.mockReturnValue(true);
+		bootstrap.mockClear();
+		await api.startTaskSession(scope, { taskId: "task-1", baseRef: "main", prompt: "Reattach" }, { kind: "user" });
+		expect(bootstrap).not.toHaveBeenCalled();
+		terminalManager.willReuseLiveSession.mockReturnValue(false);
+		terminalManager.startTaskSession.mockClear();
+		taskWorktreeMocks.resolveTaskCwd.mockClear();
+		expect(
+			await api.startTaskSession(
+				scope,
+				{ taskId: "task-1", baseRef: "main", prompt: "" },
+				{ kind: "unknown", reason: "fixture" },
+			),
+		).toMatchObject({ ok: false });
+		expect(terminalManager.startTaskSession).not.toHaveBeenCalled();
+		expect(taskWorktreeMocks.resolveTaskCwd).not.toHaveBeenCalled();
+		bootstrap.mockRejectedValueOnce(new Error("Missing retained bundle"));
+		expect(
+			await api.startTaskSession(
+				scope,
+				{ taskId: "task-1", baseRef: "main", prompt: "Implement" },
+				{ kind: "user" },
+			),
+		).toMatchObject({ ok: false });
+		expect(terminalManager.startTaskSession).not.toHaveBeenCalled();
+	});
 
 	it("starts home agent sessions in the workspace root without resolving a task worktree", async () => {
 		const homeTaskId = "__home_agent__:workspace-1:codex";

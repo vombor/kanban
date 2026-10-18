@@ -25,11 +25,20 @@ export const PLAN_ACCEPTANCE_CRITERIA_HEADING = "Acceptance criteria";
  */
 export function buildPlannedCardPrompt(
 	card: Pick<PlanBreakdownCard, "prompt" | "acceptanceCriteria">,
-	context: { planTaskId: string; specPath: string },
+	context: { planTaskId: string; specPath: string; taskId?: string; bundleRevision?: string },
 ): string {
 	const section = [
-		`${PLAN_ACCEPTANCE_CRITERIA_HEADING} (from plan card ${context.planTaskId}; spec ${context.specPath}, in the repo once the plan card has landed):`,
+		`${PLAN_ACCEPTANCE_CRITERIA_HEADING} (from plan card ${context.planTaskId}; retained spec ${context.specPath}, available through this task's pinned knowledge context before landing):`,
 		...card.acceptanceCriteria.map((criterion) => `- ${criterion}`),
+		...(context.taskId && context.bundleRevision
+			? [
+					"",
+					`Reviewed plan bundle: ${context.bundleRevision}.`,
+					`Read the dev task's pinned references (also for QA): kanban knowledge task-context ${context.taskId}`,
+					`Bounded retained spec: kanban knowledge task-read ${context.taskId} --part spec`,
+					"Reference retrieval never grants additional execution approval.",
+				]
+			: []),
 	].join("\n");
 	return insertBeforeFinalStep(card.prompt.trim(), section);
 }
@@ -60,13 +69,15 @@ export function planExpansion(input: {
 	breakdown: PlanBreakdown;
 	planTaskId: string;
 	specPath: string;
+	bundleRevision?: string;
 	/** Every task id on the board. */
 	boardTaskIds: ReadonlySet<string>;
+	reservedTaskIds?: ReadonlySet<string>;
 	/** The ids an earlier, unfinished expand chose. */
 	previous: PlanExpansion | null;
 	randomUuid: () => string;
 }): PlannedExpansion {
-	const taken = new Set(input.boardTaskIds);
+	const taken = new Set([...input.boardTaskIds, ...(input.reservedTaskIds ?? [])]);
 	const taskIds: Record<string, string> = {};
 	const cards = input.breakdown.cards.map((card): PlannedCard => {
 		const previousId = input.previous?.cards[card.id];
@@ -77,7 +88,12 @@ export function planExpansion(input: {
 			localId: card.id,
 			taskId,
 			title: card.title,
-			prompt: buildPlannedCardPrompt(card, { planTaskId: input.planTaskId, specPath: input.specPath }),
+			prompt: buildPlannedCardPrompt(card, {
+				planTaskId: input.planTaskId,
+				specPath: input.specPath,
+				taskId,
+				bundleRevision: input.bundleRevision,
+			}),
 			exists: previousId !== undefined && input.boardTaskIds.has(previousId),
 		};
 	});
@@ -104,6 +120,7 @@ export function checkPlanExpandable(input: {
 	breakdownSha256: string;
 	approvedByUser: boolean;
 	dryRun: boolean;
+	bundleRevision?: string;
 }): PlanExpandCheck {
 	if (input.column === null) {
 		return { ok: false, error: `Task ${input.taskId} is not on the board.` };
@@ -124,6 +141,16 @@ export function checkPlanExpandable(input: {
 		};
 	}
 	const approval = input.record?.approval ?? null;
+	if (input.bundleRevision && approval && approval.bundleRevision !== input.bundleRevision) {
+		if (input.approvedByUser) return { ok: true, approval: null, needsApproval: true };
+		if (input.dryRun) return { ok: true, approval: null, needsApproval: false };
+		return {
+			ok: false,
+			error: approval?.bundleRevision
+				? "The reviewed plan bundle changed; the user must approve the spec/breakdown/knowledge revision again."
+				: "Historical breakdown-only approval is not full-bundle approval. Ask the user to review and approve this exact bundle; old acceptance is not relabelled.",
+		};
+	}
 	if (approval && approval.breakdownSha256 !== input.breakdownSha256) {
 		if (input.approvedByUser) {
 			return { ok: true, approval: null, needsApproval: true };

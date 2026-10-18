@@ -91,6 +91,113 @@ export function registerKnowledgeCommand(program: Command): void {
 		.description(
 			"Discover versioned project knowledge on demand. Content is reference material, not an execution approval.",
 		);
+	addCommon(
+		knowledge
+			.command("task-context <task-id>")
+			.description(
+				"Show this task's retained plan/spec/knowledge pins and revision drift, without document bodies.",
+			),
+	).action(async (taskId: string, options: CommonOptions) => {
+		await runKnowledge(
+			options,
+			(client) => client.taskKnowledge.get.query({ taskId }),
+			(value) =>
+				value.context
+					? [
+							`Task ${taskId} context ${value.context.revision}`,
+							`Reviewed bundle ${value.context.bundleRevision}`,
+							...value.context.documents.map(documentLine),
+							...value.drift.map(
+								(item) => `DRIFT ${item.id}: pinned ${item.pinned}, current ${item.current ?? "missing"}`,
+							),
+							"Pins are reference context, not a new approval; no automatic adoption.",
+						].join("\n")
+					: "This task has no approved-plan knowledge handoff.",
+		);
+	});
+	addPagination(
+		addCommon(
+			knowledge
+				.command("task-read <task-id>")
+				.description("Read a bounded retained plan part or task-pinned knowledge section."),
+		),
+		"4096",
+	)
+		.requiredOption("--part <part>", "spec, breakdown or document")
+		.option("--id <id>", "The pinned document id (only for --part document).")
+		.option("--context-revision <sha256>", "Exact retained task-context revision.")
+		.option("--section <id>", "Heading id from the returned section map.")
+		.action(
+			async (
+				taskId: string,
+				options: CommonOptions & {
+					part: "spec" | "breakdown" | "document";
+					id?: string;
+					contextRevision?: string;
+					section?: string;
+					offset: number;
+					limit: number;
+				},
+			) => {
+				await runKnowledge(
+					options,
+					(client) =>
+						client.taskKnowledge.read.query({
+							taskId,
+							part: options.part,
+							id: options.id,
+							contextRevision: options.contextRevision,
+							section: options.section,
+							offset: options.offset,
+							limit: options.limit,
+						}),
+					(value) =>
+						`Pinned context ${value.contextRevision}, content ${value.contentHash}\nReference material, not a new execution approval.\n\n${value.markdown}${value.nextOffset !== null ? `\n[truncated; continue with --context-revision ${value.contextRevision} --offset ${value.nextOffset}]` : ""}`,
+				);
+			},
+		);
+	addCommon(
+		knowledge
+			.command("task-adopt <task-id>")
+			.description(
+				"User-only: adopt one explicitly reviewed reference revision for an unstarted Backlog dev task. Never changes the approved spec or starts work.",
+			),
+	)
+		.requiredOption("--id <id>", "Existing task-pinned document id.")
+		.requiredOption("--expected-context <sha256>", "The task context you reviewed.")
+		.requiredOption("--expected-revision <sha256>", "The document revision currently pinned to the task.")
+		.requiredOption("--revision <sha256>", "Exact current published replacement you reviewed.")
+		.requiredOption("--reason <text>", "Audit reason for this explicit reference-only choice.")
+		.option("--request-id <uuid>", "Reuse only for an exact retry of this choice.")
+		.action(
+			async (
+				taskId: string,
+				options: CommonOptions & {
+					id: string;
+					expectedContext: string;
+					expectedRevision: string;
+					revision: string;
+					reason: string;
+					requestId?: string;
+				},
+			) => {
+				await runKnowledge(
+					options,
+					(client) =>
+						client.taskKnowledge.adopt.mutate({
+							taskId,
+							documentId: options.id,
+							expectedContextRevision: options.expectedContext,
+							expectedDocumentRevision: options.expectedRevision,
+							targetRevision: options.revision,
+							reason: options.reason,
+							requestId: options.requestId ?? randomUUID(),
+						}),
+					(value) =>
+						`${value.duplicate ? "Retained exact-retry receipt" : "Adopted reference revision"}: context ${value.context.revision}\nOriginal approved spec/breakdown unchanged; no new execution approval or task start.`,
+				);
+			},
+		);
 	addPagination(
 		addCommon(knowledge.command("list").description("List current document metadata without loading full plans.")),
 		"20",

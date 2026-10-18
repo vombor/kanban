@@ -1,16 +1,19 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import { approvePlan, expandPlan, type PlanApprovalClient, planMetrics, showPlan } from "../../../src/commands/plan";
 import { createTask } from "../../../src/commands/task";
 import { parsePipelineConfig } from "../../../src/config/pipeline-config";
 import type { RuntimeBoardCard, RuntimeBoardColumnId } from "../../../src/core/api-contract";
 import { createIsolationService } from "../../../src/isolation/isolation-service";
 import type { RuntimeCaller } from "../../../src/isolation/session-identity";
+import { createProjectKnowledgeStore } from "../../../src/knowledge/knowledge-store";
+import { createTaskContextApi } from "../../../src/knowledge/task-context-api";
+import { createTaskContextStore } from "../../../src/knowledge/task-context-store";
 import { createPlanIndexStore } from "../../../src/plans/plan-index";
 import { getKanbanGlobalConfigPath, getKanbanKitsPath, getPlanIndexPath } from "../../../src/state/kanban-home";
+import { appendTaskHistory } from "../../../src/state/task-history-log";
 import type * as WorkspaceStateModule from "../../../src/state/workspace-state";
 import { type RuntimeTrpcContext, runtimeAppRouter } from "../../../src/trpc/app-router";
 import { createIsolationApi } from "../../../src/trpc/isolation-api";
@@ -174,6 +177,7 @@ describe("kanban plan", () => {
 				log: service.log,
 				findWorktree: async () => worktree.path,
 			}),
+			taskKnowledgeApi: createTaskContextApi(),
 		} as unknown as RuntimeTrpcContext;
 		return runtimeAppRouter.createCaller(context);
 	};
@@ -183,6 +187,10 @@ describe("kanban plan", () => {
 			plans: {
 				approve: { mutate: (input: never) => router.plans.approve(input) },
 				preview: { query: (input: never) => router.plans.preview(input) },
+			},
+			taskKnowledge: {
+				get: { query: (input: never) => router.taskKnowledge.get(input) },
+				attachExpansion: { mutate: (input: never) => router.taskKnowledge.attachExpansion(input) },
 			},
 		}) as unknown as PlanApprovalClient;
 	const deps = () => ({
@@ -365,6 +373,9 @@ describe("kanban plan", () => {
 			await approvePlan({ cwd: "/repo", taskId: id }, deps());
 			let calls = 0;
 			const failingCreate: typeof createTask = async (input) => {
+				expect(
+					(await createTaskContextStore().read(WORKSPACE_ID, input.taskId ?? "missing"))?.bundleRevision,
+				).toMatch(/^[a-f0-9]{64}$/u);
 				calls += 1;
 				if (calls === 2) {
 					throw new Error("board save refused");
@@ -386,6 +397,93 @@ describe("kanban plan", () => {
 			).toEqual(Object.values(chosen?.cards ?? {}));
 		});
 	});
+	it("serializes competing expansions without replacing reserved ids or doubling cards", async () =>
+		withTemporaryKanbanHome(async () => {
+			writeConfig("legacy-team");
+			const { id } = await createPlanCard();
+			moveToReview(id);
+			writeBreakdown();
+			await approvePlan({ cwd: "/repo", taskId: id }, deps());
+			const results = await Promise.allSettled([
+				expandPlan({ cwd: "/repo", taskId: id }, deps()),
+				expandPlan({ cwd: "/repo", taskId: id }, deps()),
+			]);
+			expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+			expect(allCards()).toHaveLength(4);
+		}));
+	it("does not recreate a confirmed created task that was pruned during an unfinished expansion", async () =>
+		withTemporaryKanbanHome(async () => {
+			writeConfig("legacy-team");
+			const { id } = await createPlanCard();
+			moveToReview(id);
+			writeBreakdown();
+			await approvePlan({ cwd: "/repo", taskId: id }, deps());
+			let calls = 0;
+			await expect(
+				expandPlan(
+					{ cwd: "/repo", taskId: id },
+					{
+						...deps(),
+						createCard: async (input) => {
+							if (++calls === 2) throw new Error("stopped test expansion");
+							return createTask(input);
+						},
+					},
+				),
+			).rejects.toThrow("stopped test expansion");
+			const expansion = (await createPlanIndexStore().read(WORKSPACE_ID)).plans[id]?.expansion;
+			const createdId = expansion?.createdTaskIds?.[0];
+			expect(createdId).toBeTruthy();
+			for (const column of harness.store?.stored.board.columns ?? [])
+				column.cards = column.cards.filter((card) => card.id !== createdId);
+			await expect(expandPlan({ cwd: "/repo", taskId: id }, deps())).rejects.toThrow("recreation is not authorized");
+			expect((await createTaskContextStore().read(WORKSPACE_ID, createdId ?? "missing"))?.bundleRevision).toBe(
+				expansion?.bundleRevision,
+			);
+		}));
+	it("does not replay an uncertain create whose task was deleted before its create checkpoint", async () =>
+		withTemporaryKanbanHome(async () => {
+			writeConfig("legacy-team");
+			const { id } = await createPlanCard();
+			moveToReview(id);
+			writeBreakdown();
+			await approvePlan({ cwd: "/repo", taskId: id }, deps());
+			await expect(
+				expandPlan(
+					{ cwd: "/repo", taskId: id },
+					{
+						...deps(),
+						createCard: async (input) => {
+							await createTask(input);
+							const taskId = input.taskId;
+							if (!taskId) throw new Error("Missing reserved id");
+							for (const column of harness.store?.stored.board.columns ?? [])
+								column.cards = column.cards.filter((card) => card.id !== taskId);
+							await appendTaskHistory({
+								at: new Date().toISOString(),
+								action: "delete",
+								workspaceId: WORKSPACE_ID,
+								taskId,
+								title: "Owned deleted fixture",
+								role: "dev",
+								fromColumnId: "backlog",
+								trigger: "cli",
+								caller: null,
+								status: "deleted",
+								landing: null,
+								sessionsStopped: [],
+								worktreeDeleted: true,
+							});
+							throw new Error("Create response lost after deletion");
+						},
+					},
+				),
+			).rejects.toThrow("Create response lost");
+			await expect(expandPlan({ cwd: "/repo", taskId: id }, deps())).rejects.toThrow(
+				"uncertain create result must not recreate",
+			);
+			expect(allCards()).toHaveLength(1);
+		}));
 
 	describe("the user-only approval route", () => {
 		const setUpPlan = async () => {
@@ -420,9 +518,13 @@ describe("kanban plan", () => {
 					const answer = await router.plans.approve({ taskId: id });
 					expect(answer).toMatchObject({ ok: false, approval: null });
 					expect(answer.error).toContain(refusal(id));
-					await expect(approvePlan({ cwd: "/repo", taskId: id }, deps())).rejects.toThrow(refusal(id));
+					const expected =
+						caller.kind === "session" && caller.session.workspaceId === WORKSPACE_ID
+							? refusal(id)
+							: "Project knowledge is available only";
+					await expect(approvePlan({ cwd: "/repo", taskId: id }, deps())).rejects.toThrow(expected);
 					await expect(expandPlan({ cwd: "/repo", taskId: id, approvedByUser: true }, deps())).rejects.toThrow(
-						refusal(id),
+						expected,
 					);
 				}
 				// Nothing approved, no card created.
@@ -437,7 +539,8 @@ describe("kanban plan", () => {
 				// The strict lookup finds no session above the caller: the user's shell or browser, or a process that
 				// left its session's tree. Both are taken for the user (user request, 2026-10-09).
 				runtime.caller = { kind: "user" };
-				const answer = await router.plans.approve({ taskId: id });
+				const shown = (await router.plans.preview({ taskId: id })).plan;
+				const answer = await router.plans.approve({ taskId: id, bundleRevision: shown?.bundle.revision });
 				expect(answer).toMatchObject({
 					ok: true,
 					approval: { via: "approve" },
@@ -476,18 +579,160 @@ describe("kanban plan", () => {
 				const shownSha = preview.plan?.breakdownSha256 ?? null;
 
 				writeBreakdown({ ...BREAKDOWN, summary: "Changed after the review." });
-				expect(await router.plans.approve({ taskId: id, breakdownSha256: shownSha })).toMatchObject({
+				expect(
+					await router.plans.approve({
+						taskId: id,
+						breakdownSha256: shownSha,
+						bundleRevision: preview.plan?.bundle.revision,
+					}),
+				).toMatchObject({
 					ok: false,
 					approval: null,
 					error: expect.stringContaining("changed since it was shown"),
 				});
 				expect(await approvalOf(id)).toBeNull();
 
-				const shownAgain = (await router.plans.preview({ taskId: id })).plan?.breakdownSha256 ?? null;
-				const approved = await router.plans.approve({ taskId: id, breakdownSha256: shownAgain });
-				expect(approved).toMatchObject({ ok: true, approval: { via: "approve", breakdownSha256: shownAgain } });
+				const shownAgain = (await router.plans.preview({ taskId: id })).plan;
+				const approved = await router.plans.approve({
+					taskId: id,
+					breakdownSha256: shownAgain?.breakdownSha256,
+					bundleRevision: shownAgain?.bundle.revision,
+				});
+				expect(approved).toMatchObject({
+					ok: true,
+					approval: { via: "approve", breakdownSha256: shownAgain?.breakdownSha256 },
+				});
 			});
 		});
+		it("requires the reviewed bundle, rejects spec-only/pinned-knowledge changes after preview, and retains earlier approval provenance", async () =>
+			withTemporaryKanbanHome(async () => {
+				const id = await setUpPlan();
+				expect(await router.plans.approve({ taskId: id })).toMatchObject({ ok: false, approval: null });
+				const preview = (await router.plans.preview({ taskId: id })).plan;
+				writeFileSync(
+					join(worktree.path, "docs/specs/coupons.md"),
+					"# Coupons\nSpec changed without editing the breakdown.",
+				);
+				expect(
+					await router.plans.approve({
+						taskId: id,
+						breakdownSha256: preview?.breakdownSha256,
+						bundleRevision: preview?.bundle.revision,
+					}),
+				).toMatchObject({ ok: false, approval: null });
+				const knowledge = createProjectKnowledgeStore();
+				const published = await knowledge.mutate(
+					WORKSPACE_ID,
+					{ kind: "user" },
+					{
+						action: "publish",
+						requestId: randomUUID(),
+						expectedRevision: null,
+						document: {
+							id: "protected-scope",
+							kind: "decision",
+							title: "Scope",
+							summary: "",
+							tags: [],
+							sources: [],
+						},
+						markdown: "# Scope\nUser-controlled decision.",
+					},
+				);
+				if (published.kind !== "document") throw new Error("Expected document");
+				const beforePin = (await router.plans.preview({ taskId: id })).plan;
+				await knowledge.mutate(
+					WORKSPACE_ID,
+					{ kind: "user" },
+					{
+						action: "pin",
+						id: published.document.id,
+						pinned: true,
+						expectedRevision: published.document.revision,
+						requestId: randomUUID(),
+					},
+				);
+				expect(
+					await router.plans.approve({ taskId: id, bundleRevision: beforePin?.bundle.revision }),
+				).toMatchObject({ ok: false, approval: null });
+				await createPlanIndexStore().update(WORKSPACE_ID, (current) => {
+					const record = current.plans[id];
+					if (!record) throw new Error("Missing plan");
+					return {
+						...current,
+						plans: {
+							...current.plans,
+							[id]: {
+								...record,
+								approval: { at: "2026-10-01", via: "approve", breakdownSha256: preview?.breakdownSha256 ?? "" },
+							},
+						},
+					};
+				});
+				expect((await router.plans.preview({ taskId: id })).plan?.approval?.state).toBe("legacy breakdown only");
+				await expect(expandPlan({ cwd: "/repo", taskId: id }, deps())).rejects.toThrow(
+					"Historical breakdown-only approval",
+				);
+				await approvePlan({ cwd: "/repo", taskId: id }, deps());
+				expect((await createPlanIndexStore().read(WORKSPACE_ID)).plans[id]?.approvalHistory).toEqual([
+					{ at: "2026-10-01", via: "approve", breakdownSha256: preview?.breakdownSha256 },
+				]);
+			}));
+		it("expands the reviewed knowledge revisions after publication drift, never silently reselects current pins", async () =>
+			withTemporaryKanbanHome(async () => {
+				const id = await setUpPlan();
+				const knowledge = createProjectKnowledgeStore();
+				const publish = async (markdown: string, expectedRevision: string | null) =>
+					knowledge.mutate(
+						WORKSPACE_ID,
+						{ kind: "user" },
+						{
+							action: "publish",
+							requestId: randomUUID(),
+							expectedRevision,
+							document: {
+								id: "api-contract",
+								kind: "contract",
+								title: "API",
+								summary: "",
+								tags: [],
+								sources: [],
+							},
+							markdown,
+						},
+					);
+				const first = await publish("# API\nReviewed response.", null);
+				if (first.kind !== "document") throw new Error("Expected document");
+				writeBreakdown({
+					...BREAKDOWN,
+					knowledgeReferences: [{ id: first.document.id, revision: first.document.revision }],
+				});
+				await approvePlan({ cwd: "/repo", taskId: id }, deps());
+				await publish("# API\nFuture incompatible response.", first.document.revision);
+				await expandPlan({ cwd: "/repo", taskId: id }, deps());
+				const mapping = (await createPlanIndexStore().read(WORKSPACE_ID)).plans[id]?.expansion?.cards;
+				const view = await router.taskKnowledge.get({ taskId: mapping?.api ?? "missing" });
+				expect(view.context?.documents[0]?.revision).toBe(first.document.revision);
+				expect(view.drift).toHaveLength(1);
+			}));
+		it("preview refuses cross-project and unknown identities without any private bundle metadata", async () =>
+			withTemporaryKanbanHome(async () => {
+				const id = await setUpPlan();
+				for (const caller of [
+					{ kind: "unknown", reason: "fixture" } as RuntimeCaller,
+					{
+						...orchestrator(),
+						session: {
+							...(orchestrator() as Extract<RuntimeCaller, { kind: "session" }>).session,
+							workspaceId: "other",
+						},
+					} as RuntimeCaller,
+				]) {
+					runtime.caller = caller;
+					expect(await router.plans.preview({ taskId: id })).toMatchObject({ ok: false, plan: null });
+					await expect(router.taskKnowledge.get({ taskId: id })).rejects.toMatchObject({ code: "FORBIDDEN" });
+				}
+			}));
 
 		it("the orchestrator expands an approved plan; an edited breakdown needs the user again", async () => {
 			await withTemporaryKanbanHome(async () => {

@@ -19,7 +19,7 @@ something is done, and the core never decides who does it.
     Lemonade models only, nothing paid or in the cloud);
   - a **custom team** is `team` without a preset: the project sets each role's agent, provider and model itself
     ([Custom team](#custom-team)).
-- **User kits** live in `<home>/kits/<name>.json`. They are full kits with a workflow of their own (foo's `team-foo`).
+- **User kits** live in `<home>/kits/<name>.json`. They are full kits with a workflow of their own, separate from the shipped package. Project-specific kit copies are not built-ins; use `team` with a preset when the standard workflow is wanted.
 
 Until 2026-10-12 the built-in team kits were `team-cloud`, `team-local` and `team-cline`, each a full copy of the
 workflow plus its models (and the copies had drifted apart). A config entry that still names one of them runs on
@@ -140,10 +140,10 @@ back to `default` and `kanban doctor` / `kanban kit show` report it.
 ```jsonc
 // <home>/config.json
 "workspaces": {
-  "notes":       { "landing": { "mode": "qa" }, "kit": { "name": "team", "preset": "lemonade", "overrides": { "qa.promptNotes.dbSetup": "npx prisma db push" } } },
-  "bar":         { "landing": { "mode": "qa" }, "kit": { "name": "team", "preset": null, "overrides": { "roles.dev.agent": "codex", "roles.qa.agent": "claude" } } },  // custom team
-  "foo":         { "landing": { "mode": "qa" }, "kit": { "name": "team-foo", "overrides": { "qa.blurb": "Project: Pawsome…" } } },  // user kit
-  "kanban-2uge": { "landing": { "mode": "off" } }   // no kit: default
+  "local-project":  { "landing": { "mode": "qa" }, "kit": { "name": "team", "preset": "lemonade", "overrides": { "qa.promptNotes.dbSetup": "npx prisma db push" } } },
+  "custom-project": { "landing": { "mode": "qa" }, "kit": { "name": "team", "preset": null, "overrides": { "roles.dev.agent": "codex", "roles.qa.agent": "claude" } } },
+  "cloud-project":  { "landing": { "mode": "qa" }, "kit": { "name": "team", "preset": "cloud" } },
+  "manual-project": { "landing": { "mode": "off" } }   // no kit: default
 }
 ```
 
@@ -950,18 +950,15 @@ kanban kit apply claude-qa --project <ws> --dry-run   # then without --dry-run; 
 kanban kit show --project <ws>                          # every value and its source; then kanban doctor <path>
 ```
 
-**foo: the team workflow with three fallback triggers off.** foo ran on `team-cloud` (the built-in team kit of the
-time, before that named `team`) with overrides from before the team/project split. `migrate-overrides` turned them
-into project settings plus a user kit named by `--into` (its legacy `escalate.*` / `onOutage.then` keys were dropped
-as redundant, since `team-cloud` already had every trigger on and no approval, so no stored trigger override was left
-to shadow the kit), then the edit turned the three triggers off. The `qaFails` and `outage` triggers and everything
-else stay as foo has them. `team-foo` is a full user kit, so the move to `team` and its presets changed nothing for
-foo; moving foo onto `team` (a custom team) would turn those triggers back on, and is the user's call:
+**A separately owned custom workflow.** A project that deliberately needs different fallback behavior may migrate
+its overrides into an installation-local user kit, then edit that kit. This is distinct from choosing models with
+`team` and the `cloud` preset: presets share the fixed team workflow. Migration/switching is explicit, never an
+automatic rewrite of an existing user kit or a reason to ship a project-specific copy in the main package:
 
 ```sh
-kanban kit migrate-overrides --project foo --into team-foo --dry-run   # then without --dry-run
-kanban kit edit team-foo --set fallback.on.qaStalled=false --set fallback.on.conflict=false --set fallback.on.unchanged=false
-kanban kit show --project foo
+kanban kit migrate-overrides --project <project-id> --into custom-workflow --dry-run   # then without --dry-run
+kanban kit edit custom-workflow --set fallback.on.qaStalled=false --set fallback.on.conflict=false --set fallback.on.unchanged=false
+kanban kit show --project <project-id>
 ```
 
 ### The kit file format

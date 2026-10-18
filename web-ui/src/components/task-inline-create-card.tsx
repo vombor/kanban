@@ -6,6 +6,7 @@ import { useHotkeys } from "react-hotkeys-hook";
 
 import { BranchSelectDropdown, type BranchSelectOption } from "@/components/branch-select-dropdown";
 import { TaskAgentModelPicker, useTaskAgentModelPicker } from "@/components/task-agent-model-picker";
+import { TaskPlanContextButton } from "@/components/task-plan-context-button";
 import { TaskPromptComposer } from "@/components/task-prompt-composer";
 import { Button } from "@/components/ui/button";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -58,6 +59,7 @@ export function TaskInlineCreateCard({
 	qaLandingAvailable = false,
 	startInPlanModeDisabled = false,
 	workspaceId,
+	taskId,
 	branchRef,
 	branchOptions,
 	onBranchRefChange,
@@ -89,6 +91,7 @@ export function TaskInlineCreateCard({
 	qaLandingAvailable?: boolean;
 	startInPlanModeDisabled?: boolean;
 	workspaceId: string | null;
+	taskId?: string;
 	branchRef: string;
 	branchOptions: TaskBranchOption[];
 	onBranchRefChange: (value: string) => void;
@@ -111,6 +114,7 @@ export function TaskInlineCreateCard({
 	const [measureRef, cardRect] = useMeasure<HTMLDivElement>();
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const [isBranchPopoverOpen, setIsBranchPopoverOpen] = useState(false);
+	const [isReferenceOpen, setIsReferenceOpen] = useState(false);
 	const setCardRef = useCallback(
 		(node: HTMLDivElement | null) => {
 			containerRef.current = node;
@@ -142,7 +146,7 @@ export function TaskInlineCreateCard({
 			onCancel();
 		},
 		{
-			enabled: enabled && Boolean(onCancel),
+			enabled: enabled && Boolean(onCancel) && !isReferenceOpen,
 			enableOnFormTags: true,
 			enableOnContentEditable: true,
 			ignoreEventWhen: (event) => event.defaultPrevented,
@@ -154,7 +158,7 @@ export function TaskInlineCreateCard({
 	useDocumentEvent(
 		"pointerdown",
 		(event) => {
-			if (!enabled || mode !== "edit" || isBranchPopoverOpen) {
+			if (!enabled || mode !== "edit" || isBranchPopoverOpen || isReferenceOpen) {
 				return;
 			}
 			const container = containerRef.current;
@@ -175,6 +179,16 @@ export function TaskInlineCreateCard({
 			className="rounded-md border border-border-bright bg-surface-2 p-3"
 			style={{ flexShrink: 0, marginBottom: cardMarginBottom, fontSize: 12 }}
 		>
+			{mode === "edit" && taskId ? (
+				<div className="mb-2 flex justify-end">
+					<TaskPlanContextButton
+						key={`${workspaceId}:${taskId}`}
+						taskId={taskId}
+						workspaceId={workspaceId}
+						onOpenChange={setIsReferenceOpen}
+					/>
+				</div>
+			) : null}
 			<div>
 				{onTitleChange ? (
 					<div className="mb-2">

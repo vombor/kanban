@@ -24,7 +24,7 @@ function toMessage(error: unknown): string {
 
 /**
  * A plan card's approval from the board (the runtime's src/trpc/plans-api.ts): loads what would be approved while the
- * confirmation dialog is open, then asks the runtime to record the approval of exactly that breakdown. The runtime
+ * confirmation dialog is open, then asks the runtime to record approval of that exact immutable bundle. The runtime
  * refuses agent sessions; the user is approved at once.
  */
 export function usePlanApproval(workspaceId: string | null, taskId: string, isOpen: boolean): PlanApprovalState {
@@ -58,6 +58,7 @@ export function usePlanApproval(workspaceId: string | null, taskId: string, isOp
 				taskId,
 				via: "approve",
 				breakdownSha256: preview.breakdownSha256,
+				bundleRevision: preview.bundle.revision,
 			});
 			if (response.ok && response.approval) {
 				setStep({ kind: "approved" });

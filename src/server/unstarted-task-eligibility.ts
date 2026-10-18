@@ -8,7 +8,7 @@ import { resolveCardRole } from "../core/card-role";
 import { getTaskHistoryLogPath } from "../state/kanban-home";
 
 /** Missing history is distinct from unreadable history; corrupted records cannot prove that a task never ran. */
-export async function objectiveLineageEligibility(input: {
+export async function unstartedTaskEligibility(input: {
 	workspaceId: string;
 	board: RuntimeBoardData;
 	sessions: Record<string, RuntimeTaskSessionSummary>;
@@ -27,7 +27,7 @@ export async function objectiveLineageEligibility(input: {
 			.map((line) => runtimeTaskHistoryEntrySchema.parse(JSON.parse(line)).taskId);
 	} catch (error) {
 		if (!error || typeof error !== "object" || !("code" in error) || error.code !== "ENOENT")
-			throw new Error("Objective lineage needs readable own task history; no historical task was adopted.");
+			throw new Error("Task eligibility needs readable own task history; no historical task was adopted.");
 	}
 	const historical = new Set([...history, ...Object.keys(input.sessions), ...input.pipelineTaskIds]);
 	return {

@@ -2,7 +2,7 @@
 //
 //   show <task-id>     the spec and the breakdown in the plan card's worktree, with its approval and expansion
 //   check --file <f>   validates a breakdown file offline (the planner's self-check)
-//   approve <task-id>  the user's approval marker, pinned to the breakdown's hash: asked of the running server, which
+//   approve <task-id>  the user's approval marker, pinned to the spec/breakdown/knowledge bundle: asked of the running server, which
 //                      refuses agent sessions and records it for the user at once
 //   expand <task-id>   Backlog dev cards through the normal create path (the kit's devAssignment), linked by the
 //                      breakdown's dependencies; never starts a card. Needs the user's approval.
@@ -15,10 +15,12 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { Command } from "commander";
-
 import { readPipelineConfig } from "../config/pipeline-config";
 import { resolveCardRole } from "../core/card-role";
+import { lockedFileSystem } from "../fs/locked-file-system";
 import { measureCard } from "../kits/team/scoreboard/scoreboard-store";
+import { hashKnowledgeContent } from "../knowledge/content-store";
+import { createPlanBundleStore, type PlanBundleStore } from "../knowledge/plan-bundle-store";
 import { createPipelineStateStore } from "../pipeline/pipeline-state";
 import { type PlanBreakdown, parsePlanBreakdown } from "../plans/plan-breakdown";
 import { checkPlanExpandable, hashPlanBreakdown, planExpansion } from "../plans/plan-expand";
@@ -41,6 +43,8 @@ import {
 	readValidBreakdown,
 } from "../plans/plan-target";
 import { resolveProjectInputPath } from "../projects/project-path";
+import { getPlanIndexPath } from "../state/kanban-home";
+import { readTaskHistory } from "../state/task-history-log";
 import { loadWorkspaceContext } from "../state/workspace-state";
 import { createRuntimeTrpcClient, type RuntimeTrpcClient } from "./runtime-trpc-client";
 import { createTask, linkTaskPairs } from "./task";
@@ -48,7 +52,7 @@ import { createTask, linkTaskPairs } from "./task";
 type JsonRecord = Record<string, unknown>;
 
 /** The runtime calls of an approval: the plan route. */
-export type PlanApprovalClient = Pick<RuntimeTrpcClient, "plans">;
+export type PlanApprovalClient = Pick<RuntimeTrpcClient, "plans" | "taskKnowledge">;
 
 export interface PlanCommandDependencies {
 	index?: PlanIndexStore;
@@ -62,6 +66,7 @@ export interface PlanCommandDependencies {
 	linkCards?: typeof linkTaskPairs;
 	randomUuid?: () => string;
 	now?: () => Date;
+	bundles?: PlanBundleStore;
 }
 
 async function defaultMeasure(workspaceId: string, taskId: string): Promise<PlanCardMetrics | null> {
@@ -109,7 +114,21 @@ export async function showPlan(
 	const parsed = files.breakdownText === null ? null : parsePlanBreakdown(files.breakdownText, plan.slug);
 	const sha = files.breakdownText === null ? null : hashPlanBreakdown(files.breakdownText);
 	const approval = plan.record?.approval ?? null;
-	const approvalState = describePlanApprovalState(approval, sha);
+	let bundleRevision: string | null | undefined;
+	if (approval?.bundleRevision) {
+		await (deps.createClient ?? createRuntimeTrpcClient)(target.workspaceId).taskKnowledge.get.query({
+			taskId: plan.card.id,
+		});
+		const retained = await (deps.bundles ?? createPlanBundleStore()).read(
+			target.workspaceId,
+			approval.bundleRevision,
+		);
+		bundleRevision =
+			files.spec !== null && hashKnowledgeContent(files.spec) === retained.spec.contentHash
+				? retained.revision
+				: null;
+	}
+	const approvalState = describePlanApprovalState(approval, sha, bundleRevision);
 	const text = [
 		`Plan ${plan.card.id} (${plan.column}): ${plan.card.title ?? ""}`,
 		`Approval: ${approval ? `${approvalState} at ${approval.at} via ${approval.via}` : "not approved"}`,
@@ -161,8 +180,20 @@ export async function requestPlanApproval(
 ): Promise<{ approval: PlanApproval; cards: number }> {
 	const taskId = input.plan.card.id;
 	const client = (deps.createClient ?? createRuntimeTrpcClient)(input.target.workspaceId);
+	const shown = await client.plans.preview.query({ taskId });
+	if (!shown.ok || !shown.plan) throw new Error(shown.error ?? "The full plan bundle cannot be reviewed now.");
+	const preview = shown.plan;
+	if (input.breakdownSha256 && input.breakdownSha256 !== shown.plan.breakdownSha256)
+		throw new Error("The plan breakdown changed before full-bundle approval; review it again.");
 	const requested = await Promise.resolve()
-		.then(() => client.plans.approve.mutate({ taskId, via: input.via, breakdownSha256: input.breakdownSha256 }))
+		.then(() =>
+			client.plans.approve.mutate({
+				taskId,
+				via: input.via,
+				breakdownSha256: preview.breakdownSha256,
+				bundleRevision: preview.bundle.revision,
+			}),
+		)
 		.catch((error: unknown) => {
 			throw new Error(
 				`Plan approval goes through the running Kanban server, which could not be reached: ${error instanceof Error ? error.message : String(error)}`,
@@ -190,6 +221,19 @@ export async function expandPlan(
 	input: { cwd: string; taskId: string; projectPath?: string; dryRun?: boolean; approvedByUser?: boolean },
 	deps: PlanCommandDependencies = {},
 ): Promise<JsonRecord> {
+	const target = await loadPlanTarget(input.cwd, input.projectPath);
+	const client = (deps.createClient ?? createRuntimeTrpcClient)(target.workspaceId);
+	// Strict own-project knowledge authorization also applies to offline-style CLI orchestration, with isolation off.
+	await client.taskKnowledge.get.query({ taskId: input.taskId });
+	return lockedFileSystem.withLock({ path: `${getPlanIndexPath(target.workspaceId)}.expansion` }, async () =>
+		expandPlanLocked(input, deps),
+	);
+}
+
+async function expandPlanLocked(
+	input: { cwd: string; taskId: string; projectPath?: string; dryRun?: boolean; approvedByUser?: boolean },
+	deps: PlanCommandDependencies,
+): Promise<JsonRecord> {
 	const index = deps.index ?? createPlanIndexStore();
 	const now = deps.now ?? (() => new Date());
 	const createCard = deps.createCard ?? createTask;
@@ -198,8 +242,36 @@ export async function expandPlan(
 	const target = await loadPlanTarget(input.cwd, input.projectPath);
 	const plan = await locatePlan(target, index, input.taskId);
 	const valid = await readValidBreakdown(target, plan, deps.findWorktree ?? findPlanWorktree);
-	const { breakdown, sha, specPath } = valid;
+	const { sha, specPath } = valid;
+	const breakdown = valid.breakdown;
 	const specExists = valid.spec !== null;
+	const bundles = deps.bundles ?? createPlanBundleStore();
+	const retained = plan.record?.approval?.bundleRevision
+		? await bundles.read(target.workspaceId, plan.record.approval.bundleRevision)
+		: null;
+	if (
+		retained &&
+		(retained.breakdown.contentHash !== sha ||
+			retained.spec.contentHash !== hashKnowledgeContent(valid.spec ?? "")) &&
+		!input.approvedByUser
+	)
+		throw new Error(
+			"The spec or breakdown changed after the user approved the bundle; request a new exact user approval.",
+		);
+	const bundle =
+		retained && !input.approvedByUser
+			? retained
+			: (
+					await bundles.prepare(target.workspaceId, {
+						planTaskId: plan.card.id,
+						slug: plan.slug,
+						specPath,
+						breakdownPath: valid.breakdownPath,
+						spec: valid.spec,
+						breakdownText: valid.breakdownText,
+						breakdown,
+					})
+				).bundle;
 	const check = checkPlanExpandable({
 		taskId: plan.card.id,
 		role: resolveCardRole(plan.card),
@@ -208,17 +280,37 @@ export async function expandPlan(
 		breakdownSha256: sha,
 		approvedByUser: input.approvedByUser === true,
 		dryRun,
+		bundleRevision: bundle.revision,
 	});
 	if (!check.ok) {
 		throw new Error(check.error);
 	}
 	const boardTaskIds = new Set(target.state.board.columns.flatMap((column) => column.cards.map((card) => card.id)));
 	const previous = plan.record?.expansion?.breakdownSha256 === sha ? plan.record.expansion : null;
+	if (previous?.createdTaskIds?.some((taskId) => !boardTaskIds.has(taskId)))
+		throw new Error(
+			"A previously created planned task is no longer on the board; retained context/history was preserved, but recreation is not authorized by retry.",
+		);
+	const absentReservedIds = new Set(
+		Object.values(previous?.cards ?? {}).filter((taskId) => !boardTaskIds.has(taskId)),
+	);
+	if (
+		absentReservedIds.size &&
+		(await readTaskHistory(target.workspaceId)).entries.some((entry) => absentReservedIds.has(entry.taskId))
+	)
+		throw new Error(
+			"A reserved task has retained Done/delete history but is no longer on the board; an uncertain create result must not recreate it.",
+		);
+	const otherReserved = Object.values((await index.read(target.workspaceId)).plans).flatMap((record) =>
+		Object.values(record.expansion?.cards ?? {}),
+	);
 	const planned = planExpansion({
 		breakdown,
 		planTaskId: plan.card.id,
 		specPath,
 		boardTaskIds,
+		bundleRevision: bundle.revision,
+		reservedTaskIds: new Set(otherReserved),
 		previous,
 		randomUuid: deps.randomUuid ?? (() => globalThis.crypto.randomUUID()),
 	});
@@ -247,6 +339,17 @@ export async function expandPlan(
 		// --approved-by-user: the same user-only approval as `kanban plan approve`, for exactly this breakdown.
 		approval = (await requestPlanApproval({ target, plan, via: "expand", breakdownSha256: sha }, deps)).approval;
 	}
+	if (!approval?.bundleRevision || approval.bundleRevision !== bundle.revision)
+		throw new Error("Expansion has no matching user-approved immutable bundle; no task was created.");
+	const approvedBundle = await bundles.read(target.workspaceId, approval.bundleRevision);
+	const parsed = parsePlanBreakdown(
+		await bundles.readPart(target.workspaceId, approvedBundle.breakdown.contentHash),
+		plan.slug,
+	);
+	if (!parsed.ok)
+		throw new Error("The retained approved breakdown is invalid; no mutable worktree fallback is permitted.");
+	if (JSON.stringify(parsed.breakdown) !== JSON.stringify(breakdown))
+		throw new Error("Expansion differs from the retained approved breakdown; no task was created.");
 
 	const startedAt = now().toISOString();
 	// The ids go into the index before the first card exists, so a resumed expand reuses them.
@@ -255,6 +358,12 @@ export async function expandPlan(
 		if (!record) {
 			throw new Error(`Plan ${plan.card.id} has no plan index entry.`);
 		}
+		if (
+			record.approval?.bundleRevision !== approvedBundle.revision ||
+			record.expansion?.status === "done" ||
+			(record.expansion && record.expansion.bundleRevision !== approvedBundle.revision)
+		)
+			throw new Error("Plan approval/expansion changed before reservation; no task was created.");
 		return {
 			...current,
 			plans: {
@@ -266,12 +375,23 @@ export async function expandPlan(
 						startedAt: previous?.startedAt ?? startedAt,
 						finishedAt: null,
 						breakdownSha256: sha,
+						bundleRevision: approvedBundle.revision,
 						cards: planned.taskIds,
+						createdTaskIds: [
+							...new Set([
+								...(previous?.createdTaskIds ?? []),
+								...planned.cards.filter((card) => card.exists).map((card) => card.taskId),
+							]),
+						],
 						links: planned.links,
 					},
 				},
 			},
 		};
+	});
+	// One durable transaction attaches every reserved task before the first ordinary create, even across crashes.
+	await (deps.createClient ?? createRuntimeTrpcClient)(target.workspaceId).taskKnowledge.attachExpansion.mutate({
+		planTaskId: plan.card.id,
 	});
 
 	const created: JsonRecord[] = [];
@@ -291,6 +411,24 @@ export async function expandPlan(
 			role: "dev",
 		});
 		created.push({ localId: card.localId, ...((result.task as JsonRecord | undefined) ?? {}) });
+		await index.update(target.workspaceId, (current) => {
+			const record = current.plans[plan.card.id];
+			if (!record?.expansion || record.expansion.bundleRevision !== approvedBundle.revision)
+				throw new Error("Expansion identity changed after card creation; its known result was not replayed.");
+			return {
+				...current,
+				plans: {
+					...current.plans,
+					[plan.card.id]: {
+						...record,
+						expansion: {
+							...record.expansion,
+							createdTaskIds: [...new Set([...(record.expansion.createdTaskIds ?? []), card.taskId])],
+						},
+					},
+				},
+			};
+		});
 	}
 	const linked = await linkCards({
 		cwd: input.cwd,
@@ -405,7 +543,7 @@ export function registerPlanCommand(program: Command): void {
 	plan
 		.command("approve")
 		.description(
-			"The user's approval of a plan card's breakdown (the plan card must be in Review), or use Approve plan on the board. Only the user: the Kanban server refuses agent sessions. It is what lets the orchestrator expand the plan.",
+			"The user's approval of a plan's exact spec/breakdown/knowledge bundle (the plan card must be in Review), or use Approve plan on the board. Only the user: the Kanban server refuses agent sessions. It is what lets the orchestrator expand the plan.",
 		)
 		.argument("<task-id>", "The plan card.")
 		.option("--project-path <path>", "Workspace path. Defaults to current directory workspace.")

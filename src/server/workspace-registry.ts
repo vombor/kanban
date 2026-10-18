@@ -117,7 +117,7 @@ export interface WorkspaceRegistry {
 		admission: (
 			workspaceId: string,
 			request: StartTaskSessionRequest,
-			start: () => Promise<RuntimeTaskSessionSummary>,
+			start: (prepared?: StartTaskSessionRequest) => Promise<RuntimeTaskSessionSummary>,
 		) => Promise<RuntimeTaskSessionSummary>,
 		restart: (workspaceId: string, request: StartTaskSessionRequest) => Promise<void>,
 	) => void;

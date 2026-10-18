@@ -1,10 +1,13 @@
+import { mkdir, symlink, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { buildPlanBreakdownExample, buildPlanPrompt, readPlanSlugFromPrompt } from "../../../src/kits/plan-prompt";
 import { buildQaRequirements } from "../../../src/pipeline/qa-prompt";
-import { parsePlanBreakdown, slugifyPlanTitle } from "../../../src/plans/plan-breakdown";
+import { parsePlanBreakdown, readPlanFiles, slugifyPlanTitle } from "../../../src/plans/plan-breakdown";
 import { buildPlannedCardPrompt, checkPlanExpandable, planExpansion } from "../../../src/plans/plan-expand";
 import type { PlanRecord } from "../../../src/plans/plan-index";
+import { createTempDir } from "../../utilities/temp-dir";
 
 const PROMPT = "Implement the thing in src/thing.ts and test it in test/thing.test.ts.";
 
@@ -22,6 +25,21 @@ function issuesOf(text: string, slug?: string): string[] {
 }
 
 describe("plan breakdown validation", () => {
+	it("refuses out-of-worktree symlinks and unbounded review files before reading private content", async () => {
+		const worktree = createTempDir("plan-review-boundary-"),
+			outside = createTempDir("plan-review-outside-");
+		try {
+			await mkdir(join(worktree.path, "docs/specs"), { recursive: true });
+			await writeFile(join(outside.path, "outside.md"), "Owned outside fixture, not approved plan content.");
+			await symlink(join(outside.path, "outside.md"), join(worktree.path, "docs/specs/coupons.md"));
+			await expect(readPlanFiles(worktree.path, "coupons")).rejects.toThrow("inside the plan card's worktree");
+			await writeFile(join(worktree.path, "docs/specs/large.md"), "x".repeat(262145));
+			await expect(readPlanFiles(worktree.path, "large")).rejects.toThrow("bounded regular file");
+		} finally {
+			worktree.cleanup();
+			outside.cleanup();
+		}
+	});
 	it("accepts a valid breakdown and defaults role and dependsOn", () => {
 		const parsed = parsePlanBreakdown(
 			breakdown([card("schema", { parallelGroup: "w1" }), { ...card("api"), dependsOn: ["schema"] }]),
@@ -125,6 +143,17 @@ describe("plan prompt", () => {
 });
 
 describe("expansion", () => {
+	it("keeps a dev-task retained-reference pointer in QA requirements, without copying the full shared plan", () => {
+		const prompt = buildPlannedCardPrompt(
+			{ prompt: `${PROMPT}\n\nFINAL STEP: stop.`, acceptanceCriteria: ["Reviewed API preserved"] },
+			{ planTaskId: "plan1", specPath: "docs/specs/coupons.md", taskId: "dev1", bundleRevision: "b".repeat(64) },
+		);
+		const requirements = buildQaRequirements(prompt, "");
+		expect(requirements).toContain("knowledge task-context dev1");
+		expect(requirements).toContain("knowledge task-read dev1 --part spec");
+		expect(requirements).toContain("b".repeat(64));
+		expect(requirements).not.toContain("FINAL STEP");
+	});
 	it("appends the acceptance criteria before a FINAL STEP, so the QA requirements keep them", () => {
 		const prompt = buildPlannedCardPrompt(
 			{ prompt: `${PROMPT}\n\nFINAL STEP: reply DONE.`, acceptanceCriteria: ["redeem returns 409 when used"] },

@@ -130,6 +130,29 @@ describe("TerminalSessionManager auto-restart", () => {
 		expect(restart).toHaveBeenCalledWith(expect.not.objectContaining({ admissionId: "once" }));
 		expect(ptySessionSpawnMock).toHaveBeenCalledOnce();
 	});
+	it("uses the physical admission owner's prepared request for adapter input, not stale caller context", async () => {
+		ptySessionSpawnMock.mockImplementation((request: MockSpawnRequest) => createMockPtySession(111, request));
+		const manager = new TerminalSessionManager();
+		manager.setTaskAdmission(
+			async (request, start) => start({ ...request, prompt: `${request.prompt}\nExact reserved context` }),
+			async () => {},
+		);
+		try {
+			await manager.startTaskSession({
+				taskId: "owned",
+				agentId: "claude",
+				binary: "fake",
+				args: [],
+				cwd: "/owned",
+				prompt: "Approved requirements",
+			});
+			expect(prepareAgentLaunchMock).toHaveBeenCalledWith(
+				expect.objectContaining({ prompt: "Approved requirements\nExact reserved context" }),
+			);
+		} finally {
+			manager.stopTaskSession("owned");
+		}
+	});
 
 	it("does not restart an attached agent session after an explicit stop", async () => {
 		const spawnedSessions: Array<ReturnType<typeof createMockPtySession>> = [];

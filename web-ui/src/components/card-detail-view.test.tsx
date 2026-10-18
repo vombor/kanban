@@ -223,7 +223,9 @@ describe("CardDetailView", () => {
 			expandButton.click();
 		});
 
-		const toolbarButtons = Array.from(container.querySelectorAll("button"));
+		const toolbarButtons = Array.from(container.querySelectorAll("button")).filter(
+			(button) => button.textContent !== "Plan context",
+		);
 		expect(toolbarButtons[0]?.getAttribute("aria-label")).toBe("Collapse expanded diff view");
 		expect(toolbarButtons[1]?.textContent?.trim()).toBe("All Changes");
 		expect(toolbarButtons[2]?.textContent?.trim()).toBe("Last Turn");

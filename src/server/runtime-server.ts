@@ -34,6 +34,9 @@ import { createMessageNoticeQueue } from "../isolation/message-notices";
 import { applyIssueSync } from "../issues/issue-apply";
 import { createKnowledgeApi } from "../knowledge/knowledge-api";
 import { createObsidianConnectorApi } from "../knowledge/obsidian/connector-api";
+import { createTaskContextApi } from "../knowledge/task-context-api";
+import { buildTaskContextBootstrap } from "../knowledge/task-context-bootstrap";
+import { createTaskContextStore } from "../knowledge/task-context-store";
 import { createAgentOptionsLoader } from "../models/agent-options";
 import { readAgentDefaultModels } from "../models/cline-providers";
 import { createObjectiveApi } from "../objectives/objective-api";
@@ -104,7 +107,6 @@ import { createClineLemonadeContextSyncMonitor } from "./cline-lemonade-context-
 import { createGitHubAppRequestHandler } from "./github-app-route";
 import { createModelListsRequestHandler } from "./model-lists-route";
 import { accountObjectiveInput } from "./objective-input-accounting";
-import { objectiveLineageEligibility } from "./objective-lineage-eligibility";
 import { createObjectiveReconciler } from "./objective-reconciler";
 import { accountObjectiveSessionStart } from "./objective-session-admission";
 import { createObjectiveUsageCollector } from "./objective-usage-collector";
@@ -118,11 +120,14 @@ import { createProviderDispatchRuntime } from "./provider-dispatch-runtime";
 import { buildCallerRequest, createRequestCallerResolver } from "./request-caller";
 import type { RuntimeStateHub } from "./runtime-state-hub";
 import { createShortcutPortProxyHandler, createShortcutPortRegistry, isShortcutPortProxyPath } from "./shortcut-ports";
+import { canAdoptTaskReferences } from "./task-context-adoption-eligibility";
+import { startWithTaskContext } from "./task-context-session-admission";
 import { createTaskLandingGate } from "./task-landing-gate";
 import { createTaskTokenUsageLoader } from "./task-token-usage";
 import { createTaskTokenUsageMonitor, isTaskTokenUsageSession } from "./task-token-usage-monitor";
 import { createTaskTrashWorkflow, createTrashTaskRequestHandler, type TaskTrashWorkflow } from "./task-trash-workflow";
 import { createTypedInputHold, type TypedInputHold } from "./typed-input-hold";
+import { unstartedTaskEligibility } from "./unstarted-task-eligibility";
 import { createWatchdogActionHandler } from "./watchdog-actions";
 import type { WorkspaceRegistry } from "./workspace-registry";
 
@@ -553,7 +558,9 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		},
 		log: deps.warn,
 	});
+	const taskContexts = createTaskContextStore();
 	runtimeApi = createRuntimeApi({
+		taskContextBootstrap: (workspaceId, taskId) => buildTaskContextBootstrap(taskContexts, workspaceId, taskId),
 		objectiveAdmission: objectiveStore,
 		launchReceiptIds,
 		providerDispatcher,
@@ -617,7 +624,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 				workspaceId,
 				taskId: request.taskId,
 				requestId: request.admissionId,
-				start,
+				start: () => startWithTaskContext({ contexts: taskContexts, workspaceId, request, start }),
 			}),
 		async (workspaceId, request) => {
 			const repo = deps.workspaceRegistry.getWorkspacePathById(workspaceId);
@@ -725,6 +732,23 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 	const obsidianConnectorApi = createObsidianConnectorApi();
 	const knowledgeApi = createKnowledgeApi();
 	const objectiveReceiptStore = createPipelineStateStore();
+	const taskKnowledgeApi = createTaskContextApi({
+		contexts: taskContexts,
+		admissionAvailable: objectiveAdmissionAvailable,
+		canAdopt: async (workspaceId, taskId) => {
+			const state = await loadWorkspaceStateById(workspaceId);
+			if (!state) return false;
+			const manager = deps.workspaceRegistry.getTerminalManagerForWorkspace(workspaceId);
+			return canAdoptTaskReferences({
+				workspaceId,
+				taskId,
+				state,
+				repoPath: state.repoPath,
+				live: Object.fromEntries((manager?.listSummaries() ?? []).map((summary) => [summary.taskId, summary])),
+				pipelineTaskIds: Object.keys((await objectiveReceiptStore.peek(workspaceId))?.cards ?? {}),
+			});
+		},
+	});
 	const objectiveReconciler = createObjectiveReconciler({
 		serverStartedAt: objectiveServerStartedAt,
 		collectUsage: createObjectiveUsageCollector({
@@ -764,7 +788,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 				),
 			);
 			const pipeline = await objectiveReceiptStore.peek(workspaceId);
-			return objectiveLineageEligibility({
+			return unstartedTaskEligibility({
 				workspaceId,
 				board: state.board,
 				sessions: { ...state.sessions, ...sessions },
@@ -952,6 +976,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			projectSecretsApi,
 			obsidianConnectorApi,
 			knowledgeApi,
+			taskKnowledgeApi,
 			objectiveApi,
 			getPipelineCardStages: deps.runtimeStateHub.getPipelineCardStages,
 			shortcutsApi,

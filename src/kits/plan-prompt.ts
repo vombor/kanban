@@ -77,11 +77,12 @@ ${planMode}
 ${buildPlanBreakdownExample(input.slug)}
    Rules for the cards:
    a. Each card is sized for ONE agent session: one coherent change a junior agent can finish, test and hand back in a single run. Split anything bigger.
-   b. Each prompt is self-contained: the dev agent sees only its own card prompt (plus the spec in the repo once the plan lands), so name the files, the behaviour and the checks. "role" is always "dev".
+   b. Each prompt is self-contained: the dev agent sees its own prompt and an on-demand pointer to the retained reviewed spec, available before the plan lands. Name the files, behaviour and checks. "role" is always "dev".
    c. "dependsOn" lists the local ids of cards that must be done first; cards without dependencies between them can run in parallel, and "parallelGroup" names a set of cards that can run at the same time (no card may depend on a card of its own group). No cycles.
    d. Every card has concrete, checkable "acceptanceCriteria"; QA judges the card against them.
    e. At most ${PLAN_MAX_CARDS} cards; a bigger requirement is several plans.
    f. "slug" is "${input.slug}". Check the file with: kanban plan check --file ${breakdownPath} (the one kanban command you may run).
+   g. If you use published project knowledge, name exact {"id":"document-id","revision":"<full SHA-256>"} entries in optional "knowledgeReferences" at the breakdown level (shared) or on a card (only that card). Discover/read with kanban knowledge list/search/read, never invent revisions. The user's protected pins are included automatically; ordinary knowledge is not approval.
 5. Leave both files uncommitted in your worktree; change nothing else.${rules.length > 0 ? `\n\nProject rules for plans:\n${rules.map((rule) => `- ${rule}`).join("\n")}` : ""}
 
 Finish with one line: "STATUS: PLAN READY ${specPath}, <n> cards", "STATUS: NEEDS INPUT <your questions>", "STATUS: TOO SMALL <why one card is enough>" or "STATUS: BLOCKED <why>".
