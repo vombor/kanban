@@ -62,6 +62,33 @@ function setup(beforeCommit?: () => Promise<void>) {
 		paths: getProjectKnowledgePaths("alpha", root.path),
 	};
 }
+describe("knowledge UI permission readout", () => {
+	it("returns strict own-project curation capabilities without relaxing mutation authority", async () => {
+		const { api } = setup();
+		const session = (workspaceId: string, role: "card" | "orchestrator"): RuntimeCaller => ({
+			kind: "session",
+			via: "credential",
+			session: { workspaceId, role, taskId: "fixture", agentId: "claude", cwd: "/owned" },
+		});
+		expect(await api.permissions({ kind: "user" }, "alpha")).toEqual({
+			canPropose: true,
+			canPublish: true,
+			canPin: true,
+		});
+		expect(await api.permissions(session("alpha", "orchestrator"), "alpha")).toEqual({
+			canPropose: true,
+			canPublish: true,
+			canPin: false,
+		});
+		expect(await api.permissions(session("alpha", "card"), "alpha")).toEqual({
+			canPropose: true,
+			canPublish: false,
+			canPin: false,
+		});
+		for (const caller of [session("other", "orchestrator"), { kind: "unknown", reason: "fixture" } as RuntimeCaller])
+			await expect(api.permissions(caller, "alpha")).rejects.toMatchObject({ code: "FORBIDDEN" });
+	});
+});
 async function publishedRevision(
 	store: ReturnType<typeof createProjectKnowledgeStore>,
 	input = mutation(),

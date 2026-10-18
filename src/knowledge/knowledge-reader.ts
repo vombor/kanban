@@ -15,7 +15,7 @@ function page<T>(items: T[], offset: number, limit: number) {
 		nextOffset: offset + limit < items.length ? offset + limit : null,
 	};
 }
-type KnowledgeReads = Omit<RuntimeKnowledgeApi, "mutate">;
+type KnowledgeReads = Omit<RuntimeKnowledgeApi, "mutate" | "permissions">;
 type ReadInput<K extends keyof KnowledgeReads> = Parameters<KnowledgeReads[K]> extends [unknown, unknown, infer Input]
 	? Input
 	: undefined;

@@ -116,6 +116,38 @@ also reserve/freeze pins but stay blank. Failed/uncertain starts retain the rese
 refund, unfreeze or retry. Attached automatic restarts return through ordinary runtime admission. An installation
 without the physical admission hook refuses adoption rather than advertising a preflight-only safety guarantee.
 
+## Project Knowledge in the browser
+
+The top bar's **Project knowledge** button opens the current project's canonical knowledge view, separately from
+Global Settings → Knowledge (the optional Obsidian connection). It works without Obsidian, embeddings or a model.
+
+- Opening loads bounded metadata and strict own-project curation capabilities, not all document bodies. Documents
+  can be filtered by kind, paged or searched explicitly. Search snippets are bounded; narrow a truncated search or
+  return to the paged list to continue discovery.
+- Selecting a document reads its exact listed revision in 4,096-character slices, with section selection and explicit
+  continuations. The view identifies content/revision hashes, kind, tags, sources, publisher and viewer-local time.
+  Published revision history permits historical reads; historical text is labeled and never silently replaced with
+  current content. Reload to discover a later current revision.
+- Proposals have pending/published/rejected lists. Review shows the proposed slice, its exact base comparison and
+  base metadata, plus current text when stale. Comparison is bounded, not a claim that a slice represents the full
+  document. Continuations include remaining base/current text even when the proposal itself is shorter. A missing
+  base/comparison refuses review; a new-document proposal explicitly shows no prior document.
+- Publish/reject and user pin/unpin each require a separate explicit confirmation bound to the revisions read.
+  A stale proposal cannot be published/rebased; resubmit against the current revision. Strict server permissions
+  remain authoritative, including user-only protection of pinned decisions. Failed/uncertain mutations offer only
+  a user-triggered exact retry with the retained request id; they are never automatically retried or retargeted to
+  another project. Closing/reloading discards the UI draft, not retained server history or receipts.
+
+Markdown uses the installed React Markdown/GFM pipeline with raw HTML disabled. Images never fetch; relative,
+same-origin, credential-bearing and unsafe-scheme links are non-navigable. Explicit external HTTP(S) links open
+with `noopener noreferrer`. The document cannot embed an active form or call privileged Kanban APIs. Source links
+use the same navigation rule. No knowledge body enters the global project summary stream or a shared browser cache.
+
+Project changes unmount the private view, fence late responses and discard selection/confirmation state. Curation
+does not change task columns, launch agents, approve execution, adopt task references or alter the optional connector.
+New ordinary documents/proposals can still be authored using the scoped CLI; this view is discovery and curation,
+not an unbounded document editor.
+
 ## Publish, propose and curate
 
 Publication requires an expected current revision. Use `none` only when creating a new id. IDs are lowercase

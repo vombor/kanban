@@ -249,7 +249,11 @@ export type KnowledgeProposal = z.infer<typeof knowledgeProposalSchema>;
 export type KnowledgeSection = z.infer<typeof knowledgeSectionSchema>;
 export type KnowledgeMutation = z.infer<typeof knowledgeMutationSchema>;
 export type KnowledgeMutationResult = z.infer<typeof knowledgeMutationResultSchema>;
+export const knowledgePermissionsSchema = z
+	.object({ canPropose: z.boolean(), canPublish: z.boolean(), canPin: z.boolean() })
+	.strict();
 export interface RuntimeKnowledgeApi {
+	permissions: (caller: RuntimeCaller, workspaceId: string) => Promise<z.infer<typeof knowledgePermissionsSchema>>;
 	list: (
 		caller: RuntimeCaller,
 		workspaceId: string,

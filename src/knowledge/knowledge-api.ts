@@ -30,6 +30,14 @@ export function createKnowledgeApi(store: ProjectKnowledgeStore = createProjectK
 		}
 	};
 	return {
+		permissions: async (caller, workspaceId) => {
+			const actor = authorizeKnowledgeCaller(caller, workspaceId);
+			return {
+				canPropose: true,
+				canPublish: actor.kind === "user" || actor.role === "orchestrator",
+				canPin: actor.kind === "user",
+			};
+		},
 		list: async (caller, workspaceId, input) => {
 			authorizeKnowledgeCaller(caller, workspaceId);
 			return await run(async () => await reader.list(workspaceId, input));

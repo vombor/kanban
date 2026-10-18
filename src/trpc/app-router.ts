@@ -212,6 +212,7 @@ import {
 	knowledgeListResponseSchema,
 	knowledgeMutationResultSchema,
 	knowledgeMutationSchema,
+	knowledgePermissionsSchema,
 	knowledgeProposalReadRequestSchema,
 	knowledgeProposalReadResponseSchema,
 	knowledgeProposalsRequestSchema,
@@ -719,6 +720,11 @@ export const runtimeAppRouter = t.router({
 			}),
 	}),
 	knowledge: t.router({
+		permissions: workspaceProcedure.output(knowledgePermissionsSchema).query(async ({ ctx }) => {
+			if (!ctx.knowledgeApi)
+				throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Project knowledge is unavailable." });
+			return ctx.knowledgeApi.permissions(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId);
+		}),
 		list: workspaceProcedure
 			.input(knowledgeListRequestSchema)
 			.output(knowledgeListResponseSchema)

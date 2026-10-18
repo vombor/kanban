@@ -3,6 +3,7 @@ import {
 	ArrowDown,
 	ArrowLeft,
 	ArrowUp,
+	BookOpen,
 	Bug,
 	Check,
 	ChevronDown,
@@ -301,6 +302,7 @@ export function TopBar({
 	isGitHistoryOpen,
 	onOpenSettings,
 	onOpenObjectives,
+	onOpenKnowledge,
 	onEditProject,
 	showDebugButton,
 	onOpenDebugDialog,
@@ -335,6 +337,7 @@ export function TopBar({
 	isGitHistoryOpen?: boolean;
 	onOpenSettings?: () => void;
 	onOpenObjectives?: () => void;
+	onOpenKnowledge?: () => void;
 	onEditProject?: () => void;
 	showDebugButton?: boolean;
 	onOpenDebugDialog?: () => void;
@@ -685,6 +688,18 @@ export function TopBar({
 					) : null}
 
 					{/* Tips and settings: always visible */}
+					{!hideProjectDependentActions && onOpenKnowledge ? (
+						<Tooltip content="Project knowledge and proposals">
+							<Button
+								variant="ghost"
+								size="sm"
+								icon={<BookOpen size={16} />}
+								onClick={onOpenKnowledge}
+								aria-label="Project knowledge"
+								className={cn("ml-0.5", isMobile && MOBILE_TOUCH_TARGET)}
+							/>
+						</Tooltip>
+					) : null}
 					{!hideProjectDependentActions && onOpenObjectives ? (
 						<Tooltip content="Project objectives and retained evidence">
 							<Button

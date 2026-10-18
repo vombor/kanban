@@ -16,6 +16,7 @@ import { DebugDialog } from "@/components/debug-dialog";
 import { AgentTerminalPanel } from "@/components/detail-panels/agent-terminal-panel";
 import { GitHistoryView } from "@/components/git-history-view";
 import { KanbanBoard } from "@/components/kanban-board";
+import { ProjectKnowledgeDialog } from "@/components/knowledge/project-knowledge-dialog";
 import { LandOrDiscardDialog } from "@/components/land-or-discard-dialog";
 import { ProjectObjectivesDialog } from "@/components/objectives/project-objectives-dialog";
 import { ProjectEditDialog } from "@/components/project-edit-dialog";
@@ -96,6 +97,7 @@ export default function App(): ReactElement {
 	const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 	const [scriptProjectId, setScriptProjectId] = useState<string | null>(null);
 	const [objectivesProjectId, setObjectivesProjectId] = useState<string | null>(null);
+	const [knowledgeProjectId, setKnowledgeProjectId] = useState<string | null>(null);
 	const [isClearTrashDialogOpen, setIsClearTrashDialogOpen] = useState(false);
 	const [isGitHistoryOpen, setIsGitHistoryOpen] = useState(false);
 	const [pendingTaskStartAfterEditId, setPendingTaskStartAfterEditId] = useState<string | null>(null);
@@ -103,6 +105,7 @@ export default function App(): ReactElement {
 	const lastStreamErrorRef = useRef<string | null>(null);
 	const handleProjectSwitchStart = useCallback(() => {
 		setObjectivesProjectId(null);
+		setKnowledgeProjectId(null);
 		setCanPersistWorkspaceState(false);
 		setIsGitHistoryOpen(false);
 		setPendingTaskStartAfterEditId(null);
@@ -862,6 +865,7 @@ export default function App(): ReactElement {
 							isTerminalLoading={selectedCard ? isDetailTerminalStarting : isHomeTerminalStarting}
 							onOpenSettings={handleOpenSettings}
 							onOpenObjectives={currentProjectId ? () => setObjectivesProjectId(currentProjectId) : undefined}
+							onOpenKnowledge={currentProjectId ? () => setKnowledgeProjectId(currentProjectId) : undefined}
 							onEditProject={currentProjectId ? () => setScriptProjectId(currentProjectId) : undefined}
 							showDebugButton={debugModeEnabled}
 							onOpenDebugDialog={debugModeEnabled ? handleOpenDebugDialog : undefined}
@@ -1067,6 +1071,16 @@ export default function App(): ReactElement {
 								projects.find((project) => project.id === objectivesProjectId)?.name ?? objectivesProjectId
 							}
 							onClose={() => setObjectivesProjectId(null)}
+						/>
+					) : null}
+					{knowledgeProjectId && knowledgeProjectId === currentProjectId && !isProjectSwitching ? (
+						<ProjectKnowledgeDialog
+							key={knowledgeProjectId}
+							workspaceId={knowledgeProjectId}
+							projectName={
+								projects.find((project) => project.id === knowledgeProjectId)?.name ?? knowledgeProjectId
+							}
+							onClose={() => setKnowledgeProjectId(null)}
 						/>
 					) : null}
 					<RuntimeSettingsDialog
