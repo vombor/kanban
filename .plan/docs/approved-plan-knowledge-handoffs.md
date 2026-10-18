@@ -19,7 +19,7 @@ service or mistake ordinary publication/context for user-only execution approval
 - [x] Add native review/readout UI and regressions for mutation-between-preview/approval, pruning, retries, privacy/isolation-off, stale revisions and missing/corrupt content.
 - [x] Run formatting, both typechecks, product/UI tests/build and owned shared-Chrome/isolated smoke for the implemented milestone; reconcile actual completed versus pending scope.
 - [x] Validate adoption races/authority/retention, native Backlog-editor confirmation and restart retention on owned phone/desktop contexts.
-- [ ] Complete final source validation, exact committed-export build/local smoke, App-authenticated push/exact-SHA CI and authorized application deployment; preserve live configuration, boards, sidecars, credentials and maintenance schedule.
+- [x] Complete final source validation, exact committed-export build/local smoke, App-authenticated push/exact-SHA CI and authorized application deployment; preserve live configuration, boards, sidecars, credentials and maintenance schedule.
 
 Initial discovery (before this source milestone): plan approval hashed only the breakdown; the spec could change
 independently and was not durably available to dev tasks until landing. New approval now names the full reviewed bundle. Old
@@ -80,6 +80,34 @@ Final source validation passed: `npm run check` (**3,015 product tests**, runtim
 lint warning), full web UI (**754 tests**), **33 maintainer tests** plus maintainer typecheck, fresh product build,
 and both owned phone/desktop adoption/restart/freeze flows. No new real-model trial or live reference mutation.
 
-Publication/deployment is now user-authorized but is not claimed complete until exact exported source/artifact
-validation, App-authenticated CI and production readback finish. No host maintainer update is necessary for these
-product-only changes; its immutable artifact, saved session/journal and 03:00 America/Los_Angeles schedule stay fixed.
+## Publication and deployment outcome
+
+- Implementation committed/pushed through the Kanban GitHub App as **1e17850903c002f7856a19c23874a7571d89052c**.
+  Exact push/image CI **39141352467** passed, including the bare non-root image check and verified registry publish.
+- Exact committed export built with isolated HOME/credentials and passed the owned local-overlay pod smoke without
+  a provider turn or live data mount, with owned cleanup verified. CLI SHA-256:
+  `065ca28377d3d7f33ded0d0d5c1ab874370d0609da1bb7afe2ef9ddf171b0365`; whole artifact-tree SHA-256:
+  `d1da8a9cfbbc2c8592eb8020082d3d9e510227a24d6edf1a315e898dfe03e054`. Package dry run retained 27 files,
+  standard kits/presets only. The initial smoke runner inherited the isolated build HOME and therefore could not
+  locate the host's rootless image store; it failed with owned cleanup, and the succeeding smoke used ordinary
+  host Podman discovery with only the disposable product overlay mounted. No failed run is counted as a pass.
+- User-authorized application-only update completed through live `restart prepare` and `restart update`, both with
+  explicit **KANBAN_RUNTIME_PORT=3484**, after a fresh zero-running-card check and private rollback snapshot.
+- Production now runs implementation **1e178509**, image id
+  `a05f2fde53e0333ee753679c528f35ce51517ee9af4e1645adfb80948b336509`, published digest
+  `sha256:fdb5e2026c6602edfa5c81c3700825143a387b739c7f7b5b0d8750c855825291`.
+- Readback verified unchanged config and both stored boards byte-for-byte, mounts, Chrome/Postgres identities/start
+  times, active Quadlet (including unchanged inline credentials), real `/projects/foo` and display name `pawsome`.
+  HTTP/WebSockets passed on 127.0.0.1, ::1 and localhost; Postgres remained ready.
+- Production phone/desktop Plan context readouts passed on owned shared-Chrome contexts, with mutation requests
+  blocked, no page errors and contexts closed. An initial selector assumed a nonempty default board; the default
+  pawsome board is empty, so readback explicitly selected the existing triton-test project via its native selector.
+  Another verification compared a timer's advancing next-fire clock instead of its policy; comparison now checks
+  the unchanged calendar/cadence. Neither correction changed application data or timer configuration.
+- Host maintainer artifact and daily **03:00 America/Los_Angeles** / ten-minute reconciliation schedules remain
+  unchanged. No release/tag, live knowledge adoption/plan action, provider/model change, benchmark rerun or new
+  agent/session was performed. Private rollback/readback evidence stays outside the product payload in the
+  installation's `approved-plan-handoffs-1e178509` deployment ledger.
+
+This completes the approved-plan bundle/task-pin/bounded retrieval/explicit pre-start reference-adoption slice,
+not broader scoped graph retrieval, a running-task rebase/rework protocol or complete billing measurement.
