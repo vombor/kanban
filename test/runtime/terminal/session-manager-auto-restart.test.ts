@@ -82,6 +82,54 @@ describe("TerminalSessionManager auto-restart", () => {
 		expect(manager.getSummary("task-1")?.state).toBe("running");
 		expect(manager.getSummary("task-1")?.pid).toBe(222);
 	});
+	it("gates blank starts before preparing/spawning and delegates attached automatic restarts to ordinary runtime admission", async () => {
+		const manager = new TerminalSessionManager();
+		const refused = vi.fn(async () => {
+				throw new Error("Objective admission paused");
+			}),
+			restart = vi.fn(async () => {});
+		manager.setTaskAdmission(refused, restart);
+		await expect(
+			manager.startTaskSession({
+				taskId: "own",
+				agentId: "claude",
+				binary: "claude",
+				args: [],
+				cwd: "/fixture",
+				prompt: "",
+			}),
+		).rejects.toThrow("paused");
+		expect(prepareAgentLaunchMock).not.toHaveBeenCalled();
+		expect(ptySessionSpawnMock).not.toHaveBeenCalled();
+		let session: ReturnType<typeof createMockPtySession> | null = null;
+		ptySessionSpawnMock.mockImplementation((request: MockSpawnRequest) => {
+			session = createMockPtySession(111, request);
+			return session;
+		});
+		const admission = vi.fn(async (_request: unknown, start: () => Promise<unknown>) => start());
+		manager.setTaskAdmission(async (request, start) => {
+			await admission(request, start);
+			const summary = manager.getSummary(request.taskId);
+			if (!summary) throw new Error("No test summary");
+			return summary;
+		}, restart);
+		manager.attach("own", { onState: vi.fn() });
+		await manager.startTaskSession({
+			taskId: "own",
+			agentId: "claude",
+			binary: "claude",
+			args: [],
+			cwd: "/fixture",
+			prompt: "Approved task",
+			admissionId: "once",
+		});
+		const current = session as ReturnType<typeof createMockPtySession> | null;
+		if (!current) throw new Error("No fake PTY");
+		current.triggerExit(130);
+		await vi.waitFor(() => expect(restart).toHaveBeenCalledOnce());
+		expect(restart).toHaveBeenCalledWith(expect.not.objectContaining({ admissionId: "once" }));
+		expect(ptySessionSpawnMock).toHaveBeenCalledOnce();
+	});
 
 	it("does not restart an attached agent session after an explicit stop", async () => {
 		const spawnedSessions: Array<ReturnType<typeof createMockPtySession>> = [];
@@ -239,5 +287,30 @@ describe("TerminalSessionManager auto-restart", () => {
 		expect(prepareAgentLaunchMock).toHaveBeenLastCalledWith(
 			expect.objectContaining({ prompt: "NOTE", resumeFromTrash: true }),
 		);
+	});
+	it("marks an empty composer unsubmitted at birth and records the first native submit without letting a late restore marker erase it", async () => {
+		ptySessionSpawnMock.mockImplementation((request: MockSpawnRequest) => createMockPtySession(111, request));
+		const manager = new TerminalSessionManager();
+		const observed: boolean[] = [];
+		manager.onSummary((summary) => observed.push(summary.dispatchPromptSubmitted === true));
+		await manager.startTaskSession({
+			taskId: "blank",
+			agentId: "claude",
+			binary: "claude",
+			args: [],
+			cwd: "/fixture",
+			prompt: "",
+		});
+		expect(observed[0]).toBe(false);
+		expect(manager.getSummary("blank")).toMatchObject({
+			dispatchPromptSubmitted: false,
+			dispatchPromptSubmittedAt: null,
+		});
+		manager.transitionToRunning("blank");
+		manager.recordDispatchProvider("blank", "fixture", false);
+		expect(manager.getSummary("blank")).toMatchObject({
+			dispatchPromptSubmitted: true,
+			dispatchPromptSubmittedAt: expect.any(Number),
+		});
 	});
 });

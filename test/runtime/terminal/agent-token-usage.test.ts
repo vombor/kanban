@@ -96,6 +96,58 @@ function copilotShutdown(input: number, output: number, cacheRead: number): Reco
 }
 
 describe("createAgentTokenUsageReader", () => {
+	it("native observations retain Cline's actual per-message provider, cache semantics and unknown usage without transcript content", async () => {
+		const { root, sources } = createSources();
+		const worktree = join(root, "worktrees", "native", "repo");
+		const messages = [
+			{
+				id: "request-1",
+				role: "assistant",
+				ts: Date.parse("2026-10-18T10:00:00Z"),
+				modelInfo: { id: "fixture-model", provider: "bedrock" },
+				metrics: { inputTokens: 130, outputTokens: 5, cacheReadTokens: 100, cacheWriteTokens: 10 },
+				content: [{ type: "text", text: "private answer must not persist" }],
+			},
+			{
+				id: "request-2",
+				role: "assistant",
+				ts: Date.parse("2026-10-18T10:01:00Z"),
+				modelInfo: { id: "fixture-model", provider: "lemonade" },
+				content: [{ type: "tool_use", name: "editor", input: { new_text: "private source" } }],
+			},
+		];
+		writeClineSession(sources, "1792290000000_one", worktree, messages);
+		writeClineSession(sources, "1792290001000_two", worktree, messages);
+		const reader = createAgentTokenUsageReader();
+		const usage = (await reader.read([worktree], sources, { observations: true })).get(worktree);
+		expect(usage?.observations).toHaveLength(2);
+		expect(usage?.observations?.[0]).toMatchObject({
+			agent: "cline",
+			provider: "bedrock",
+			tokens: { input: 20, output: 5, cacheRead: 100, cacheWrite: 10 },
+			uncertainty: [],
+		});
+		expect(usage?.observations?.[1]?.tokens).toBeNull();
+		expect(usage?.observations?.[1]?.uncertainty).toContain("usage_missing");
+		expect(JSON.stringify(usage?.observations)).not.toContain("private");
+		expect((await reader.read([worktree], sources)).get(worktree)).not.toHaveProperty("observations");
+	});
+	it("Copilot's mixed/late totals remain session-level uncertainty, never a guessed billing route", async () => {
+		const { root, sources } = createSources();
+		const worktree = join(root, "worktrees", "mixed", "repo");
+		writeCopilotSession(sources, "mixed", worktree, [
+			{ type: "assistant.message", timestamp: "2026-10-18T10:00:00Z", data: { model: "one" } },
+			{ type: "assistant.message", timestamp: "2026-10-18T10:01:00Z", data: { model: "two" } },
+			copilotShutdown(10, 5, 2),
+		]);
+		const rows = (await createAgentTokenUsageReader().read([worktree], sources, { observations: true })).get(
+			worktree,
+		)?.observations;
+		expect(rows?.[0]).toMatchObject({ basis: "session_total", provider: null, model: null });
+		expect(rows?.[0]?.uncertainty).toEqual(
+			expect.arrayContaining(["mixed_model", "provider_missing", "time_missing"]),
+		);
+	});
 	it("counts a Claude Code transcript once per message id, keeping the last line of each", async () => {
 		const { root, sources } = createSources();
 		const worktree = join(root, "worktrees", "abc12", "repo");

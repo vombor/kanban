@@ -22,6 +22,7 @@
       "@runtime-trpc": ["../src/trpc/app-router.ts"],
       "@runtime-shortcuts": ["../src/config/shortcut-utils.ts"],
       "@runtime-project-secrets": ["../src/trpc/project-secrets-contract.ts"],
+      "@runtime-objectives": ["../src/core/objective-contract.ts"],
       "@runtime-task-id": ["../src/core/task-id.ts"],
       "@runtime-provider-queue": ["../src/core/provider-queue.ts"],
       "@runtime-kit-choice-display": ["../src/core/kit-choice-display.ts"],

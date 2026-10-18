@@ -51,3 +51,6 @@ jobs:
 
       - name: Web UI tests
         run: npm --prefix web-ui run test
+
+      - name: Maintainer tooling (never in product payload)
+        run: npm run maintainer:typecheck && npm run maintainer:test && npm run maintainer:build

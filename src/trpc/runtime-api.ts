@@ -28,6 +28,7 @@ import {
 } from "../core/api-validation";
 import { getDispatchProvider } from "../core/dispatch-provider";
 import { isHomeAgentSessionId, isHomeAgentSessionIdForWorkspace } from "../core/home-agent-session";
+import type { ObjectiveAdmissionAccounting } from "../core/objective-admission";
 import { providerStartFingerprint } from "../core/provider-start-intent";
 import { resolveLaunchAgentSettings } from "../core/task-agent-settings";
 import { resolveOrchestratorGuardrails, resolveTaskGuardrails } from "../guardrails/task-guardrails";
@@ -39,11 +40,13 @@ import {
 	getSessionRole,
 	KANBAN_SESSION_CREDENTIAL_ENV,
 	KANBAN_SESSION_WORKSPACE_ENV,
+	type RuntimeCaller,
 } from "../isolation/session-identity";
 import { readClineModelRecords } from "../models/cline-model-records";
 import { readAgentDefaultModels } from "../models/cline-providers";
 import { readProjectShortcuts } from "../projects/project-shortcut-store";
 import { openInBrowser } from "../server/browser";
+import { accountObjectiveRawInput } from "../server/objective-raw-input";
 import type { ProviderDispatcher } from "../server/provider-dispatcher";
 import type { TypedInputHold } from "../server/typed-input-hold";
 import { getClineModelsSettingsPath, getDebugResetTargetPaths, getProjectShortcutsPath } from "../state/kanban-home";
@@ -87,6 +90,8 @@ export interface CreateRuntimeApiDependencies {
 	providerDispatcher?: ProviderDispatcher;
 	/** Unforgeable in-process handoff, never serialized into a request or stored with an intent. */
 	launchAuthorization?: WeakMap<object, AbortSignal>;
+	launchReceiptIds?: WeakMap<object, string>;
+	objectiveAdmission?: ObjectiveAdmissionAccounting;
 }
 
 async function resolveExistingTaskCwdOrEnsure(options: {
@@ -132,6 +137,24 @@ async function listClineModelRecords(): Promise<RuntimeClineModelRecord[]> {
 }
 
 export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrpcContext["runtimeApi"] {
+	const checkObjective = async (
+		scope: RuntimeTrpcWorkspaceScope,
+		taskId: string,
+		kind: "start" | "input",
+		caller?: RuntimeCaller,
+	) => {
+		const decision = await deps.objectiveAdmission?.check?.(scope.workspaceId, taskId, kind);
+		if (
+			decision?.bound &&
+			caller &&
+			caller.kind !== "user" &&
+			(caller.kind !== "session" || caller.session.workspaceId !== scope.workspaceId)
+		)
+			throw new Error(
+				"Objective-controlled work belongs only to the user and this project's identified sessions; nothing was started or typed.",
+			);
+		return decision;
+	};
 	const buildConfigResponse = async (
 		runtimeConfig: RuntimeConfigState,
 		workspaceScope: RuntimeTrpcWorkspaceScope | null,
@@ -205,6 +228,8 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 		},
 		startTaskSession: async (workspaceScope, input, caller) => {
 			try {
+				const admissionId = input && typeof input === "object" ? deps.launchReceiptIds?.get(input) : undefined;
+				if (input && typeof input === "object") deps.launchReceiptIds?.delete(input);
 				const authorization = input && typeof input === "object" ? deps.launchAuthorization?.get(input) : undefined;
 				if (input && typeof input === "object") deps.launchAuthorization?.delete(input);
 				const body = parseTaskSessionStartRequest(input);
@@ -223,6 +248,16 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 						error: "Sidebar starts belong only to the user or that project's own orchestrator.",
 					};
 				const scopedRuntimeConfig = await deps.loadScopedRuntimeConfig(workspaceScope);
+				const terminalManager = await deps.getScopedTerminalManager(workspaceScope);
+				if (deps.objectiveAdmission) {
+					const decision = await checkObjective(workspaceScope, body.taskId, "start", caller);
+					if (decision && !decision.allowed && !terminalManager.willReuseLiveSession(body.taskId))
+						return {
+							ok: false,
+							summary: null,
+							error: `Objective admission held (${decision.reason}); no session was started or replaced.`,
+						};
+				}
 				const taskCwd = isHomeAgentSessionId(body.taskId)
 					? workspaceScope.workspacePath
 					: await resolveExistingTaskCwdOrEnsure({
@@ -246,7 +281,6 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 				//   own config. There is no session-level persistence for these; if the user changes the model on
 				//   the card or the default, the next session launch (including trash-restore) uses the new values.
 				//   The orchestrator's sidebar session names no model, so it runs on the default.
-				const terminalManager = await deps.getScopedTerminalManager(workspaceScope);
 				// The session manager's own reuse rule: a live session whose turn ended would be handed back unchanged.
 				if (
 					body.requireNewTurn &&
@@ -360,6 +394,7 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 				if (authorization?.aborted)
 					return { ok: false, summary: null, error: "Queued start cancelled before launch." };
 				const summary = await terminalManager.startTaskSession({
+					admissionId,
 					taskId: body.taskId,
 					agentId: resolved.agentId,
 					binary: resolved.binary,
@@ -439,12 +474,22 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 				};
 			}
 		},
-		sendTaskSessionInput: async (workspaceScope, input) => {
+		sendTaskSessionInput: async (workspaceScope, input, caller) => {
 			try {
 				const body = parseTaskSessionInputRequest(input);
+				await checkObjective(workspaceScope, body.taskId, "input", caller);
 				const payloadText = body.appendNewline ? `${body.text}\n` : body.text;
 				const terminalManager = await deps.getScopedTerminalManager(workspaceScope);
-				const summary = terminalManager.writeInput(body.taskId, Buffer.from(payloadText, "utf8"));
+				const write = () => terminalManager.writeInput(body.taskId, Buffer.from(payloadText, "utf8"));
+				const summary = deps.objectiveAdmission
+					? await accountObjectiveRawInput({
+							accounting: deps.objectiveAdmission,
+							workspaceId: workspaceScope.workspaceId,
+							taskId: body.taskId,
+							text: payloadText,
+							write,
+						})
+					: write();
 				if (!summary) {
 					return {
 						ok: false,
@@ -465,9 +510,19 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 				};
 			}
 		},
-		deliverTaskInput: async (workspaceScope, input) => {
+		deliverTaskInput: async (workspaceScope, input, caller) => {
 			try {
 				const body = parseTaskInputDeliveryRequest(input);
+				const decision = await checkObjective(workspaceScope, body.taskId, "input", caller);
+				if (decision && !decision.allowed)
+					return {
+						ok: false,
+						status: "busy",
+						evidence: null,
+						enterAttempts: 0,
+						summary: null,
+						error: `Objective admission held (${decision.reason}); nothing was typed.`,
+					};
 				const terminalManager = await deps.getScopedTerminalManager(workspaceScope);
 				const options = { enter: body.enter, confirm: body.confirm };
 				return deps.typedInputHold

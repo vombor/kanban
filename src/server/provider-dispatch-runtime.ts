@@ -23,6 +23,7 @@ export function createProviderDispatchRuntime(deps: {
 	launch: (intent: ProviderStartIntent, signal: AbortSignal) => Promise<RuntimeTaskSessionStartResponse>;
 	broadcast: (workspaceId: string) => Promise<void>;
 	log: (message: string) => void;
+	objectiveHold?: (workspaceId: string, taskId: string) => Promise<boolean>;
 }) {
 	const store = createPipelineStateStore();
 	const holds = createProviderUsageHolds({ readLegacy: readLegacyProviderUsageHolds });
@@ -83,6 +84,7 @@ export function createProviderDispatchRuntime(deps: {
 		const entry = readQaGateEntry(state?.cards[intent.taskId]);
 		const settings = getWorkspacePipelineSettings(config, intent.workspaceId);
 		const paused =
+			(await deps.objectiveHold?.(intent.workspaceId, intent.taskId)) ||
 			!deps.registry.getTerminalManagerForWorkspace(intent.workspaceId) ||
 			(qa && !intent.explicit && settings.pipeline.paused && !entry?.evidenceOnly);
 		return {

@@ -36,6 +36,13 @@ import { createRoutingPolicy } from "../kits/policy";
 import { type KitCatalog, loadKitCatalog, resolveWorkspaceKit } from "../kits/resolve-kit";
 import { registerTeamKitFeatures } from "../kits/team/features";
 import { readAgentDefaultModels } from "../models/cline-providers";
+import {
+	checksObjectiveReceipt,
+	createObjectiveEvidenceOwner,
+	replayObjectiveReceipts,
+	retainObjectiveReceipt,
+} from "../objectives/objective-receipts";
+import { createObjectiveStore, type ObjectiveStore } from "../objectives/objective-store";
 import { getAgentClearCommand, readAgentSessionSize } from "../terminal/orchestrator-agents";
 import type { PipelineActionResult, PipelineActions } from "./actions";
 import { describePipelineCardStages } from "./card-stage";
@@ -88,6 +95,7 @@ import {
 } from "./worker-protocol";
 
 export interface PipelineWorkerDependencies {
+	objectiveStore?: ObjectiveStore;
 	send: (message: PipelineWorkerMessage) => void;
 	readConfig?: () => Promise<ParsedPipelineConfig>;
 	loadCatalog?: () => Promise<KitCatalog>;
@@ -176,6 +184,8 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 	const readConfig = deps.readConfig ?? (async () => await readPipelineConfig());
 	const loadCatalog = deps.loadCatalog ?? (async () => await loadKitCatalog());
 	const store = deps.store ?? createPipelineStateStore({ log });
+	const objectiveStore = deps.objectiveStore ?? createObjectiveStore();
+	const objectives = createObjectiveEvidenceOwner(objectiveStore);
 	const decisionLog = deps.decisionLog ?? createPipelineDecisionLog();
 	const bus = deps.bus ?? createPipelineEventBus({ log });
 	const preserveWork = deps.preserveWork ?? preserveTaskWork;
@@ -241,10 +251,13 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 		const resolution = resolveWorkspaceKit(parsed.config, request.workspaceId, await loadCatalog());
 		const stored = toStoredChecksResult(result);
 		const { steps } = stored;
+		const objectiveReceipt = checksObjectiveReceipt(result);
 		// The legacy checks-state fields (`snapshot`, `version`, `harness`: the checked snapshot) plus the result.
 		await store.update(request.workspaceId, (state) => {
 			state.cards[request.taskId] = {
-				...state.cards[request.taskId],
+				...(objectiveReceipt
+					? retainObjectiveReceipt(state.cards[request.taskId], objectiveReceipt)
+					: state.cards[request.taskId]),
 				snapshot: request.snapshot,
 				version: CHECKS_VERSION,
 				harness: result.harness,
@@ -252,6 +265,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			};
 			return state;
 		});
+		if (objectiveReceipt) await objectives.record(request.workspaceId, objectiveReceipt);
 		if (result.verdict !== "ERROR") {
 			await appendQaLog(request.workspaceId, formatChecksReport(result));
 		}
@@ -285,6 +299,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 			log,
 		});
 	const submissionStage = createSubmissionStage({
+		objectives,
 		checks,
 		// The watchdog reports an empty-diff Review from this record (stalls.ts, issue #14).
 		recordEmptyDiff: async (workspaceId, taskId, emptyDiff) => {
@@ -355,6 +370,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 	const qaGate =
 		deps.qaGate ??
 		createQaGate({
+			objectives,
 			usageHolds: createProviderUsageHolds({ readLegacy: readLegacyProviderUsageHolds }),
 			actions: gateActions,
 			deliverInput,
@@ -414,6 +430,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 	const reworkStage =
 		deps.reworkStage ??
 		createReworkStage({
+			objectives,
 			actions: gateActions,
 			deliverInput,
 			store,
@@ -551,6 +568,7 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 		workspacePaths.set(workspaceId, snapshot.workspacePath);
 		features.syncWorkspace(workspaceId, resolution.kit);
 		const state = await store.load(workspaceId);
+		await replayObjectiveReceipts(objectiveStore, workspaceId, state);
 
 		const records: PipelineDecisionRecord[] = [];
 		const recoveryMode = recoveryScope.evaluate ? parsed.config.pipeline.recovery.mode : "off";

@@ -119,6 +119,21 @@ describe("machine-wide provider dispatcher (#53)", () => {
 		await restarted.flush();
 		expect(test.launch).toHaveBeenCalledTimes(2);
 	});
+	it("does not let an objective-held earlier intent block unrelated eligible work on the same provider", async () => {
+		const test = setup(),
+			original = test.deps.admission;
+		test.deps.admission = async (intent) => ({
+			...(await original(intent)),
+			until: intent.taskId === "paused" ? Number.MAX_SAFE_INTEGER : null,
+		});
+		expect((await test.dispatcher.submit(test.intent("paused"))).queued).toBe(true);
+		expect((await test.dispatcher.submit(test.intent("eligible", "bar"))).queued).not.toBe(true);
+		expect(test.launch).toHaveBeenCalledExactlyOnceWith(
+			expect.objectContaining({ taskId: "eligible" }),
+			expect.any(AbortSignal),
+		);
+		expect((await test.dispatcher.pending()).map((row) => row.taskId)).toEqual(["paused"]);
+	});
 	it("drops changed/Done intents and cancels exactly the requested queue without launching", async () => {
 		const test = setup();
 		test.hold(10_000);

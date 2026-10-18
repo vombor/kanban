@@ -87,7 +87,9 @@ export function createProviderDispatcher(deps: ProviderDispatcherDependencies) {
 		if (closed || (admission.until !== null && admission.until > now())) return null;
 		for (const old of earlier) {
 			if (keyOf(old) === keyOf(intent) || controllers.has(keyOf(old))) continue;
-			const previous = resourcesOf((await deps.admission(old)).resources, limits);
+			const oldAdmission = await deps.admission(old);
+			if (oldAdmission.until !== null && oldAdmission.until > now()) continue;
+			const previous = resourcesOf(oldAdmission.resources, limits);
 			if (previous.some((resource) => resources.includes(resource))) return null;
 		}
 		const active = [...(await deps.activity()), ...reserved.values()];

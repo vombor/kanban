@@ -1,14 +1,13 @@
 import { ChevronDown, ChevronRight, Command, CornerDownLeft, MessageSquare, X } from "lucide-react";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
+import { useDiffViewport } from "@/components/detail-panels/use-diff-viewport";
 import {
 	buildDisplayItems,
-	buildHighlightedLineMap,
 	buildUnifiedDiffRows,
 	CollapsedBlockControls,
 	DiffRowText,
-	getHighlightedLineHtml,
 	resolvePrismGrammar,
 	resolvePrismLanguage,
 	truncatePathMiddle,
@@ -42,6 +41,56 @@ export interface DiffLineComment {
 }
 
 export type DiffViewMode = "unified" | "split";
+
+interface DiffCommentActions {
+	onAddComment: (filePath: string, lineNumber: number, lineText: string, variant: DiffLineComment["variant"]) => void;
+	onUpdateComment: (filePath: string, lineNumber: number, variant: DiffLineComment["variant"], text: string) => void;
+	onDeleteComment: (filePath: string, lineNumber: number, variant: DiffLineComment["variant"]) => void;
+}
+
+// Keep per-file diff computation independent of selection/viewport updates and
+// changes to other files. Callback binding lives here, not in the file-list loop.
+const FileDiffEntry = memo(function FileDiffEntry({
+	path,
+	oldText,
+	newText,
+	comments,
+	viewMode,
+	onAddComment,
+	onUpdateComment,
+	onDeleteComment,
+}: DiffCommentActions & {
+	path: string;
+	oldText: string | null;
+	newText: string;
+	comments: Map<string, DiffLineComment>;
+	viewMode: DiffViewMode;
+}): React.ReactElement {
+	const add = useCallback(
+		(line: number, text: string, variant: DiffLineComment["variant"]) => onAddComment(path, line, text, variant),
+		[onAddComment, path],
+	);
+	const update = useCallback(
+		(line: number, variant: DiffLineComment["variant"], text: string) => onUpdateComment(path, line, variant, text),
+		[onUpdateComment, path],
+	);
+	const remove = useCallback(
+		(line: number, variant: DiffLineComment["variant"]) => onDeleteComment(path, line, variant),
+		[onDeleteComment, path],
+	);
+	const Diff = viewMode === "split" ? SplitDiff : UnifiedDiff;
+	return (
+		<Diff
+			path={path}
+			oldText={oldText}
+			newText={newText}
+			comments={comments}
+			onAddComment={add}
+			onUpdateComment={update}
+			onDeleteComment={remove}
+		/>
+	);
+});
 
 function commentKey(filePath: string, lineNumber: number, variant: DiffLineComment["variant"]): string {
 	return `${filePath}:${variant}:${lineNumber}`;
@@ -140,14 +189,6 @@ function UnifiedDiff({
 	const { expandedBlocks, expandTop, expandBottom, expandAll } = useIncrementalExpand();
 	const prismLanguage = useMemo(() => resolvePrismLanguage(path), [path]);
 	const prismGrammar = useMemo(() => resolvePrismGrammar(prismLanguage), [prismLanguage]);
-	const highlightedOldByLine = useMemo(
-		() => buildHighlightedLineMap(oldText, prismGrammar, prismLanguage),
-		[oldText, prismGrammar, prismLanguage],
-	);
-	const highlightedNewByLine = useMemo(
-		() => buildHighlightedLineMap(newText, prismGrammar, prismLanguage),
-		[newText, prismGrammar, prismLanguage],
-	);
 	const rows = useMemo(() => buildUnifiedDiffRows(oldText, newText), [oldText, newText]);
 	const displayItems = useMemo(() => buildDisplayItems(rows, expandedBlocks), [expandedBlocks, rows]);
 
@@ -163,12 +204,6 @@ function UnifiedDiff({
 					: "kb-diff-row kb-diff-row-context";
 		const rowClass = hasComment ? `${baseClass} kb-diff-row-commented` : baseClass;
 		const canClickRow = row.lineNumber != null && !hasComment;
-		const highlightedLineHtml =
-			row.lineNumber == null
-				? null
-				: row.variant === "removed"
-					? (highlightedOldByLine.get(row.lineNumber) ?? null)
-					: (highlightedNewByLine.get(row.lineNumber) ?? null);
 
 		const handleRowClick =
 			row.lineNumber != null && !hasComment
@@ -204,12 +239,7 @@ function UnifiedDiff({
 							</span>
 						) : null}
 					</span>
-					<DiffRowText
-						row={row}
-						highlightedLineHtml={highlightedLineHtml}
-						grammar={prismGrammar}
-						language={prismLanguage}
-					/>
+					<DiffRowText row={row} grammar={prismGrammar} language={prismLanguage} />
 				</div>
 				{existingComment ? (
 					<InlineComment
@@ -368,7 +398,6 @@ function SplitDiff({
 				? baseClass
 				: `${baseClass} kb-diff-row-noncommentable`;
 		const canClickRow = canCommentOnSide && !hasComment;
-		const highlightedLineHtml = getHighlightedLineHtml(row.text, prismGrammar, prismLanguage);
 
 		return (
 			<div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
@@ -407,12 +436,7 @@ function SplitDiff({
 							</span>
 						) : null}
 					</span>
-					<DiffRowText
-						row={row}
-						highlightedLineHtml={highlightedLineHtml}
-						grammar={prismGrammar}
-						language={prismLanguage}
-					/>
+					<DiffRowText row={row} grammar={prismGrammar} language={prismLanguage} />
 				</div>
 				{existingComment ? (
 					<InlineComment
@@ -502,7 +526,7 @@ function SplitDiff({
 	);
 }
 
-export function DiffViewerPanel({
+export const DiffViewerPanel = memo(function DiffViewerPanel({
 	workspaceFiles,
 	selectedPath,
 	onSelectedPathChange,
@@ -511,6 +535,7 @@ export function DiffViewerPanel({
 	comments,
 	onCommentsChange,
 	viewMode = "unified",
+	isActive = true,
 }: {
 	workspaceFiles: RuntimeWorkspaceFileChange[] | null;
 	selectedPath: string | null;
@@ -520,7 +545,14 @@ export function DiffViewerPanel({
 	comments: Map<string, DiffLineComment>;
 	onCommentsChange: (comments: Map<string, DiffLineComment>) => void;
 	viewMode?: DiffViewMode;
+	isActive?: boolean;
 }): React.ReactElement {
+	// The mobile Files tab can still refresh its stats while this panel is hidden.
+	// Freeze the last visible payload so those polls do no hidden diff computation;
+	// keep mounted state/scroll/comments and catch up when Diff is shown again.
+	const lastActiveFilesRef = useRef(isActive ? workspaceFiles : null);
+	if (isActive) lastActiveFilesRef.current = workspaceFiles;
+	const diffFiles = lastActiveFilesRef.current;
 	const [expandedPaths, setExpandedPaths] = useState<Record<string, boolean>>({});
 	const scrollContainerRef = useRef<HTMLDivElement>(null);
 	const sectionElementsRef = useRef<Record<string, HTMLElement | null>>({});
@@ -530,21 +562,24 @@ export function DiffViewerPanel({
 	const programmaticScrollClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 	const diffEntries = useMemo(() => {
-		return (workspaceFiles ?? []).map((file, index) => ({
-			id: `workspace-${file.path}-${index}`,
-			path: file.path,
-			isBinary: isBinaryFilePath(file.path),
-			oldText: file.oldText,
-			newText: file.newText ?? "",
-			additions: file.additions,
-			deletions: file.deletions,
-			timestamp: 0,
-			toolTitle: `${file.status} (${file.additions}+/${file.deletions}-)`,
-		}));
-	}, [workspaceFiles]);
+		const occurrences = new Map<string, number>();
+		return (diffFiles ?? []).map((file) => {
+			const occurrence = occurrences.get(file.path) ?? 0;
+			occurrences.set(file.path, occurrence + 1);
+			return {
+				id: `workspace-${file.path}-${occurrence}`,
+				path: file.path,
+				isBinary: isBinaryFilePath(file.path),
+				oldText: file.oldText,
+				newText: file.newText ?? "",
+				additions: file.additions,
+				deletions: file.deletions,
+			};
+		});
+	}, [diffFiles]);
 
 	const groupedByPath = useMemo((): FileDiffGroup[] => {
-		const sourcePaths = workspaceFiles?.map((file) => file.path) ?? [];
+		const sourcePaths = diffFiles?.map((file) => file.path) ?? [];
 		const orderedPaths = flattenFilePathsForDisplay(sourcePaths);
 		const orderIndex = new Map(orderedPaths.map((path, index) => [path, index]));
 		const map = new Map<string, FileDiffGroup>();
@@ -578,7 +613,9 @@ export function DiffViewerPanel({
 			}
 			return a.path.localeCompare(b.path);
 		});
-	}, [diffEntries, workspaceFiles]);
+	}, [diffEntries, diffFiles]);
+	const paths = useMemo(() => groupedByPath.map((group) => group.path), [groupedByPath]);
+	const readyPaths = useDiffViewport(scrollContainerRef, paths, isActive, selectedPath);
 
 	const resolveActivePath = useCallback((): string | null => {
 		const container = scrollContainerRef.current;
@@ -586,21 +623,18 @@ export function DiffViewerPanel({
 			return null;
 		}
 
-		const probeOffset = container.scrollTop + 80;
-		let activePath = groupedByPath[0]?.path ?? null;
-		for (const group of groupedByPath) {
-			const section = sectionElementsRef.current[group.path];
-			if (!section) {
-				continue;
-			}
-			if (getSectionTopWithinScrollContainer(container, section) <= probeOffset) {
-				activePath = group.path;
-				continue;
-			}
-			break;
+		// Section anchors are ordered. Probe with O(log files) reads, not a layout
+		// walk of every preceding file on every scroll event.
+		const probeTop = container.getBoundingClientRect().top + container.clientTop + 80;
+		let low = 0;
+		let high = groupedByPath.length - 1;
+		while (low < high) {
+			const middle = Math.ceil((low + high) / 2);
+			const section = sectionElementsRef.current[groupedByPath[middle]!.path];
+			if (section && section.getBoundingClientRect().top <= probeTop) low = middle;
+			else high = middle - 1;
 		}
-
-		return activePath;
+		return groupedByPath[low]?.path ?? null;
 	}, [groupedByPath]);
 
 	const handleDiffScroll = useCallback(() => {
@@ -651,7 +685,7 @@ export function DiffViewerPanel({
 	}, []);
 
 	useEffect(() => {
-		if (!selectedPath) {
+		if (!selectedPath || !isActive) {
 			return;
 		}
 
@@ -662,7 +696,7 @@ export function DiffViewerPanel({
 		}
 		scrollSyncSelectionRef.current = null;
 		scrollToPath(selectedPath);
-	}, [scrollToPath, selectedPath]);
+	}, [isActive, scrollToPath, selectedPath]);
 
 	const handleAddComment = useCallback(
 		(filePath: string, lineNumber: number, lineText: string, variant: "added" | "removed" | "context") => {
@@ -765,7 +799,7 @@ export function DiffViewerPanel({
 			handleAddComments();
 		},
 		{
-			enabled: Boolean(onAddToTerminal),
+			enabled: isActive && Boolean(onAddToTerminal),
 			enableOnFormTags: true,
 			enableOnContentEditable: true,
 			ignoreEventWhen: (event) => event.defaultPrevented,
@@ -784,7 +818,7 @@ export function DiffViewerPanel({
 			handleSendComments();
 		},
 		{
-			enabled: Boolean(onSendToTerminal),
+			enabled: isActive && Boolean(onSendToTerminal),
 			enableOnFormTags: true,
 			enableOnContentEditable: true,
 			ignoreEventWhen: (event) => event.defaultPrevented,
@@ -841,6 +875,7 @@ export function DiffViewerPanel({
 							return (
 								<section
 									key={group.path}
+									data-diff-path={group.path}
 									ref={(node) => {
 										sectionElementsRef.current[group.path] = node;
 									}}
@@ -882,49 +917,34 @@ export function DiffViewerPanel({
 											) : null}
 										</span>
 									</button>
-									{isExpanded ? (
+									{isExpanded && (readyPaths.has(group.path) || (isActive && selectedPath === group.path)) ? (
 										<div
 											className="rounded-b-md border-x border-b border-border bg-surface-1"
 											style={{ overflow: "hidden" }}
 										>
 											{group.entries.map((entry) => (
 												<div key={entry.id} className="kb-diff-entry">
-													{entry.isBinary ? null : viewMode === "split" ? (
-														<SplitDiff
+													{entry.isBinary ? null : (
+														<FileDiffEntry
 															path={group.path}
 															oldText={entry.oldText}
 															newText={entry.newText}
 															comments={comments}
-															onAddComment={(lineNumber, lineText, variant) =>
-																handleAddComment(group.path, lineNumber, lineText, variant)
-															}
-															onUpdateComment={(lineNumber, variant, text) =>
-																handleUpdateComment(group.path, lineNumber, variant, text)
-															}
-															onDeleteComment={(lineNumber, variant) =>
-																handleDeleteComment(group.path, lineNumber, variant)
-															}
-														/>
-													) : (
-														<UnifiedDiff
-															path={group.path}
-															oldText={entry.oldText}
-															newText={entry.newText}
-															comments={comments}
-															onAddComment={(lineNumber, lineText, variant) =>
-																handleAddComment(group.path, lineNumber, lineText, variant)
-															}
-															onUpdateComment={(lineNumber, variant, text) =>
-																handleUpdateComment(group.path, lineNumber, variant, text)
-															}
-															onDeleteComment={(lineNumber, variant) =>
-																handleDeleteComment(group.path, lineNumber, variant)
-															}
+															viewMode={viewMode}
+															onAddComment={handleAddComment}
+															onUpdateComment={handleUpdateComment}
+															onDeleteComment={handleDeleteComment}
 														/>
 													)}
 												</div>
 											))}
 										</div>
+									) : isExpanded ? (
+										<div
+											role="status"
+											aria-label={`Diff for ${group.path} loads when visible`}
+											className="h-60 rounded-b-md border-x border-b border-border bg-surface-1"
+										/>
 									) : null}
 								</section>
 							);
@@ -997,4 +1017,4 @@ export function DiffViewerPanel({
 			)}
 		</div>
 	);
-}
+});

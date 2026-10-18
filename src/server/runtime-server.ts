@@ -14,8 +14,9 @@ import type {
 	RuntimeUpdateStatusResponse,
 	RuntimeWorkspaceStateResponse,
 } from "../core/api-contract";
+import { resolveCardRole } from "../core/card-role";
 import { getDetailTerminalTaskId } from "../core/detail-terminal-session";
-import { isHomeAgentSessionIdForWorkspace } from "../core/home-agent-session";
+import { isHomeAgentSessionId, isHomeAgentSessionIdForWorkspace } from "../core/home-agent-session";
 import { providerStartFingerprint } from "../core/provider-start-intent";
 import {
 	buildKanbanRuntimeUrl,
@@ -35,9 +36,13 @@ import { createKnowledgeApi } from "../knowledge/knowledge-api";
 import { createObsidianConnectorApi } from "../knowledge/obsidian/connector-api";
 import { createAgentOptionsLoader } from "../models/agent-options";
 import { readAgentDefaultModels } from "../models/cline-providers";
+import { createObjectiveApi } from "../objectives/objective-api";
+import { createObjectiveEvidenceOwner } from "../objectives/objective-receipts";
+import { createObjectiveStore } from "../objectives/objective-store";
 import type { PipelineActionRequest, PipelineActionResult } from "../pipeline/actions";
 import type { PipelineEventMap } from "../pipeline/events";
 import { preserveTaskWork } from "../pipeline/hold";
+import { createPipelineStateStore } from "../pipeline/pipeline-state";
 import type { WatchdogActionRequest } from "../pipeline/watchdog/actions";
 import { createProjectSecretsApi } from "../secrets/project-secrets-api";
 import {
@@ -62,10 +67,12 @@ import {
 	mutateWorkspaceState,
 } from "../state/workspace-state";
 import { agentReadsClineModelsFile } from "../terminal/agent-session-adapters";
+import { createAgentTokenUsageReader } from "../terminal/agent-token-usage";
 import { KANBAN_CLINE_HUB_ABORT_REASONS } from "../terminal/cline-hub-abort-reason";
 import type { ClineHubRunCanceller } from "../terminal/cline-hub-runs";
 import { createClineTurnMonitor } from "../terminal/cline-turn-monitor";
 import { deliverTaskInput } from "../terminal/deliver-task-input";
+import { getAgentClearCommand } from "../terminal/orchestrator-agents";
 import { DEFAULT_REVIEW_SETTLE_MS } from "../terminal/review-settle";
 import type { TerminalSessionManager } from "../terminal/session-manager";
 import { createTerminalWebSocketBridge } from "../terminal/ws-server";
@@ -96,6 +103,11 @@ import { chooseBrowserOrigin, createBrowserOriginTracker, createBrowserUpgradeRe
 import { createClineLemonadeContextSyncMonitor } from "./cline-lemonade-context-sync-monitor";
 import { createGitHubAppRequestHandler } from "./github-app-route";
 import { createModelListsRequestHandler } from "./model-lists-route";
+import { accountObjectiveInput } from "./objective-input-accounting";
+import { objectiveLineageEligibility } from "./objective-lineage-eligibility";
+import { createObjectiveReconciler } from "./objective-reconciler";
+import { accountObjectiveSessionStart } from "./objective-session-admission";
+import { createObjectiveUsageCollector } from "./objective-usage-collector";
 import { createOrchestratorInbox } from "./orchestrator-inbox";
 import { createOrphanProcessSweeper } from "./orphan-process-sweeper";
 import { createPipelineActionRunner } from "./pipeline-actions";
@@ -305,7 +317,11 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 	});
 	// The board cards' token counts: one loader per server, so its session-file cache outlives a request (the
 	// workspace API is built per request), shared by workspace.getTaskTokenUsage and the live push.
-	const loadTaskTokenUsage = createTaskTokenUsageLoader();
+	const agentUsageReader = createAgentTokenUsageReader();
+	const objectiveServerStartedAt = Date.now();
+	const objectiveAdmissionAvailable = typeof deps.workspaceRegistry.setTaskAdmission === "function";
+	const objectiveStore = createObjectiveStore({ admissionScopeAvailable: objectiveAdmissionAvailable });
+	const loadTaskTokenUsage = createTaskTokenUsageLoader({ reader: agentUsageReader });
 	const taskTokenUsageMonitor = createTaskTokenUsageMonitor({
 		loadUsage: async (workspaceId) => {
 			const workspacePath = deps.workspaceRegistry.getWorkspacePathById(workspaceId);
@@ -408,6 +424,37 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		getTerminal: (workspaceId) => deps.workspaceRegistry.getTerminalManagerForWorkspace(workspaceId) ?? null,
 		deliver: async (terminal, taskId, text, options) => {
 			const summary = terminal.getSummary(taskId);
+			const ownerWorkspace = deps.workspaceRegistry
+				.listManagedWorkspaces()
+				.find((workspace) => workspace.terminalManager === terminal);
+			if (ownerWorkspace) {
+				const gate = await objectiveStore
+					.check(ownerWorkspace.workspaceId, taskId, "input")
+					.catch(() => ({ bound: true, allowed: false, reason: "enforcement_unavailable" }));
+				if (gate && !gate.allowed)
+					return {
+						ok: false,
+						status: "busy",
+						evidence: null,
+						enterAttempts: 0,
+						summary,
+						error: `Objective admission held (${gate.reason}); nothing was typed.`,
+					};
+			}
+			const modelInput =
+				summary &&
+				(options?.enter ?? true) &&
+				(!summary.agentId || text.trim() !== getAgentClearCommand(summary.agentId));
+			const delivered = async () => await deliverTaskInput(terminal, taskId, text, options);
+			const accountDelivery = async () =>
+				modelInput && ownerWorkspace
+					? await accountObjectiveInput({
+							accounting: objectiveStore,
+							workspaceId: ownerWorkspace.workspaceId,
+							taskId,
+							deliver: delivered,
+						})
+					: await delivered();
 			if (
 				!summary ||
 				(summary.state === "running" &&
@@ -415,7 +462,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 				options?.enter === false ||
 				terminal.hasTypedInputSinceEnter(taskId)
 			)
-				return await deliverTaskInput(terminal, taskId, text, options);
+				return terminal.hasTypedInputSinceEnter(taskId) ? await delivered() : await accountDelivery();
 			const workspace = deps.workspaceRegistry
 				.listManagedWorkspaces()
 				.find((workspace) => workspace.terminalManager === terminal);
@@ -447,7 +494,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 				};
 			let typed = false;
 			try {
-				const result = await deliverTaskInput(terminal, taskId, text, options);
+				const result = await accountDelivery();
 				typed = !["busy", "user_typing", "no_session", "error", "aborted"].includes(result.status);
 				if (typed && (options?.enter ?? true))
 					workspace.terminalManager.recordDispatchProvider(taskId, decision.provider, true);
@@ -472,19 +519,27 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 	});
 	orchestratorInbox.start();
 	const launchAuthorization = new WeakMap<object, AbortSignal>();
+	const launchReceiptIds = new WeakMap<object, string>();
 	let runtimeApi: RuntimeTrpcContext["runtimeApi"];
 	const providerDispatcher = createProviderDispatchRuntime({
 		registry: deps.workspaceRegistry,
+		objectiveHold: async (workspaceId, taskId) => {
+			try {
+				return !(await objectiveStore.check(workspaceId, taskId, "start")).allowed;
+			} catch {
+				return true;
+			} // Unreadable own state holds this project, not every other project's provider queue.
+		},
 		launch: async (intent, signal) => {
 			const repo = deps.workspaceRegistry.getWorkspacePathById(intent.workspaceId);
 			if (!repo)
 				return { ok: false, summary: null, error: "Queued project is unavailable; no session was launched." };
 			const input = { ...intent.body };
 			launchAuthorization.set(input, signal);
-			const result = await runtimeApi.startTaskSession(
-				{ workspaceId: intent.workspaceId, workspacePath: repo },
-				input,
-			);
+			if (intent.id) launchReceiptIds.set(input, intent.id);
+			const start = async () =>
+				await runtimeApi.startTaskSession({ workspaceId: intent.workspaceId, workspacePath: repo }, input);
+			const result = await start();
 			if (signal.aborted && result.summary)
 				await runtimeApi.stopTaskSession(
 					{ workspaceId: intent.workspaceId, workspacePath: repo },
@@ -499,6 +554,8 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		log: deps.warn,
 	});
 	runtimeApi = createRuntimeApi({
+		objectiveAdmission: objectiveStore,
+		launchReceiptIds,
 		providerDispatcher,
 		launchAuthorization,
 		getAgentSettingsOptions: createAgentOptionsLoader(),
@@ -553,6 +610,40 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 	// A session's credential stops working when its process ends (resolveCaller checks that too); this drops them.
 	const credentialSweep = setInterval(() => void isolation.pruneCredentials().catch(() => undefined), 10_000);
 	credentialSweep.unref();
+	deps.workspaceRegistry.setTaskAdmission?.(
+		async (workspaceId, request, start) =>
+			await accountObjectiveSessionStart({
+				accounting: objectiveStore,
+				workspaceId,
+				taskId: request.taskId,
+				requestId: request.admissionId,
+				start,
+			}),
+		async (workspaceId, request) => {
+			const repo = deps.workspaceRegistry.getWorkspacePathById(workspaceId);
+			if (!repo) throw new Error("Automatic restart has no registered project; nothing was started.");
+			const board = await loadWorkspaceBoardById(workspaceId),
+				column = board.columns.find((column) => column.cards.some((card) => card.id === request.taskId));
+			if (column?.id === "trash")
+				throw new Error("Automatic restart card is Done; no worktree or session was restarted.");
+			const card = column?.cards.find((card) => card.id === request.taskId);
+			if (!card && !isHomeAgentSessionId(request.taskId))
+				throw new Error("Automatic restart card is absent; nothing was started.");
+			const result = await runtimeApi.startTaskSession(
+				{ workspaceId, workspacePath: repo },
+				{
+					taskId: request.taskId,
+					prompt: card?.prompt ?? request.prompt,
+					baseRef: card?.baseRef ?? "HEAD",
+					agentId: card?.agentId ?? request.agentId,
+					agentSettings: card?.agentSettings ?? request.agentSettings,
+					images: card?.images,
+					resumeFromTrash: request.resumeFromTrash,
+				},
+			);
+			if (!result.ok) throw new Error(result.error ?? "Automatic restart was refused by ordinary admission.");
+		},
+	);
 	const isolationApi = createIsolationApi({
 		service: isolation,
 		listEntries: listWorkspaceIndexEntries,
@@ -633,6 +724,62 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 	const projectSecretsApi = createProjectSecretsApi();
 	const obsidianConnectorApi = createObsidianConnectorApi();
 	const knowledgeApi = createKnowledgeApi();
+	const objectiveReceiptStore = createPipelineStateStore();
+	const objectiveReconciler = createObjectiveReconciler({
+		serverStartedAt: objectiveServerStartedAt,
+		collectUsage: createObjectiveUsageCollector({
+			store: objectiveStore,
+			reader: agentUsageReader,
+			workspacePath: deps.workspaceRegistry.getWorkspacePathById,
+		}),
+		store: objectiveStore,
+		pipeline: objectiveReceiptStore,
+		reviewSettleMs: deps.reviewSettleMs,
+		listWorkspaces: () =>
+			deps.workspaceRegistry.listManagedWorkspaces().map((workspace) => ({
+				workspaceId: workspace.workspaceId,
+				summaries: workspace.terminalManager.listSummaries(),
+				isLive: (taskId: string) => workspace.terminalManager.hasLiveProcess(taskId),
+			})),
+		warn: deps.warn,
+	});
+	const unsubscribeObjectiveActivity = deps.runtimeStateHub.onWorkspaceActivity((activity) => {
+		if (activity.summary)
+			objectiveReconciler.noteActivity(
+				activity.workspaceId,
+				activity.summary,
+				deps.workspaceRegistry
+					.getTerminalManagerForWorkspace(activity.workspaceId)
+					?.hasLiveProcess(activity.summary.taskId) ?? false,
+			);
+	});
+	const objectiveApi = createObjectiveApi({
+		admissionScopeAvailable: objectiveAdmissionAvailable,
+		taskEligibility: async (workspaceId) => {
+			const state = await loadWorkspaceStateById(workspaceId);
+			if (!state) throw new Error("Objective project is unavailable.");
+			const sessions = Object.fromEntries(
+				(deps.workspaceRegistry.getTerminalManagerForWorkspace(workspaceId)?.listSummaries() ?? []).map(
+					(summary) => [summary.taskId, summary],
+				),
+			);
+			const pipeline = await objectiveReceiptStore.peek(workspaceId);
+			return objectiveLineageEligibility({
+				workspaceId,
+				board: state.board,
+				sessions: { ...state.sessions, ...sessions },
+				pipelineTaskIds: Object.keys(pipeline?.cards ?? {}),
+			});
+		},
+		store: objectiveStore,
+		recheck: async (workspaceId) => await objectiveReconciler.recheck(workspaceId),
+		taskIds: async (workspaceId) =>
+			new Set(
+				(await loadWorkspaceBoardById(workspaceId)).columns.flatMap((column) =>
+					column.cards.filter((card) => resolveCardRole(card) === "dev").map((card) => card.id),
+				),
+			),
+	});
 	// Shortcut runs that ask for a port, and the proxy the browser reaches those ports through (shortcut-ports.ts).
 	const shortcutPorts = createShortcutPortRegistry();
 	const handleShortcutPortProxyRequest = createShortcutPortProxyHandler({
@@ -705,6 +852,8 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			await deps.runtimeStateHub.broadcastRuntimeWorkspaceStateUpdated(scope.workspaceId, scope.workspacePath),
 		// Landing mode `qa`: land before Done, or ask "land or discard?". Passes every other workspace through.
 		doneGate: createTaskLandingGate({
+			objectives: createObjectiveEvidenceOwner(objectiveStore),
+			objectiveReceiptStore,
 			stopProcessesUnder: async (directories) => {
 				const prepared = await processReaper.prepareWorktreeReap({
 					taskId: "post-land",
@@ -721,6 +870,12 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 	});
 	const handleTrashTaskRequest = createTrashTaskRequestHandler(taskTrashWorkflow);
 	const runPipelineAction = createPipelineActionRunner({
+		canAdmitTask: async (scope, taskId) => {
+			const decision = await objectiveStore.check(scope.workspaceId, taskId, "start");
+			return decision.allowed
+				? null
+				: `Objective admission held (${decision.reason}); its existing process was not stopped.`;
+		},
 		mutateWorkspaceState,
 		ensureTaskWorktree: async (scope, input) =>
 			await ensureTaskWorktreeIfDoesntExist({
@@ -797,6 +952,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			projectSecretsApi,
 			obsidianConnectorApi,
 			knowledgeApi,
+			objectiveApi,
 			getPipelineCardStages: deps.runtimeStateHub.getPipelineCardStages,
 			shortcutsApi,
 			githubApi,
@@ -1110,6 +1266,8 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		runPipelineAction,
 		isolation,
 		close: async () => {
+			unsubscribeObjectiveActivity();
+			await objectiveReconciler.close();
 			providerDispatcher.close();
 			messageNotices.close();
 			typedInputHold.close();

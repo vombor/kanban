@@ -442,6 +442,7 @@ export function CardDetailView({
 		true,
 	);
 	const taskWorkspaceStateVersion = useTaskWorkspaceStateVersionValue(selection.card.id);
+	const isDiffDataActive = !isMobile || mobileTab !== "chat";
 	const lastTurnViewKey =
 		diffMode === "last_turn"
 			? [
@@ -459,6 +460,7 @@ export function CardDetailView({
 		isDocumentVisible && !gitHistoryPanel && selection.column.id !== "trash" ? DETAIL_DIFF_POLL_INTERVAL_MS : null,
 		lastTurnViewKey,
 		true,
+		isDiffDataActive,
 	);
 	const runtimeFiles = workspaceChanges?.files ?? null;
 	const isWorkspaceChangesPending = isRuntimeAvailable && workspaceChanges === null;
@@ -659,6 +661,7 @@ export function CardDetailView({
 									<WorkspaceChangesEmptyPanel title={emptyDiffTitle} />
 								) : (
 									<DiffViewerPanel
+										isActive={mobileTab === "diff"}
 										workspaceFiles={isRuntimeAvailable ? runtimeFiles : null}
 										selectedPath={selectedPath}
 										onSelectedPathChange={setSelectedPath}

@@ -45,6 +45,7 @@ function createWorkspaceChangesResponse(path: string): RuntimeWorkspaceChangesRe
 }
 
 interface HookSnapshot {
+	changes: RuntimeWorkspaceChangesResponse | null;
 	paths: string[];
 	isLoading: boolean;
 	isRuntimeAvailable: boolean;
@@ -54,11 +55,15 @@ function HookHarness({
 	taskId,
 	viewKey = null,
 	clearOnViewTransition = true,
+	active = true,
+	stateVersion = 0,
 	onSnapshot,
 }: {
 	taskId: string;
 	viewKey?: string | null;
 	clearOnViewTransition?: boolean;
+	active?: boolean;
+	stateVersion?: number;
 	onSnapshot: (snapshot: HookSnapshot) => void;
 }): null {
 	const workspaceChanges = useRuntimeWorkspaceChanges(
@@ -66,14 +71,16 @@ function HookHarness({
 		"project-1",
 		"main",
 		"working_copy",
-		0,
+		stateVersion,
 		null,
 		viewKey,
 		clearOnViewTransition,
+		active,
 	);
 
 	useEffect(() => {
 		onSnapshot({
+			changes: workspaceChanges.changes,
 			paths: workspaceChanges.changes?.files.map((file) => file.path) ?? [],
 			isLoading: workspaceChanges.isLoading,
 			isRuntimeAvailable: workspaceChanges.isRuntimeAvailable,
@@ -277,5 +284,96 @@ describe("useRuntimeWorkspaceChanges", () => {
 			isLoading: false,
 			isRuntimeAvailable: true,
 		});
+	});
+
+	it("retains files on unchanged polls but never shares identities across request scopes", async () => {
+		const response = createWorkspaceChangesResponse("same.ts");
+		getChangesQueryMock.mockImplementation(async () => ({
+			...response,
+			generatedAt: Date.now(),
+			files: response.files.map((file) => ({ ...file })),
+		}));
+		const snapshots: HookSnapshot[] = [];
+		const onSnapshot = (snapshot: HookSnapshot) => snapshots.push(snapshot);
+		await act(async () => {
+			root.render(<HookHarness taskId="a" onSnapshot={onSnapshot} />);
+		});
+		const initial = snapshots.at(-1)!.changes!;
+		await act(async () => {
+			root.render(<HookHarness taskId="a" stateVersion={1} onSnapshot={onSnapshot} />);
+		});
+		expect(snapshots.at(-1)!.changes!.files).toBe(initial.files);
+		await act(async () => {
+			root.render(<HookHarness taskId="b" stateVersion={1} onSnapshot={onSnapshot} />);
+		});
+		expect(snapshots.at(-1)!.changes!.files).not.toBe(initial.files);
+	});
+
+	it("suspends hidden queries and does not show the old task when resumed after a hidden switch", async () => {
+		getChangesQueryMock.mockResolvedValueOnce(createWorkspaceChangesResponse("a.ts"));
+		const snapshots: HookSnapshot[] = [];
+		const onSnapshot = (snapshot: HookSnapshot) => snapshots.push(snapshot);
+		await act(async () => {
+			root.render(<HookHarness taskId="a" active={false} onSnapshot={onSnapshot} />);
+		});
+		expect(getChangesQueryMock).not.toHaveBeenCalled();
+		await act(async () => {
+			root.render(<HookHarness taskId="a" onSnapshot={onSnapshot} />);
+		});
+		expect(snapshots.at(-1)!.paths).toEqual(["a.ts"]);
+		await act(async () => {
+			root.render(<HookHarness taskId="b" active={false} onSnapshot={onSnapshot} />);
+		});
+		expect(getChangesQueryMock).toHaveBeenCalledTimes(1);
+		const deferred = createDeferred<RuntimeWorkspaceChangesResponse>();
+		getChangesQueryMock.mockImplementationOnce(() => deferred.promise);
+		await act(async () => {
+			root.render(<HookHarness taskId="b" onSnapshot={onSnapshot} />);
+		});
+		expect(snapshots.at(-1)!.paths).toEqual([]);
+		await act(async () => {
+			deferred.resolve(createWorkspaceChangesResponse("b.ts"));
+			await deferred.promise;
+		});
+		expect(snapshots.at(-1)!.paths).toEqual(["b.ts"]);
+	});
+
+	it("does not let a late concurrent poll replace the newest identity baseline", async () => {
+		const initial = createWorkspaceChangesResponse("initial.ts");
+		const older = createDeferred<RuntimeWorkspaceChangesResponse>();
+		const newer = createDeferred<RuntimeWorkspaceChangesResponse>();
+		const newest = createWorkspaceChangesResponse("newest.ts");
+		getChangesQueryMock
+			.mockResolvedValueOnce(initial)
+			.mockImplementationOnce(() => older.promise)
+			.mockImplementationOnce(() => newer.promise)
+			.mockResolvedValueOnce({ ...newest, files: newest.files.map((file) => ({ ...file })) });
+		const snapshots: HookSnapshot[] = [];
+		const onSnapshot = (snapshot: HookSnapshot) => snapshots.push(snapshot);
+		const render = (version: number) =>
+			root.render(<HookHarness taskId="a" stateVersion={version} onSnapshot={onSnapshot} />);
+		await act(async () => {
+			render(0);
+		});
+		await act(async () => {
+			render(1);
+		});
+		await act(async () => {
+			render(2);
+		});
+		await act(async () => {
+			newer.resolve(newest);
+			await newer.promise;
+		});
+		const files = snapshots.at(-1)!.changes!.files;
+		await act(async () => {
+			older.resolve(createWorkspaceChangesResponse("stale.ts"));
+			await older.promise;
+		});
+		expect(snapshots.at(-1)!.changes!.files).toBe(files);
+		await act(async () => {
+			render(3);
+		});
+		expect(snapshots.at(-1)!.changes!.files).toBe(files);
 	});
 });

@@ -1,6 +1,5 @@
 import * as esbuild from "esbuild";
 import { execFile } from "node:child_process";
-import { chmod, copyFile, mkdir } from "node:fs/promises";
 import { promisify } from "node:util";
 
 /**
@@ -55,17 +54,8 @@ await Promise.all([
 		entryPoints: ["src/index.ts"],
 		outfile: "dist/index.js",
 	}),
-	esbuild.build({
-		...shared,
-		entryPoints: ["src/maintenance/cli.ts"],
-		outfile: "dist/maintenance.js",
-		banner: { js: `#!/usr/bin/env node\n${cjsShimBanner}` },
-	}),
 ]);
 
-await mkdir("dist/maintenance", { recursive: true });
-await copyFile("scripts/maintenance/github-app-bridge.py", "dist/maintenance/github-app-bridge.py");
-await chmod("dist/maintenance.js", 0o755);
 // Parse every actual artifact. A source shebang plus a banner shebang is otherwise only caught on first launch.
-await Promise.all(["dist/cli.js", "dist/index.js", "dist/maintenance.js"].map((file) => promisify(execFile)(process.execPath, ["--check", file])));
-console.log("esbuild: bundled CLI, library and host maintenance supervisor");
+await Promise.all(["dist/cli.js", "dist/index.js"].map((file) => promisify(execFile)(process.execPath, ["--check", file])));
+console.log("esbuild: bundled product CLI and library (maintainer automation is separate)");

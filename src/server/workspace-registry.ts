@@ -6,6 +6,7 @@ import type {
 	RuntimeOrchestratorWait,
 	RuntimeProjectSummary,
 	RuntimeProjectTaskCounts,
+	RuntimeTaskSessionSummary,
 	RuntimeWorkspaceStateResponse,
 } from "../core/api-contract";
 import { readShowableProjectDisplayName } from "../projects/project-display-name";
@@ -20,7 +21,7 @@ import {
 } from "../state/workspace-state";
 import { ensureClaudeWorkspaceTrusted } from "../terminal/claude-workspace-trust";
 import { ensureCodexWorkspaceTrusted } from "../terminal/codex-workspace-trust";
-import { TerminalSessionManager } from "../terminal/session-manager";
+import { type StartTaskSessionRequest, TerminalSessionManager } from "../terminal/session-manager";
 import { appendTerminalOutput } from "../terminal/terminal-output-archive";
 import type { BrokenGitRepository } from "../workspace/repo-health";
 import { findOrchestratorWait } from "./orchestrator-wait";
@@ -112,6 +113,14 @@ export interface WorkspaceRegistry {
 		workspacePath: string | null;
 		terminalManager: TerminalSessionManager;
 	}>;
+	setTaskAdmission?: (
+		admission: (
+			workspaceId: string,
+			request: StartTaskSessionRequest,
+			start: () => Promise<RuntimeTaskSessionSummary>,
+		) => Promise<RuntimeTaskSessionSummary>,
+		restart: (workspaceId: string, request: StartTaskSessionRequest) => Promise<void>,
+	) => void;
 }
 
 function createEmptyProjectTaskCounts(): RuntimeProjectTaskCounts {
@@ -249,6 +258,17 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 	);
 	const projectTaskCountsByWorkspaceId = new Map<string, RuntimeProjectTaskCounts>();
 	const terminalManagersByWorkspaceId = new Map<string, TerminalSessionManager>();
+	let taskAdmission: Parameters<NonNullable<WorkspaceRegistry["setTaskAdmission"]>>[0] | null = null;
+	let taskRestart: Parameters<NonNullable<WorkspaceRegistry["setTaskAdmission"]>>[1] | null = null;
+	const configureAdmission = (id: string, manager: TerminalSessionManager) => {
+		const admit = taskAdmission,
+			restart = taskRestart;
+		if (admit && restart)
+			manager.setTaskAdmission(
+				(request, start) => admit(id, request, start),
+				(request) => restart(id, request),
+			);
+	};
 	const terminalManagerLoadPromises = new Map<string, Promise<TerminalSessionManager>>();
 
 	const trustedWorkspacePaths = new Set<string>();
@@ -293,6 +313,7 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 			const manager = new TerminalSessionManager({
 				onOutput: (taskId, chunk) => appendTerminalOutput(workspaceId, taskId, chunk, undefined, deps.logError),
 			});
+			configureAdmission(workspaceId, manager);
 			try {
 				const existingWorkspace = await loadWorkspaceState(repoPath);
 				manager.hydrateFromRecord(existingWorkspace.sessions);
@@ -300,6 +321,7 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 			} catch {
 				// Workspace state will be created on demand.
 			}
+			configureAdmission(workspaceId, manager); // Admission may have been installed while hydration awaited disk.
 			terminalManagersByWorkspaceId.set(workspaceId, manager);
 			return manager;
 		})().finally(() => {
@@ -561,6 +583,11 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 
 	return {
 		getActiveWorkspaceId: () => activeWorkspaceId,
+		setTaskAdmission: (admit, restart) => {
+			taskAdmission = admit;
+			taskRestart = restart;
+			for (const [id, manager] of terminalManagersByWorkspaceId) configureAdmission(id, manager);
+		},
 		getActiveWorkspacePath: () => activeWorkspacePath,
 		getWorkspacePathById: (workspaceId: string) => workspacePathsById.get(workspaceId) ?? null,
 		rememberWorkspace,

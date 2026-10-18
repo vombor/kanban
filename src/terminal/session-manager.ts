@@ -108,6 +108,8 @@ interface SessionEntry {
 }
 
 export interface StartTaskSessionRequest {
+	/** In-process dispatch receipt identity; never parsed from an external launch body or an authorization bypass. */
+	admissionId?: string;
 	taskId: string;
 	agentId: AgentAdapterLaunchInput["agentId"];
 	binary: string;
@@ -533,6 +535,41 @@ export class TerminalSessionManager implements TerminalSessionService {
 	}
 
 	async startTaskSession(request: StartTaskSessionRequest): Promise<RuntimeTaskSessionSummary> {
+		const pending = this.taskStarts.get(request.taskId);
+		if (pending) return pending;
+		if (this.willReuseLiveSession(request.taskId)) {
+			const entry = this.ensureEntry(request.taskId);
+			entry.restartRequest = { kind: "task", request: cloneStartTaskSessionRequest(request) };
+			return cloneSummary(entry.summary);
+		}
+		const start = Promise.resolve().then(() =>
+			this.taskStartAdmission
+				? this.taskStartAdmission(request, () => this.startTaskSessionAdmitted(request))
+				: this.startTaskSessionAdmitted(request),
+		);
+		this.taskStarts.set(request.taskId, start);
+		try {
+			return await start;
+		} finally {
+			if (this.taskStarts.get(request.taskId) === start) this.taskStarts.delete(request.taskId);
+		}
+	}
+	private readonly taskStarts = new Map<string, Promise<RuntimeTaskSessionSummary>>();
+	private taskStartAdmission:
+		| ((
+				request: StartTaskSessionRequest,
+				start: () => Promise<RuntimeTaskSessionSummary>,
+		  ) => Promise<RuntimeTaskSessionSummary>)
+		| null = null;
+	private taskRestart: ((request: StartTaskSessionRequest) => Promise<void>) | null = null;
+	setTaskAdmission(
+		admission: NonNullable<TerminalSessionManager["taskStartAdmission"]>,
+		restart: NonNullable<TerminalSessionManager["taskRestart"]>,
+	): void {
+		this.taskStartAdmission = admission;
+		this.taskRestart = restart;
+	}
+	private async startTaskSessionAdmitted(request: StartTaskSessionRequest): Promise<RuntimeTaskSessionSummary> {
 		const entry = this.ensureEntry(request.taskId);
 		entry.restartRequest = {
 			kind: "task",
@@ -804,6 +841,8 @@ export class TerminalSessionManager implements TerminalSessionService {
 			workspacePath: request.cwd,
 			pid: session.pid,
 			startedAt,
+			dispatchPromptSubmitted: request.prompt.trim().length > 0,
+			dispatchPromptSubmittedAt: request.prompt.trim().length > 0 ? startedAt : null,
 			lastOutputAt: launch.sessionWarning ? startedAt : null,
 			reviewReason: awaitingInput ? "attention" : null,
 			exitCode: null,
@@ -1200,6 +1239,8 @@ export class TerminalSessionManager implements TerminalSessionService {
 			return null;
 		}
 		const before = entry.summary;
+		if (entry.summary.dispatchPromptSubmitted === false && entry.active)
+			updateSummary(entry, { dispatchPromptSubmitted: true, dispatchPromptSubmittedAt: now() });
 		const summary = this.applySessionEvent(entry, { type: "hook.to_in_progress" });
 		if (summary !== before && entry.active) {
 			for (const listener of entry.listeners.values()) {
@@ -1217,9 +1258,14 @@ export class TerminalSessionManager implements TerminalSessionService {
 	): RuntimeTaskSessionSummary | null {
 		const entry = this.entries.get(taskId);
 		if (!entry) return null;
-		if (entry.summary.providerId === providerId && entry.summary.dispatchPromptSubmitted === promptSubmitted)
+		const submitted = promptSubmitted || entry.summary.dispatchPromptSubmitted === true;
+		if (entry.summary.providerId === providerId && entry.summary.dispatchPromptSubmitted === submitted)
 			return cloneSummary(entry.summary);
-		const summary = updateSummary(entry, { providerId, dispatchPromptSubmitted: promptSubmitted });
+		const summary = updateSummary(entry, {
+			providerId,
+			dispatchPromptSubmitted: submitted,
+			dispatchPromptSubmittedAt: entry.summary.dispatchPromptSubmittedAt ?? (submitted ? now() : null),
+		});
 		this.emitSummary(summary);
 		return cloneSummary(summary);
 	}
@@ -1347,7 +1393,9 @@ export class TerminalSessionManager implements TerminalSessionService {
 		let pendingAutoRestart: Promise<void> | null = null;
 		pendingAutoRestart = (async () => {
 			try {
-				await this.startTaskSession(cloneStartTaskSessionRequest(restartRequest.request));
+				const { admissionId: _receipt, ...request } = cloneStartTaskSessionRequest(restartRequest.request);
+				if (this.taskRestart) await this.taskRestart(request);
+				else await this.startTaskSession(request);
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				const summary = updateSummary(entry, {

@@ -239,8 +239,8 @@ describe("useGitActions", () => {
 		});
 
 		expect(sendTaskSessionInput).toHaveBeenCalledWith("task-1", expect.any(String), {
-			appendNewline: false,
-			mode: "paste",
+			verifiedSubmit: true,
+			preferTerminal: false,
 		});
 		expect(showAppToastMock).not.toHaveBeenCalled();
 	});
@@ -252,17 +252,10 @@ describe("useGitActions", () => {
 		});
 
 		expect(sendTaskSessionInput).toHaveBeenCalledWith("task-1", expect.any(String), {
-			appendNewline: false,
-			mode: "paste",
+			verifiedSubmit: true,
+			preferTerminal: false,
 		});
-
-		await act(async () => {
-			await new Promise<void>((resolve) => {
-				window.setTimeout(resolve, 200);
-			});
-		});
-
-		expect(sendTaskSessionInput).toHaveBeenCalledWith("task-1", "\r", { appendNewline: false });
+		expect(sendTaskSessionInput).toHaveBeenCalledTimes(1);
 		expect(showAppToastMock).not.toHaveBeenCalled();
 	});
 
@@ -272,17 +265,10 @@ describe("useGitActions", () => {
 		});
 
 		expect(sendTaskSessionInput).toHaveBeenCalledWith("task-1", expect.any(String), {
-			appendNewline: false,
-			mode: "paste",
+			verifiedSubmit: true,
+			preferTerminal: false,
 		});
-
-		await act(async () => {
-			await new Promise<void>((resolve) => {
-				window.setTimeout(resolve, 200);
-			});
-		});
-
-		expect(sendTaskSessionInput).toHaveBeenCalledWith("task-1", "\r", { appendNewline: false });
+		expect(sendTaskSessionInput).toHaveBeenCalledTimes(1);
 		expect(showAppToastMock).not.toHaveBeenCalled();
 	});
 });

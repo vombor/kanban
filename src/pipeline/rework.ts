@@ -60,6 +60,7 @@ import type {
 } from "../core/api-contract";
 import { resolveCardRole } from "../core/card-role";
 import type { EffectiveModel, EffectiveModelConfig } from "../core/effective-agent";
+import { type ObjectiveEvidenceOwner, objectiveLineageSchema } from "../core/objective-evidence";
 import { isTaskExecutionBlocked } from "../core/task-execution-block";
 import { createUniqueTaskId } from "../core/task-id";
 import {
@@ -300,6 +301,7 @@ export interface ReworkContext {
 }
 
 export interface ReworkDependencies {
+	objectives?: ObjectiveEvidenceOwner;
 	/** updateTask, resumeTask, blockTask, createTask, startTask on the server. */
 	actions: PipelineActions;
 	/**
@@ -649,6 +651,16 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 		const { card } = scope.entry;
 		const workspaceId = context.snapshot.workspaceId;
 		const taskId = input.taskId ?? createUniqueTaskId(await loadKnownTaskIds(scope), randomUuid);
+		const objective = await deps.objectives?.capture(workspaceId, card.id);
+		const lineage = objective
+			? objectiveLineageSchema.parse({
+					binding: objective.binding,
+					taskId,
+					parentTaskId: card.id,
+					kind: input.sibling.kind,
+					at: input.sibling.at,
+				})
+			: null;
 		const created = await run({
 			...scopeOf(scope),
 			kind: "createTask",
@@ -669,9 +681,14 @@ export function createReworkStage(deps: ReworkDependencies): ReworkStage {
 		}
 		const sibling = input.sibling;
 		await deps.store.update(workspaceId, (state) => {
-			state.cards[taskId] = { ...(state.cards[taskId] ?? {}), sibling };
+			state.cards[taskId] = {
+				...(state.cards[taskId] ?? {}),
+				sibling,
+				...(lineage ? { objectiveLineage: lineage } : {}),
+			};
 			return state;
 		});
+		if (lineage) await deps.objectives?.attach(workspaceId, lineage);
 		if (!input.start) {
 			return { ok: true, taskId, started: false };
 		}

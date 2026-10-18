@@ -149,6 +149,17 @@ import {
 	runtimeWorktreeEnsureResponseSchema,
 } from "../core/api-contract";
 import { isHomeAgentSessionId, isHomeAgentSessionIdForWorkspace } from "../core/home-agent-session";
+import {
+	objectiveControlRequestSchema,
+	objectiveCreateSchema,
+	objectiveLimitsRequestSchema,
+	objectiveListResponseSchema,
+	objectiveListSchema,
+	objectiveManualLineageSchema,
+	objectiveReadResponseSchema,
+	objectiveReadSchema,
+	objectiveSchema,
+} from "../core/objective-contract";
 import { type ProviderDispatchStatus, providerDispatchStatusSchema } from "../core/provider-dispatch-contract";
 import {
 	type TerminalHistoryPage,
@@ -211,6 +222,7 @@ import {
 	knowledgeSearchResponseSchema,
 	type RuntimeKnowledgeApi,
 } from "./knowledge-contract";
+import type { RuntimeObjectiveApi } from "./objective-contract";
 import {
 	obsidianConnectorProbeSchema,
 	obsidianConnectorViewSchema,
@@ -284,6 +296,7 @@ export interface RuntimeTrpcWorkspaceScope {
 }
 
 export interface RuntimeTrpcContext {
+	objectiveApi?: RuntimeObjectiveApi;
 	projectSecretsApi?: RuntimeProjectSecretsApi;
 	knowledgeApi?: RuntimeKnowledgeApi;
 	obsidianConnectorApi?: RuntimeObsidianConnectorApi;
@@ -355,10 +368,12 @@ export interface RuntimeTrpcContext {
 		sendTaskSessionInput: (
 			scope: RuntimeTrpcWorkspaceScope,
 			input: RuntimeTaskSessionInputRequest,
+			caller?: RuntimeCaller,
 		) => Promise<RuntimeTaskSessionInputResponse>;
 		deliverTaskInput: (
 			scope: RuntimeTrpcWorkspaceScope,
 			input: RuntimeTaskInputDeliveryRequest,
+			caller?: RuntimeCaller,
 		) => Promise<RuntimeTaskInputDeliveryResponse>;
 		startShellSession: (
 			scope: RuntimeTrpcWorkspaceScope,
@@ -592,6 +607,68 @@ const gitSyncActionInputSchema = z.object({
 });
 
 export const runtimeAppRouter = t.router({
+	objectives: t.router({
+		manualLineage: workspaceProcedure
+			.input(objectiveManualLineageSchema)
+			.output(objectiveSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.objectiveApi)
+					throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Project objectives are unavailable." });
+				return ctx.objectiveApi.manualLineage(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId, input);
+			}),
+		control: workspaceProcedure
+			.input(objectiveControlRequestSchema)
+			.output(objectiveSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.objectiveApi)
+					throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Project objectives are unavailable." });
+				return ctx.objectiveApi.control(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId, input);
+			}),
+		recheck: workspaceProcedure
+			.input(objectiveReadSchema)
+			.output(objectiveReadResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.objectiveApi)
+					throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Project objectives are unavailable." });
+				return await ctx.objectiveApi.recheck(
+					await readStrictCaller(ctx),
+					ctx.workspaceScope.workspaceId,
+					input.id,
+				);
+			}),
+		list: workspaceProcedure
+			.input(objectiveListSchema)
+			.output(objectiveListResponseSchema)
+			.query(async ({ ctx, input }) => {
+				if (!ctx.objectiveApi)
+					throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Project objectives are unavailable." });
+				return await ctx.objectiveApi.list(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId, input);
+			}),
+		read: workspaceProcedure
+			.input(objectiveReadSchema)
+			.output(objectiveReadResponseSchema)
+			.query(async ({ ctx, input }) => {
+				if (!ctx.objectiveApi)
+					throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Project objectives are unavailable." });
+				return await ctx.objectiveApi.read(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId, input.id);
+			}),
+		create: workspaceProcedure
+			.input(objectiveCreateSchema)
+			.output(objectiveSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.objectiveApi)
+					throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Project objectives are unavailable." });
+				return await ctx.objectiveApi.create(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId, input);
+			}),
+		setLimits: workspaceProcedure
+			.input(objectiveLimitsRequestSchema)
+			.output(objectiveSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.objectiveApi)
+					throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Project objectives are unavailable." });
+				return await ctx.objectiveApi.setLimits(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId, input);
+			}),
+	}),
 	knowledge: t.router({
 		list: workspaceProcedure
 			.input(knowledgeListRequestSchema)
@@ -764,14 +841,14 @@ export const runtimeAppRouter = t.router({
 			.input(runtimeTaskSessionInputRequestSchema)
 			.output(runtimeTaskSessionInputResponseSchema)
 			.mutation(async ({ ctx, input }) => {
-				return await ctx.runtimeApi.sendTaskSessionInput(ctx.workspaceScope, input);
+				return await ctx.runtimeApi.sendTaskSessionInput(ctx.workspaceScope, input, await readStrictCaller(ctx));
 			}),
 		// Typed input with delivery confirmation (focus-in, separate Enter, activity check and retry).
 		deliverTaskInput: workspaceProcedure
 			.input(runtimeTaskInputDeliveryRequestSchema)
 			.output(runtimeTaskInputDeliveryResponseSchema)
 			.mutation(async ({ ctx, input }) => {
-				return await ctx.runtimeApi.deliverTaskInput(ctx.workspaceScope, input);
+				return await ctx.runtimeApi.deliverTaskInput(ctx.workspaceScope, input, await readStrictCaller(ctx));
 			}),
 		startShellSession: workspaceProcedure
 			.input(runtimeShellSessionStartRequestSchema)

@@ -258,6 +258,47 @@ describe("createRuntimeApi startTaskSession", () => {
 			}),
 		);
 	});
+	it("gates an objective-controlled blank launch and raw input before any process/worktree side effects, and refuses unknown callers without leaking hold reasons", async () => {
+		const terminalManager = {
+			willReuseLiveSession: vi.fn(() => false),
+			startTaskSession: vi.fn(),
+			writeInput: vi.fn(),
+		};
+		const accounting = {
+			check: vi.fn(async () => ({ bound: true, allowed: false, reason: "user_paused" as const })),
+			reserve: vi.fn(),
+			settle: vi.fn(),
+		};
+		const api = createTestRuntimeApi({
+			getActiveWorkspaceId: vi.fn(() => "workspace-1"),
+			setActiveRuntimeConfig: vi.fn(),
+			resolveInteractiveShellCommand: vi.fn(),
+			loadScopedRuntimeConfig: vi.fn(async () => createRuntimeConfigState()),
+			getScopedTerminalManager: vi.fn(async () => terminalManager as never),
+			objectiveAdmission: accounting,
+		});
+		const scope = { workspaceId: "workspace-1", workspacePath: "/tmp/repo" };
+		expect(
+			await api.startTaskSession(scope, { taskId: "task-1", baseRef: "main", prompt: "" }, { kind: "user" }),
+		).toMatchObject({ ok: false, error: expect.stringContaining("user_paused") });
+		expect(
+			await api.sendTaskSessionInput(
+				scope,
+				{ taskId: "task-1", text: "draft", appendNewline: false },
+				{ kind: "user" },
+			),
+		).toMatchObject({ ok: false });
+		const unknown = await api.deliverTaskInput(
+			scope,
+			{ taskId: "task-1", text: "Private prompt", enter: true, confirm: true },
+			{ kind: "unknown", reason: "fixture" },
+		);
+		expect(unknown).toMatchObject({ ok: false, error: expect.stringContaining("identified sessions") });
+		expect(unknown.error).not.toContain("user_paused");
+		expect(terminalManager.startTaskSession).not.toHaveBeenCalled();
+		expect(terminalManager.writeInput).not.toHaveBeenCalled();
+		expect(taskWorktreeMocks.resolveTaskCwd).not.toHaveBeenCalled();
+	});
 
 	it("ensures the worktree when no existing task cwd is available", async () => {
 		taskWorktreeMocks.resolveTaskCwd

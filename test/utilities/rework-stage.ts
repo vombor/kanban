@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import { getWorkspacePipelineSettings, parsePipelineConfig } from "../../src/config/pipeline-config";
 import type { RuntimeAgentId, RuntimeBoardCard, RuntimeBoardColumnId } from "../../src/core/api-contract";
+import type { ObjectiveEvidenceOwner } from "../../src/core/objective-evidence";
 import type { OnFailAnswer, RoutingPolicy } from "../../src/kits/policy";
 import type { PipelineActionRequest, PipelineActionResult } from "../../src/pipeline/actions";
 import { createPipelineEventBus, type PipelineEventMap, type PipelineEventName } from "../../src/pipeline/events";
@@ -28,6 +29,7 @@ export type ReworkHarnessAction =
 type OnFailInput = Parameters<RoutingPolicy["onFail"]>[0];
 
 export interface ReworkHarnessOptions {
+	objectives?: ObjectiveEvidenceOwner;
 	/** The stub kit's onFail answer (default: rework, clearContext auto). */
 	onFail?: (input: OnFailInput) => OnFailAnswer;
 	/** Raw `pipeline` config section. */
@@ -68,6 +70,7 @@ export function createReworkHarness(options: ReworkHarnessOptions = {}) {
 	}
 	let siblingCount = 0;
 	const stage = createReworkStage({
+		objectives: options.objectives,
 		actions: { run: async (request) => answer(request) },
 		deliverInput: async (input) => answer({ kind: "deliverInput", ...input }),
 		store,

@@ -31,11 +31,14 @@
 import { getWorkspacePipelineSettings, type ParsedPipelineConfig, readPipelineConfig } from "../config/pipeline-config";
 import type { RuntimeBoardCard, RuntimeTaskLandingOutcome, RuntimeTaskTrashTrigger } from "../core/api-contract";
 import { isKanbanLandedCard, isProjectWorkCard, resolveCardRole } from "../core/card-role";
+import { type ObjectiveEvidenceOwner, objectiveEvidenceSchema } from "../core/objective-evidence";
 import { createIssueLandCommenter, type IssueCardFinishedInput } from "../issues/issue-comment";
 import type { KitFeature } from "../kits/kit-schema";
 import { findKitLandVeto, type KitLandVeto, type KitLandVetoAnswer, type KitLandVetoInput } from "../kits/land-veto";
 import { type KitCatalog, loadKitCatalog, resolveWorkspaceKit } from "../kits/resolve-kit";
 import { createTeamKitLandVetoes } from "../kits/team/features";
+import { objectiveDigest } from "../objectives/objective-identity";
+import { retainObjectiveReceipt } from "../objectives/objective-receipts";
 import {
 	createPipelineDecisionLog,
 	type PipelineDecisionLog,
@@ -44,7 +47,7 @@ import {
 } from "../pipeline/decision-log";
 import type { PipelineEventMap } from "../pipeline/events";
 import { type PipelineHold, readPipelineHold } from "../pipeline/hold";
-import { createPipelineStateStore } from "../pipeline/pipeline-state";
+import { createPipelineStateStore, type PipelineStateStore } from "../pipeline/pipeline-state";
 import { takeTaskSnapshot } from "../pipeline/snapshots";
 import {
 	buildLandCommitMessage,
@@ -60,6 +63,9 @@ import { getTaskWorkspacePathInfo } from "../workspace/task-worktree";
 import type { TaskDoneGate, TaskDoneGateDecision, TaskDoneGateInput } from "./task-trash-workflow";
 
 export interface TaskLandingGateDependencies {
+	objectives?: ObjectiveEvidenceOwner;
+	/** Retains exact owner receipts for restart replay before Done can prune a card. */
+	objectiveReceiptStore?: PipelineStateStore;
 	readConfig?: () => Promise<ParsedPipelineConfig>;
 	loadCatalog?: () => Promise<KitCatalog>;
 	readHold?: (workspaceId: string, taskId: string) => Promise<PipelineHold | null>;
@@ -383,6 +389,10 @@ export function createTaskLandingGate(deps: TaskLandingGateDependencies = {}): T
 		}
 
 		const postLand: readonly PostLandStep[] = resolution.kit.land?.postLand ?? [];
+		const objective =
+			resolveCardRole(card) === "dev" ? await deps.objectives?.capture(input.workspaceId, card.id) : null;
+		if (objective && !deps.objectiveReceiptStore)
+			throw new Error("Objective landing receipt storage is unavailable.");
 		const result: LandResult = await serialized(input.workspacePath, async () =>
 			landCommit({
 				repoPath: input.workspacePath,
@@ -398,6 +408,25 @@ export function createTaskLandingGate(deps: TaskLandingGateDependencies = {}): T
 		const via = landedVia(input.trigger);
 		const approved = via === "approved" ? "HUMAN_APPROVED: " : "";
 		if (result.status === "landed") {
+			if (objective && deps.objectiveReceiptStore) {
+				const receipt = objectiveEvidenceSchema.parse({
+					id: objectiveDigest(
+						JSON.stringify(["landed", objective.binding, card.id, source.commit, result.commit]),
+					),
+					kind: "landed",
+					binding: objective.binding,
+					taskId: card.id,
+					snapshot: source.commit,
+					at: new Date(now()).toISOString(),
+					commit: result.commit,
+					baseRef,
+				});
+				await deps.objectiveReceiptStore.update(input.workspaceId, (state) => {
+					state.cards[card.id] = retainObjectiveReceipt(state.cards[card.id], receipt);
+					return state;
+				});
+				await deps.objectives?.record(input.workspaceId, receipt);
+			}
 			const landing: RuntimeTaskLandingOutcome = { decision: "landed", baseRef, commit: result.commit };
 			log(
 				`land ${card.id}: ${baseRef} -> ${result.commit.slice(0, 8)}${result.checkout ? ` in ${result.checkout}` : ""}`,

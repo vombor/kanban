@@ -1,8 +1,13 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import { getRuntimeTrpcClient } from "@/runtime/trpc-client";
-import type { RuntimeWorkspaceChangesMode, RuntimeWorkspaceChangesResponse } from "@/runtime/types";
+import type {
+	RuntimeWorkspaceChangesMode,
+	RuntimeWorkspaceChangesResponse,
+	RuntimeWorkspaceFileChange,
+} from "@/runtime/types";
 import { useTrpcQuery } from "@/runtime/use-trpc-query";
+import { retainWorkspaceDiffFiles } from "@/runtime/workspace-diff-identity";
 
 export interface UseRuntimeWorkspaceChangesResult {
 	changes: RuntimeWorkspaceChangesResponse | null;
@@ -20,23 +25,34 @@ export function useRuntimeWorkspaceChanges(
 	pollIntervalMs: number | null = null,
 	viewKey: string | null = null,
 	clearOnViewTransition = true,
+	active = true,
 ): UseRuntimeWorkspaceChangesResult {
-	const hasWorkspaceScope = taskId !== null && workspaceId !== null && baseRef !== null;
+	const hasWorkspaceScope = active && taskId !== null && workspaceId !== null && baseRef !== null;
 	const normalizedViewKey = viewKey ?? "__default__";
-	const requestKey = `${workspaceId ?? "__none__"}:${taskId ?? "__none__"}:${baseRef ?? "__none__"}:${mode}:${normalizedViewKey}`;
+	const requestKey = JSON.stringify([workspaceId, taskId, baseRef, mode, normalizedViewKey]);
 	const previousRequestKeyRef = useRef(requestKey);
-	const isRequestTransitioning = hasWorkspaceScope && previousRequestKeyRef.current !== requestKey;
-	const queryFn = useCallback(async () => {
-		if (!taskId || !workspaceId || !baseRef) {
-			throw new Error("Missing workspace scope.");
-		}
-		void normalizedViewKey;
-		const trpcClient = getRuntimeTrpcClient(workspaceId);
-		return await trpcClient.workspace.getChanges.query({
-			taskId,
-			baseRef,
-			mode,
-		});
+	const isRequestTransitioning = previousRequestKeyRef.current !== requestKey;
+	const queryFn = useMemo(() => {
+		let previousFiles: RuntimeWorkspaceFileChange[] | null = null;
+		let latestRequest = 0;
+		return async () => {
+			if (!taskId || !workspaceId || !baseRef) {
+				throw new Error("Missing workspace scope.");
+			}
+			void normalizedViewKey;
+			const trpcClient = getRuntimeTrpcClient(workspaceId);
+			const request = ++latestRequest;
+			const response = await trpcClient.workspace.getChanges.query({
+				taskId,
+				baseRef,
+				mode,
+			});
+			// Older concurrent polls must not replace the identity baseline of a newer response.
+			if (request !== latestRequest) return response;
+			const files = retainWorkspaceDiffFiles(previousFiles, response.files);
+			previousFiles = files;
+			return { ...response, files };
+		};
 	}, [baseRef, mode, normalizedViewKey, taskId, workspaceId]);
 	const changesQuery = useTrpcQuery<RuntimeWorkspaceChangesResponse>({
 		enabled: hasWorkspaceScope,
@@ -52,18 +68,18 @@ export function useRuntimeWorkspaceChanges(
 	const previousStateVersionRef = useRef(stateVersion);
 
 	useEffect(() => {
-		if (!isRequestTransitioning) {
+		if (!isRequestTransitioning || !active) {
 			return;
 		}
 		previousRequestKeyRef.current = requestKey;
 		if (clearOnViewTransition) {
 			changesQuery.setData(null);
 		}
-	}, [changesQuery.setData, clearOnViewTransition, isRequestTransitioning, requestKey]);
+	}, [active, changesQuery.setData, clearOnViewTransition, isRequestTransitioning, requestKey]);
 
 	useEffect(() => {
 		if (!hasWorkspaceScope) {
-			previousRequestKeyRef.current = requestKey;
+			if (active) previousRequestKeyRef.current = requestKey;
 			previousStateVersionRef.current = stateVersion;
 			return;
 		}
@@ -72,7 +88,7 @@ export function useRuntimeWorkspaceChanges(
 		}
 		previousStateVersionRef.current = stateVersion;
 		void changesQuery.refetch();
-	}, [changesQuery.refetch, hasWorkspaceScope, requestKey, stateVersion]);
+	}, [active, changesQuery.refetch, hasWorkspaceScope, requestKey, stateVersion]);
 
 	useEffect(() => {
 		if (!hasWorkspaceScope || pollIntervalMs == null) {

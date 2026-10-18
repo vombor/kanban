@@ -1,3 +1,4 @@
+import Prism from "prismjs";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -43,6 +44,9 @@ describe("DiffViewerPanel", () => {
 		container = document.createElement("div");
 		document.body.appendChild(container);
 		root = createRoot(container);
+		// Most behavior tests use the browser-without-observers fallback. Deferred
+		// activation has its own controlled-observer regression below.
+		vi.stubGlobal("IntersectionObserver", undefined);
 	});
 
 	afterEach(() => {
@@ -50,6 +54,7 @@ describe("DiffViewerPanel", () => {
 			root.unmount();
 		});
 		vi.restoreAllMocks();
+		vi.unstubAllGlobals();
 		container.remove();
 		if (previousActEnvironment === undefined) {
 			delete (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT;
@@ -382,5 +387,245 @@ describe("DiffViewerPanel", () => {
 
 		expect(onSendToTerminal).toHaveBeenCalledWith("src/example.ts:1 | const value = 2;\n> Ship this");
 		expect(onCommentsChange).toHaveBeenCalledWith(new Map());
+	});
+
+	it("highlights only displayed lines and reuses decoration on selection and comment edits", async () => {
+		const highlight = vi.spyOn(Prism, "highlight");
+		const oldText = Array.from({ length: 2000 }, (_, index) => `const value${index} = ${index};`).join("\n");
+		const workspaceFiles: RuntimeWorkspaceFileChange[] = [
+			{
+				path: "large.ts",
+				status: "modified",
+				additions: 1,
+				deletions: 1,
+				oldText,
+				newText: oldText.replace("value1000 = 1000", "value1000 = 'changed'"),
+			},
+		];
+		const onSelectedPathChange = vi.fn();
+		const onCommentsChange = vi.fn();
+		const render = (comments: Map<string, DiffLineComment>, selectedPath: string | null) =>
+			root.render(
+				<DiffViewerPanel
+					workspaceFiles={workspaceFiles}
+					selectedPath={selectedPath}
+					onSelectedPathChange={onSelectedPathChange}
+					comments={comments}
+					onCommentsChange={onCommentsChange}
+				/>,
+			);
+		await act(async () => {
+			render(new Map(), null);
+		});
+		expect(container.querySelectorAll(".kb-diff-row")).toHaveLength(8);
+		expect(highlight.mock.calls.length).toBeLessThan(40);
+		const initialCalls = highlight.mock.calls.length;
+		await act(async () => {
+			render(new Map(), "large.ts");
+		});
+		expect(highlight).toHaveBeenCalledTimes(initialCalls);
+		const comments = new Map<string, DiffLineComment>([
+			[
+				"large.ts:added:1001",
+				{
+					filePath: "large.ts",
+					lineNumber: 1001,
+					lineText: "const value1000 = 'changed';",
+					variant: "added",
+					comment: "note",
+				},
+			],
+		]);
+		await act(async () => {
+			render(comments, "large.ts");
+		});
+		expect(container.querySelector("textarea")?.value).toBe("note");
+		expect(highlight).toHaveBeenCalledTimes(initialCalls);
+	});
+
+	it("defers offscreen files, activates at most two per frame, and cancels queued work while hidden", async () => {
+		const observers: ControlledObserver[] = [];
+		class ControlledObserver {
+			callback: IntersectionObserverCallback;
+			disconnect = vi.fn();
+			observe = vi.fn();
+			unobserve = vi.fn();
+			constructor(callback: IntersectionObserverCallback) {
+				this.callback = callback;
+				observers.push(this);
+			}
+			emit(elements: Element[]) {
+				this.callback(
+					elements.map((target) => ({ target, isIntersecting: true }) as IntersectionObserverEntry),
+					this as unknown as IntersectionObserver,
+				);
+			}
+		}
+		vi.stubGlobal("IntersectionObserver", ControlledObserver);
+		let frameId = 0;
+		const frames = new Map<number, FrameRequestCallback>();
+		vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+			frames.set(++frameId, callback);
+			return frameId;
+		});
+		vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+		const workspaceFiles: RuntimeWorkspaceFileChange[] = Array.from({ length: 6 }, (_, index) => ({
+			path: `file${index}.ts`,
+			status: "added",
+			additions: 1,
+			deletions: 0,
+			oldText: null,
+			newText: `const value = ${index};`,
+		}));
+		const comments = new Map<string, DiffLineComment>();
+		const onSelectedPathChange = vi.fn();
+		const onCommentsChange = vi.fn();
+		const render = (isActive: boolean, selectedPath: string | null = null) =>
+			root.render(
+				<DiffViewerPanel
+					workspaceFiles={workspaceFiles}
+					selectedPath={selectedPath}
+					onSelectedPathChange={onSelectedPathChange}
+					comments={comments}
+					onCommentsChange={onCommentsChange}
+					isActive={isActive}
+				/>,
+			);
+		await act(async () => {
+			render(false);
+		});
+		expect(observers).toHaveLength(0);
+		expect(container.querySelectorAll(".kb-diff-row")).toHaveLength(0);
+		await act(async () => {
+			render(true);
+		});
+		act(() => observers[0]!.emit([...container.querySelectorAll("section")]));
+		const flushFrame = () => {
+			const [id, callback] = [...frames.entries()][0]!;
+			frames.delete(id);
+			act(() => callback(0));
+		};
+		flushFrame();
+		expect(container.querySelectorAll(".kb-diff-row")).toHaveLength(2);
+		await act(async () => {
+			render(false);
+		});
+		expect(frames.size).toBe(0);
+		expect(observers[0]!.disconnect).toHaveBeenCalledOnce();
+		await act(async () => {
+			render(true, "file5.ts");
+		});
+		expect(container.querySelectorAll(".kb-diff-row")).toHaveLength(3);
+		expect(container.querySelector('[data-diff-path="file5.ts"]')?.textContent).toContain("const value = 5;");
+	});
+
+	it("resolves scroll selection with logarithmic section reads", async () => {
+		const workspaceFiles: RuntimeWorkspaceFileChange[] = Array.from({ length: 128 }, (_, index) => ({
+			path: `file${String(index).padStart(3, "0")}.txt`,
+			status: "added",
+			additions: 1,
+			deletions: 0,
+			oldText: null,
+			newText: "value",
+		}));
+		const onSelectedPathChange = vi.fn();
+		await act(async () => {
+			root.render(
+				<DiffViewerPanel
+					workspaceFiles={workspaceFiles}
+					selectedPath={null}
+					onSelectedPathChange={onSelectedPathChange}
+					comments={new Map()}
+					onCommentsChange={() => {}}
+				/>,
+			);
+		});
+		const sections = [...container.querySelectorAll("section")];
+		const scrollContainer = sections[0]!.parentElement!;
+		vi.spyOn(scrollContainer, "getBoundingClientRect").mockReturnValue(createRect(100));
+		const reads = sections.map((section, index) =>
+			vi.spyOn(section, "getBoundingClientRect").mockReturnValue(createRect(100 + (index - 100) * 200)),
+		);
+		act(() => {
+			scrollContainer.dispatchEvent(new Event("scroll"));
+		});
+		expect(onSelectedPathChange).toHaveBeenCalledWith("file100.txt");
+		expect(reads.reduce((count, read) => count + read.mock.calls.length, 0)).toBeLessThanOrEqual(8);
+	});
+
+	it("keeps complete long lines safe and commentable without syntax decoration", async () => {
+		const text = `<img src=x onerror='alert(1)'>${"x".repeat(12_000)}`;
+		const highlight = vi.spyOn(Prism, "highlight");
+		const onCommentsChange = vi.fn();
+		await act(async () => {
+			root.render(
+				<DiffViewerPanel
+					workspaceFiles={[
+						{ path: "generated.ts", status: "added", additions: 1, deletions: 0, oldText: null, newText: text },
+					]}
+					selectedPath={null}
+					onSelectedPathChange={() => {}}
+					comments={new Map()}
+					onCommentsChange={onCommentsChange}
+				/>,
+			);
+		});
+		expect(container.querySelector(".kb-diff-text")?.textContent).toBe(text);
+		expect(container.querySelector("img")).toBeNull();
+		expect(highlight).not.toHaveBeenCalled();
+		act(() => {
+			container.querySelector<HTMLDivElement>(".kb-diff-row-added")!.click();
+		});
+		expect(
+			(onCommentsChange.mock.calls[0]![0] as Map<string, DiffLineComment>).get("generated.ts:added:1")?.lineText,
+		).toBe(text);
+	});
+
+	it("freezes hidden file payloads and catches up without losing an expanded context block", async () => {
+		const oldText = Array.from({ length: 100 }, (_, index) => `const value${index} = ${index};`).join("\n");
+		const file: RuntimeWorkspaceFileChange = {
+			path: "file.ts",
+			status: "modified",
+			additions: 1,
+			deletions: 1,
+			oldText,
+			newText: oldText.replace("value50 = 50", "value50 = 'one'"),
+		};
+		const highlight = vi.spyOn(Prism, "highlight");
+		const render = (workspaceFiles: RuntimeWorkspaceFileChange[], isActive: boolean) =>
+			root.render(
+				<DiffViewerPanel
+					workspaceFiles={workspaceFiles}
+					selectedPath={null}
+					onSelectedPathChange={() => {}}
+					comments={new Map()}
+					onCommentsChange={() => {}}
+					isActive={isActive}
+				/>,
+			);
+		await act(async () => {
+			render([file], true);
+		});
+		const expand = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+			(button) => button.textContent === "↓ 20 lines",
+		)!;
+		act(() => expand.click());
+		expect(container.querySelectorAll(".kb-diff-row")).toHaveLength(28);
+		const calls = highlight.mock.calls.length;
+		const changed = { ...file, newText: file.newText!.replace("'one'", "'two'") };
+		await act(async () => {
+			render([changed], false);
+		});
+		expect(highlight).toHaveBeenCalledTimes(calls);
+		expect(container.querySelector(".kb-diff-row-added")?.textContent).toContain("one");
+		await act(async () => {
+			render([changed], true);
+		});
+		expect(container.querySelector(".kb-diff-row-added")?.textContent).toContain("two");
+		expect(container.querySelectorAll(".kb-diff-row")).toHaveLength(28);
+		await act(async () => {
+			render([{ ...file, path: "a.txt", oldText: null, newText: "new file" }, changed], true);
+		});
+		expect(container.querySelectorAll('[data-diff-path="file.ts"] .kb-diff-row')).toHaveLength(28);
 	});
 });

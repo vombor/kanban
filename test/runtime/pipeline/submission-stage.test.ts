@@ -1,4 +1,6 @@
 // The submission stage on real temp repos, with a recording checks queue.
+
+import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -6,6 +8,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { parsePipelineConfig } from "../../../src/config/pipeline-config";
 import type { RuntimeBoardCard } from "../../../src/core/api-contract";
+import { objectiveCreateSchema } from "../../../src/core/objective-contract";
+import { createObjectiveEvidenceOwner } from "../../../src/objectives/objective-receipts";
+import { createObjectiveStore } from "../../../src/objectives/objective-store";
 import { CHECKS_VERSION, type ChecksRequest } from "../../../src/pipeline/checks";
 import type { EmptyDiffRecord } from "../../../src/pipeline/empty-diff";
 import type { PipelineSessionView } from "../../../src/pipeline/engine";
@@ -113,6 +118,54 @@ describe("submission stage", () => {
 				project: { envFile: ".env", setup: "npx prisma migrate deploy" },
 			},
 		]);
+	});
+
+	it("captures objective requirements before enqueue and never relabels an already checked snapshot", async () => {
+		const repo = createRepoWithWorktree();
+		repos.push(repo);
+		const store = createObjectiveStore({ home: join(repo.repoPath, "test-home") });
+		await store.create(
+			"foo",
+			objectiveCreateSchema.parse({
+				requestId: randomUUID(),
+				title: "Objective",
+				requirements: "Tests pass",
+				taskIds: ["dev01"],
+			}),
+		);
+		writeFileSync(join(repo.worktreePath, "work.txt"), "work\n");
+		const enqueued: ChecksRequest[] = [];
+		const stage = createSubmissionStage({
+			objectives: createObjectiveEvidenceOwner(store),
+			resolveWorktree: async () => repo.worktreePath,
+			checks: {
+				enqueue: (request) => {
+					enqueued.push(request);
+					return "queued";
+				},
+			},
+		});
+		const context: SubmissionContext = {
+			workspaceId: "foo",
+			workspacePath: repo.repoPath,
+			settings: settingsFor(TEAM_QA),
+			kitName: "team-cloud",
+			state: emptyState(),
+		};
+		const card = createCard({ id: "dev01" });
+		const input = {
+			card,
+			effective: { ...createEffectiveCard({ role: "dev", agentId: "cline" }), card },
+			session: null,
+		};
+		await stage.inspect(context, input);
+		expect(enqueued[0]?.objectiveBinding).toEqual(await store.binding("foo", "dev01"));
+		const snapshot = enqueued[0]?.snapshot;
+		if (!snapshot) throw new Error("No snapshot");
+		context.state = emptyState({ dev01: { snapshot, version: CHECKS_VERSION, harness: false } });
+		stage.forgetWorkspace("foo");
+		await stage.inspect(context, input);
+		expect(enqueued).toHaveLength(1);
 	});
 
 	it("a card whose snapshot equals its base is not submitted", async () => {

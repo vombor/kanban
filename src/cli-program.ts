@@ -13,6 +13,7 @@ import { registerKitCommand } from "./commands/kit";
 import { registerKnowledgeCommand } from "./commands/knowledge";
 import { registerMessageCommand } from "./commands/message";
 import { registerModelsCommand } from "./commands/models";
+import { registerObjectiveCommand } from "./commands/objective";
 import { registerOrchestratorCommand } from "./commands/orchestrator";
 import { registerPipelineCommand } from "./commands/pipeline";
 import { registerPlanCommand } from "./commands/plan";
@@ -102,6 +103,7 @@ export function registerCliCommands(program: Command, version: string): void {
 	registerSetupCommand(program);
 	registerKitCommand(program);
 	registerKnowledgeCommand(program);
+	registerObjectiveCommand(program);
 	registerShortcutCommand(program);
 	registerConfigCommand(program);
 	registerModelsCommand(program);

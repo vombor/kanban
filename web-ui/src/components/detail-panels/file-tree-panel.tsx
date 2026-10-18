@@ -1,5 +1,5 @@
 import { FileText, Folder, FolderOpen } from "lucide-react";
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import type { RuntimeWorkspaceFileChange } from "@/runtime/types";
 import { buildFileTree, type FileTreeNode } from "@/utils/file-tree";
 
@@ -67,7 +67,7 @@ function FileTreeRow({
 	);
 }
 
-export function FileTreePanel({
+export const FileTreePanel = memo(function FileTreePanel({
 	workspaceFiles,
 	selectedPath,
 	onSelectPath,
@@ -128,4 +128,4 @@ export function FileTreePanel({
 			</div>
 		</div>
 	);
-}
+});

@@ -24,7 +24,7 @@ import "prismjs/components/prism-swift";
 import "prismjs/components/prism-tsx";
 import "prismjs/components/prism-typescript";
 import "prismjs/components/prism-yaml";
-import { useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 
@@ -32,6 +32,7 @@ export const CONTEXT_RADIUS = 3;
 export const MIN_COLLAPSE_LINES = 8;
 export const INCREMENTAL_EXPAND_STEP = 20;
 export const INCREMENTAL_EXPAND_THRESHOLD = 40;
+export const MAX_HIGHLIGHT_LINE_LENGTH = 4096;
 
 export interface InlineDiffSegment {
 	key: string;
@@ -138,27 +139,10 @@ export function getHighlightedLineHtml(
 	grammar: Prism.Grammar | null,
 	language: string | null,
 ): string | null {
-	if (!grammar || !language) {
+	if (!grammar || !language || line.length > MAX_HIGHLIGHT_LINE_LENGTH) {
 		return null;
 	}
 	return Prism.highlight(line.length > 0 ? line : " ", grammar, language);
-}
-
-export function buildHighlightedLineMap(
-	text: string | null | undefined,
-	grammar: Prism.Grammar | null,
-	language: string | null,
-): Map<number, string> {
-	const lines = toLines(text ?? "");
-	const highlightedByLine = new Map<number, string>();
-	for (let index = 0; index < lines.length; index += 1) {
-		const line = lines[index] ?? "";
-		const highlighted = getHighlightedLineHtml(line, grammar, language);
-		if (highlighted != null) {
-			highlightedByLine.set(index + 1, highlighted);
-		}
-	}
-	return highlightedByLine;
 }
 
 function buildModifiedSegments(
@@ -170,6 +154,13 @@ function buildModifiedSegments(
 } {
 	const oldSegments: InlineDiffSegment[] = [];
 	const newSegments: InlineDiffSegment[] = [];
+	// Minified/generated lines remain complete and commentable; only decoration is skipped.
+	if (oldText.length > MAX_HIGHLIGHT_LINE_LENGTH || newText.length > MAX_HIGHLIGHT_LINE_LENGTH) {
+		return {
+			oldSegments: [{ key: "old", text: oldText, tone: "removed" }],
+			newSegments: [{ key: "new", text: newText, tone: "added" }],
+		};
+	}
 	const parts = diffWordsWithSpace(oldText, newText);
 
 	for (let index = 0; index < parts.length; index += 1) {
@@ -498,34 +489,47 @@ export function truncatePathMiddle(path: string, maxLength = 64): string {
 	return `${path.slice(0, head)}${separator}${path.slice(path.length - tail)}`;
 }
 
-export function DiffRowText({
+export const DiffRowText = memo(function DiffRowText({
 	row,
-	highlightedLineHtml,
 	grammar,
 	language,
 }: {
 	row: UnifiedDiffRow;
-	highlightedLineHtml: string | null;
 	grammar: Prism.Grammar | null;
 	language: string | null;
 }): React.ReactElement {
+	const lineHtml = useMemo(
+		() => (row.segments ? null : getHighlightedLineHtml(row.text, grammar, language)),
+		[row, grammar, language],
+	);
+	const segments = useMemo(
+		() =>
+			row.segments?.map((segment) => ({
+				...segment,
+				html:
+					row.text.length > MAX_HIGHLIGHT_LINE_LENGTH
+						? null
+						: getHighlightedLineHtml(segment.text, grammar, language),
+			})),
+		[row, grammar, language],
+	);
 	if (!row.segments) {
-		if (highlightedLineHtml) {
-			return <span className="font-mono kb-diff-text" dangerouslySetInnerHTML={{ __html: highlightedLineHtml }} />;
+		if (lineHtml) {
+			return <span className="font-mono kb-diff-text" dangerouslySetInnerHTML={{ __html: lineHtml }} />;
 		}
 		return <span className="font-mono kb-diff-text">{row.text || " "}</span>;
 	}
 
 	return (
 		<span className="font-mono kb-diff-text">
-			{row.segments.map((segment) => {
+			{segments?.map((segment) => {
 				const className =
 					segment.tone === "added"
 						? "kb-diff-segment-added"
 						: segment.tone === "removed"
 							? "kb-diff-segment-removed"
 							: undefined;
-				const highlightedSegmentHtml = getHighlightedLineHtml(segment.text, grammar, language);
+				const highlightedSegmentHtml = segment.html;
 				if (highlightedSegmentHtml) {
 					return (
 						<span
@@ -543,7 +547,7 @@ export function DiffRowText({
 			})}
 		</span>
 	);
-}
+});
 
 export function CollapsedBlockControls({
 	block,
@@ -680,19 +684,13 @@ export function ReadOnlyUnifiedDiff({ rows, path }: { rows: UnifiedDiffRow[]; pa
 				: row.variant === "removed"
 					? "kb-diff-row kb-diff-row-removed"
 					: "kb-diff-row kb-diff-row-context";
-		const highlightedLineHtml = getHighlightedLineHtml(row.text, prismGrammar, prismLanguage);
 
 		return (
 			<div key={row.key} className={baseClass} style={{ cursor: "default" }}>
 				<span className="kb-diff-line-number" style={{ color: "var(--color-text-tertiary)" }}>
 					<span className="kb-diff-line-number-text">{row.lineNumber ?? ""}</span>
 				</span>
-				<DiffRowText
-					row={row}
-					highlightedLineHtml={highlightedLineHtml}
-					grammar={prismGrammar}
-					language={prismLanguage}
-				/>
+				<DiffRowText row={row} grammar={prismGrammar} language={prismLanguage} />
 			</div>
 		);
 	};

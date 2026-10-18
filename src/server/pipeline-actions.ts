@@ -32,6 +32,7 @@ export interface PipelineActionRunnerDependencies {
 	hasLiveProcess?: (scope: TaskTrashWorkspaceScope, taskId: string) => Promise<boolean> | boolean;
 	/** Stops the task's session (`resumeTask` with `replaceLive`). Without it a live session is never replaced. */
 	stopTaskSession?: (scope: TaskTrashWorkspaceScope, taskId: string) => Promise<void> | void;
+	canAdmitTask?: (scope: TaskTrashWorkspaceScope, taskId: string) => Promise<string | null>;
 	/** How long `replaceLive` waits for a stopped session's process to exit. Default 5 s. */
 	stopTimeoutMs?: number;
 	onBoardMutated?: (scope: TaskTrashWorkspaceScope) => Promise<void> | void;
@@ -213,6 +214,8 @@ export function createPipelineActionRunner(
 		if (!card) {
 			return { ok: false, error: `task ${request.taskId} is not In Progress or in Review` };
 		}
+		const admissionError = await deps.canAdmitTask?.(request, card.id);
+		if (admissionError) return { ok: false, error: admissionError };
 		// startTaskSession returns a live idle session unchanged (and stops an interrupted or failed one to start
 		// another), so a live one is never "resumed": restart recovery leaves a card restarted by hand alone, and the
 		// rework started-check (`replaceLive`) stops the session that never took the rework first.

@@ -85,6 +85,15 @@ export const USER_ONLY_COMMANDS = [
 	"github bot create",
 	"knowledge pin",
 	"knowledge unpin",
+	"objective create",
+	"objective limits",
+	"objective link",
+	"objective recheck",
+	"objective pause",
+	"objective resume",
+	"objective override",
+	"objective acknowledge",
+	"objective revoke",
 ] as const;
 
 /** The plan approval refusal (the server's, src/trpc/plans-api.ts, says the same). */

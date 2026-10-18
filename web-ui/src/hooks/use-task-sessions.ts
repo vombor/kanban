@@ -205,7 +205,8 @@ export function useTaskSessions({ currentProjectId, setSessions }: UseTaskSessio
 	const sendTaskSessionInput = useCallback(
 		async (taskId: string, text: string, options?: SendTerminalInputOptions): Promise<SendTaskSessionInputResult> => {
 			const appendNewline = options?.appendNewline ?? true;
-			const controller = options?.preferTerminal === false ? null : getTerminalController(taskId);
+			const controller =
+				options?.verifiedSubmit || options?.preferTerminal === false ? null : getTerminalController(taskId);
 			if (controller) {
 				const sent =
 					options?.mode === "paste"
@@ -220,11 +221,13 @@ export function useTaskSessions({ currentProjectId, setSessions }: UseTaskSessio
 			}
 			try {
 				const trpcClient = getRuntimeTrpcClient(currentProjectId);
-				const payload = await trpcClient.runtime.sendTaskSessionInput.mutate({
-					taskId,
-					text,
-					appendNewline,
-				});
+				const payload = options?.verifiedSubmit
+					? await trpcClient.runtime.deliverTaskInput.mutate({ taskId, text, enter: true, confirm: true })
+					: await trpcClient.runtime.sendTaskSessionInput.mutate({
+							taskId,
+							text,
+							appendNewline,
+						});
 				if (!payload.ok) {
 					const errorMessage = payload.error || "Task session input failed.";
 					return { ok: false, message: errorMessage };

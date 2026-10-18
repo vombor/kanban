@@ -63,7 +63,6 @@ import { randomUUID } from "node:crypto";
 import { cp, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-
 import type { PipelineConfig, WorkspacePipelineSettings } from "../config/pipeline-config";
 import type {
 	RuntimeAgentId,
@@ -75,11 +74,18 @@ import type {
 } from "../core/api-contract";
 import { resolveCardRole, resolveReviewedTaskId } from "../core/card-role";
 import type { EffectiveModel, EffectiveModelConfig } from "../core/effective-agent";
+import {
+	type ObjectiveEvidenceOwner,
+	objectiveBindingSchema,
+	objectiveEvidenceSchema,
+} from "../core/objective-evidence";
 import { isTaskExecutionBlocked } from "../core/task-execution-block";
 import { createUniqueTaskId } from "../core/task-id";
 import type { KitDocument } from "../kits/kit-schema";
 import type { EffectiveCard, KitVerdict, OnPassAnswer, QaPolicyAnswer, RoutingPolicy } from "../kits/policy";
 import { isLocalProvider } from "../kits/team/bench/prices";
+import { objectiveDigest } from "../objectives/objective-identity";
+import { buildObjectiveQaNote, retainObjectiveReceipt } from "../objectives/objective-receipts";
 import { getKanbanHomeDisplayPath, getPipelineQaLogPath, getQaArtifactsPath } from "../state/kanban-home";
 import { type ClineSilentStall, describeClineSilentStall, isClineShellTool } from "../terminal/cline-turn-check";
 import { isReviewSettled } from "../terminal/review-settle";
@@ -168,6 +174,8 @@ export const qaGateEntrySchema = z.object({
 	createdAt: z.number(),
 	startedAt: z.number().nullable().default(null),
 	evidenceOnly: z.boolean().optional(),
+	/** Immutable requirements captured for this review before the QA card is created. */
+	objectiveBinding: objectiveBindingSchema.optional(),
 	/** When the gate first saw the card in Review in this attempt (the verdict grace runs from here). */
 	reviewSeenAt: z.number().nullable().default(null),
 	nudges: z.number().int().nonnegative().default(0),
@@ -260,6 +268,7 @@ export interface QaGateSubmitInput {
 }
 
 export interface QaGateDependencies {
+	objectives?: ObjectiveEvidenceOwner;
 	/** Creates and starts QA cards on the server. */
 	actions: PipelineActions;
 	/** Types into a card's agent (the watchdog's `deliverInput` request): the verdict nudges. */
@@ -866,6 +875,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		// QA-card and workspace scoped: replacements/supplemental reviews must never overwrite an earlier review's copy.
 		const scratchDir = join(context.qa.scratchRoot, workspaceId, qaTaskId);
 		const devTitle = card.title || card.prompt;
+		const objective = evidenceOnly ? null : await deps.objectives?.capture(workspaceId, card.id);
 		const qaPrompt = buildQaPrompt({
 			devTaskId: card.id,
 			round,
@@ -899,6 +909,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		});
 		const prompt = [
 			qaPrompt,
+			buildObjectiveQaNote(objective ?? null),
 			setupNote,
 			browserNote,
 			evidenceOnly
@@ -943,6 +954,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			createdAt: context.now,
 			startedAt: null,
 			...(evidenceOnly ? { evidenceOnly: true } : {}),
+			...(objective ? { objectiveBinding: objective.binding } : {}),
 			reviewSeenAt: null,
 			nudges: 0,
 			timedOutAt: null,
@@ -968,6 +980,14 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 			};
 		});
 		const checksNote = describeQaChecksOutcome(checksOutcome);
+		if (objective)
+			await deps.objectives?.attach(workspaceId, {
+				kind: "qa",
+				binding: objective.binding,
+				taskId: qaTaskId,
+				parentTaskId: card.id,
+				at: new Date(entry.createdAt).toISOString(),
+			});
 		deps.log(
 			`qa ${card.id}: created QA card ${qaTaskId} (round ${round}) for snapshot ${short}${checksNote ? ` with ${checksNote}` : ""}; queued`,
 		);
@@ -1022,6 +1042,19 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 		);
 		// State first: a worker that dies halfway through never records the same verdict twice.
 		const at = context.now;
+		const objectiveReceipt =
+			entry.objectiveBinding && !entry.evidenceOnly
+				? objectiveEvidenceSchema.parse({
+						id: objectiveDigest(JSON.stringify(["qa", entry.objectiveBinding, qaTaskId, entry.snapshot])),
+						kind: "qa",
+						binding: entry.objectiveBinding,
+						taskId: entry.reviewsTaskId,
+						snapshot: entry.snapshot,
+						qaTaskId,
+						verdict: verdict.verdict,
+						at: new Date(at).toISOString(),
+					})
+				: null;
 		const verdictRecord: QaVerdictRecord = {
 			qaTaskId,
 			round: entry.round,
@@ -1051,7 +1084,10 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 								],
 								manualReview: { ...readManualReview(devEntry), status: "complete" },
 							}
-						: { ...devEntry, qaVerdicts: [...readQaVerdictRecords(devEntry), verdictRecord] },
+						: {
+								...(objectiveReceipt ? retainObjectiveReceipt(devEntry, objectiveReceipt) : devEntry),
+								qaVerdicts: [...readQaVerdictRecords(devEntry), verdictRecord],
+							},
 					[qaTaskId]: {
 						...qaEntry,
 						qaGate: { ...entry, status: "ingested", ingestedAt: at, verdict: verdict.verdict },
@@ -1059,6 +1095,7 @@ export function createQaGate(deps: QaGateDependencies): QaGate {
 				},
 			};
 		});
+		if (objectiveReceipt) await deps.objectives?.record(workspaceId, objectiveReceipt);
 		try {
 			await copyArtifacts(entry.outboxDir, artifactsDir);
 		} catch (error) {

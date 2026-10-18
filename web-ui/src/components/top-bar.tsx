@@ -13,6 +13,7 @@ import {
 	Play,
 	Plus,
 	Settings,
+	Target,
 	Terminal,
 } from "lucide-react";
 import { useState } from "react";
@@ -299,6 +300,7 @@ export function TopBar({
 	onToggleGitHistory,
 	isGitHistoryOpen,
 	onOpenSettings,
+	onOpenObjectives,
 	onEditProject,
 	showDebugButton,
 	onOpenDebugDialog,
@@ -332,6 +334,7 @@ export function TopBar({
 	onToggleGitHistory?: () => void;
 	isGitHistoryOpen?: boolean;
 	onOpenSettings?: () => void;
+	onOpenObjectives?: () => void;
 	onEditProject?: () => void;
 	showDebugButton?: boolean;
 	onOpenDebugDialog?: () => void;
@@ -682,6 +685,18 @@ export function TopBar({
 					) : null}
 
 					{/* Tips and settings: always visible */}
+					{!hideProjectDependentActions && onOpenObjectives ? (
+						<Tooltip content="Project objectives and retained evidence">
+							<Button
+								variant="ghost"
+								size="sm"
+								icon={<Target size={16} />}
+								onClick={onOpenObjectives}
+								aria-label="Project objectives"
+								className={cn("ml-0.5", isMobile && MOBILE_TOUCH_TARGET)}
+							/>
+						</Tooltip>
+					) : null}
 					<TipsPopover showAgentHints={showAgentHints} className={cn("ml-0.5", isMobile && MOBILE_TOUCH_TARGET)} />
 					<Button
 						variant="ghost"

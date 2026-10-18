@@ -1,12 +1,28 @@
 import { describe, expect, it } from "vitest";
 import {
 	buildDisplayItems,
+	buildUnifiedDiffRows,
 	CONTEXT_RADIUS,
+	getHighlightedLineHtml,
 	INCREMENTAL_EXPAND_STEP,
 	INCREMENTAL_EXPAND_THRESHOLD,
+	MAX_HIGHLIGHT_LINE_LENGTH,
 	MIN_COLLAPSE_LINES,
+	resolvePrismGrammar,
 	type UnifiedDiffRow,
 } from "@/components/shared/diff-renderer";
+
+describe("long generated lines", () => {
+	it("keeps complete old/new text while skipping expensive syntax and word decoration", () => {
+		const oldText = `const data = '${"x".repeat(MAX_HIGHLIGHT_LINE_LENGTH)}';`;
+		const newText = `const data = '${"y".repeat(MAX_HIGHLIGHT_LINE_LENGTH)}';`;
+		expect(getHighlightedLineHtml(newText, resolvePrismGrammar("typescript"), "typescript")).toBeNull();
+		const rows = buildUnifiedDiffRows(oldText, newText);
+		expect(rows.map((row) => row.text)).toEqual([oldText, newText]);
+		expect(rows[0]?.segments).toEqual([{ key: "old", text: oldText, tone: "removed" }]);
+		expect(rows[1]?.segments).toEqual([{ key: "new", text: newText, tone: "added" }]);
+	});
+});
 
 function makeContextRows(count: number, startLine = 1): UnifiedDiffRow[] {
 	const rows: UnifiedDiffRow[] = [];

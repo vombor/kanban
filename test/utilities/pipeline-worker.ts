@@ -9,6 +9,8 @@ import type {
 	RuntimeTaskSessionSummary,
 } from "../../src/core/api-contract";
 import { loadKitCatalog } from "../../src/kits/resolve-kit";
+import { createObjectiveEvidenceOwner } from "../../src/objectives/objective-receipts";
+import { createObjectiveStore, type ObjectiveStore } from "../../src/objectives/objective-store";
 import type { PipelineActionRequest, PipelineActionResult } from "../../src/pipeline/actions";
 import type { ChecksResult, ChecksRunner } from "../../src/pipeline/checks";
 import { createPipelineDecisionLog, type PipelineDecisionRecord } from "../../src/pipeline/decision-log";
@@ -44,6 +46,7 @@ export type QaGateHarnessAction =
 	| { kind: "deliverInput"; workspaceId: string; taskId: string; text: string };
 
 export interface PipelineWorkerHarnessOptions {
+	objectiveStore?: ObjectiveStore;
 	usageHolds?: ProviderUsageHolds;
 	/** The raw config.json content; mutable through `setConfig`. */
 	config?: unknown;
@@ -122,6 +125,8 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 	});
 	const appendQaLog = options.appendQaLog ?? createQaLogAppender(qaLogPath);
 	const artifactsPath = (workspaceId: string) => join(temp.path, "data", workspaceId, "qa-artifacts");
+	const objectiveStore =
+		options.objectiveStore ?? createObjectiveStore({ home: temp.path, now: () => new Date(clock()) });
 	const preview: QaPreviewController = {
 		ensure: async ({ workspaceId }) => {
 			previewCalls.push({ call: "ensure", workspaceId });
@@ -131,6 +136,7 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 		},
 	};
 	const qaGate = createQaGate({
+		objectives: createObjectiveEvidenceOwner(objectiveStore),
 		usageHolds:
 			options.usageHolds ?? createProviderUsageHolds({ path: join(temp.path, "provider-usage-holds.json") }),
 		actions: { run: async (request) => answer(request) },
@@ -174,6 +180,7 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 	});
 	const features = options.createFeatures?.({ bus, appendQaLog, root: temp.path });
 	const reworkStage = createReworkStage({
+		objectives: createObjectiveEvidenceOwner(objectiveStore),
 		runoffGroups: features?.runoffGroups,
 		actions: { run: async (request) => answer(request) },
 		deliverInput: async (input) => answer({ kind: "deliverInput", ...input }),
@@ -213,6 +220,7 @@ export function createPipelineWorkerHarness(options: PipelineWorkerHarnessOption
 	mkdirSync(join(temp.path, "kits"), { recursive: true });
 	writeFileSync(join(temp.path, "kits", "legacy-team.json"), readLegacyTeamKitText());
 	const worker = createPipelineWorker({
+		objectiveStore,
 		send: (message) => messages.push(message),
 		readConfig: async () => parsePipelineConfig(rawConfig),
 		loadCatalog: async () => await loadKitCatalog(join(temp.path, "kits")),

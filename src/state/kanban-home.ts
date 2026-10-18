@@ -547,6 +547,20 @@ export function getProjectKnowledgePaths(workspaceId: string, homePath = getKanb
 	return { root, manifest: join(root, "manifest.json"), objects: join(root, "objects") };
 }
 
+/** Native objective requirements/receipts live inside the workspace data tree for rename/home migration. */
+export function getObjectivePaths(workspaceId: string, homePath = getKanbanHomePath()) {
+	if (
+		!workspaceId ||
+		workspaceId === "." ||
+		workspaceId === ".." ||
+		/[\\/\0]/u.test(workspaceId) ||
+		getReservedDataDirNames().includes(workspaceId)
+	)
+		throw new Error("Invalid project objective scope");
+	const root = join(getKanbanWorkspaceDataPath(workspaceId, homePath), "objectives");
+	return { root, state: join(root, "state.json"), requirements: join(root, "requirements") };
+}
+
 /** The pipeline's per-card state (`<home>/data/<workspaceId>/pipeline-state.json`). */
 export function getPipelineStatePath(workspaceId: string, homePath = getKanbanHomePath()): string {
 	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), PIPELINE_STATE_FILENAME);

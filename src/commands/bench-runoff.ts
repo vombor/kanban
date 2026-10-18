@@ -8,6 +8,7 @@ import type { Command } from "commander";
 import { getWorkspacePipelineSettings, readPipelineConfig } from "../config/pipeline-config";
 import { loadGlobalRuntimeConfig } from "../config/runtime-config";
 import type { RuntimeAgentId, RuntimeBoardCard, RuntimeBoardColumnId } from "../core/api-contract";
+import { objectiveManualLineageSchema } from "../core/objective-contract";
 import { createUniqueTaskId } from "../core/task-id";
 import { resolveProposalProvider } from "../kits/dev-assignment";
 import { resolveKitRole } from "../kits/kit-roles";
@@ -26,6 +27,7 @@ import { readPipelineHold } from "../pipeline/hold";
 import { createPipelineStateStore } from "../pipeline/pipeline-state";
 import { getWatchdogWorkspacePaths } from "../state/kanban-home";
 import { loadWorkspaceBoardById } from "../state/workspace-state";
+import { createRuntimeTrpcClient } from "./runtime-trpc-client";
 import { createTask, startTask } from "./task";
 import { resolveWorkspaceTarget, type WorkspaceTarget } from "./workspace-target";
 
@@ -64,6 +66,9 @@ function findCard(
 }
 
 interface CreateOptions {
+	objective?: string;
+	objectiveRevision?: string;
+	objectiveParent?: string;
 	project?: string;
 	title?: string;
 	prompt?: string;
@@ -106,6 +111,13 @@ async function readPrompt(
 
 async function runCreate(name: string, options: CreateOptions): Promise<number> {
 	const target = await resolveWorkspaceTarget(options.project, { allowUnregistered: false });
+	if (
+		[options.objective, options.objectiveRevision, options.objectiveParent].some(Boolean) &&
+		![options.objective, options.objectiveRevision, options.objectiveParent].every(Boolean)
+	)
+		throw new Error(
+			"Explicit objective lineage requires --objective, --objective-revision and --objective-parent together; --from is only a reference.",
+		);
 	if (!target.repoPath) {
 		throw new Error(`workspace ${target.workspaceId} has no registered repo`);
 	}
@@ -173,6 +185,18 @@ async function runCreate(name: string, options: CreateOptions): Promise<number> 
 		return { taskId, card };
 	});
 	const createdAt = new Date().toISOString();
+	if (options.objective)
+		await createRuntimeTrpcClient(target.workspaceId).objectives.manualLineage.mutate(
+			objectiveManualLineageSchema.parse({
+				requestId: randomUUID(),
+				id: options.objective,
+				expectedRevision: Number(options.objectiveRevision),
+				parentTaskId: options.objectiveParent,
+				taskIds: plannedCards.map((item) => item.taskId),
+				kind: "runoff",
+				planned: true,
+			}),
+		);
 	const entryFor = (cards: typeof plannedCards) =>
 		buildRunoffEntry({
 			name,
@@ -372,6 +396,15 @@ export function registerBenchRunoffCommands(
 		)
 		.option("--prompt <text>", "The task prompt; @file reads a file.")
 		.option("--from <taskId>", "Copy the prompt, title and base of an existing card.")
+		.option(
+			"--objective <id>",
+			"Explicit user-owned lineage, never inferred from --from; no benchmark execution approval.",
+		)
+		.option(
+			"--objective-revision <number>",
+			"Pinned objective revision for lineage before any cards/group are created.",
+		)
+		.option("--objective-parent <taskId>", "Implementation parent in the same objective.")
 		.option("--title <title>", "Card title (each card gets ' [runoff <name>: <model>]').")
 		.option("--model <spec>", "[agent:][provider/]model; repeat for each contender.", collect)
 		.option("--tier <tier>", "Every usable model of this kit tier (dropped models skipped).")

@@ -30,6 +30,7 @@ import { dirname, join, relative } from "node:path";
 
 import type { PipelineConfig, WorkspacePipelineSettings } from "../config/pipeline-config";
 import { createGitProcessEnv } from "../core/git-process-env";
+import type { ObjectiveBinding } from "../core/objective-evidence";
 import { removeTreeWithoutFollowingLinks } from "../fs/remove-tree";
 import type { KitChecks } from "../kits/kit-schema";
 import { DEFAULT_KIT_NAME } from "../kits/resolve-kit";
@@ -72,6 +73,8 @@ export async function readSnapshotCheckScripts(
 }
 
 export interface ChecksRequest {
+	/** Captured before enqueue; absent on historical/unbound runs, never filled in at result time. */
+	objectiveBinding?: ObjectiveBinding;
 	workspaceId: string;
 	/** The workspace's repo (snapshots are exported from its object store, so a deleted worktree doesn't matter). */
 	repoPath: string;

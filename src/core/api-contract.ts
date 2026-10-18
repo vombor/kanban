@@ -377,6 +377,8 @@ export const runtimeTaskSessionSummarySchema = z.object({
 	providerId: z.string().nullable().optional(),
 	/** An empty composer/terminal restore is not a model turn until its first subsequent prompt hook or delivery. */
 	dispatchPromptSubmitted: z.boolean().optional(),
+	/** First native submit after an empty composer; birth/output time is not a submitted attempt clock. */
+	dispatchPromptSubmittedAt: z.number().nullable().optional(),
 	reasoningEffort: z.string().nullable().default(null),
 	latestTurnCheckpoint: runtimeTaskTurnCheckpointSchema.nullable().optional(),
 	previousTurnCheckpoint: runtimeTaskTurnCheckpointSchema.nullable().optional(),

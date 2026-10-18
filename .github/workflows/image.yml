@@ -83,6 +83,13 @@ jobs:
           npm run build
           npm test
 
+      - name: Validate separate maintainer tooling
+        run: |
+          npm run maintainer:typecheck
+          npm run maintainer:test
+          npm run maintainer:build
+          npm run web:test
+
       - name: Pack Kanban
         run: |
           # The scoped package packs as vombor-kanban-<version>.tgz; an empty dir makes it the only tarball.

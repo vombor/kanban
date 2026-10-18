@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -5,14 +6,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { getWorkspacePipelineSettings, parsePipelineConfig } from "../../../src/config/pipeline-config";
 import type { RuntimeBoardCard, RuntimeBoardColumnId } from "../../../src/core/api-contract";
+import { objectiveCreateSchema } from "../../../src/core/objective-contract";
+import type { ObjectiveEvidenceOwner } from "../../../src/core/objective-evidence";
 import type { KitLandVeto } from "../../../src/kits/land-veto";
 import { createRoutingPolicy } from "../../../src/kits/policy";
 import { getDefaultKit, loadKitCatalog } from "../../../src/kits/resolve-kit";
 import { createRunoffsLandVeto } from "../../../src/kits/team/runoffs/runoffs-land-veto";
+import { createObjectiveEvidenceOwner } from "../../../src/objectives/objective-receipts";
+import { createObjectiveStore } from "../../../src/objectives/objective-store";
 import { createPipelineDecisionLog, type PipelineDecisionRecord } from "../../../src/pipeline/decision-log";
 import { evaluatePipelineWorkspace } from "../../../src/pipeline/engine";
 import type { PipelineEventMap } from "../../../src/pipeline/events";
 import type { PipelineHold } from "../../../src/pipeline/hold";
+import { createPipelineStateStore, type PipelineStateStore } from "../../../src/pipeline/pipeline-state";
 import { createAutoReviewReconciler } from "../../../src/server/auto-review-reconciler";
 import { createTaskLandingGate } from "../../../src/server/task-landing-gate";
 import { createTaskTrashWorkflow, type TaskTrashTrigger } from "../../../src/server/task-trash-workflow";
@@ -42,10 +48,14 @@ function createHarness(input: {
 	worktrees?: Record<string, string>;
 	holds?: Record<string, PipelineHold>;
 	landVetoes?: readonly KitLandVeto[];
+	objectives?: ObjectiveEvidenceOwner;
+	objectiveReceiptStore?: PipelineStateStore;
 }) {
 	const logPath = join(input.repo.root, "data", WORKSPACE_ID, "pipeline-decisions.jsonl");
 	const landed: Array<PipelineEventMap["landed"]> = [];
 	const gate = createTaskLandingGate({
+		objectives: input.objectives,
+		objectiveReceiptStore: input.objectiveReceiptStore,
 		readConfig: async () => parsePipelineConfig(input.config),
 		loadCatalog: async () => await loadKitCatalog(join(input.repo.root, "kits")),
 		readHold: async (_workspaceId, taskId) => input.holds?.[taskId] ?? null,
@@ -94,6 +104,48 @@ describe("landing modes", () => {
 	afterEach(() => {
 		repo?.cleanup();
 		repo = null;
+	});
+
+	it("retains the actual pre-land snapshot and final commit before Done; landing alone cannot complete an objective", async () => {
+		const setup = repoWithWork();
+		repo = setup.repo;
+		const objectives = createObjectiveStore({
+			home: join(repo.root, "home"),
+			now: () => new Date("2026-10-07T11:00:00Z"),
+		});
+		await objectives.create(
+			"foo",
+			objectiveCreateSchema.parse({
+				requestId: randomUUID(),
+				title: "Objective",
+				requirements: "Pass regression",
+				taskIds: ["dev01"],
+			}),
+		);
+		const receipts = createPipelineStateStore({
+			getStatePath: () => join(setup.repo.root, "home", "pipeline.json"),
+			getLegacyChecksStatePaths: () => [],
+		});
+		const harness = createHarness({
+			repo,
+			config: landingConfig("qa"),
+			cards: { review: [createCard({ id: "dev01" })] },
+			worktrees: { dev01: setup.worktree },
+			objectives: createObjectiveEvidenceOwner(objectives),
+			objectiveReceiptStore: receipts,
+		});
+		const done = await harness.done("dev01", { landing: "land", trigger: "approve" });
+		expect(done).toMatchObject({ ok: true, landing: { decision: "landed" } });
+		const objective = (await objectives.read("foo")).objectives[0];
+		expect(objective?.status).toBe("held");
+		expect(objective?.evidence).toHaveLength(1);
+		expect(objective?.evidence[0]).toMatchObject({
+			kind: "landed",
+			commit: repo.tip(),
+			taskId: "dev01",
+			binding: { requirementsHash: objective?.requirementsHash },
+		});
+		expect((await receipts.load("foo")).cards.dev01?.objectiveReceipts).toEqual(objective?.evidence);
 	});
 
 	describe("landing off/commit/pr: Done never drops work unasked (issue #11)", () => {

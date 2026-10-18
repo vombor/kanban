@@ -20,6 +20,7 @@
 // entry is said to look stranded in the stash, with the entry's sha (worktree-stash.ts, issue #22), not "never ran".
 import type { WorkspacePipelineSettings } from "../config/pipeline-config";
 import type { RuntimeBoardCard } from "../core/api-contract";
+import type { ObjectiveEvidenceOwner } from "../core/objective-evidence";
 import type { KitChecks } from "../kits/kit-schema";
 import type { EffectiveCard } from "../kits/policy";
 import { getReviewActivityAt } from "../terminal/review-settle";
@@ -76,6 +77,7 @@ export interface SubmissionStage {
 }
 
 export interface CreateSubmissionStageOptions {
+	objectives?: ObjectiveEvidenceOwner;
 	checks: ChecksQueue;
 	resolveWorktree?: (workspacePath: string, card: RuntimeBoardCard) => Promise<string | null>;
 	takeSnapshot?: (input: TakeTaskSnapshotInput) => Promise<TaskSnapshot>;
@@ -198,7 +200,9 @@ export function createSubmissionStage(options: CreateSubmissionStageOptions): Su
 			} else if (shadow) {
 				records.push({ stage: "checks", outcome: "shadow", note: `would run checks on ${short(snapshot.commit)}` });
 			} else {
+				const objective = await options.objectives?.capture(context.workspaceId, card.id);
 				const status = options.checks.enqueue({
+					...(objective ? { objectiveBinding: objective.binding } : {}),
 					workspaceId: context.workspaceId,
 					repoPath: context.workspacePath,
 					taskId: card.id,

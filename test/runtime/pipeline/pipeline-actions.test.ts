@@ -31,6 +31,26 @@ function createRunner(columns: Parameters<typeof createBoard>[0]) {
 }
 
 describe("pipeline actions on the server", () => {
+	it("refuses objective-held replaceLive recovery before stopping its active tool or creating a worktree", async () => {
+		const { store, fakes } = createRunner({ review: [createCard({ id: "dev01" })] });
+		const stop = vi.fn(),
+			canAdmitTask = vi.fn(async () => "Objective admission paused; existing process preserved");
+		const run = createPipelineActionRunner({
+			mutateWorkspaceState: store.mutateWorkspaceState,
+			ensureTaskWorktree: fakes.ensureTaskWorktree,
+			startTaskSession: fakes.startTaskSession,
+			stopTaskSession: stop,
+			hasLiveProcess: () => true,
+			canAdmitTask,
+		});
+		expect(
+			await run({ ...SCOPE, kind: "resumeTask", taskId: "dev01", agentId: "cline", replaceLive: true }),
+		).toMatchObject({ ok: false, error: expect.stringContaining("paused") });
+		expect(stop).not.toHaveBeenCalled();
+		expect(fakes.startTaskSession).not.toHaveBeenCalled();
+		expect(fakes.ensureTaskWorktree).not.toHaveBeenCalled();
+		expect(findCardInBoard(store.stored.board, "dev01")?.columnId).toBe("review");
+	});
 	it("creates a QA card in Backlog with its role and reviewsTaskId, never auto-reviewed", async () => {
 		const { store, run, onBoardMutated } = createRunner({ review: [createCard({ id: "d1111" })] });
 

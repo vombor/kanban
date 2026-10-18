@@ -25,6 +25,8 @@
 import type { Dirent } from "node:fs";
 import { open, readdir, readFile, stat } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
+import type { AgentUsageObservation } from "../core/agent-usage-observation";
+import { hasUsageNumbers, usageObservation, usageSourceKey } from "./usage-observation";
 
 export interface TokenCounts {
 	/** Input tokens not read from or written to the prompt cache. */
@@ -45,6 +47,7 @@ export interface AgentSessionUsage {
 	counts: TokenCounts;
 	/** Every model that answered in the worktree's sessions, most recently used first. */
 	models: string[];
+	observations?: AgentUsageObservation[];
 }
 
 export interface AgentTokenUsageReader {
@@ -52,7 +55,11 @@ export interface AgentTokenUsageReader {
 	 * Token counts and models per worktree path (keyed as given) over every agent session run in it; worktrees with
 	 * neither are left out.
 	 */
-	read(worktreePaths: readonly string[], sources: AgentTokenUsageSources): Promise<Map<string, AgentSessionUsage>>;
+	read(
+		worktreePaths: readonly string[],
+		sources: AgentTokenUsageSources,
+		options?: { observations: true },
+	): Promise<Map<string, AgentSessionUsage>>;
 }
 
 /** When each model last answered (ms since the epoch; 0 for a record without a time). */
@@ -281,6 +288,7 @@ interface ClaudeTranscriptState {
 	byMessageId: Map<string, TokenCounts>;
 	withoutId: TokenCounts;
 	models: ModelUses;
+	observations: Map<string, AgentUsageObservation>;
 }
 
 function applyClaudeLine(state: ClaudeTranscriptState, record: Record<string, unknown>): void {
@@ -293,6 +301,22 @@ function applyClaudeLine(state: ClaudeTranscriptState, record: Record<string, un
 	}
 	const usage = asRecord(message?.usage);
 	if (!usage) {
+		if (message?.model !== CLAUDE_SYNTHETIC_MODEL) {
+			const id = typeof message?.id === "string" ? message.id : null;
+			const key = id ?? `line-${state.observations.size}`;
+			state.observations.set(
+				key,
+				usageObservation({
+					agent: "claude",
+					identity: key,
+					stable: id !== null,
+					at: readTime(record.timestamp),
+					model: message?.model,
+					tokens: null,
+					cacheKnown: false,
+				}),
+			);
+		}
 		return;
 	}
 	const counts: TokenCounts = {
@@ -302,6 +326,21 @@ function applyClaudeLine(state: ClaudeTranscriptState, record: Record<string, un
 		cacheWrite: count(usage.cache_creation_input_tokens),
 	};
 	const id = typeof message?.id === "string" ? message.id : null;
+	if (message?.model !== CLAUDE_SYNTHETIC_MODEL) {
+		const key = id ?? `line-${state.observations.size}`;
+		state.observations.set(
+			key,
+			usageObservation({
+				agent: "claude",
+				identity: key,
+				stable: id !== null,
+				at: readTime(record.timestamp),
+				model: message?.model,
+				tokens: hasUsageNumbers(usage.input_tokens, usage.output_tokens) ? counts : null,
+				cacheKnown: hasUsageNumbers(usage.cache_read_input_tokens, usage.cache_creation_input_tokens),
+			}),
+		);
+	}
 	if (id) {
 		state.byMessageId.set(id, counts);
 	} else {
@@ -313,6 +352,7 @@ function applyClaudeLine(state: ClaudeTranscriptState, record: Record<string, un
 interface ClineTurn {
 	id: string | null;
 	counts: TokenCounts;
+	observation: AgentUsageObservation;
 }
 
 interface ClineSessionMessages {
@@ -359,6 +399,25 @@ function parseClineMessages(text: string): ClineSessionMessages {
 				cacheRead,
 				cacheWrite,
 			},
+			observation: usageObservation({
+				agent: "cline",
+				identity: typeof message.id === "string" ? message.id : `ordinal-${turns.length}`,
+				stable: typeof message.id === "string",
+				at: readTime(message.ts),
+				model: asRecord(message.modelInfo)?.id,
+				provider: asRecord(message.modelInfo)?.provider,
+				tokens:
+					hasUsageNumbers(metrics?.inputTokens, metrics?.outputTokens) && input >= cacheRead + cacheWrite
+						? {
+								input: Math.max(0, input - cacheRead - cacheWrite),
+								output: count(metrics?.outputTokens),
+								cacheRead,
+								cacheWrite,
+							}
+						: null,
+				cacheKnown: hasUsageNumbers(metrics?.cacheReadTokens, metrics?.cacheWriteTokens),
+				generationError: asRecord(message.metadata)?.displayRole === "error",
+			}),
 		});
 	}
 	return { turns, models };
@@ -368,11 +427,19 @@ interface CodexRolloutState {
 	lastTotal: unknown;
 	counts: TokenCounts;
 	models: ModelUses;
+	currentModel: unknown;
+	sessionId: string | null;
+	observations: Map<string, AgentUsageObservation>;
 }
 
 function applyCodexLine(state: CodexRolloutState, record: Record<string, unknown>): void {
 	const payload = asRecord(record.payload);
+	if (record.type === "session_meta") {
+		state.sessionId = typeof payload?.id === "string" ? payload.id : null;
+		return;
+	}
 	if (record.type === "turn_context") {
+		state.currentModel = payload?.model;
 		noteModel(state.models, payload?.model, readTime(record.timestamp));
 		return;
 	}
@@ -394,11 +461,33 @@ function applyCodexLine(state: CodexRolloutState, record: Record<string, unknown
 		cacheRead,
 		cacheWrite,
 	});
+	state.observations.set(
+		String(total),
+		usageObservation({
+			agent: "codex",
+			identity: `${state.sessionId ?? "unknown"}:total-${String(total)}:${readTime(record.timestamp)}`,
+			stable: state.sessionId !== null,
+			at: readTime(record.timestamp),
+			model: state.currentModel,
+			tokens: hasUsageNumbers(usage.input_tokens, usage.output_tokens)
+				? {
+						input: Math.max(0, count(usage.input_tokens) - cacheRead - cacheWrite),
+						output: count(usage.output_tokens),
+						cacheRead,
+						cacheWrite,
+					}
+				: null,
+			cacheKnown: hasUsageNumbers(usage.cached_input_tokens, usage.cache_write_input_tokens),
+		}),
+	);
 }
 
 interface CopilotEventsState {
 	counts: TokenCounts | null;
 	models: ModelUses;
+	shutdownAt: number;
+	usageKnown: boolean;
+	cacheKnown: boolean;
 }
 
 function applyCopilotLine(state: CopilotEventsState, record: Record<string, unknown>): void {
@@ -420,6 +509,12 @@ function applyCopilotLine(state: CopilotEventsState, record: Record<string, unkn
 		cacheRead: tokens("cache_read"),
 		cacheWrite: tokens("cache_write"),
 	};
+	state.shutdownAt = readTime(record.timestamp);
+	state.usageKnown = hasUsageNumbers(asRecord(details.input)?.tokenCount, asRecord(details.output)?.tokenCount);
+	state.cacheKnown = hasUsageNumbers(
+		asRecord(details.cache_read)?.tokenCount,
+		asRecord(details.cache_write)?.tokenCount,
+	);
 }
 
 async function listCodexRollouts(root: string): Promise<string[]> {
@@ -453,11 +548,17 @@ export function createAgentTokenUsageReader(options: { now?: () => number } = {}
 	const sessionCwds = new Map<string, CachedValue<string[] | null>>();
 
 	return {
-		read: async (worktreePaths, sources) => {
+		read: async (worktreePaths, sources, request) => {
 			const at = now();
 			const worktrees = new Map<
 				string,
-				{ key: string; counts: TokenCounts; models: ModelUses; seen: Set<string> }
+				{
+					key: string;
+					counts: TokenCounts;
+					models: ModelUses;
+					seen: Set<string>;
+					observations: Map<string, AgentUsageObservation>;
+				}
 			>();
 			for (const path of worktreePaths) {
 				worktrees.set(normalizePath(path), {
@@ -465,6 +566,7 @@ export function createAgentTokenUsageReader(options: { now?: () => number } = {}
 					counts: emptyTokenCounts(),
 					models: new Map(),
 					seen: new Set(),
+					observations: new Map(),
 				});
 			}
 			const findWorktree = (cwds: readonly string[]) => {
@@ -501,7 +603,12 @@ export function createAgentTokenUsageReader(options: { now?: () => number } = {}
 					const state = await readJsonlIncrementally(
 						claudeFiles,
 						join(dir, name),
-						() => ({ byMessageId: new Map(), withoutId: emptyTokenCounts(), models: new Map() }),
+						() => ({
+							byMessageId: new Map(),
+							withoutId: emptyTokenCounts(),
+							models: new Map(),
+							observations: new Map(),
+						}),
 						applyClaudeLine,
 						at,
 					);
@@ -513,6 +620,12 @@ export function createAgentTokenUsageReader(options: { now?: () => number } = {}
 					}
 					addTokenCounts(worktree.counts, state.withoutId);
 					addModelUses(worktree.models, state.models);
+					for (const observation of state.observations.values()) {
+						const scoped = observation.uncertainty.includes("identity_missing")
+							? { ...observation, key: usageSourceKey(observation.agent, `${observation.key}:${name}`) }
+							: observation;
+						worktree.observations.set(scoped.key, scoped);
+					}
 				}
 			}
 
@@ -542,6 +655,13 @@ export function createAgentTokenUsageReader(options: { now?: () => number } = {}
 				const session = await readWholeFile(clineFiles, join(dir, `${name}.messages.json`), parseClineMessages, at);
 				for (const turn of session?.turns ?? []) {
 					addOnce(worktree, turn.id ? `cline:${turn.id}` : null, turn.counts);
+					const observation = turn.id
+						? turn.observation
+						: {
+								...turn.observation,
+								key: usageSourceKey(turn.observation.agent, `${turn.observation.key}:${name}`),
+							};
+					worktree.observations.set(observation.key, observation);
 				}
 				if (session) {
 					addModelUses(worktree.models, session.models);
@@ -565,13 +685,29 @@ export function createAgentTokenUsageReader(options: { now?: () => number } = {}
 				const state = await readJsonlIncrementally(
 					codexFiles,
 					file,
-					() => ({ lastTotal: null, counts: emptyTokenCounts(), models: new Map() }),
+					() => ({
+						lastTotal: null,
+						counts: emptyTokenCounts(),
+						models: new Map(),
+						currentModel: null,
+						sessionId: null,
+						observations: new Map(),
+					}),
 					applyCodexLine,
 					at,
 				);
 				if (state) {
 					addTokenCounts(worktree.counts, state.counts);
 					addModelUses(worktree.models, state.models);
+					for (const observation of state.observations.values()) {
+						const scoped = {
+							...observation,
+							key: observation.uncertainty.includes("identity_missing")
+								? usageSourceKey(observation.agent, `${observation.key}:${file}`)
+								: observation.key,
+						};
+						worktree.observations.set(scoped.key, scoped);
+					}
 				}
 			}
 
@@ -594,7 +730,7 @@ export function createAgentTokenUsageReader(options: { now?: () => number } = {}
 				const state = await readJsonlIncrementally(
 					copilotFiles,
 					join(dir, "events.jsonl"),
-					() => ({ counts: null, models: new Map() }),
+					() => ({ counts: null, models: new Map(), shutdownAt: 0, usageKnown: false, cacheKnown: false }),
 					applyCopilotLine,
 					at,
 				);
@@ -603,6 +739,19 @@ export function createAgentTokenUsageReader(options: { now?: () => number } = {}
 				}
 				if (state) {
 					addModelUses(worktree.models, state.models);
+					const models = listModelsByLastUse(state.models);
+					const observation = usageObservation({
+						agent: "copilot",
+						identity: dir,
+						stable: true,
+						at: state.shutdownAt,
+						model: models[0],
+						mixed: models.length > 1,
+						tokens: state.usageKnown ? state.counts : null,
+						cacheKnown: state.cacheKnown,
+						basis: "session_total",
+					});
+					worktree.observations.set(observation.key, observation);
 				}
 			}
 
@@ -612,8 +761,16 @@ export function createAgentTokenUsageReader(options: { now?: () => number } = {}
 			const usage = new Map<string, AgentSessionUsage>();
 			for (const worktree of worktrees.values()) {
 				// A model without counts yet: a Copilot session writes its totals only when it ends.
-				if (getTokenCountsTotal(worktree.counts) > 0 || worktree.models.size > 0) {
-					usage.set(worktree.key, { counts: worktree.counts, models: listModelsByLastUse(worktree.models) });
+				if (
+					getTokenCountsTotal(worktree.counts) > 0 ||
+					worktree.models.size > 0 ||
+					(request?.observations && worktree.observations.size > 0)
+				) {
+					usage.set(worktree.key, {
+						counts: worktree.counts,
+						models: listModelsByLastUse(worktree.models),
+						...(request?.observations ? { observations: [...worktree.observations.values()] } : {}),
+					});
 				}
 			}
 			return usage;
