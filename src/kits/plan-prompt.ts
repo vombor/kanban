@@ -83,6 +83,7 @@ ${buildPlanBreakdownExample(input.slug)}
    e. At most ${PLAN_MAX_CARDS} cards; a bigger requirement is several plans.
    f. "slug" is "${input.slug}". Check the file with: kanban plan check --file ${breakdownPath} (the one kanban command you may run).
    g. If you use published project knowledge, name exact {"id":"document-id","revision":"<full SHA-256>"} entries in optional "knowledgeReferences" at the breakdown level (shared) or on a card (only that card). Discover/read with kanban knowledge list/search/read, never invent revisions. The user's protected pins are included automatically; ordinary knowledge is not approval.
+   h. Where known, add optional per-card "coordination": {"paths":["src/example"],"produces":["interface-name"],"consumes":["other-interface"],"risk":"medium","taskType":"implementation"}. These are bounded review hints (20 paths / 10 produced / 10 consumed interfaces), not locks, new prerequisites, assignment decisions or permission to start. Use portable relative paths without globs; omit unknown hints rather than inventing ownership or timing estimates.
 5. Leave both files uncommitted in your worktree; change nothing else.${rules.length > 0 ? `\n\nProject rules for plans:\n${rules.map((rule) => `- ${rule}`).join("\n")}` : ""}
 
 Finish with one line: "STATUS: PLAN READY ${specPath}, <n> cards", "STATUS: NEEDS INPUT <your questions>", "STATUS: TOO SMALL <why one card is enough>" or "STATUS: BLOCKED <why>".

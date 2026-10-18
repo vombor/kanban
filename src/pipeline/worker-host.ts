@@ -41,9 +41,11 @@ import type {
 	RuntimeTaskSessionSummary,
 	RuntimeTaskTrashResponse,
 } from "../core/api-contract";
+import { IntegrationChecksUnavailableError } from "../integration/checks-admission";
 import { type PidPressureFlags, readPidPressureFlags } from "../state/pid-pressure-flags";
 import { DEFAULT_REVIEW_SETTLE_MS, getReviewActivityAt } from "../terminal/review-settle";
 import type { PipelineActionRequest, PipelineActionResult } from "./actions";
+import type { ChecksRequest, ChecksResult } from "./checks";
 import { getRecoveryScope, isPipelineWorkspace, type PipelineWorkspaceSnapshot } from "./engine";
 import type { PipelineEventMap } from "./events";
 import type { WatchdogActionRequest } from "./watchdog/actions";
@@ -112,6 +114,8 @@ export interface PipelineWorkerHostStatus {
 }
 
 export interface PipelineWorkerHost {
+	/** Explicit user-owned report only. Refuses without an already-ready worker; never starts/replays one. */
+	integrationChecks?: (request: ChecksRequest) => Promise<ChecksResult>;
 	start: () => void;
 	/** A board write (`summary` absent) or a session summary of a workspace (from the state hub). */
 	notifyActivity: (activity: { workspaceId: string; summary?: RuntimeTaskSessionSummary }) => void;
@@ -173,6 +177,19 @@ export function forkPipelineWorkerProcess(script: string, execArgv: string[]): P
 export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependencies): PipelineWorkerHost {
 	const readConfig = deps.readConfig ?? (async () => await readPipelineConfig());
 	const spawnWorker = deps.spawnWorker ?? spawnPipelineWorkerProcess;
+	let integrationReady = false;
+	const integrationPending = new Map<
+		string,
+		{ resolve: (result: ChecksResult) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }
+	>();
+	const refuseIntegrations = () => {
+		integrationReady = false;
+		for (const pending of integrationPending.values()) {
+			clearTimeout(pending.timer);
+			pending.reject(new Error("Integration checks delivery is uncertain; no replay was performed."));
+		}
+		integrationPending.clear();
+	};
 	const restartDelays = deps.restartDelaysMs ?? DEFAULT_RESTART_DELAYS_MS;
 	const coalesceMs = deps.coalesceMs ?? DEFAULT_COALESCE_MS;
 	const reviewSettleMs = deps.reviewSettleMs ?? DEFAULT_REVIEW_SETTLE_MS;
@@ -382,10 +399,21 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 					}
 				})();
 			} else if (message.type === "ready") {
+				if (child === started) integrationReady = true;
 				// Snapshots sent before the worker listened would be lost; send them all now.
 				for (const [workspaceId, workspacePath] of pipelineWorkspaces) {
 					void sendSnapshot(workspaceId, workspacePath);
 				}
+			} else if (message.type === "integrationChecksResult") {
+				if (child !== started) return;
+				const pending = integrationPending.get(message.id);
+				if (pending && message.result?.request?.integrationReportId === message.id) {
+					integrationPending.delete(message.id);
+					clearTimeout(pending.timer);
+					pending.resolve(message.result);
+				}
+				// Full check output is private to the exact report owner, never a generic host/UI event.
+				return;
 			}
 			deps.onWorkerMessage?.(message);
 		});
@@ -394,6 +422,7 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 				return;
 			}
 			child = null;
+			refuseIntegrations();
 			// Nothing keeps them current now; the restarted worker sends them again after its first evaluation.
 			clearCardStages();
 			if (closed || pipelineWorkspaces.size === 0) {
@@ -421,6 +450,7 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 	}
 
 	const stopChild = (): void => {
+		refuseIntegrations();
 		const current = child;
 		child = null;
 		clearCardStages();
@@ -508,6 +538,37 @@ export function createPipelineWorkerHost(deps: CreatePipelineWorkerHostDependenc
 	};
 
 	return {
+		integrationChecks: async (request) => {
+			const parsed = await readConfig(),
+				pressure = await readPidPressure();
+			if (
+				closed ||
+				!child ||
+				!integrationReady ||
+				parsed.config.pipeline.paused ||
+				pressure.pressure ||
+				integrationPending.size ||
+				!request.integrationReportId
+			)
+				throw new IntegrationChecksUnavailableError();
+			const target = child,
+				id = request.integrationReportId;
+			return new Promise<ChecksResult>((resolve, reject) => {
+				const timer = setTimeout(() => {
+					integrationPending.delete(id);
+					reject(new Error("Integration checks outcome uncertain; no automatic replay."));
+				}, 30 * 60_000);
+				timer.unref();
+				integrationPending.set(id, { resolve, reject, timer });
+				try {
+					target.send({ type: "integrationChecks", id, request });
+				} catch {
+					integrationPending.delete(id);
+					clearTimeout(timer);
+					reject(new Error("Integration checks outcome uncertain; no automatic replay."));
+				}
+			});
+		},
 		start: () => {
 			if (closed || sweepTimer) {
 				return;

@@ -9,6 +9,7 @@ import type {
 	RuntimeTaskTrashResponse,
 } from "../core/api-contract";
 import type { PipelineActionRequest } from "./actions";
+import type { ChecksRequest, ChecksResult } from "./checks";
 import type { PipelineWorkspaceSnapshot } from "./engine";
 import type { PipelineEventMap } from "./events";
 import type { WatchdogActionRequest } from "./watchdog/actions";
@@ -28,6 +29,7 @@ export interface PipelineFinishTaskRequest {
 export type PipelineServerRequest = WatchdogActionRequest | PipelineActionRequest;
 
 export type PipelineHostMessage =
+	| { type: "integrationChecks"; id: string; request: ChecksRequest }
 	| { type: "snapshot"; snapshot: PipelineWorkspaceSnapshot }
 	/** The workspace left the server (project removed) or no longer runs the pipeline. */
 	| { type: "forget"; workspaceId: string }
@@ -40,6 +42,7 @@ export type PipelineHostMessage =
 	| { type: "shutdown" };
 
 export type PipelineWorkerMessage =
+	| { type: "integrationChecksResult"; id: string; result: ChecksResult }
 	| { type: "ready"; pid: number }
 	| { type: "evaluated"; workspaceId: string; decisions: number; logged: number }
 	| { type: "log"; message: string }
@@ -53,8 +56,24 @@ function hasType(value: unknown): value is { type: unknown } {
 	return Boolean(value) && typeof value === "object" && "type" in (value as object);
 }
 
-const HOST_MESSAGE_TYPES = new Set(["snapshot", "forget", "landed", "finishTaskResult", "response", "shutdown"]);
-const WORKER_MESSAGE_TYPES = new Set(["ready", "evaluated", "log", "cardStages", "finishTask", "request"]);
+const HOST_MESSAGE_TYPES = new Set([
+	"snapshot",
+	"forget",
+	"landed",
+	"finishTaskResult",
+	"response",
+	"shutdown",
+	"integrationChecks",
+]);
+const WORKER_MESSAGE_TYPES = new Set([
+	"ready",
+	"evaluated",
+	"log",
+	"cardStages",
+	"finishTask",
+	"request",
+	"integrationChecksResult",
+]);
 
 export function isPipelineHostMessage(value: unknown): value is PipelineHostMessage {
 	return hasType(value) && typeof value.type === "string" && HOST_MESSAGE_TYPES.has(value.type);

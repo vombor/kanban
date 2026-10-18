@@ -1,6 +1,8 @@
 import { BookOpen, RefreshCw } from "lucide-react";
 import { useId, useState } from "react";
+import { CoordinationDialog } from "@/components/coordination-dialog";
 import { EfficiencyDialog } from "@/components/efficiency-dialog";
+import { IntegrationDialog } from "@/components/integration-dialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogBody, DialogFooter, DialogHeader } from "@/components/ui/dialog";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -27,6 +29,8 @@ function KnowledgeDialogScope({
 		statusId = useId();
 	const [discoveryOpen, setDiscoveryOpen] = useState(false);
 	const [efficiencyOpen, setEfficiencyOpen] = useState(false);
+	const [coordinationOpen, setCoordinationOpen] = useState(false);
+	const [integrationOpen, setIntegrationOpen] = useState(false);
 	const view = useKnowledgeBrowser(workspaceId),
 		[draft, setDraft] = useState("");
 	const data = view.query.data,
@@ -241,6 +245,12 @@ function KnowledgeDialogScope({
 					<Button size="sm" onClick={() => setEfficiencyOpen(true)}>
 						Efficiency reports
 					</Button>
+					<Button size="sm" onClick={() => setCoordinationOpen(true)}>
+						Coordination preview
+					</Button>
+					<Button size="sm" onClick={() => setIntegrationOpen(true)}>
+						Integration reports
+					</Button>
 					<Button size="sm" icon={<RefreshCw size={14} />} onClick={view.reload}>
 						Reload knowledge
 					</Button>
@@ -258,6 +268,12 @@ function KnowledgeDialogScope({
 					projectName={projectName}
 					onClose={() => setEfficiencyOpen(false)}
 				/>
+			) : null}
+			{coordinationOpen ? (
+				<CoordinationDialog workspaceId={workspaceId} onClose={() => setCoordinationOpen(false)} />
+			) : null}
+			{integrationOpen ? (
+				<IntegrationDialog workspaceId={workspaceId} onClose={() => setIntegrationOpen(false)} />
 			) : null}
 		</Dialog>
 	);

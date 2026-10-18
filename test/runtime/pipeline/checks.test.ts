@@ -12,6 +12,7 @@ import {
 	createCheckStepEnv,
 	createChecksRunner,
 	exportSnapshotToDir,
+	findCardChecks,
 	formatChecksReport,
 	type RunCheckStepInput,
 	resolveChecksEnabled,
@@ -238,6 +239,23 @@ describe("checks runner", () => {
 		harness.hold.resolve();
 		await harness.runner.idle();
 		expect(harness.runner.status?.()).toEqual({ running: null, queued: [] });
+	});
+
+	it("serializes report/card jobs even with colliding synthetic ids, with isolated export directories and no card-status alias", async () => {
+		const harness = createHarness({ holdFirst: true }),
+			report = request({ integrationReportId: "00000000-0000-4000-8000-000000000001" });
+		harness.runner.enqueue(report);
+		await vi.waitFor(() => expect(harness.steps).toHaveLength(1));
+		expect(harness.runner.enqueue(request({ snapshot: "bbbbbbbb22222222" }))).toBe("queued");
+		expect(findCardChecks(harness.runner.status?.() ?? null, "foo", "dev-1")).toEqual({ kind: "queued", ahead: 1 });
+		harness.hold.resolve();
+		await harness.runner.idle();
+		expect(harness.getMaxActive()).toBe(1);
+		expect(harness.results).toHaveLength(2);
+		expect(harness.results[0]?.logsDir).toContain(
+			`${join(".integration", "foo", report.integrationReportId ?? "missing")}`,
+		);
+		expect(harness.results[1]?.logsDir).not.toContain(".integration");
 	});
 
 	it("installs, runs the configured scripts that exist, niced and capped, and reports PASS", async () => {

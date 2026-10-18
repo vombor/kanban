@@ -32,6 +32,7 @@ import {
 	setKanbanRuntimeTls,
 } from "./core/runtime-endpoint";
 import { lockedFileSystem } from "./fs/locked-file-system";
+import { IntegrationChecksUnavailableError } from "./integration/checks-admission";
 import { applyCliSessionScope } from "./isolation/cli-scope";
 import type { PipelineWorkerHost } from "./pipeline/worker-host";
 import { disablePasscode, generateInternalToken, generatePasscode } from "./security/passcode-manager";
@@ -477,6 +478,10 @@ async function startServer(serverOptions: {
 		onTaskLanded: (event) => pipelineWorkerHost?.notifyLanded(event),
 		cancelClineHubRuns: clineHubRuns.cancelRuns,
 		requestPipelineSnapshot: (workspaceId) => pipelineWorkerHost?.requestSnapshot(workspaceId),
+		runIntegrationChecks: async (request) => {
+			if (!pipelineWorkerHost?.integrationChecks) throw new IntegrationChecksUnavailableError();
+			return pipelineWorkerHost.integrationChecks(request);
+		},
 		runtimeStateHub: runtimeHub,
 		warn: (message) => {
 			console.warn(`[kanban] ${message}`);

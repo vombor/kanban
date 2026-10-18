@@ -23,6 +23,7 @@
 // Ported from archive/devteam-kit:services/kanban-autoland.mjs@6da71597 (enqueueChecks, exportSnapshot, runStep,
 // installDirs, writeChecksNpmrc, prismaSchemas, the harness-failure patterns and the report).
 import { type ChildProcess, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { closeSync, existsSync, lstatSync, openSync, readdirSync, readFileSync } from "node:fs";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -40,6 +41,18 @@ import { type ChecksProjectEnv, prepareChecksProjectEnv } from "./checks-project
 
 /** Bump when the checker changes so that old results are stale. 2 = the legacy kit's checker. */
 export const CHECKS_VERSION = 2;
+
+export const checksSettingsFingerprint = (value: unknown) =>
+	createHash("sha256").update(JSON.stringify(value)).digest("hex");
+export const checksToolchainFingerprint = () =>
+	checksSettingsFingerprint({
+		node: process.version,
+		platform: process.platform,
+		arch: process.arch,
+		checksVersion: CHECKS_VERSION,
+		image: process.env.KANBAN_IMAGE_REVISION ?? null,
+		path: process.env.PATH ?? null,
+	});
 
 export type ChecksSettings = PipelineConfig["pipeline"]["checks"];
 
@@ -73,6 +86,12 @@ export async function readSnapshotCheckScripts(
 }
 
 export interface ChecksRequest {
+	/** Explicit speculative report; results must never enter per-card checks/QA state. */
+	integrationReportId?: string;
+	checksSettingsFingerprint?: string;
+	expectedToolchainFingerprint?: string;
+	expectedEnvFingerprint?: string;
+	expectedProjectChecksFingerprint?: string;
 	/** Captured before enqueue; absent on historical/unbound runs, never filled in at result time. */
 	objectiveBinding?: ObjectiveBinding;
 	workspaceId: string;
@@ -127,6 +146,7 @@ export interface ChecksQueue {
 
 /** A card's checks the runner has: running (with the step it is on) or queued. */
 export interface ChecksRunnerCard {
+	integrationReportId?: string;
 	workspaceId: string;
 	taskId: string;
 	snapshot: string;
@@ -155,10 +175,12 @@ export function findCardChecks(
 		return null;
 	}
 	const { running } = status;
-	if (running && running.workspaceId === workspaceId && running.taskId === taskId) {
+	if (running && !running.integrationReportId && running.workspaceId === workspaceId && running.taskId === taskId) {
 		return { kind: "running", step: running.step };
 	}
-	const position = status.queued.findIndex((queued) => queued.workspaceId === workspaceId && queued.taskId === taskId);
+	const position = status.queued.findIndex(
+		(queued) => !queued.integrationReportId && queued.workspaceId === workspaceId && queued.taskId === taskId,
+	);
 	return position < 0 ? null : { kind: "queued", ahead: position + (running ? 1 : 0) };
 }
 
@@ -183,6 +205,8 @@ export interface RunCheckStepInput {
 }
 
 export interface CreateChecksRunnerOptions {
+	/** Optional explicit-report admission recheck; ordinary card checks are unchanged. */
+	validateRequest?: (request: ChecksRequest) => Promise<boolean>;
 	readSettings: () => Promise<ChecksSettings>;
 	onResult: (result: ChecksResult) => Promise<void>;
 	/** Called after the status changed (a run or a step started, the queue changed); for the board's card stages. */
@@ -476,11 +500,14 @@ export function createChecksRunner(options: CreateChecksRunnerOptions): ChecksRu
 	let closed = false;
 	const stopping = () => closed || currentSuperseded;
 
-	const sameCard = (a: ChecksRequest, b: ChecksRequest) => a.workspaceId === b.workspaceId && a.taskId === b.taskId;
+	const sameCard = (a: ChecksRequest, b: ChecksRequest) =>
+		a.workspaceId === b.workspaceId && a.taskId === b.taskId && a.integrationReportId === b.integrationReportId;
 
 	const run = async (request: ChecksRequest): Promise<ChecksResult> => {
 		const settings = await options.readSettings();
-		const dir = join(settings.scratchRoot, request.workspaceId, request.taskId);
+		const dir = request.integrationReportId
+			? join(settings.scratchRoot, ".integration", request.workspaceId, request.integrationReportId)
+			: join(settings.scratchRoot, request.workspaceId, request.taskId);
 		const logsDir = join(dir, ".checks");
 		const startedAt = now();
 		const steps: CheckStepResult[] = [];
@@ -499,6 +526,18 @@ export function createChecksRunner(options: CreateChecksRunnerOptions): ChecksRu
 		let installDirs: string[] = [];
 		let projectEnv: ChecksProjectEnv | null = null;
 		try {
+			if (options.validateRequest && !(await options.validateRequest(request)))
+				throw new Error("Checks request no longer matches its current authorized configuration");
+			if (
+				request.checksSettingsFingerprint &&
+				checksSettingsFingerprint(settings) !== request.checksSettingsFingerprint
+			)
+				throw new Error("Exact candidate checks configuration changed before execution");
+			if (
+				request.expectedToolchainFingerprint &&
+				checksToolchainFingerprint() !== request.expectedToolchainFingerprint
+			)
+				throw new Error("Exact candidate toolchain changed before execution");
 			setStep("export");
 			await exportSnapshot(request.repoPath, request.snapshot, dir);
 			await mkdir(logsDir, { recursive: true });
@@ -507,9 +546,10 @@ export function createChecksRunner(options: CreateChecksRunnerOptions): ChecksRu
 				facts: request.project,
 				worktreePath: request.worktreePath ?? null,
 				exportDir: dir,
-				workspaceId: request.workspaceId,
+				workspaceId: request.integrationReportId ? "integration" : request.workspaceId,
 				taskId: request.taskId,
 				excludedNames: listSecretEnvNames(),
+				expectedEnvFingerprint: request.expectedEnvFingerprint,
 			});
 			const { redact } = projectEnv;
 			const env = createCheckStepEnv(settings, npmrcPath, projectEnv.env);
@@ -705,9 +745,15 @@ export function createChecksRunner(options: CreateChecksRunnerOptions): ChecksRu
 							snapshot: current.snapshot,
 							step: currentStep,
 							startedAt: currentStartedAt,
+							...(current.integrationReportId ? { integrationReportId: current.integrationReportId } : {}),
 						}
 					: null,
-			queued: queue.map(({ workspaceId, taskId, snapshot }) => ({ workspaceId, taskId, snapshot })),
+			queued: queue.map(({ workspaceId, taskId, snapshot, integrationReportId }) => ({
+				workspaceId,
+				taskId,
+				snapshot,
+				...(integrationReportId ? { integrationReportId } : {}),
+			})),
 		}),
 		idle: async () => {
 			while (pumping) {

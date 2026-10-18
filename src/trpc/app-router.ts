@@ -169,6 +169,11 @@ import {
 } from "../core/terminal-history";
 import type { CallerRequest } from "../isolation/isolation-service";
 import type { RuntimeCaller } from "../isolation/session-identity";
+import {
+	coordinationReportSchema,
+	coordinationRequestSchema,
+	type RuntimeCoordinationApi,
+} from "./coordination-contract";
 import { efficiencyReportSchema, efficiencyRequestSchema, type RuntimeEfficiencyApi } from "./efficiency-contract";
 import {
 	githubAppStartRequestSchema,
@@ -178,6 +183,16 @@ import {
 	githubIssueResponseSchema,
 	type RuntimeGitHubApi,
 } from "./github-api";
+import {
+	integrationListResponseSchema,
+	integrationListSchema,
+	integrationManifestSchema,
+	integrationReadSchema,
+	integrationReportSchema,
+	integrationRunSchema,
+	integrationSelectionSchema,
+	type RuntimeIntegrationApi,
+} from "./integration-contract";
 import {
 	isolationApprovalRequestResponseSchema,
 	isolationApprovalRequestSchema,
@@ -329,6 +344,8 @@ export interface RuntimeTrpcContext {
 	knowledgeApi?: RuntimeKnowledgeApi;
 	knowledgeDiscoveryApi?: RuntimeKnowledgeDiscoveryApi;
 	efficiencyApi?: RuntimeEfficiencyApi;
+	coordinationApi?: RuntimeCoordinationApi;
+	integrationApi?: RuntimeIntegrationApi;
 	taskKnowledgeApi?: RuntimeTaskKnowledgeApi;
 	obsidianConnectorApi?: RuntimeObsidianConnectorApi;
 	requestedWorkspaceId: string | null;
@@ -766,6 +783,45 @@ export const runtimeAppRouter = t.router({
 				if (!ctx.efficiencyApi)
 					throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Efficiency reporting is unavailable." });
 				return ctx.efficiencyApi.report(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId, input);
+			}),
+	}),
+	coordination: t.router({
+		preview: workspaceProcedure
+			.input(coordinationRequestSchema)
+			.output(coordinationReportSchema)
+			.query(async ({ ctx, input }) => {
+				if (!ctx.coordinationApi) throw new TRPCError({ code: "NOT_IMPLEMENTED" });
+				return ctx.coordinationApi.preview(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId, input);
+			}),
+	}),
+	integration: t.router({
+		list: workspaceProcedure
+			.input(integrationListSchema)
+			.output(integrationListResponseSchema)
+			.query(async ({ ctx, input }) => {
+				if (!ctx.integrationApi) throw new TRPCError({ code: "NOT_IMPLEMENTED" });
+				return ctx.integrationApi.list(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId, input);
+			}),
+		preview: workspaceProcedure
+			.input(integrationSelectionSchema)
+			.output(integrationManifestSchema)
+			.query(async ({ ctx, input }) => {
+				if (!ctx.integrationApi) throw new TRPCError({ code: "NOT_IMPLEMENTED" });
+				return ctx.integrationApi.preview(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId, input);
+			}),
+		run: workspaceProcedure
+			.input(integrationRunSchema)
+			.output(integrationReportSchema)
+			.mutation(async ({ ctx, input }) => {
+				if (!ctx.integrationApi) throw new TRPCError({ code: "NOT_IMPLEMENTED" });
+				return ctx.integrationApi.run(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId, input);
+			}),
+		read: workspaceProcedure
+			.input(integrationReadSchema)
+			.output(integrationReportSchema)
+			.query(async ({ ctx, input }) => {
+				if (!ctx.integrationApi) throw new TRPCError({ code: "NOT_IMPLEMENTED" });
+				return ctx.integrationApi.read(await readStrictCaller(ctx), ctx.workspaceScope.workspaceId, input);
 			}),
 	}),
 	knowledgeDiscovery: t.router({

@@ -89,6 +89,7 @@ export const USER_ONLY_COMMANDS = [
 	"knowledge source-policy",
 	"knowledge source-opt-in",
 	"knowledge source-collection",
+	"integration run",
 	"objective create",
 	"objective limits",
 	"objective link",

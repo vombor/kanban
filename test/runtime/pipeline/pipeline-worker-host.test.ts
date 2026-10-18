@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parsePipelineConfig } from "../../../src/config/pipeline-config";
 import type { RuntimePipelineCardStage, RuntimeTaskSessionSummary } from "../../../src/core/api-contract";
 import type { PipelineActionRequest, PipelineActionResult } from "../../../src/pipeline/actions";
+import type { ChecksRequest, ChecksResult } from "../../../src/pipeline/checks";
 import type { WatchdogActionRequest } from "../../../src/pipeline/watchdog/actions";
 import { createPipelineWorkerHost, type PipelineWorkerChild } from "../../../src/pipeline/worker-host";
 import type { PipelineHostMessage } from "../../../src/pipeline/worker-protocol";
@@ -117,6 +118,55 @@ function summary(taskId: string, state: RuntimeTaskSessionSummary["state"]): Run
 }
 
 describe("pipeline worker host", () => {
+	it("refuses unavailable integration execution and never replays an uncertain report after a worker crash", async () => {
+		const harness = createHostHarness(QA_FOO);
+		const execute = harness.host.integrationChecks;
+		if (!execute) throw new Error("Missing shared report queue");
+		const request: ChecksRequest = {
+			workspaceId: "foo",
+			repoPath: "/owned/candidate",
+			taskId: "integration_fixture",
+			integrationReportId: "00000000-0000-4000-8000-000000000001",
+			title: "Speculative report",
+			baseRef: "main",
+			snapshot: "a".repeat(40),
+			scripts: ["test"],
+		};
+		await expect(execute(request)).rejects.toThrow("unavailable");
+		expect(harness.spawnWorker).not.toHaveBeenCalled();
+		await harness.startReady();
+		const first = harness.children[0];
+		if (!first) throw new Error("Missing fake worker");
+		const pending = execute(request);
+		const rejected = expect(pending).rejects.toThrow("uncertain");
+		await vi.advanceTimersByTimeAsync(0);
+		expect(first.sent.filter((m) => m.type === "integrationChecks")).toHaveLength(1);
+		first.exit(1);
+		await rejected;
+		await vi.advanceTimersByTimeAsync(1000);
+		const second = harness.children[1];
+		second?.emitMessage({ type: "ready", pid: 2 });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(second?.sent.filter((m) => m.type === "integrationChecks")).toEqual([]);
+		const next = execute({ ...request, integrationReportId: "00000000-0000-4000-8000-000000000002" });
+		await vi.advanceTimersByTimeAsync(0);
+		const sent = second?.sent.find((m) => m.type === "integrationChecks");
+		if (!sent || sent.type !== "integrationChecks") throw new Error("Missing explicit new report");
+		const result: ChecksResult = {
+			request: sent.request,
+			verdict: "PASS",
+			harness: false,
+			steps: [],
+			logsDir: "/owned/logs",
+			startedAt: 1,
+			finishedAt: 2,
+			timeoutMin: 1,
+			error: null,
+		};
+		second?.emitMessage({ type: "integrationChecksResult", id: sent.id, result });
+		expect(await next).toEqual(result);
+		await harness.host.close();
+	});
 	beforeEach(() => {
 		vi.useFakeTimers();
 	});

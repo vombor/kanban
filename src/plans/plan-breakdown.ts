@@ -8,6 +8,7 @@
 import { realpath } from "node:fs/promises";
 import { isAbsolute, join, relative } from "node:path";
 import { z } from "zod";
+import { coordinationHintsSchema } from "../core/coordination-hints";
 import { readKnowledgeFile } from "../knowledge/content-store";
 import { KNOWLEDGE_MAX_CONTENT_BYTES, knowledgeIdSchema, knowledgeRevisionSchema } from "../trpc/knowledge-contract";
 
@@ -42,6 +43,7 @@ export const planBreakdownCardSchema = z
 		/** Plans produce dev cards only (QA cards come from the pipeline). */
 		role: z.literal("dev").default("dev"),
 		knowledgeReferences: z.array(planKnowledgeReferenceSchema).max(30).optional(),
+		coordination: coordinationHintsSchema.optional(),
 		/** Local ids of cards that must be done (landed) before this one starts. */
 		dependsOn: z.array(localIdSchema).default([]),
 		/** Cards of one group can run at the same time. */

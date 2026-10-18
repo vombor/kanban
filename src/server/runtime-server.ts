@@ -9,6 +9,7 @@ import { createClineTurnDetectorSettingsLoader } from "../config/cline-turn-dete
 import { createLemonadeModelListSettingsLoader } from "../config/model-lists-config";
 import { getWorkspacePipelineSettings, readPipelineConfig } from "../config/pipeline-config";
 import { createProcessReaperSettingsLoader } from "../config/process-reaper-config";
+import { createCoordinationApi } from "../coordination/coordination-api";
 import type {
 	RuntimeRunUpdateResponse,
 	RuntimeUpdateStatusResponse,
@@ -16,6 +17,7 @@ import type {
 } from "../core/api-contract";
 import { resolveCardRole } from "../core/card-role";
 import { getDetailTerminalTaskId } from "../core/detail-terminal-session";
+import { mergeAgentDefaultModels } from "../core/effective-agent";
 import { isHomeAgentSessionId, isHomeAgentSessionIdForWorkspace } from "../core/home-agent-session";
 import { providerStartFingerprint } from "../core/provider-start-intent";
 import {
@@ -31,13 +33,17 @@ import { createEfficiencyTimingStore } from "../efficiency/timing-store";
 import { writeGitHubAppCredentials } from "../github-app/app-credentials";
 import { createGitHubAppCreationFlow } from "../github-app/app-manifest";
 import { getSharedGitHubAppTokenSource } from "../github-app/installation-tokens";
+import { IntegrationChecksUnavailableError } from "../integration/checks-admission";
+import { createIntegrationApi } from "../integration/integration-api";
 import { createIsolationService, type IsolationService } from "../isolation/isolation-service";
 import { createMessageNoticeQueue } from "../isolation/message-notices";
 import { applyIssueSync } from "../issues/issue-apply";
+import { loadKitCatalog, resolveWorkspaceKit } from "../kits/resolve-kit";
 import { createKnowledgeDiscoveryApi } from "../knowledge/discovery-api";
 import { createDiscoveryBroker } from "../knowledge/discovery-broker";
 import { createKnowledgeApi } from "../knowledge/knowledge-api";
 import { createObsidianConnectorApi } from "../knowledge/obsidian/connector-api";
+import { createPlanBundleStore } from "../knowledge/plan-bundle-store";
 import { createTaskContextApi } from "../knowledge/task-context-api";
 import { buildTaskContextBootstrap } from "../knowledge/task-context-bootstrap";
 import { createTaskContextStore } from "../knowledge/task-context-store";
@@ -47,6 +53,7 @@ import { createObjectiveApi } from "../objectives/objective-api";
 import { createObjectiveEvidenceOwner } from "../objectives/objective-receipts";
 import { createObjectiveStore } from "../objectives/objective-store";
 import type { PipelineActionRequest, PipelineActionResult } from "../pipeline/actions";
+import { type ChecksRequest, type ChecksResult, resolveChecksEnabled } from "../pipeline/checks";
 import type { PipelineEventMap } from "../pipeline/events";
 import { preserveTaskWork } from "../pipeline/hold";
 import { createPipelineStateStore } from "../pipeline/pipeline-state";
@@ -177,6 +184,7 @@ export interface CreateRuntimeServerDependencies {
 	reviewSettleMs?: number;
 	/** Asks the pipeline worker host for a workspace's snapshot now (`kanban task resubmit`, `kanban pipeline resume`). */
 	requestPipelineSnapshot?: (workspaceId: string) => void;
+	runIntegrationChecks?: (request: ChecksRequest) => Promise<ChecksResult>;
 	/**
 	 * Shuts the server down gracefully and exits with the code (`kanban restart update`); without it the route refuses.
 	 */
@@ -763,12 +771,68 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		createDiscoveryBroker({ projectPath: deps.workspaceRegistry.getWorkspacePathById }),
 	);
 	const efficiencyTiming = createEfficiencyTimingStore();
+	const coordinationApi = createCoordinationApi({
+		plans: createPlanIndexStore(),
+		bundles: createPlanBundleStore(),
+		capacity: providerCapacityApi,
+		load: async (workspaceId) => {
+			const state = await loadWorkspaceStateById(workspaceId);
+			if (!state) throw new Error("Project unavailable");
+			const runtime = await deps.workspaceRegistry.loadScopedRuntimeConfig({
+				workspaceId,
+				workspacePath: state.repoPath,
+			});
+			const live = deps.workspaceRegistry.getTerminalManagerForWorkspace(workspaceId)?.listSummaries() ?? [];
+			const parsed = await readPipelineConfig();
+			return {
+				repoPath: state.repoPath,
+				board: state.board,
+				sessions: Object.values({
+					...state.sessions,
+					...Object.fromEntries(live.map((summary) => [summary.taskId, summary])),
+				}),
+				stages: deps.runtimeStateHub.getPipelineCardStages(workspaceId),
+				selectedAgentId: runtime.selectedAgentId,
+				config: parsed.config,
+				settleMs: deps.reviewSettleMs,
+				agentDefaultModels: mergeAgentDefaultModels(
+					runtime.agentDefaults,
+					await readAgentDefaultModels(parsed.config.agents.cline.dataDir),
+				),
+			};
+		},
+	});
 	const efficiencyApi = createEfficiencyApi({
 		objectives: objectiveStore,
 		plans: createPlanIndexStore(),
 		contexts: taskContexts,
 		timing: efficiencyTiming,
 		board: loadWorkspaceBoardById,
+	});
+	const integrationService = createIntegrationApi({
+		coordination: coordinationApi,
+		contexts: taskContexts,
+		checks: async (request) => {
+			if (!deps.runIntegrationChecks) throw new IntegrationChecksUnavailableError();
+			return deps.runIntegrationChecks(request);
+		},
+		setup: async (workspaceId) => {
+			const repoPath = deps.workspaceRegistry.getWorkspacePathById(workspaceId);
+			if (!repoPath) throw new Error("Project unavailable");
+			const parsed = await readPipelineConfig(),
+				settings = getWorkspacePipelineSettings(parsed.config, workspaceId),
+				resolution = resolveWorkspaceKit(parsed.config, workspaceId, await loadKitCatalog());
+			if (resolution.issues.length) throw new Error("Project checks configuration unavailable");
+			return {
+				repoPath,
+				settings: parsed.config.pipeline.checks,
+				scripts: settings.checks.scripts,
+				project: resolution.kit.checks,
+				checksEnabled: resolveChecksEnabled(settings, resolution.kitName),
+				paused: parsed.config.pipeline.paused,
+				alternateWorker: Boolean(parsed.config.pipeline.workerEntry),
+			};
+		},
 	});
 	const efficiencyObserver = createEfficiencyObserver({
 		store: efficiencyTiming,
@@ -1089,6 +1153,8 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			obsidianConnectorApi,
 			knowledgeApi,
 			knowledgeDiscoveryApi,
+			coordinationApi,
+			integrationApi: integrationService.api,
 			efficiencyApi,
 			taskKnowledgeApi,
 			objectiveApi,
@@ -1406,6 +1472,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		isolation,
 		close: async () => {
 			await efficiencyObserver.close();
+			integrationService.close();
 			unsubscribeObjectiveActivity();
 			await objectiveReconciler.close();
 			providerDispatcher.close();

@@ -553,6 +553,11 @@ export function getKnowledgeDiscoveryPaths(homePath = getKanbanHomePath()) {
 export function getKnowledgeSourcePolicyPath(workspaceId: string, homePath = getKanbanHomePath()) {
 	return join(getProjectKnowledgePaths(workspaceId, homePath).root, "source-policy.json");
 }
+export function getIntegrationReportPaths(workspaceId: string, homePath = getKanbanHomePath()) {
+	const root = join(homePath, "data", workspaceId, "integration");
+	return { root, manifest: join(root, "reports.json"), candidates: join(root, "candidates") };
+}
+
 export function getEfficiencyStatePath(workspaceId: string, homePath = getKanbanHomePath()) {
 	getProjectKnowledgePaths(workspaceId, homePath);
 	return join(getKanbanWorkspaceDataPath(workspaceId, homePath), "efficiency.json");

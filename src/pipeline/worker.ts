@@ -50,8 +50,10 @@ import {
 	CHECKS_VERSION,
 	type ChecksResult,
 	type ChecksRunner,
+	checksSettingsFingerprint,
 	createChecksRunner,
 	formatChecksReport,
+	resolveChecksEnabled,
 	toStoredChecksResult,
 } from "./checks";
 import { createPipelineDecisionLog, type PipelineDecisionLog, type PipelineDecisionRecord } from "./decision-log";
@@ -246,6 +248,10 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 
 	const recordChecksResult = async (result: ChecksResult): Promise<void> => {
 		const { request } = result;
+		if (request.integrationReportId) {
+			deps.send({ type: "integrationChecksResult", id: request.integrationReportId, result });
+			return;
+		}
 		const parsed = await readConfig();
 		const settings = getWorkspacePipelineSettings(parsed.config, request.workspaceId);
 		const resolution = resolveWorkspaceKit(parsed.config, request.workspaceId, await loadCatalog());
@@ -293,6 +299,23 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 	const checks =
 		deps.createChecks?.(recordChecksResult, () => publishAllCardStages()) ??
 		createChecksRunner({
+			validateRequest: async (request) => {
+				if (!request.integrationReportId) return true;
+				const parsed = await readConfig(),
+					settings = getWorkspacePipelineSettings(parsed.config, request.workspaceId),
+					resolution = resolveWorkspaceKit(parsed.config, request.workspaceId, await loadCatalog());
+				return (
+					!parsed.config.pipeline.paused &&
+					!parsed.config.pipeline.workerEntry &&
+					!resolution.issues.length &&
+					request.expectedProjectChecksFingerprint ===
+						checksSettingsFingerprint({
+							project: resolution.kit.checks ?? null,
+							scripts: settings.checks.scripts,
+							enabled: resolveChecksEnabled(settings, resolution.kitName),
+						})
+				);
+			},
 			readSettings: async () => (await readConfig()).config.pipeline.checks,
 			onResult: recordChecksResult,
 			onStatusChange: () => publishAllCardStages(),
@@ -855,6 +878,10 @@ export function createPipelineWorker(deps: PipelineWorkerDependencies): Pipeline
 				lastSnapshots.set(message.snapshot.workspaceId, message.snapshot);
 				watchdog.observe(message.snapshot);
 				await schedule(message.snapshot);
+			} else if (message.type === "integrationChecks") {
+				if (message.request.integrationReportId !== message.id || message.request.objectiveBinding)
+					throw new Error("Invalid integration checks request");
+				checks.enqueue(message.request);
 			} else if (message.type === "forget") {
 				lastSnapshots.delete(message.workspaceId);
 				watchdog.forget(message.workspaceId);

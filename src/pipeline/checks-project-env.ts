@@ -12,11 +12,14 @@
 //
 // The values are secrets: they never reach the logs, the stored result, the QA log or the QA prompt (every step's
 // output and log file go through `redact`), and the copied file is deleted when the run ends.
+
+import { createHash } from "node:crypto";
 import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
 import { parseEnv } from "node:util";
 
 import type { KitChecks } from "../kits/kit-schema";
+import { readKnowledgeFile } from "../knowledge/content-store";
 
 /** The run's own database name (the checks run one card at a time, so a leftover is the same card's next run's). */
 export function buildChecksDatabaseName(workspaceId: string, taskId: string): string {
@@ -49,7 +52,7 @@ function isInside(root: string, path: string): boolean {
 	return rel !== "" && !rel.startsWith(`..${sep}`) && rel !== ".." && !rel.startsWith(sep);
 }
 
-async function readEnvFile(worktreePath: string, envFile: string): Promise<string> {
+async function readEnvFile(worktreePath: string, envFile: string, maxBytes?: number): Promise<string> {
 	let root: string;
 	let source: string;
 	try {
@@ -63,10 +66,16 @@ async function readEnvFile(worktreePath: string, envFile: string): Promise<strin
 		throw new ChecksProjectEnvError(`checks.envFile ${envFile} points outside the card's worktree`);
 	}
 	try {
-		return await readFile(source, "utf8");
+		return maxBytes === undefined ? await readFile(source, "utf8") : await readKnowledgeFile(source, maxBytes);
 	} catch {
 		throw new ChecksProjectEnvError(`checks.envFile ${envFile} could not be read`);
 	}
+}
+
+export async function readChecksEnvFingerprint(worktreePath: string, envFile: string): Promise<string> {
+	return createHash("sha256")
+		.update(await readEnvFile(worktreePath, envFile, 1048576))
+		.digest("hex");
 }
 
 function replaceDatabaseName(url: string, databaseName: string, variable: string): URL {
@@ -115,6 +124,7 @@ function secretValuesOf(value: string): string[] {
 }
 
 export interface PrepareChecksProjectEnvInput {
+	expectedEnvFingerprint?: string;
 	facts: KitChecks | undefined;
 	/** The card's worktree; null when it is gone. */
 	worktreePath: string | null;
@@ -140,7 +150,11 @@ export async function prepareChecksProjectEnv(input: PrepareChecksProjectEnvInpu
 	if (!input.worktreePath) {
 		throw new ChecksProjectEnvError(`checks.envFile ${facts.envFile}: the card has no worktree`);
 	}
-	let text = await readEnvFile(input.worktreePath, facts.envFile);
+	let text = await readEnvFile(input.worktreePath, facts.envFile, input.expectedEnvFingerprint ? 1048576 : undefined);
+	if (input.expectedEnvFingerprint && createHash("sha256").update(text).digest("hex") !== input.expectedEnvFingerprint)
+		throw new ChecksProjectEnvError(
+			"Checks environment changed after the exact candidate was selected; no environment substitution was used",
+		);
 	let parsed: Record<string, string>;
 	try {
 		parsed = parseEnv(text) as Record<string, string>;

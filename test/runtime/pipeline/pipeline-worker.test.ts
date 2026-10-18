@@ -367,6 +367,50 @@ describe("pipeline worker", () => {
 		]);
 	});
 
+	it("uses the shared checks queue for speculative reports without writing card checks, QA logs or acceptance", async () => {
+		const recorders: Array<(result: ChecksResult) => Promise<void>> = [],
+			enqueue = vi.fn(() => "queued" as const);
+		const harness = createHarness({
+			config: { workspaces: { foo: QA_WORKSPACE } },
+			createChecks: (onResult) => {
+				recorders.push(onResult);
+				return { enqueue, idle: async () => {}, close: () => {} };
+			},
+		});
+		const request = {
+			workspaceId: "foo",
+			repoPath: "/owned/candidate",
+			taskId: "integration_fixture",
+			integrationReportId: "00000000-0000-4000-8000-000000000001",
+			title: "Speculative report",
+			baseRef: "main",
+			snapshot: "a".repeat(40),
+			scripts: ["test"],
+		};
+		await harness.worker.handle({ type: "integrationChecks", id: request.integrationReportId, request });
+		expect(enqueue).toHaveBeenCalledWith(request);
+		const result: ChecksResult = {
+			request,
+			verdict: "PASS",
+			harness: false,
+			steps: [{ name: "test", ok: true }],
+			logsDir: "/owned/logs",
+			startedAt: 1,
+			finishedAt: 2,
+			timeoutMin: 1,
+			error: null,
+		};
+		await recorders[0]?.(result);
+		expect(harness.messages).toContainEqual({
+			type: "integrationChecksResult",
+			id: request.integrationReportId,
+			result,
+		});
+		expect(harness.actions).toEqual([]);
+		expect(harness.readDecisions("foo")).toEqual([]);
+		expect((await harness.store.load("foo")).cards).toEqual({});
+	});
+
 	it("leaves a Review card recovery holds out of the snapshot and QA gate (autoland's onDevReview order)", async () => {
 		const inspected: string[] = [];
 		const harness = createHarness({
