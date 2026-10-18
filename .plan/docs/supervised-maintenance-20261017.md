@@ -31,7 +31,7 @@ benchmark rerun/promotion or new agent/session creation is authorized. Existing 
 - [x] Add fake-driven end-to-end, crash/uncertain-admission/duplicate/stale-evidence/secret-redaction regressions.
 - [x] Build/typecheck/test and validate dry/read-only operation without launching real model work or changing the pod.
 - [x] Wire the user-authorized host daily/supervision schedule with installation-only config and verify receipts.
-- [ ] Commit/push scoped changes under standing authorization, verify CI, document outcomes and reconcile this plan.
+- [x] Commit/push scoped changes under standing authorization, verify CI, document outcomes and reconcile this plan.
 
 ## Verified contracts / important discoveries
 
@@ -49,18 +49,15 @@ files are advisory; exact-SHA CI, pushed ancestry and unchanged issue/comment ev
 No model request or pod restart was performed during implementation. The signing key stays inside the existing
 running Kanban credential broker.
 
-## Continuation checkpoint
+## Historical continuation checkpoint
 
 A native V2 compaction request was admitted once with id `msg_supervised_maintenance_checkpoint_20261017`; it is
-conversation context management, not a reset, new model/permissions setting or pod operation. Continue implementation
-from this plan after compaction, without repeating completed API discovery or prior #64/#65 release/deployment work.
-Remaining validation/installation/publication steps are pending, not complete. Preserve host timer's existing daily receipts and App
-credential helper; read before editing. Suggested next concrete files: typed contracts, durable locked store, pure
-supervisor decisions and fake-adapter tests. Reuse `src/fs/locked-file-system.ts`/durable-file instead of guessing a
-lock implementation. Initial recovery may reconcile and safely hold/handoff; it must never automatically replay an
+conversation context management, not a reset, new model/permissions setting or pod operation. The continuation
+implemented and verified this first slice; it is no longer pending. Existing daily receipts and the App credential
+helper were preserved. Recovery may reconcile and safely hold/handoff; it must never automatically replay an
 uncertain prompt, switch models, spawn sessions, reissue completed work or treat a worker report as authorization.
 
-## Validation so far
+## Completed validation
 
 - `npm run check`: passed (2,955 tests; both typechecks; repository Biome check). One pre-existing unused-import
   warning in `test/runtime/pipeline/rework-limits.test.ts` is outside this slice and was not changed.
@@ -89,5 +86,19 @@ uncertain prompt, switch models, spawn sessions, reissue completed work or treat
   ledger hold installation paths; no identities/secrets were added to product defaults or the npm payload.
 - Live Kanban remains `a8291171d973c39074d773aebbb82ec6af750ad9`, UID 1000. No pod restart/update, release, credential
   or model-policy change, benchmark rerun, verdict change, additional agent or session creation was performed.
-- Scoped repository publication and exact-commit CI verification remain pending; the implementation is not yet
-  described as fully published/verified until that last plan item is satisfied.
+
+## Verified publication / final outcome
+
+- Implementation commit `65d8445a94ae004d963bee73db6e8f5931f2be8d` was committed/pushed using the verified Kanban GitHub
+  App identity. The commit-specific secret scan passed; no human PAT or non-registry Actions token was used.
+- Exact-commit image CI **39081951718** succeeded: https://github.com/vombor/kanban/actions/runs/39081951718 . Its
+  `Build and test Kanban`, `Validate the bare non-root image` and `Publish the validated image` steps all passed.
+  This publishes ordinary dev-channel image code, not an npm/release tag or a live deployment.
+- The first read-only CI watcher hit a two-minute harness process timeout without a receipt or mutation. It was
+  resumed with the exact implementation SHA pinned and a bounded twenty-minute internal wait; no POST, CI dispatch,
+  deployment, release or maintenance prompt was replayed. The final private `publication.json` confirms success.
+- Private installed-artifact audit confirms the host bundle equals the production build at the hash above, with
+  operator ownership, config/journal 0600 and host home 0700. Zero real maintenance jobs were admitted in validation.
+- The authorized first slice is implemented, installed, enabled and independently verified. Every plan item above
+  is complete. Automatic model/session replacement, a user handoff/reauthorization protocol, semantic QA proof and
+  the broader efficiency roadmap remain separate work; they were not inferred from this authorization.
