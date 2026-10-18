@@ -16,7 +16,7 @@ reports over existing native owners and new explicitly sampled observations. Coo
   attribution, overlap-safe elapsed windows and explicit unknowns/insufficient forecast evidence.
 - [x] Validate privacy, revocation/stale source reads, symlink/path escape, connector absence/outage, graph budgets,
   timing overlap/restarts, usage deduplication and owned phone/desktop flows with fake inputs only.
-- [ ] Run full source/build/exact-export smoke gates before App-only push; deploy only verified exact-SHA CI images,
+- [x] Run full source/build/exact-export smoke gates before App-only push; deploy only verified exact-SHA CI images,
   preserving configuration/boards, sidecars, credentials, real foo/pawsome identity and maintenance schedules.
 
 No required Obsidian/network service, global supervising model, embedding service, real model trial, implicit provider change,
@@ -31,11 +31,27 @@ Follow-up user scope (2026-10-18): update the Lemonade preset and installed Clin
 dev / MuseGlimmer secondary-fallback / Qwen36 QA, and one-model capacity/concurrency. Treat Ornith separately from
 Qwen for review-family routing; preserve the fixed team workflow and assert no new model/plan vetting. Live provider
 list/default and Lemonade/ Kanban capacities were updated with protected backups; unregistered historical notes
-settings were not changed. The built-in preset/family classification still requires the validated image deployment.
+settings were not changed. The built-in preset/family classification was deployed and its primary/secondary QA
+routing and all five recommended settings were verified on the existing local project without starting work.
 
 Source validation: `npm run check` passed both typechecks and 3,045 product tests; `npm run web:test` passed 762 UI
 tests; maintainer regressions passed 33 tests. Four owned shared-Chrome phone/desktop flows passed for canonical
 knowledge plus discovery/efficiency. Only disposable data/fake CLIs and injected usage fixtures were used. Coverage
 includes immutable policy identity/history across project-data rename, revocation fencing, source/graph budgets,
 strict own-project authorization, timing coalescing/retention refusal, observer shutdown and retained plan descendants.
-Publication/exact-export smoke/deployment are not yet claimed.
+Exact committed-export build and isolated immutable-image overlay smoke passed for
+`c5ab2f9917f2914a90d61f8c8d539867710d95ba`, including the package boundary, native PTY and dual-stack HTTP/WebSocket
+probe. No live data was mounted and no provider turn ran. Product CLI SHA-256:
+`7729117bedd6be43ab064aa1858f4e4e9a25e5fd507c6983323437a8fdad8b88`; asset-tree SHA-256:
+`b83f70acf58aa0d5c1e0787727c05ba76aacbe9e7c63585b823ca9ecb426a1d5`.
+
+App-only publication succeeded. Exact-SHA image CI [39161462601](https://github.com/vombor/kanban/actions/runs/39161462601)
+passed before the nonforced application-only update. Live `restart prepare` / `restart update` used the explicit
+runtime port. The running image revision is the implementation SHA above; published digest:
+`sha256:906bf26ee137218027acbd4bce5c107bfce1c59afa7141d3184f368576d8a7a1`.
+Post-update evidence verified unchanged configuration/boards (relative to the approved provider-update baseline),
+sidecars, mounts, credentials, project identity and maintenance policy/cadence. Production owned phone/desktop
+read-only views passed with writes blocked, zero page errors, and honest uncertainty. Host-published localhost,
+IPv4 and IPv6 loopback HTTP/WebSocket probes passed. CLI source discovery and top-level `kanban efficiency` reads
+passed on the existing empty local project; missing usage/time/cost remained null. Private rollback backups and
+screenshots remain outside the product. No incomplete billing/forecast/substep coverage is relabelled as complete.

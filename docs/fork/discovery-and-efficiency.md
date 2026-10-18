@@ -39,7 +39,7 @@ the caller has a cross-project grant. Agents cannot curate discovery policies.
 ## Read-only efficiency and timing
 
 Open **Project knowledge → Efficiency reports** (also a desktop top-bar action), or use
-`kanban knowledge efficiency --help`. Project, recorded task, objective family and retained plan-descendant scopes
+`kanban efficiency --help`. Project, recorded task, objective family and retained plan-descendant scopes
 are supported. Plan descendants include retained QA/fallback/runoff context bindings even after cards are pruned;
 historical/unlinked work is not retroactively attributed or certified.
 
