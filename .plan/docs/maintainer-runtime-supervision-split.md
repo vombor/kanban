@@ -40,7 +40,7 @@ deployment operation, not an automatic consequence of a maintenance fix or smoke
 - [x] Move maintainer tooling/build/tests/docs outside the product payload, preserve installed jobs/receipts/schedule.
 - [x] Add independently verified exact committed-export/artifact local-pod smoke gating, durable no-replay reservation and retained proof to new maintainer jobs; installed historical artifact/jobs remain unchanged.
 - [x] Add native objective contracts/store/scoped API and CLI with immutable requirements and explicit root-task membership.
-- [x] Connect authoritative checks/QA/final-commit receipts and native restart/observed-attempt reconciliation to existing owners (root tasks and their QA lineage; extended sibling lineage remains pending below).
+- [x] Connect authoritative checks/QA/final-commit receipts and native restart/observed-attempt reconciliation to existing owners, including explicit automatic/manual descendant lineage.
 - [x] Add actionable project-scoped handoffs and audited user-only resolution controls without a second watchdog/wake source.
   - [x] Record automatic escalation/runoff lineage before ordinary starts; recover explicit parent/QA links in topological order.
   - [x] Assess the landed descendant using its own exact-snapshot receipts, retaining losing attempts/evidence without mixing cards.
@@ -55,8 +55,8 @@ deployment operation, not an automatic consequence of a maintenance fix or smoke
   - [x] Add the scoped project-header readout for pinned policy/requirements, lineage, owner receipts, attempts/reservations and unknown/partial cost.
   - [x] Fence late project/selection responses; refresh reads only, preserve failed-recheck warnings and expose user-only retained-fact recheck.
   - [x] Add explicit creation, stale-draft-safe limit editing, scope opt-in, audited control/lineage forms and exact mutation retry after admission integration.
-- [ ] Verify temporary-home regression/chaos/isolation tests, both typechecks, full build/tests and local pod smoke.
-- [ ] Publish scoped changes using the App, verify exact-commit CI and reconcile this plan with actual outcomes.
+- [x] Verify temporary-home regression/chaos/isolation tests, both typechecks, full build/tests and exact committed-export local pod smoke.
+- [x] Publish implementation using the App and verify exact-commit CI (`cc6ac1e6`, run 39132300978); reconcile source-only completion and unchanged live/installed boundaries.
 
 ## Scope accuracy
 
@@ -333,7 +333,7 @@ provider/model/credential change, benchmark reopening or new agent/session. Keep
 - [x] Close Kanban admission gaps, including manager auto-restarts, blank-session starts, raw API submissions, browser-generated prompts and pre-stop resume guards; retain uncertainty across restart.
 - [x] Add user-only pause/resume, bounded one-admission override/revocation and no-refund uncertainty acknowledgement with audit/retry receipts; opt-in enforcement labels its Kanban-admission scope, never an internal-CLI/billing hard cap.
 - [x] Implement independent exact committed-export/artifact smoke gating and durable smoke reservations/receipts; historical jobs/results stay compatible and no installed tooling is replaced.
-- [ ] Add native configuration/control UI, full regressions/typechecks/build/owned smoke, then scoped App-authenticated commit/push and exact-commit CI verification.
+- [x] Add native configuration/control UI, full regressions/typechecks/build/owned smoke, then scoped App-authenticated implementation commit/push and exact-commit CI verification.
 
 Admission controls must gate new server-issued work before stopping/replacing any session. They never kill an
 active tool or claim visibility into an arbitrary CLI's internal model requests. Explicit user's live terminal
@@ -375,7 +375,27 @@ no maintainer payload. Expanded owned overlay smoke passed for CLI SHA-256
 `8559549b2ccd44df6d829f4266084bb67efa64902ce8f428badb2148e4340f2d`: explicit opt-in, unknown-cost hold,
 pause/resume/no fake acceptance and cleanup verified; no live mounts, provider turns or browser launch.
 
-Remaining authorized work: scoped App source commit/push, exact committed-export verification and exact-SHA CI
-receipt. No source publication is claimed yet. No live deployment, release, provider/credential change, model
-promotion or benchmark rerun is included. Full CLI-internal/billing measurement and the broader knowledge roadmap
-remain explicitly outside this finished admission boundary, not silently priced at zero.
+All five requested implementation/publication steps are complete for the documented Kanban-admission boundary.
+Implementation commit `cc6ac1e65bac82090ba9466d76c61adb11f78e8c` was App-authored/pushed to `fork/stack`;
+App readback confirmed remote SHA and exact push-event/repository/branch CI success at
+https://github.com/vombor/kanban/actions/runs/39132300978. Product build/tests, separate maintainer tooling, bare
+non-root image smoke and validated dev-image publication all passed. No release tag/npm release or live deployment
+was performed. The active pod remains on its previously authorized build; private installation tooling, schedules,
+provider/credential settings and archived benchmark outcomes were not changed.
+
+The exact committed export passed independent installs/build, maintainer typechecks/tests and expanded owned pod
+smoke. CLI SHA-256 `10c65be9369cd87f5db09c67c19d3efd7e41d77324dcfed8554e51cadb394478`; full product artifact-tree
+SHA-256 `33ed2aac43de39a8c152395b3305ee59ae09dac82bd97f2096e3f565cc1e94f6`; both export and pod cleanup verified.
+The first export attempt correctly refused an omitted root test-config change before any build/pod operation;
+the unpublished own commit was amended to include it, not by discarding user work. Secret guard scanned the
+implementation commit clean.
+
+Performance cleanup correction: the first timed-out delegated baseline left one scratch root behind despite its
+initial report. The delegate confirmed that exact root by its own fake CLI/config, vanished recorded PID and
+matching timeout artifact, checked there were no active users, and removed only that owned root. No live resources
+were modified. Separate profile passes, rather than timed-out combined runs, are the browser verification evidence.
+
+Full CLI-internal/billing measurement and the broader knowledge roadmap remain explicitly outside this finished
+admission boundary, not silently priced at zero. Activation on the live installation and installing/configuring
+the new immutable maintainer artifact require their own user authorization. This follow-up completion record is
+documentation-only; the exact implementation test/publication receipt remains the commit/run above.
