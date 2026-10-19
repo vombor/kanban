@@ -14,6 +14,7 @@ import {
 } from "./cli-program";
 import { createRuntimeTrpcClient } from "./commands/runtime-trpc-client";
 import { loadGlobalRuntimeConfig, loadRuntimeConfig } from "./config/runtime-config";
+import { flushCliOutput } from "./core/cli-output";
 import {
 	installGracefulShutdownHandlers,
 	shouldSuppressImmediateDuplicateShutdownSignals,
@@ -998,6 +999,7 @@ function createProgram(invocationArgs: string[]): Command {
 		});
 		if (refusal) {
 			process.stderr.write(`${refusal}\n`);
+			await flushCliOutput();
 			process.exit(1);
 		}
 	});
@@ -1047,7 +1049,8 @@ async function run(): Promise<void> {
 	await program.parseAsync(dropDeprecatedLaunchAgentOption(argv), { from: "user" });
 	if (!shouldAutoOpenBrowserTabForInvocation(argv)) {
 		await Promise.allSettled([flushNodeTelemetry()]);
-		process.exit(process.exitCode ?? 0);
+		const flushed = await flushCliOutput();
+		process.exit(flushed ? (process.exitCode ?? 0) : 1);
 	}
 }
 
@@ -1056,5 +1059,6 @@ void run().catch(async (error) => {
 	await Promise.allSettled([flushNodeTelemetry()]);
 	const message = error instanceof Error ? error.message : String(error);
 	console.error(`Failed to start Kanban: ${message}`);
+	await flushCliOutput();
 	process.exit(1);
 });

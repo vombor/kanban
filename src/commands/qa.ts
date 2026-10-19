@@ -5,6 +5,7 @@ import { resolveQaChromiumLibs } from "../pipeline/qa-browser-tooling";
 import { inspectQaFontconfig, repairQaFontconfig } from "../pipeline/qa-fontconfig";
 import { runQaShot } from "../pipeline/qa-shot";
 import { getQaToolchainInfo, verifyQaToolchain } from "../pipeline/qa-toolchain";
+import { runOperatorQaEvaluation } from "../qa-evaluator/operator-run";
 
 function splitList(value: string | undefined): string[] {
 	return (value ?? "")
@@ -18,7 +19,52 @@ function collect(value: string, previous: string[]): string[] {
 }
 
 export function registerQaCommand(program: Command): void {
-	const qa = program.command("qa").description("Tools for QA agents (run in the QA scratch copy).");
+	const qa = program
+		.command("qa")
+		.description("QA tooling; evaluate is an explicit user-only host mode, separate from card QA.");
+	qa.command("evaluate")
+		.description(
+			"User-only host evaluator: bounded native structured-output A/B evidence, separate from card QA. Dry-run unless --execute.",
+		)
+		.requiredOption(
+			"--profile <file>",
+			"Operator-owned capability/transport profile; credentials are env references only.",
+		)
+		.requiredOption("--suite <file>", "Versioned trusted cases, named signatures, oracles and explicit variants.")
+		.requiredOption("--image <sha256>", "Existing immutable secret-free local Node image; never pulled.")
+		.requiredOption(
+			"--out <directory>",
+			"New private output directory outside Git workspaces; existing output is refused.",
+		)
+		.option("--execute", "Explicitly authorize bounded model requests and isolated CPU containers.", false)
+		.option(
+			"--provider-idle-confirmed",
+			"User attestation that evaluation will not contend with live work; not a capacity reservation.",
+			false,
+		)
+		.option("--max-total-sec <seconds>", "Whole-run deadline (10–900), checked before further work.", Number, 300)
+		.action(
+			async (options: {
+				profile: string;
+				suite: string;
+				image: string;
+				out: string;
+				execute: boolean;
+				providerIdleConfirmed: boolean;
+				maxTotalSec: number;
+			}) => {
+				try {
+					const result = await runOperatorQaEvaluation(options);
+					process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+					if ("matrixComplete" in result && !result.matrixComplete) process.exitCode = 3;
+				} catch {
+					process.stderr.write(
+						"kanban qa evaluate: operator input, capability, image or execution unavailable/unconfirmed. No raw provider error, credential fallback, settings change or automatic replay was used.\n",
+					);
+					process.exitCode = 2;
+				}
+			},
+		);
 	qa.command("fonts")
 		.description(
 			"Inspect retained Fontconfig as the runtime/QA OS user; explicitly repair relocated paths with a backup. Never launches a browser.",

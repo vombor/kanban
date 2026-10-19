@@ -41,6 +41,7 @@ export interface WatchdogActionScope {
 }
 
 export interface WatchdogActionDependencies {
+	prepareTaskInput?: (workspaceId: string, taskId: string, text: string) => Promise<string>;
 	getWorkspacePathById: (workspaceId: string) => string | null;
 	getTerminal: (scope: WatchdogActionScope) => Promise<TaskInputTerminal>;
 	startTaskSession: (
@@ -109,12 +110,15 @@ export function createWatchdogActionHandler(
 				if (refused) {
 					return { ok: false, status: "error", evidence: null, enterAttempts: 0, summary: null, error: refused };
 				}
+				const scope = scopeOf(request.workspaceId);
+				const text = deps.prepareTaskInput
+					? await deps.prepareTaskInput(request.workspaceId, request.taskId, request.text)
+					: request.text;
 				if (deps.inputHold) {
-					scopeOf(request.workspaceId); // throws for a workspace that isn't registered, as below
-					return await deps.inputHold.deliver(request.workspaceId, request.taskId, request.text);
+					return await deps.inputHold.deliver(request.workspaceId, request.taskId, text);
 				}
-				const terminal = await deps.getTerminal(scopeOf(request.workspaceId));
-				return await deliverTaskInput(terminal, request.taskId, request.text);
+				const terminal = await deps.getTerminal(scope);
+				return await deliverTaskInput(terminal, request.taskId, text);
 			}
 			case "queueOrchestratorNotices": {
 				const refused =

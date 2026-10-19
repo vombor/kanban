@@ -1,6 +1,7 @@
 {
 	"kit": 1,
 	"name": "team",
+	"dispatch": { "devCompletion": "review" },
 	"description": "The team workflow: a dev builds, a QA reviewer of another vendor reviews, same-model rework for 3 rounds, then the fallback dev model takes the task over on a sibling card at once (no approval, paid or free); only when the fallback fails too does the card go to the orchestrator. The models come from a preset (cloud, cline, lemonade) or the project's own role settings (a custom team)",
 	"roles": {
 		"dev": {

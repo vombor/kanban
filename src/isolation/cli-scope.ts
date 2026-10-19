@@ -90,6 +90,7 @@ export const USER_ONLY_COMMANDS = [
 	"knowledge source-opt-in",
 	"knowledge source-collection",
 	"integration run",
+	"qa evaluate",
 	"objective create",
 	"objective limits",
 	"objective link",

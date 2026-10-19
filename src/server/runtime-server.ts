@@ -119,6 +119,7 @@ import { chooseBrowserOrigin, createBrowserOriginTracker, createBrowserUpgradeRe
 import { createClineLemonadeContextSyncMonitor } from "./cline-lemonade-context-sync-monitor";
 import { createEfficiencyObserver, efficiencySample } from "./efficiency-observer";
 import { createGitHubAppRequestHandler } from "./github-app-route";
+import { prepareKitDevPrompt } from "./kit-dev-instructions";
 import { createModelListsRequestHandler } from "./model-lists-route";
 import { accountObjectiveInput } from "./objective-input-accounting";
 import { createObjectiveReconciler } from "./objective-reconciler";
@@ -658,7 +659,13 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 						contexts: taskContexts,
 						workspaceId,
 						request,
-						start,
+						start: async (prepared) => {
+							const launch = prepared ?? request;
+							return start({
+								...launch,
+								prompt: await prepareKitDevPrompt(workspaceId, launch.taskId, launch.prompt),
+							});
+						},
 						rootRevision: await validateKnowledgeAnchor(workspaceId, request.taskId),
 					}),
 			}),
@@ -994,6 +1001,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		startTaskSession: async (scope, input) => await runtimeApi.startTaskSession(scope, input),
 		credentials: isolation,
 		inputHold: typedInputHold,
+		prepareTaskInput: prepareKitDevPrompt,
 		orchestratorInbox,
 		runProcessSweep: async () => {
 			await orphanProcessSweeper.sweep();

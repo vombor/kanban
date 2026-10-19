@@ -299,6 +299,10 @@ export const kitDocumentObjectSchema = z
 			})
 			.strict()
 			.optional(),
+		dispatch: z
+			.object({ devCompletion: z.literal("review").optional() })
+			.strict()
+			.optional(),
 		/** Legacy: `roles.dev`. */
 		dev: legacyDevSchema.optional(),
 		qa: z
